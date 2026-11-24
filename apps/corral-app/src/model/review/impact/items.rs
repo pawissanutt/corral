@@ -98,6 +98,19 @@ pub struct Item {
     pub target: Option<Target>,
     /// Why the map selects something else than the item's own node, or nothing.
     pub note: Option<String>,
+    /// A lens the change touches, drawn with what it touched marked.
+    pub lens: Option<LensItem>,
+}
+
+/// A touched lens: which to read, at which commit, and the elements the change touched,
+/// added and removed, by the checker's names.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LensItem {
+    pub id: String,
+    pub at: String,
+    pub touched: Vec<String>,
+    pub added: Vec<String>,
+    pub removed: Vec<String>,
 }
 
 pub(super) fn short(commit: &str) -> &str {
@@ -208,11 +221,8 @@ pub(super) const fn category_of(row: &Row) -> Option<Category> {
         Row::NotRead { .. } => Category::NotRead,
         Row::RuntimeUnit { .. } | Row::RuntimeEdge { .. } => Category::Runtime,
         Row::Entry { .. } => Category::EntryPoints,
-        Row::Map { .. }
-        | Row::Container { .. }
-        | Row::Module { .. }
-        | Row::File { .. }
-        | Row::Lens { .. } => {
+        Row::Lens { .. } => Category::Lenses,
+        Row::Map { .. } | Row::Container { .. } | Row::Module { .. } | Row::File { .. } => {
             return None;
         }
     })
@@ -288,6 +298,7 @@ pub(super) fn item(key: String, sign: Sign, main: String, right: String) -> Item
         anchor: None,
         target: None,
         note: None,
+        lens: None,
     }
 }
 
@@ -549,14 +560,59 @@ fn row_item(cx: &Ctx, n: usize, row: &Row) -> Option<Item> {
                 )
             }
         }
-        Row::Map { .. }
-        | Row::Container { .. }
-        | Row::Module { .. }
-        | Row::File { .. }
-        | Row::Lens { .. } => {
+        Row::Lens { impact } => lens_item(cx, key, impact),
+        Row::Map { .. } | Row::Container { .. } | Row::Module { .. } | Row::File { .. } => {
             return None;
         }
     })
+}
+
+/// A touched lens: its title, how many elements the change touched, added and removed, and
+/// the lens to draw: at the base when the change only removed from it.
+fn lens_item(cx: &Ctx, key: String, impact: &corral_types::lenses::LensImpact) -> Item {
+    let only_removed =
+        impact.touched.is_empty() && impact.added.is_empty() && !impact.removed.is_empty();
+    let mut right = Vec::new();
+    if !impact.touched.is_empty() {
+        right.push(format!("{} touched", impact.touched.len()));
+    }
+    if !impact.added.is_empty() {
+        right.push(format!("+{}", impact.added.len()));
+    }
+    if !impact.removed.is_empty() {
+        right.push(format!("−{}", impact.removed.len()));
+    }
+    let sign = if only_removed {
+        Sign::Removed
+    } else if impact.touched.is_empty() && impact.removed.is_empty() {
+        Sign::Added
+    } else {
+        Sign::Changed
+    };
+    let listed = |word: &str, names: &[String]| {
+        (!names.is_empty()).then(|| format!("{word}: {}", names.join("; ")))
+    };
+    let sub = [
+        listed("touched", &impact.touched),
+        listed("added", &impact.added),
+        listed("removed", &impact.removed),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(" · ");
+    Item {
+        sub: (!sub.is_empty()).then_some(sub),
+        anchor: cx.anchor(&impact.path, None, only_removed),
+        lens: Some(LensItem {
+            id: impact.id.clone(),
+            at: if only_removed { cx.base } else { cx.head }.to_owned(),
+            touched: impact.touched.clone(),
+            added: impact.added.clone(),
+            removed: impact.removed.clone(),
+        }),
+        ..item(key, sign, impact.title.clone(), right.join(" · "))
+    }
 }
 
 /// What changed in a unit kept across the change: its ports, then its command, else where or

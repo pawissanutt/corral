@@ -27,12 +27,12 @@ use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 use super::Host;
 
 /// The CSS font of a map font.
-fn css(font: Font) -> String {
+pub(super) fn css(font: Font) -> String {
     let family = if font.mono() { FONT_MONO } else { FONT_TEXT };
     format!("{} {}px {family}", font.weight(), font.size())
 }
 
-fn measure(font: Font, words: &str) -> f32 {
+pub(super) fn measure(font: Font, words: &str) -> f32 {
     measure_text(&css(font), words).0
 }
 
@@ -104,11 +104,11 @@ fn now(adaptive: AdaptiveColor) -> Hsla {
     }
 }
 
-fn ink(token: Token) -> Hsla {
+pub(super) fn ink(token: Token) -> Hsla {
     now(color(token))
 }
 
-fn bounds(r: Rect) -> Bounds<Points> {
+pub(super) fn bounds(r: Rect) -> Bounds<Points> {
     nsh_core::prelude::bounds(point(px(r.x), px(r.y)), size(px(r.w), px(r.h)))
 }
 
@@ -284,7 +284,7 @@ fn paint(layout: &Layout, scene: &Scene, state: &State, marks: Option<&Marks>) -
 }
 
 /// Points along a route, the end pulled back so the arrowhead does not sink into the card.
-fn trim(points: &[(f32, f32)], by: f32) -> Vec<(f32, f32)> {
+pub(super) fn trim(points: &[(f32, f32)], by: f32) -> Vec<(f32, f32)> {
     let mut out = points.to_vec();
     let n = out.len();
     if n < 2 {
@@ -302,7 +302,7 @@ fn trim(points: &[(f32, f32)], by: f32) -> Vec<(f32, f32)> {
 }
 
 /// Straight where a step is level or upright, an S-curve between rows otherwise.
-fn curve(p: Painter, points: &[(f32, f32)]) -> Painter {
+pub(super) fn curve(p: Painter, points: &[(f32, f32)]) -> Painter {
     let Some(&(x, y)) = points.first() else {
         return p;
     };
@@ -323,7 +323,7 @@ fn curve(p: Painter, points: &[(f32, f32)]) -> Painter {
     p
 }
 
-fn arrow(p: Painter, points: &[(f32, f32)]) -> Painter {
+pub(super) fn arrow(p: Painter, points: &[(f32, f32)]) -> Painter {
     let n = points.len();
     if n < 2 {
         return p;
@@ -748,7 +748,7 @@ fn hit(
         .into_element()
 }
 
-fn tip(words: SharedString) -> AnyElement {
+pub(super) fn tip(words: SharedString) -> AnyElement {
     view()
         .px(px(8.0))
         .py(px(4.0))

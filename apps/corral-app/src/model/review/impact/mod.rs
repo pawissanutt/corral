@@ -18,7 +18,7 @@ use corral_types::{
     SystemReview, SystemReviewRow as Row, SystemStatus,
 };
 
-pub use items::{Anchor, Item, Sign, Target};
+pub use items::{Anchor, Item, LensItem, Sign, Target};
 pub use reach::{CHECKING, Reach, reach, wanted};
 
 use items::{

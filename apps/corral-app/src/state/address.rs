@@ -43,7 +43,7 @@ impl AppState {
         let place = computed(move || {
             let shown = Shown {
                 phone_section: self.phone_section.get(),
-                system_runtime: self.system.with(|s| s.view == View::Runtime),
+                system_view: self.system.with(|s| s.view),
             };
             self.nav.with(|nav| Place::of(nav, form, shown))
         });
@@ -106,9 +106,9 @@ impl AppState {
                 self.go(destination);
                 self.show_system_view(View::Structure);
             }
-            Place::SystemRuntime => {
+            Place::SystemView(view) => {
                 self.go(Destination::System);
-                self.show_system_view(View::Runtime);
+                self.show_system_view(view);
             }
             Place::Project(id) => self.open_project(id),
             place => self.change(|nav| place.open(nav)),

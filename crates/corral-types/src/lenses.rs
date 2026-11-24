@@ -43,9 +43,33 @@ impl Lens {
         }
     }
 
+    pub fn kind(&self) -> LensKind {
+        match self {
+            Self::State { .. } => LensKind::State,
+            Self::Sequence { .. } => LensKind::Sequence,
+        }
+    }
+
     pub fn read_at(&self) -> &str {
         match self {
             Self::State { read_at, .. } | Self::Sequence { read_at, .. } => read_at,
+        }
+    }
+}
+
+/// The diagram a lens describes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LensKind {
+    State,
+    Sequence,
+}
+
+impl LensKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::State => "state",
+            Self::Sequence => "sequence",
         }
     }
 }

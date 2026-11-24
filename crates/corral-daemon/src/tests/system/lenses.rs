@@ -1,5 +1,5 @@
 use corral_protocol::app::SYSTEM_LENSES_V1;
-use corral_types::lenses::LensStatus;
+use corral_types::lenses::{LensKind, LensStatus};
 
 use super::*;
 
@@ -116,13 +116,15 @@ anchor = {anchor}
         initial
             .rows
             .iter()
-            .any(|row| row.id.as_deref() == Some("run") && row.status == LensStatus::Current)
+            .any(|row| row.id.as_deref() == Some("run")
+                && row.status == LensStatus::Current
+                && row.kind == Some(LensKind::Sequence))
     );
     assert!(
         initial
             .rows
             .iter()
-            .any(|row| row.file == MALFORMED && row.id.is_none())
+            .any(|row| row.file == MALFORMED && row.id.is_none() && row.kind.is_none())
     );
     let error = system
         .call(DETAIL_GET, query(lens("oversized", None)))

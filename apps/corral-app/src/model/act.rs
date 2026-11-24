@@ -367,7 +367,11 @@ pub fn created(feed: &Feed, key: &str) -> Option<String> {
 /// The receipt a settled operation toasts. A new task has no id until the engine gives it one,
 /// so its receipt names the id from the reply: "New task T-21 · Done".
 pub fn receipt(feed: &Feed, act: &Act, status: &ActStatus) -> String {
-    let new = matches!(act.op, Op::New { .. }) && *status == ActStatus::Done;
+    // A lens draft or repair files a task too; its receipt names it.
+    let new = matches!(
+        act.op,
+        Op::New { .. } | Op::LensDraft { .. } | Op::LensRepair { .. }
+    ) && *status == ActStatus::Done;
     match new.then(|| created(feed, &act.key)).flatten() {
         Some(task) => format!("{} {task} · {}", act.title, status.line()),
         None => format!("{} · {}", act.title, status.line()),

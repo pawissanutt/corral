@@ -6,10 +6,14 @@
 //! them for the canvas, `tree` lists them for the phone and the terminal, `inspect` says what
 //! the pick is, and `words` the page's sentences. The Runtime view reads the `system_runtime`
 //! detail instead and `runtime` turns it into a scene the same code places, lists and inspects.
+//! The Lenses view reads `system_lenses` and `system_lens`: `lens` turns a checked lens into a
+//! diagram and `lens_layout` places it.
 
 pub mod inspect;
 mod layered;
 pub mod layout;
+pub mod lens;
+pub mod lens_layout;
 pub mod marks;
 pub mod runtime;
 mod runtime_inspect;
@@ -19,24 +23,55 @@ pub mod tree;
 pub mod words;
 
 use corral_protocol::detail::DetailRef;
+use corral_types::lenses::LensKind;
 use corral_types::{ModuleId, RuntimeUnitId, SystemAt};
 
-/// Which map the page draws: what the project is made of, or what it runs.
+use crate::model::Id;
+
+/// Which map the page draws: what the project is made of, what it runs, or how it behaves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum View {
     #[default]
     Structure,
     Runtime,
+    /// The project's saved state and sequence diagrams.
+    Lenses,
 }
 
 impl View {
-    pub const ALL: [View; 2] = [Self::Structure, Self::Runtime];
+    pub const ALL: [View; 3] = [Self::Structure, Self::Runtime, Self::Lenses];
     pub const fn label(self) -> &'static str {
         match self {
             Self::Structure => "Structure",
             Self::Runtime => "Runtime",
+            Self::Lenses => "Lenses",
         }
     }
+    /// The address's last segment.
+    pub const fn slug(self) -> &'static str {
+        match self {
+            Self::Structure => "structure",
+            Self::Runtime => "runtime",
+            Self::Lenses => "lenses",
+        }
+    }
+    pub fn from_slug(slug: &str) -> Option<View> {
+        Self::ALL.into_iter().find(|v| v.slug() == slug)
+    }
+}
+
+/// The Draft a lens form: the kind and the owner's one sentence.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Draft {
+    pub kind: LensKind,
+    pub about: String,
+}
+
+/// A task this page filed (a draft or a repair): the operation's key, read for its outcome.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Filed {
+    pub key: Id,
+    pub title: String,
 }
 
 /// What re-colours the same geometry.
@@ -190,6 +225,13 @@ pub struct State {
     pub overlay: Overlay,
     pub window: Window,
     pub filter: String,
+    /// The lens drawn: its id, or the file of one without an id.
+    pub lens: Option<String>,
+    /// The lens element picked, by the checker's name for it.
+    pub element: Option<String>,
+    /// The Draft a lens form, while open.
+    pub draft: Option<Draft>,
+    pub filed: Option<Filed>,
 }
 
 /// What the owner does on the page.
@@ -207,6 +249,13 @@ pub enum Action {
     Window(Window),
     Filter(String),
     View(View),
+    /// Draws another lens.
+    Lens(String),
+    /// Picks a lens element; picking it again lets go.
+    Element(String),
+    /// Opens, edits or closes (none) the Draft a lens form.
+    Draft(Option<Draft>),
+    Filed(Filed),
 }
 
 impl State {
@@ -222,6 +271,10 @@ impl State {
             self.trail.clear();
             self.picked = None;
             self.filter.clear();
+            self.lens = None;
+            self.element = None;
+            self.draft = None;
+            self.filed = None;
         }
     }
 
@@ -239,9 +292,16 @@ impl State {
                 }
             }
             Action::Open(node) => self.open(&node),
-            // The Runtime view has one level: the trail is the Structure view's.
-            Action::To(_) if self.view == View::Runtime => {}
+            // The Runtime and Lenses views have one level: the trail is the Structure view's.
+            Action::To(_) if self.view != View::Structure => {}
             Action::Up if self.view == View::Runtime => self.picked = None,
+            Action::Up if self.view == View::Lenses => {
+                if self.draft.is_some() {
+                    self.draft = None;
+                } else {
+                    self.element = None;
+                }
+            }
             Action::To(depth) => {
                 if depth < self.trail.len() {
                     let left = self.trail.get(depth).map(Node::of);
@@ -261,6 +321,20 @@ impl State {
                     self.view = view;
                     self.picked = None;
                 }
+            }
+            Action::Lens(lens) => {
+                if self.lens.as_ref() != Some(&lens) {
+                    self.lens = Some(lens);
+                    self.element = None;
+                }
+            }
+            Action::Element(name) => {
+                self.element = (self.element.as_ref() != Some(&name)).then_some(name);
+            }
+            Action::Draft(draft) => self.draft = draft,
+            Action::Filed(filed) => {
+                self.draft = None;
+                self.filed = Some(filed);
             }
         }
         *self != before
@@ -307,6 +381,7 @@ pub fn view_request(state: &State, project: &str, at: Option<&SystemAt>) -> Deta
     match state.view {
         View::Structure => request(project, at),
         View::Runtime => runtime_request(project),
+        View::Lenses => lens::list_request(project),
     }
 }
 

@@ -293,7 +293,10 @@ fn affected(target: &DetailRef, topic: Topic, changed: &BTreeSet<String>) -> boo
         }
         DetailRef::UsageSeries { .. } => matches!(topic, Topic::Usage | Topic::Settings),
         // A project's row moves its revision whenever any of its map's details changes.
-        DetailRef::SystemMap { project, .. } | DetailRef::SystemRuntime { project } => {
+        DetailRef::SystemMap { project, .. }
+        | DetailRef::SystemRuntime { project }
+        | DetailRef::SystemLenses { project }
+        | DetailRef::SystemLens { project, .. } => {
             topic == Topic::System && changed.contains(project)
         }
         // The impact's facts land on the project's row, which this target does not name.
@@ -318,7 +321,10 @@ pub(super) fn topic_affects(target: &DetailRef, topic: Topic) -> bool {
             matches!(topic, Topic::Tasks | Topic::Plans | Topic::Agents)
         }
         DetailRef::UsageSeries { .. } => matches!(topic, Topic::Usage | Topic::Settings),
-        DetailRef::SystemMap { .. } | DetailRef::SystemRuntime { .. } => topic == Topic::System,
+        DetailRef::SystemMap { .. }
+        | DetailRef::SystemRuntime { .. }
+        | DetailRef::SystemLenses { .. }
+        | DetailRef::SystemLens { .. } => topic == Topic::System,
         DetailRef::SystemReview { .. } => matches!(topic, Topic::System | Topic::Tasks),
         _ => false,
     }

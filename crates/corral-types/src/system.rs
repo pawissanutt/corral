@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     facts::*,
-    lenses::{LensImpact, LensResult, LensStatus},
+    lenses::{LensImpact, LensKind, LensResult, LensStatus},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -140,6 +140,9 @@ pub struct SystemLensSummary {
     pub file: String,
     pub id: Option<String>,
     pub title: Option<String>,
+    /// Absent when the file could not be read as a lens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<LensKind>,
     pub status: LensStatus,
 }
 

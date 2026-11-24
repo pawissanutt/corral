@@ -27,6 +27,7 @@ mod sample;
 mod session_ops;
 mod sessions;
 mod system;
+mod system_lenses;
 mod system_review;
 mod system_runtime;
 mod workspace;
@@ -141,6 +142,7 @@ fn base(now: u64, date: String, clock: String, time_zone: Option<jiff::tz::TimeZ
         corral_protocol::app::SYSTEM_V1,
         corral_protocol::app::SYSTEM_RUNTIME_V1,
         corral_protocol::app::SYSTEM_ENTRIES_V1,
+        corral_protocol::app::SYSTEM_LENSES_V1,
         USAGE_V1,
         SETTINGS_V1,
         ASSISTANT_V1,

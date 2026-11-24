@@ -14,6 +14,7 @@ use corral_types::{
 };
 
 use super::system::detail;
+use super::system_lenses::{impact, results};
 
 /// `files`: the change's paths with lines added and removed.
 pub(super) fn review(
@@ -200,6 +201,11 @@ pub(super) fn review(
                 }
             }
             _ => {}
+        }
+    }
+    for result in results(project)? {
+        if let Some(impact) = impact(result, files) {
+            facts.push((Category::Lenses, Row::Lens { impact }));
         }
     }
     let mut categories = Vec::new();

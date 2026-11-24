@@ -131,6 +131,24 @@ pub fn shown(state: &State, feed: &Feed, scope: &Scope) -> Shown {
     if state.view == View::Runtime {
         return runtime_shown(state, feed, project, row);
     }
+    // The Lenses view draws from its own reads (`screens::system::lenses`).
+    if state.view == View::Lenses {
+        return Shown {
+            project: Some(project.clone()),
+            projects: Vec::new(),
+            status: Status::Ready,
+            scene: None,
+            crumbs: vec![project],
+            notices: Vec::new(),
+            summary: Vec::new(),
+            legend: Vec::new(),
+            inspector: None,
+            matched: None,
+            provenance: String::new(),
+            empty: None,
+            hint: super::lens::HINT,
+        };
+    }
     let status = status_of(feed.detail(&request(&project, at)));
     let map = map_of(feed, &project, at);
     let scene = map.map(|map| build(map, at));

@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 
 use super::rollup::{closed, last_worker, rebuild};
 use super::sample::{finish, run};
+use super::system_lenses::{draft_task, repair_task};
 use super::{ago, event, number, record, records, save};
 use crate::model::act::Act;
 use crate::model::daemon::{ClientError, Feed, Operation};
@@ -82,10 +83,20 @@ fn apply(feed: &mut Feed, op: &Op, force: bool) -> Applied {
     let id = match op {
         Op::New { task } => return new(feed, task),
         Op::Sync => return Ok(None),
-        Op::LensDraft { .. } | Op::LensRepair { .. } => {
-            return Err(Fail::Unsupported(
-                "Preview cannot inspect project lenses; no task was created".into(),
-            ));
+        Op::LensDraft {
+            project,
+            kind,
+            about,
+            ready,
+        } => {
+            let task = draft_task(project, kind, about, *ready)
+                .map_err(|reason| refuse(reason, Vec::new()))?;
+            return new(feed, &task);
+        }
+        Op::LensRepair { project, id, ready } => {
+            let task =
+                repair_task(project, id, *ready).map_err(|reason| refuse(reason, Vec::new()))?;
+            return new(feed, &task);
         }
         Op::ArtifactAdd { .. } => {
             return Err(Fail::Unsupported(

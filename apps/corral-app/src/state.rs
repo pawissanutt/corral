@@ -162,8 +162,8 @@ impl AppState {
         let mut launch_scope = None;
         let mut launch_system = system::State::default();
         if let Some(place) = address::launched() {
-            if place == crate::model::address::Place::SystemRuntime {
-                launch_system.view = system::View::Runtime;
+            if let crate::model::address::Place::SystemView(view) = place {
+                launch_system.view = view;
             }
             if let crate::model::address::Place::Project(id) = &place {
                 launch_scope = Some(crate::model::projects::Scope::Project(id.clone()));

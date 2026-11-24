@@ -7,7 +7,7 @@
 //! `model::review::impact`'s.
 //!
 //! Test ids: "task-impact", "impact-crumb-<n>", "impact-item-<key>", "btn-open-in-system",
-//! "impact-unreachable", "btn-impact-more-<n>".
+//! "impact-unreachable", "btn-impact-more-<n>", "impact-lens" (a touched lens, drawn under its item).
 
 use corral_protocol::detail::DetailRef;
 use nsh_core::prelude::*;
@@ -17,10 +17,11 @@ use crate::model::review::impact::{
     READING, Reach, Section, Shown, Sign, TOUCHED,
 };
 use crate::model::system::Action as MapAction;
+use crate::model::system::lens::{self, Touch};
 use crate::model::system::marks::Marks;
 use crate::model::system::scene::Scene;
 use crate::model::{Form, Hue, Id};
-use crate::screens::system::{Host, canvas, tree};
+use crate::screens::system::{Host, canvas, lenses, tree};
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, button};
 use crate::ui::kit::marks::hue_ink;
@@ -120,10 +121,17 @@ fn keep(
             let selected = touched
                 .iter()
                 .chain(sections.iter().flat_map(|s| s.items.iter()))
-                .find(|i| Some(&i.key) == item.as_ref())
-                .and_then(|i| i.target.as_ref());
-            if let Some(target) = selected {
+                .find(|i| Some(&i.key) == item.as_ref());
+            if let Some(target) = selected.and_then(|i| i.target.as_ref()) {
                 targets.extend(impact::wanted(project.as_str(), target));
+            }
+            // A touched lens is drawn as checked at the commit the item names.
+            if let Some(touched) = selected.and_then(|i| i.lens.as_ref()) {
+                targets.push(lens::lens_request(
+                    project.as_str(),
+                    &touched.id,
+                    Some(&touched.at),
+                ));
             }
         });
         targets
@@ -342,7 +350,20 @@ fn row(app: AppState, at: At, item: Item) -> AnyElement {
             return None;
         }
         let (sub, anchor, note) = (item.sub.clone(), item.anchor.clone(), item.note.clone());
-        let to_system = to_system(app, project.clone(), item.target.clone());
+        let drawn = item.lens.clone().map(|touched| {
+            let target = lens::lens_request(project.as_str(), &touched.id, Some(&touched.at));
+            let touch = Touch {
+                touched: touched.touched,
+                added: touched.added,
+            };
+            untracked(|| lenses::touched_lens(app, target, touch))
+        });
+        // A lens has no node on the map; it is drawn here instead.
+        let to_system = if item.lens.is_some() {
+            view().into_element()
+        } else {
+            to_system(app, project.clone(), item.target.clone())
+        };
         Some(untracked(|| {
             view()
                 .when(form == Form::Terminal, |v| v.pl(term::cells(3.0)))
@@ -355,6 +376,7 @@ fn row(app: AppState, at: At, item: Item) -> AnyElement {
                     anchor.map_or_else(|| NO_ANCHOR.to_owned(), |a| a.words()),
                 ))
                 .children(note.map(|note| quiet(app, note)))
+                .children(drawn)
                 .child(to_system)
                 .into_element()
         }))

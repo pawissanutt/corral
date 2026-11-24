@@ -4,14 +4,13 @@
 //! former destinations and of the Project page still parse, each to its new home.
 
 use crate::model::nav::{Area, TaskTab};
+use crate::model::system::View;
 use crate::model::{Destination, Form, Id, Live, NavState, Route, SettingsSection};
 
 /// The first segment of a task's page, a session's page and Activity's pages.
 const TASK: &str = "task";
 const SESSION: &str = "session";
 const ACTIVITY: &str = "activity";
-/// The last segment of Activity › System's Runtime view.
-const RUNTIME: &str = "runtime";
 /// The first segment of the former Project page.
 const PROJECTS: &str = "projects";
 
@@ -20,8 +19,8 @@ const PROJECTS: &str = "projects";
 pub enum Place {
     /// A destination's own screen.
     Destination(Destination),
-    /// Activity › System showing its Runtime view.
-    SystemRuntime,
+    /// Activity › System showing a view other than Structure (Runtime or Lenses).
+    SystemView(View),
     /// A Settings section.
     Settings(SettingsSection),
     /// A task's page at one of its tabs.
@@ -38,8 +37,8 @@ pub enum Place {
 pub struct Shown {
     /// The Settings section the phone's stack has open over its Settings list.
     pub phone_section: Option<SettingsSection>,
-    /// Activity › System shows its Runtime view.
-    pub system_runtime: bool,
+    /// The view Activity › System shows.
+    pub system_view: View,
 }
 
 impl Place {
@@ -58,7 +57,9 @@ impl Place {
                 .phone_section
                 .map_or(Place::Destination(Destination::Settings), Place::Settings),
             Destination::Settings => Place::Settings(nav.settings),
-            Destination::System if shown.system_runtime => Place::SystemRuntime,
+            Destination::System if shown.system_view != View::Structure => {
+                Place::SystemView(shown.system_view)
+            }
             destination => Place::Destination(destination),
         }
     }
@@ -70,8 +71,8 @@ impl Place {
                 format!("{ACTIVITY}/{}", destination.slug())
             }
             Place::Destination(destination) => destination.slug().to_owned(),
-            Place::SystemRuntime => {
-                format!("{ACTIVITY}/{}/{RUNTIME}", Destination::System.slug())
+            Place::SystemView(view) => {
+                format!("{ACTIVITY}/{}/{}", Destination::System.slug(), view.slug())
             }
             Place::Settings(section) => {
                 format!("{}/{}", Destination::Settings.slug(), section.slug())
@@ -100,8 +101,11 @@ impl Place {
             SESSION => return id(rest).map(Place::Session),
             PROJECTS => return id(rest).map(Place::Project),
             ACTIVITY => {
-                if rest.split_once('/') == Some((Destination::System.slug(), RUNTIME)) {
-                    return Some(Place::SystemRuntime);
+                if let Some((page, view)) = rest.split_once('/')
+                    && page == Destination::System.slug()
+                    && let Some(view) = View::from_slug(view)
+                {
+                    return Some(Place::SystemView(view));
                 }
                 let page = Destination::from_slug(rest)
                     .filter(|page| page.area() == Area::Activity)
@@ -130,7 +134,7 @@ impl Place {
         match self {
             Place::Destination(destination) => nav.go(destination),
             // The view itself is the System page's state, which the caller sets.
-            Place::SystemRuntime => nav.go(Destination::System),
+            Place::SystemView(_) => nav.go(Destination::System),
             Place::Settings(section) => nav.go_settings(section),
             Place::Task(id, tab) => {
                 nav.pages.clear();
@@ -198,7 +202,7 @@ mod tests {
 
     const SHOWN: Shown = Shown {
         phone_section: None,
-        system_runtime: false,
+        system_view: View::Structure,
     };
 
     /// The Runtime view had no address of its own: a reload or a link must open it again,
@@ -207,13 +211,16 @@ mod tests {
     fn the_runtime_view_has_its_own_address() {
         let runtime = Shown {
             phone_section: None,
-            system_runtime: true,
+            system_view: View::Runtime,
         };
         let mut nav = NavState::new(Form::Desktop);
         nav.go(Destination::System);
         let place = Place::of(&nav, Form::Desktop, runtime);
         assert_eq!(place.path(), "activity/system/runtime");
-        assert_eq!(Place::parse(&place.path()), Some(Place::SystemRuntime));
+        assert_eq!(
+            Place::parse(&place.path()),
+            Some(Place::SystemView(View::Runtime))
+        );
         nav.go(Destination::Usage);
         assert_eq!(
             Place::of(&nav, Form::Desktop, runtime),
@@ -278,7 +285,7 @@ mod tests {
         assert_eq!(list, Place::Destination(Destination::Settings));
         let open = Shown {
             phone_section: Some(SettingsSection::Config),
-            system_runtime: false,
+            system_view: View::Structure,
         };
         let section = Place::of(&nav, Form::Phone, open);
         assert_ne!(section.path(), list.path());

@@ -11,6 +11,9 @@
 //! "inspect-row-<n>", and those of `canvas.rs` and `tree.rs`.
 
 pub(crate) mod canvas;
+pub(crate) mod lens_canvas;
+mod lens_draft;
+pub(crate) mod lenses;
 pub(crate) mod tree;
 
 use nsh_core::element::color as for_appearance;
@@ -91,10 +94,18 @@ pub fn screen(app: AppState) -> AnyElement {
     });
     keep_loaded(app, data);
     let asking = computed(move || data.with(|shown| shown.project.is_none()));
+    let lensing = computed(move || {
+        app.system
+            .with(|s| s.view == View::Lenses)
+            .then(|| data.with(|shown| shown.project.clone()))
+            .flatten()
+    });
     let head = page_head(app, data);
     let content = dynamic(move || {
         if asking.get() {
             untracked(|| picker(app, data))
+        } else if let Some(project) = lensing.get() {
+            untracked(|| lenses::page(app, project))
         } else {
             untracked(|| map_page(app, data))
         }
