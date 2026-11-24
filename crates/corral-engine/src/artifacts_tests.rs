@@ -1,7 +1,11 @@
 use std::fs;
 
 use crate::{
-    ArtifactKind, Engine, artifacts::scan_globs, as_refusal, events::EventKind, tasks::NewTask,
+    ArtifactKind, Engine,
+    artifacts::{ArtifactFilter, scan_globs},
+    as_refusal,
+    events::EventKind,
+    tasks::NewTask,
 };
 
 #[test]
@@ -46,7 +50,17 @@ fn stored_artifacts_with_unclassified_kinds_decode_as_legacy() {
         artifacts.first()
     );
     assert_eq!(
-        store.artifacts_before(Default::default(), None, 1).unwrap()[0].reference(),
+        store
+            .artifacts_before(
+                ArtifactFilter {
+                    all: true,
+                    ..Default::default()
+                },
+                None,
+                1
+            )
+            .unwrap()[0]
+            .reference(),
         "T-001:3"
     );
 }
@@ -84,7 +98,14 @@ fn tool_output_is_recorded_once_per_run_and_name() {
     );
     let catalog = engine
         .store
-        .artifacts_before(Default::default(), None, 10)
+        .artifacts_before(
+            ArtifactFilter {
+                all: true,
+                ..Default::default()
+            },
+            None,
+            10,
+        )
         .unwrap();
     assert!(catalog.iter().any(|a| a.run.as_deref() == Some("R1")));
     assert!(catalog.iter().any(|a| a.run.as_deref() == Some("R2")));
@@ -125,7 +146,16 @@ fn artifact_replacement_refuses_stale_reference_and_names_chain_tip() {
     assert_eq!(events.len(), 3);
     assert_eq!(events[2].kind, EventKind::Artifact);
     assert_eq!(events[2].detail["replaces"], middle.reference());
-    let catalog = store.artifacts_before(Default::default(), None, 3).unwrap();
+    let catalog = store
+        .artifacts_before(
+            ArtifactFilter {
+                all: true,
+                ..Default::default()
+            },
+            None,
+            3,
+        )
+        .unwrap();
     let original = catalog.iter().find(|a| a.id == first.id).unwrap();
     assert_eq!(original.replaced_by, Some(middle.reference()));
 }

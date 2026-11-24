@@ -143,6 +143,7 @@ impl Query {
             kind: longest(&self.kinds),
             task: self.tasks.first().cloned(),
             project: longest(&self.projects),
+            ..Default::default()
         };
         DetailRef::Artifacts {
             filter: (!self.words.is_empty()).then(|| self.words.join(" ")),

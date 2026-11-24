@@ -27,6 +27,9 @@ pub struct ArtifactsPage {
 /// All supplied filters must match. Prefixes are case-insensitive.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ArtifactNarrowing {
+    /// Include submission, record, and replaced artifacts without a kind filter.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub all: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

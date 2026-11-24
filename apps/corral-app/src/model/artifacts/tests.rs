@@ -109,6 +109,7 @@ fn tokens_go_into_the_narrowing_and_words_into_the_filter() {
                 kind: Some("report".into()),
                 task: Some("T-10".into()),
                 project: None,
+                ..Default::default()
             }),
         }
     );

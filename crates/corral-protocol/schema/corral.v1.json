@@ -104,6 +104,10 @@
       "ArtifactNarrowing": {
         "description": "All supplied filters must match. Prefixes are case-insensitive.",
         "properties": {
+          "all": {
+            "description": "Include submission, record, and replaced artifacts without a kind filter.",
+            "type": "boolean"
+          },
           "kind": {
             "type": [
               "string",

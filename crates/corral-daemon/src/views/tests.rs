@@ -380,6 +380,98 @@ fn project_library_artifacts_round_trip_through_finder_and_detail() {
 }
 
 #[test]
+fn artifact_finder_hides_automatic_and_replaced_rows_by_default() {
+    use corral_engine::ArtifactKind;
+    use corral_protocol::detail::ArtifactNarrowing;
+
+    let fixture = Fixture::new();
+    fixture.project();
+    let task = fixture.named_task("attachments", Some("demo"));
+    let engine = fixture.shared.engine().unwrap();
+    let file = fixture.shared.root().join("attachment.txt");
+    fs::write(&file, "content").unwrap();
+    let reference = engine
+        .add_artifact(&task, &file, ArtifactKind::Reference, None)
+        .unwrap();
+    let report = engine
+        .add_artifact(&task, &file, ArtifactKind::Report, None)
+        .unwrap();
+    let diff = engine
+        .add_artifact_with_replacement(
+            &task,
+            &file,
+            ArtifactKind::Diff,
+            None,
+            Some(&report.reference()),
+        )
+        .unwrap();
+    let gate = engine
+        .add_artifact(&task, &file, ArtifactKind::Gate, None)
+        .unwrap();
+    let library = engine
+        .add_artifact("demo", &file, ArtifactKind::Reference, None)
+        .unwrap();
+    let get = |narrowing: ArtifactNarrowing| {
+        let reply = detail(
+            &fixture.shared,
+            DetailGet {
+                target: DetailRef::Artifacts {
+                    filter: None,
+                    narrowing: Some(narrowing),
+                },
+                page: None,
+                etag: None,
+            },
+        )
+        .unwrap();
+        assert!(reply.next.is_none());
+        let Some(DetailBody::Artifacts(page)) = reply.body else {
+            panic!("expected artifacts")
+        };
+        page.rows
+            .iter()
+            .map(|row| row.reference())
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    let selection = ArtifactNarrowing {
+        task: Some(task),
+        ..Default::default()
+    };
+    assert_eq!(
+        get(selection.clone()),
+        [reference.reference()].into_iter().collect()
+    );
+    assert_eq!(
+        get(ArtifactNarrowing {
+            kind: Some("gate".into()),
+            ..selection.clone()
+        }),
+        [gate.reference()].into_iter().collect()
+    );
+    assert_eq!(
+        get(ArtifactNarrowing {
+            all: true,
+            ..selection
+        }),
+        [
+            reference.reference(),
+            report.reference(),
+            diff.reference(),
+            gate.reference()
+        ]
+        .into_iter()
+        .collect()
+    );
+    assert_eq!(
+        get(ArtifactNarrowing {
+            task: Some("demo".into()),
+            ..Default::default()
+        }),
+        [library.reference()].into_iter().collect()
+    );
+}
+
+#[test]
 fn artifact_finder_orders_and_filters_before_stable_paging() {
     use corral_engine::{Actor, Artifact, ArtifactKind, EventKind, events::NewEvent};
     use corral_protocol::detail::ArtifactNarrowing;
@@ -490,6 +582,7 @@ fn artifact_finder_orders_and_filters_before_stable_paging() {
         kind: Some("REP".into()),
         task: Some(site.clone()),
         project: Some("SITE-W".into()),
+        ..Default::default()
     };
     let search = DetailRef::Artifacts {
         filter: Some("DEPLOY report".into()),

@@ -26,6 +26,7 @@ use crate::{
 /// Narrow the artifact finder before applying its page bounds.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct ArtifactFilter<'a> {
+    pub all: bool,
     pub words: Option<&'a str>,
     pub kind: Option<&'a str>,
     pub task: Option<&'a str>,
@@ -222,6 +223,15 @@ impl Store {
             }
             let mut artifact = decode_artifact(row)?;
             let kind = artifact.kind.as_str();
+            if !filter.all
+                && filter.kind.is_none()
+                && matches!(
+                    artifact.kind.group(),
+                    corral_types::ArtifactGroup::Submission | corral_types::ArtifactGroup::Record
+                )
+            {
+                continue;
+            }
             if let Some(prefix) = &kind_prefix
                 && !kind.starts_with(prefix)
             {
@@ -243,6 +253,9 @@ impl Store {
             }
             artifact.project = project;
             artifact.replaced_by = replaced_by(&mut replacements, reference)?;
+            if !filter.all && filter.kind.is_none() && artifact.replaced_by.is_some() {
+                continue;
+            }
             artifact.run = run
                 .query_row([reference], |row| row.get(0))
                 .optional()

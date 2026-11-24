@@ -171,6 +171,7 @@ fn artifacts(
         })
         .transpose()?;
     let filter = ArtifactFilter {
+        all: narrowing.is_some_and(|filters| filters.all),
         words,
         kind: narrowing.and_then(|filters| filters.kind.as_deref()),
         task: narrowing.and_then(|filters| filters.task.as_deref()),
