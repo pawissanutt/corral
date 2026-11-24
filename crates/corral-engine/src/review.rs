@@ -58,6 +58,7 @@ impl Engine {
                     task: id,
                     run: Some(&run.id),
                     actor: self.actor,
+                    replaces: None,
                 };
                 self.add_artifact_in(store, target(), diff.as_bytes(), ArtifactKind::Diff, "diff.patch")?;
                 self.add_artifact_in(
@@ -68,15 +69,7 @@ impl Engine {
                     "summary.md",
                 )?;
                 for path in self.scan_artifacts(&run.worktree, &run.base_sha, &head)? {
-                    let result = self.add_artifact_file_in(
-                        store,
-                        target(),
-                        &path,
-                        ArtifactKind::Report,
-                        None,
-                        Some(self.config.artifacts.max_bytes),
-                    );
-                    if let Err(error) = result {
+                    if let Err(error) = self.add_scanned_artifact_in(store, target(), &path) {
                         let Some(refusal) = as_refusal(&error) else {
                             return Err(error);
                         };
@@ -228,6 +221,7 @@ impl Engine {
                     task: &run.task,
                     run: Some(&run.id),
                     actor,
+                    replaces: None,
                 },
                 &log_path,
                 ArtifactKind::Gate,

@@ -326,6 +326,8 @@ fn artifact_finder_orders_and_filters_before_stable_paging() {
             // Older catalog rows also lack these fields.
             project: None,
             run: None,
+            replaces: None,
+            replaced_by: None,
         };
         let reference = artifact.reference();
         engine

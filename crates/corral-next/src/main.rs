@@ -21,8 +21,8 @@ use std::{
 use anyhow::{Context, Result, ensure};
 use clap::{Parser, error::ErrorKind};
 use corral_engine::{
-    Actor, ArtifactKind, Config, Engine, NewTask, Op, Role, Status, Task, Usage, UsageToken,
-    config::ExtensionTool, events::EventFilter, extension, refuse, store::TaskFilter,
+    Actor, Applied, ArtifactKind, Config, Engine, NewTask, Op, Role, Status, Task, Usage,
+    UsageToken, config::ExtensionTool, events::EventFilter, extension, refuse, store::TaskFilter,
 };
 use jiff::Timestamp;
 use serde::Serialize;
@@ -629,6 +629,7 @@ fn artifact(engine: &Engine, out: &mut Output<'_>, command: ArtifactCommand) -> 
             path,
             kind,
             title,
+            replaces,
         } => {
             let kind = match kind {
                 Some(kind) => kind,
@@ -644,23 +645,27 @@ fn artifact(engine: &Engine, out: &mut Output<'_>, command: ArtifactCommand) -> 
                     ));
                 }
             };
-            apply(
-                engine,
-                out,
-                Op::ArtifactAdd {
-                    id,
-                    path,
-                    kind,
-                    title,
-                },
-                false,
-            )
+            let task = engine.store.require_task(&id)?;
+            let artifact = engine.add_artifact_with_replacement(
+                &id,
+                &path,
+                kind,
+                title.as_deref(),
+                replaces.as_deref(),
+            )?;
+            out.applied(&Applied {
+                task: Some(task),
+                artifact: Some(artifact),
+                seq: engine.store.latest_seq()?,
+                ..Applied::default()
+            })
         }
-        ArtifactCommand::List { id } => {
+        ArtifactCommand::List { id, all } => {
             let artifacts = engine.list_artifacts(id.as_deref())?;
             out.value(&artifacts, |out, artifacts| {
                 artifacts
                     .iter()
+                    .filter(|artifact| all || artifact.replaced_by.is_none())
                     .try_for_each(|artifact| output::artifact_line(out, artifact))
             })
         }

@@ -276,6 +276,7 @@ pub(crate) enum Verdict {
 #[derive(Subcommand)]
 pub(crate) enum ArtifactCommand {
     Add {
+        #[arg(value_name = "OWNER")]
         id: String,
         path: PathBuf,
         /// Artifact kind (required except for the owner, who defaults to reference).
@@ -283,9 +284,15 @@ pub(crate) enum ArtifactCommand {
         kind: Option<ArtifactKind>,
         #[arg(long)]
         title: Option<String>,
+        /// Replace the artifact at this reference without changing its stored contents.
+        #[arg(long, value_name = "REF")]
+        replaces: Option<String>,
     },
     List {
         id: Option<String>,
+        /// Include replaced artifacts in text output (JSON always includes them).
+        #[arg(long)]
+        all: bool,
     },
     /// Write the blob to stdout, or show its metadata with --json.
     Show {

@@ -814,6 +814,8 @@ pub(super) fn artifact(
         } else {
             Actor::Agent
         },
+        replaces: None,
+        replaced_by: None,
         // corrald states the project when it lists the catalog; the run is the latest one, which
         // an agent's artifact came from.
         project: None,

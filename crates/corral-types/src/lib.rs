@@ -320,6 +320,12 @@ pub struct Artifact {
     /// Run that recorded the artifact, if it was attached to a run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run: Option<String>,
+    /// The prior artifact reference explicitly replaced by this row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replaces: Option<String>,
+    /// This row's direct successor, supplied by the catalog and never stored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replaced_by: Option<String>,
 }
 
 impl Artifact {

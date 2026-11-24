@@ -76,6 +76,46 @@ fn tool_output_is_recorded_once_per_run_and_name() {
 }
 
 #[test]
+fn artifact_replacement_refuses_stale_reference_and_names_chain_tip() {
+    let root = crate::tests::tempdir();
+    let engine = Engine::init(root.path(), None).unwrap();
+    let store = &engine.store;
+    let task = "T-001";
+    let other = "T-002";
+    for id in [task, other] {
+        store.insert_task(&crate::tests::task(id)).unwrap();
+    }
+    let file = root.path().join("report.md");
+    fs::write(&file, b"report").unwrap();
+    let add = |owner: &str, replaces: Option<&str>| {
+        engine.add_artifact_with_replacement(owner, &file, ArtifactKind::Report, None, replaces)
+    };
+    let first = add(task, None).unwrap();
+    let middle = add(task, Some("T-001:01")).unwrap();
+    let newest = add(task, Some(&middle.reference())).unwrap();
+    assert_eq!(middle.replaces, Some(first.reference()));
+    assert_eq!((first.id, middle.id, newest.id), (1, 2, 3));
+
+    let error = add(task, Some(&first.reference())).unwrap_err();
+    assert!(
+        as_refusal(&error)
+            .unwrap()
+            .reason
+            .contains(&newest.reference())
+    );
+    assert!(as_refusal(&add(task, Some("T-001:42")).unwrap_err()).is_some());
+    assert!(as_refusal(&add(other, Some(&newest.reference())).unwrap_err()).is_some());
+
+    let events = store.list_events(task).unwrap();
+    assert_eq!(events.len(), 3);
+    assert_eq!(events[2].kind, EventKind::Artifact);
+    assert_eq!(events[2].detail["replaces"], middle.reference());
+    let catalog = store.artifacts_before(Default::default(), None, 3).unwrap();
+    let original = catalog.iter().find(|a| a.id == first.id).unwrap();
+    assert_eq!(original.replaced_by, Some(middle.reference()));
+}
+
+#[test]
 fn artifact_add_list_show_size_and_glob_scan() {
     let root = crate::tests::tempdir();
     let mut engine = Engine::init(root.path(), None).unwrap();

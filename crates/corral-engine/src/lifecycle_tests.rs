@@ -342,6 +342,47 @@ fn done_skips_inherited_artifacts_and_unrelated_ignored_outputs() {
 }
 
 #[test]
+fn second_done_skips_unchanged_scanned_file_but_records_its_own_submission() {
+    let mut cx = Fixture::new(&[]);
+    cx.engine.config.artifacts.globs.push("report.md".into());
+    let id = cx.backlog("publish a report");
+    let first = cx.dispatch(&id);
+    fs::write(first.worktree.join("report.md"), "report\n").unwrap();
+    cx.done(&id);
+
+    cx.runner
+        .set_status(first.session.as_ref().unwrap(), SessionStatus::Gone);
+    let second = cx.engine.changes(&id, "resubmit").unwrap().unwrap();
+    assert_ne!(first.id, second.id);
+    cx.done(&id);
+
+    let store = &cx.engine.store;
+    let rows = store.list_artifacts(Some(&id)).unwrap();
+    let refs = |kind| {
+        rows.iter()
+            .filter(|a| a.kind == kind)
+            .map(|a| a.reference())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(refs(ArtifactKind::Report).len(), 1);
+    assert_eq!(refs(ArtifactKind::Summary).len(), 2);
+    let diffs = refs(ArtifactKind::Diff);
+    assert_eq!(diffs.len(), 2);
+    assert_eq!(
+        store.submitted_diff_ref(&id, &first.id).unwrap(),
+        Some(diffs[0].clone())
+    );
+    assert_eq!(
+        store.submitted_diff_ref(&id, &second.id).unwrap(),
+        Some(diffs[1].clone())
+    );
+    assert_eq!(
+        cx.engine.show_artifact(&diffs[0]).unwrap(),
+        cx.engine.show_artifact(&diffs[1]).unwrap()
+    );
+}
+
+#[test]
 fn red_gate_sends_back_then_blocks_with_typed_owner_actions() {
     let mut cx = Fixture::new(&["test -f green", "printf 'unexpected second line' "]);
     cx.project().max_rounds = Some(1);

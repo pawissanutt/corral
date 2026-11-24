@@ -18,6 +18,8 @@ fn artifact(task: &str, id: u32, kind: ArtifactKind, title: &str, minute: i64) -
         by: Actor::Agent,
         project: None,
         run: None,
+        replaces: None,
+        replaced_by: None,
     }
 }
 
