@@ -48,6 +48,8 @@ pub(super) fn edges(scene: &mut Scene, review: &SystemReview, at: Option<&System
                         Node::Container(from.container.clone()),
                         Node::Container(to.container.clone()),
                     ),
+                    // A pair between two other packages is not on this package's level.
+                    Some(path) if from.container != path && to.container != path => continue,
                     Some(path) => (end(from, path, true), end(to, path, false)),
                 };
                 if ends.0 == ends.1 {

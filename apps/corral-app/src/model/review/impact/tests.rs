@@ -641,6 +641,7 @@ fn moved_reference_counts_reach_their_edges_and_hidden_files_their_more_card() {
         moved(&z, &y, 1, 3),
         moved(&z, &x, 2, 0),
         moved(&x, &w, 5, 0),
+        moved(&y, &w, 1, 2),
         // The package's total counts a file the change deleted; no level of the head has it.
         Row::Container {
             path: "a".into(),
@@ -724,6 +725,12 @@ fn moved_reference_counts_reach_their_edges_and_hidden_files_their_more_card() {
     };
     assert_eq!(change(&scene, &from, &gone), Some(vec![(5, 0)]));
     assert!(scene.bottom.iter().any(|i| scene.cards[*i].node == gone));
+    // A pair between two neighbours is not drawn between their ports.
+    assert!(
+        !scene
+            .all_edges()
+            .any(|e| matches!((&e.from, &e.to), (Node::Port { .. }, Node::Port { .. })))
+    );
 
     let at = SystemAt::Module { module: x };
     let file = |path: String, lines| SystemMapRow::File {
