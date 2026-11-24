@@ -141,6 +141,9 @@ impl Engine {
                 .collect::<Result<Vec<_>>>()?;
             let prefix = format!("{}/", reader.lens_dir());
             let selected = select_lens(&results, &identities, &prefix, about).or_else(|| {
+                if shared_id(&identities, about) {
+                    return None;
+                }
                 let matches = identities
                     .iter()
                     .enumerate()
@@ -234,7 +237,13 @@ impl Engine {
                 .unwrap_or(&result.file),
             lens.title.trim(),
         ] {
-            if alias.is_empty() || alias.trim() != alias || shared_id(&identities, alias) {
+            let is_path = results.iter().any(|item| {
+                item.file == alias || item.file.strip_prefix(&dir_prefix) == Some(alias)
+            });
+            if alias.is_empty()
+                || alias.trim() != alias
+                || (!is_path && shared_id(&identities, alias))
+            {
                 continue;
             }
             let points_to_result = match select_lens(&results, &identities, &dir_prefix, alias) {
