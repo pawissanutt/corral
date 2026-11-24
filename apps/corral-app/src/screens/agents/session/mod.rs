@@ -255,6 +255,9 @@ pub fn compact(app: AppState, id: Id, page: Memo<SessionPage>, form: Compact) ->
     let card = form == Compact::Card;
     let tail = view()
         .flex_none()
+        .when(!card, |tail| {
+            tail.child(header::local_notice(app, id.clone(), page))
+        })
         .child(dock::dock(app, page, false))
         .child(command_menu::menu(app, page, commands, !card))
         .child(bottom(app, page, id.clone(), commands, !card, !card, false))

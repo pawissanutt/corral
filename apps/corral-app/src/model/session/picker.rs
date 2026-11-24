@@ -313,6 +313,9 @@ fn model_meta(model: &ModelChoice) -> String {
 
 /// Why the session cannot change its model now, if it cannot.
 pub(crate) fn unavailable(cx: &Cx<'_>) -> Option<String> {
+    if changing(cx) {
+        return Some("Waiting for the model change to finish".into());
+    }
     match cx.can("model") {
         Can::Absent => return Some("this session does not change its model".into()),
         Can::Unavailable(why) => return Some(why),
@@ -544,6 +547,25 @@ fn reread(feed: &Feed, session: &str) -> Effect {
     })
 }
 
+const MODEL_CHANGE: &str = "Model change";
+const EFFORT_CHANGE: &str = "Effort change";
+
+/// The app sends model changes and messages through separate paths to the host.
+pub(in crate::model::session) fn changing(cx: &Cx<'_>) -> bool {
+    change_pending(cx.ui, cx.feed)
+}
+
+fn change_pending(ui: &super::super::Ui, feed: &Feed) -> bool {
+    ui.dock.pending.iter().any(|(key, pending)| {
+        matches!(
+            pending,
+            Pending::Action {
+                what: MODEL_CHANGE | EFFORT_CHANGE
+            }
+        ) && feed.operations.get(key).is_none_or(|op| op.loading)
+    })
+}
+
 /// Sends `session.model` under a new key; a refusal is told as a notice when it settles.
 fn send(
     state: &mut State,
@@ -570,8 +592,12 @@ fn send(
 
 /// Uses `effort` with the session's current model.
 fn effort(state: &mut State, session: &Id, effort: String, feed: &Feed) -> Vec<Effect> {
+    // An effort action targets the model shown. Do not enqueue its old model behind a switch.
+    if change_pending(state.ui(session.as_str()), feed) {
+        return Vec::new();
+    }
     match current_model(feed, session.as_str()) {
-        Some(model) => send(state, session, model, Some(effort), "Effort change"),
+        Some(model) => send(state, session, model, Some(effort), EFFORT_CHANGE),
         None => {
             state.ui_mut(session).notices.push(
                 Hue::Held,
@@ -671,11 +697,11 @@ pub(crate) fn act(state: &mut State, action: PickerAction, feed: &Feed) -> Vec<E
                     state.ui_mut(&session).picker.open = None;
                     Vec::new()
                 }
-                Choice::Model(model) => send(state, &session, model.id, None, "Model change"),
+                Choice::Model(model) => send(state, &session, model.id, None, MODEL_CHANGE),
                 Choice::Effort(level) => effort(state, &session, level, feed),
             }
         }
-        PickerAction::Pick { session, model } => send(state, &session, model, None, "Model change"),
+        PickerAction::Pick { session, model } => send(state, &session, model, None, MODEL_CHANGE),
         PickerAction::Effort {
             session,
             effort: level,
@@ -721,7 +747,7 @@ pub(crate) fn act(state: &mut State, action: PickerAction, feed: &Feed) -> Vec<E
                     (at + len).saturating_add_signed(isize::from(delta)) % len
                 });
             match cycle.get(at).map(|model| model.id.clone()) {
-                Some(model) => send(state, &session, model, None, "Model change"),
+                Some(model) => send(state, &session, model, None, MODEL_CHANGE),
                 None => Vec::new(),
             }
         }

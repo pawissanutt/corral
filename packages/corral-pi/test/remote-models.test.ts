@@ -30,6 +30,28 @@ test("a refused parent-model preflight leaves the current and default model unch
   } finally { await fx.close(); }
 });
 
+test("fresh and reused assistant turns use and report an acknowledged model selection", async () => {
+  for (const reused of [true, false]) {
+    const fx = await codeHost("assistant", { enabled: [] });
+    try {
+      const { host } = fx, { session } = host;
+      const owner = new RemoteOwner(host, fx.events, new SessionRecord(fx.cwd, "A-1", "assistant", fx.cwd),
+        session.sessionFile!, join(fx.cwd, "runtime"));
+      installRemote(host, owner, fx.cwd);
+      if (reused) await fx.turn([{ text: "first" }]);
+      const catalog = await host.remoteRegistry.get("models")!({}) as SessionModels;
+      const target = catalog.models.find(model => model.id !== catalog.current);
+      if (!target) throw new Error("fixture requires an alternative model");
+      expect(await owner.setModel({ model: target.id })).toMatchObject({ model: target.id });
+      await fx.turn([{ text: "selected" }], "next");
+      const reply = session.messages.findLast(message => message.role === "assistant");
+      expect(reply?.role === "assistant" && `${reply.provider}/${reply.model}`).toBe(target.id);
+      const usage = fx.engine.calls().findLast(args => args.includes("usage") && args.includes("--model"));
+      expect(usage?.[usage.indexOf("--model") + 1]).toBe(target.id);
+    } finally { await fx.close(); }
+  }
+});
+
 test("a typed compact command calls the session action instead of becoming a model prompt", async () => {
   const registry = new RemoteRegistry(), instructions: (string | undefined)[] = [];
   registerCommands(registry, { list: () => ({ commands: [] }), ready: () => true, async compact(text) {

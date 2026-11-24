@@ -4,8 +4,8 @@ use corral_protocol::session_state::{Capability, SessionState};
 
 use super::{Action, Cx, Facts, PickerAction, PickerKind, SessionRole, State, Ui, model_picker};
 use crate::model::Id;
-use crate::model::daemon::{DetailCache, Feed, detail_key};
-use crate::model::effect::Effect;
+use crate::model::daemon::{DetailCache, Feed, Link, Operation, detail_key};
+use crate::model::effect::{Conn, Effect, Env};
 use crate::model::health::daemon_env;
 use crate::model::nav::Form;
 use crate::model::session::transcript::LiveSession;
@@ -35,6 +35,70 @@ fn feed_with_catalog(id: &Id) -> Feed {
             model(API, "anthropic-api"),
         ],
     )
+}
+
+#[test]
+fn assistant_composer_waits_for_the_model_reply_before_sending() {
+    let id = Id::from("A-10");
+    let mut feed = feed_with_catalog(&id);
+    feed.link = Link::Up;
+    let mut live = LiveSession::default();
+    live.replace_state(Some(Box::new(SessionState {
+        model: Some(SUBSCRIPTION.into()),
+        ..SessionState::default()
+    })));
+    feed.live.insert(id.clone(), live);
+    let facts = Facts {
+        role: SessionRole::Assistant,
+        task: None,
+    };
+    let mut state = State::default();
+    let ready = |feed: &Feed, state: &State| {
+        let env = Env {
+            conn: Conn::Healthy,
+            ..daemon_env(feed, Form::Desktop)
+        };
+        let cx = Cx::new(feed, state.ui(id.as_str()), &id, env, &facts);
+        super::composer::composer(&cx)
+            .expect("composer")
+            .send
+            .unavailable
+            .is_none()
+    };
+    assert!(ready(&feed, &state));
+    let effects = state.act(
+        Action::Picker(PickerAction::Pick {
+            session: id.clone(),
+            model: API.into(),
+        }),
+        &feed,
+    );
+    let [Effect::SessionModel { key, .. }] = effects.as_slice() else {
+        panic!("expected a model change");
+    };
+    assert!(!ready(&feed, &state));
+    assert!(
+        state
+            .act(
+                Action::Picker(PickerAction::Effort {
+                    session: id.clone(),
+                    effort: "high".into()
+                }),
+                &feed
+            )
+            .is_empty()
+    );
+    feed.operations.insert(
+        key.clone(),
+        Operation {
+            method: corral_protocol::session_host::SESSION_MODEL.into(),
+            loading: false,
+            value: None,
+            error: None,
+            refusal: None,
+        },
+    );
+    assert!(ready(&feed, &state));
 }
 
 /// A session on the subscription model with `models` as its catalog, whose host keeps

@@ -425,6 +425,24 @@ fn facts(app: AppState, page: Memo<SessionPage>, header: Memo<Header>) -> AnyEle
         .into_element()
 }
 
+/// Compact Ask has no session header, but its device-local action results still need a place.
+pub(super) fn local_notice(app: AppState, session: Id, page: Memo<SessionPage>) -> AnyElement {
+    let header = computed(move || {
+        page.with(|page| {
+            page.header
+                .notice
+                .as_ref()
+                .filter(|notice| notice.id.starts_with("notice-"))
+                .map(|_| page.header.clone())
+        })
+    });
+    dynamic(move || {
+        let header = header.get()?;
+        Some(untracked(|| state(app, &session, &header, None)))
+    })
+    .into_element()
+}
+
 /// The state word with its mark, or the current notice in its place in its tone with × to
 /// dismiss one of this device's (a refusal stays until then); pressable as `finish` while a
 /// build's exit choice waits undocked.

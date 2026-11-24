@@ -187,10 +187,13 @@ pub fn host_bar(cx: &Cx<'_>) -> Option<HostBar> {
     }
 }
 
-/// The send refusal the page knows before sending: no link, or the host's own reason.
+/// Why the composer cannot send yet.
 fn refusal(cx: &Cx<'_>) -> Option<String> {
     if cx.env.conn.refuses() || cx.feed.link != Link::Up {
         return Some("corrald is unreachable".into());
+    }
+    if super::actions::model_changing(cx) {
+        return Some("Waiting for the model change to finish".into());
     }
     match cx.can("send") {
         Can::Unavailable(why) => return Some(why),
