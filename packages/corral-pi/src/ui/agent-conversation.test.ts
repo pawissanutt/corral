@@ -297,6 +297,11 @@ test("a recording that grew is read again around the reader's row, and reopening
   count = 11; stamp = "three";
   await open();
   expect(reading(view)).toBe(before);
+  // It grew once more, and they ask for its end once it is read again and before a frame shows it: its new end.
+  count = 12; stamp = "four";
+  expect(view.navigate("older")).toBeTrue(); await settle();
+  view.scroll.scrollToEnd(); await rest();
+  expect(reading(view)).toContain("✓ read src/file-12.ts · 2 lines");
 });
 
 test("a running agent's unrecorded work follows its recording once, and the settled recording replaces it", async () => {
@@ -339,22 +344,37 @@ test("a running agent's unrecorded work follows its recording once, and the sett
   expect(final).not.toContain("TYPING_NOW");
 });
 
-test("a reply that ends while the recording is being read is drawn once", async () => {
-  let row = recorded({ messages: [{ id: "assistant-1", kind: "assistant", text: "LATE_REPLY" }] });
-  let rows: TranscriptRow[] = [{ id: "u", kind: "user", text: "Question", record: 0, item: 0 }];
-  // The first read is held until the reply has ended and is in the file it then returns.
-  const held = Promise.withResolvers<void>();
-  let first = true;
+test("a reply that ends while the recording is read is drawn once: only a read that none ended during is shown", async () => {
+  let row = recorded({ messages: [{ id: "assistant-1", kind: "assistant", text: "REPLY_1" }] });
+  let rows: TranscriptRow[] = [{ id: "u", kind: "user", text: "RECORDED_PROMPT", record: 0, item: 0 }];
+  // During each of the next `ending` reads the reply being written ends and is in the file read, and the next begins.
+  let ending = 3, reads = 0;
   const { view } = reader(() => row, async () => {
-    if (first) { first = false; await held.promise; }
+    reads++;
+    await Promise.resolve();
+    if (ending > 0) {
+      ending--;
+      const messages = row.conversation!.messages, last = messages.length;
+      rows = [...rows, { id: `a${last}`, kind: "assistant", text: `REPLY_${last}`, record: last * 10, item: 0 }];
+      row = { ...row, conversation: { ...row.conversation!, messages: [...messages.map(message => ({ ...message, stopReason: "stop" as const })),
+        { id: `assistant-${last + 1}`, kind: "assistant", text: `REPLY_${last + 1}` }] } };
+    }
     return { stamp: String(rows.length), rows };
   });
   view.restore(row.key);
   view.refresh(); await settle();
-  rows = [...rows, { id: "a", kind: "assistant", text: "LATE_REPLY", record: 10, item: 0 }];
-  row = { ...row, conversation: { ...row.conversation!, messages: [{ id: "assistant-1", kind: "assistant", text: "LATE_REPLY", stopReason: "stop" }] } };
-  held.resolve(); await settle(); await settle();
-  expect(times(whole(view), "LATE_REPLY")).toBe(1);
+  // No read found the recording at rest: none is shown, and what the session holds stays as it was.
+  expect(reads).toBe(3);
+  let text = whole(view);
+  expect(text).not.toContain("RECORDED_PROMPT");
+  for (let reply = 1; reply <= 4; reply++) expect(times(text, `REPLY_${reply}`)).toBe(1);
+  // A reply ends during the next tick's first read and none during its second, which is shown.
+  ending = 1;
+  view.refresh(); await settle();
+  expect(reads).toBe(5);
+  text = whole(view);
+  expect(text).toContain("RECORDED_PROMPT");
+  for (let reply = 1; reply <= 5; reply++) expect(times(text, `REPLY_${reply}`)).toBe(1);
 });
 
 test("pages that draw no rows are not traded across a full window, and a push against its edge reads on", async () => {
@@ -398,13 +418,39 @@ test("the bottom of the resident pages is not the recording's end: a page joins 
   expect(reading(view)).toBe(bottom);
 });
 
-test("a jump to the end while the newest pages are not resident reads the recording's end", async () => {
+test("a jump to the end while the newest pages are not resident reads the recording's end, unless the owner scrolls away before it is shown", async () => {
   const row = recorded();
   const { read, reads } = recording(() => 70, () => "same");
-  const { view, open, rest } = reader(() => row, read);
+  let held: PromiseWithResolvers<void> | undefined, unreadable = false;
+  const { view, open, rest } = reader(() => row, async (id, request) => {
+    await held?.promise;
+    if (unreadable) throw new Error("transient read failure");
+    return read(id, request);
+  });
   await open();
   for (let step = 0; step < 400 && !(view.scroll.scrollTop === 0 && reads.includes("same:0")); step++) { view.scroll.scrollBy(-200); await rest(); }
-  // Pi's jump control asks the scroll view for its end.
+  // Pi's jump control asks the scroll view for its end. The owner scrolls up while that end is read: it moves nothing.
+  held = Promise.withResolvers();
+  view.scroll.scrollToEnd(); await settle();
+  view.scroll.scrollBy(-5);
+  const place = reading(view);
+  held.resolve(); held = undefined; await rest();
+  expect(reading(view)).toBe(place);
+  // They scroll up once it is read, before a frame has shown it: it moves nothing either.
+  const before = reads.length;
+  view.scroll.scrollToEnd(); await settle();
+  expect(reads.length).toBeGreaterThan(before);
+  view.scroll.scrollBy(-5);
+  expect(reading(view)).toBe(place);
+  await rest();
+  expect(reading(view)).toBe(place);
+  // Nor is a read of that end owed when it fails after they scrolled away.
+  held = Promise.withResolvers(); unreadable = true;
+  view.scroll.scrollToEnd(); await settle();
+  view.scroll.scrollBy(-5);
+  held.resolve(); held = undefined; await rest(); unreadable = false;
+  expect(whole(view)).not.toContain("could not be read");
+  // Left alone, the jump lands on the recording's end.
   view.scroll.scrollToEnd(); await rest();
   expect(reading(view)).toContain("✓ read src/file-70.ts · 2 lines");
   expect(view.following).toBeTrue();

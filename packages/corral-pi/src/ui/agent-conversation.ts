@@ -43,6 +43,16 @@ type Hold = { readonly edge: Direction; readonly anchor?: Anchor; readonly below
 /** The resident pages changed at `edge` and the next frame keeps the reader's row. `exact`: the rows on the other side are as they were. */
 type Join = { readonly edge: Direction; readonly exact: boolean };
 
+/** Why a recording is read again from its end; see `reread`. */
+type Reread = "open" | "follow" | "end" | "place";
+/** A recording read again and not shown yet: `from` is the resident pages it was read to replace. */
+interface Arrival {
+  readonly from: AgentHistory; readonly history: AgentHistory; readonly known: ReadonlySet<string>;
+  readonly mode: Reread; readonly settling: boolean; readonly saved?: Position;
+}
+
+/** The most reads of a recording's latest page in search of one the agent ended no message during. */
+const LATEST_READS = 3;
 /** Pages read again, off screen, each time a running agent's recording grows under a reader at its end. */
 const FOLLOW_PAGES = 8;
 /** The most pages one re-read walks back for the reader's row. */
@@ -93,6 +103,8 @@ export class AgentConversation {
   /** The place kept for a recording that is not read yet. */
   private reopen: Position | undefined;
   private joining: Join | undefined;
+  /** Read by `reread`, for the next frame to show. */
+  private arrived: Arrival | undefined;
   /** A page joined on this side past the resident limit: the far end is given up one frame later. */
   private trimming: Direction | undefined;
   /** The owner asked for the recording's end while its newest pages were not resident. */
@@ -185,7 +197,7 @@ export class AgentConversation {
   }
   restore(key: string): void {
     this.history = new AgentHistory(); this.recorded = undefined;
-    this.spans = []; this.joining = undefined; this.trimming = undefined; this.ending = false; this.jump = undefined;
+    this.spans = []; this.joining = undefined; this.arrived = undefined; this.trimming = undefined; this.ending = false; this.jump = undefined;
     this.failed = false; this.moved = false; this.wasLive = false; this.latestAvailable = false;
     this.toward = "older"; this.pushed = false; this.known = new Set();
     this.reopen = this.positions.get(key);
@@ -197,7 +209,8 @@ export class AgentConversation {
   /** Called on entry and on workbench ticks, never by render or snapshot publication. */
   refresh(): void {
     const row = this.host.row(), history = this.history;
-    if (!this.host.read || !row?.capabilities.transcript || history.busy) return;
+    // What was read last is shown by the next frame before anything is read again.
+    if (!this.host.read || !row?.capabilities.transcript || history.busy || this.arrived) return;
     this.failed = false;
     const live = isLive(row.state);
     const following = (this.pending?.following ?? this.following) && !history.newer;
@@ -211,8 +224,8 @@ export class AgentConversation {
   /** End: a recording whose newest pages are not resident is read again at its end. */
   jumpToRecordedEnd(): boolean {
     if (!(this.history.newer || this.latestAvailable) || this.host.canInteract?.() === false || !this.session()) return false;
-    // A read in flight ends first; this one follows it.
-    this.ending = true;
+    // A read in flight ends first, and this one follows it. One that waits for a frame is passed over.
+    this.arrived = undefined; this.ending = true;
     void this.reread("end");
     return true;
   }
@@ -274,13 +287,14 @@ export class AgentConversation {
   }
 
   /**
-   * Reads the recording again from its end, off screen, and shows it in one step, so no frame draws half of it.
+   * Reads the recording again from its end, off screen, and has the next frame show it in one step (`arrive`), so
+   * no frame draws half of it.
    * `open` is the first read, back to the place kept for the agent. `follow` keeps a reader at a running agent's end
    * on its newest messages. `end` is the End key. `place` follows a recording that changed under the resident pages,
    * whose cursors no longer read it, and keeps the reader's row: a record keeps its byte offset while a recording
    * only grows, so the read walks back until that record is resident again.
    */
-  private async reread(mode: "open" | "follow" | "end" | "place", settling = false): Promise<void> {
+  private async reread(mode: Reread, settling = false): Promise<void> {
     const session = this.session();
     if (!session || session.history.busy) return;
     const { row, read, history, current } = session;
@@ -289,19 +303,21 @@ export class AgentConversation {
     const keep = mode === "place" && !this.atEnd();
     const until = saved && !saved.following ? saved.anchor?.record : keep ? history.first : undefined;
     const pages = until === undefined ? Math.min(Math.max(1, history.pages.length), FOLLOW_PAGES) : REREAD_PAGES;
-    let next: AgentHistory | undefined, known = recordedLive(row.conversation);
+    let next: AgentHistory | undefined, known: ReadonlySet<string> = new Set();
     history.busy = true;
     try {
-      let latest = await read(row.id, { mode: "conversation" });
-      // A message that ended while the file was read may or may not be in what came back. `known` is exact only
-      // for a read that none ended during, so the file is read again.
-      for (let again = 0; again < 2 && current(); again++) {
-        const now = recordedLive(this.host.row()?.conversation);
-        if (now.size === known.size && [...now].every(id => known.has(id))) break;
-        known = now;
-        latest = await read(row.id, { mode: "conversation" });
+      // A message that ended while the file was read may or may not be in what came back. Only a read that none
+      // ended during is shown: the live messages it holds are then exactly the ones that have ended.
+      let latest: TranscriptPage | undefined;
+      for (let attempt = 0; attempt < LATEST_READS && !latest; attempt++) {
+        const before = recordedLive(this.host.row()?.conversation);
+        const page = await read(row.id, { mode: "conversation" });
+        if (!current()) return;
+        known = recordedLive(this.host.row()?.conversation);
+        if (known.size === before.size && [...known].every(id => before.has(id))) latest = page;
       }
-      if (!current()) return;
+      // The agent ended a message during every read: none is shown, and the next tick reads again.
+      if (!latest) throw new Error("recording written throughout its read");
       if (mode === "follow" && latest.stamp === history.stamp && !history.newer) { this.latestAvailable = false; this.known = known; return; }
       const walk = new AgentHistory();
       walk.open(latest);
@@ -317,19 +333,38 @@ export class AgentConversation {
     } catch { /* `next` stays undefined. */ }
     finally { history.busy = false; }
     if (!current()) return;
+    // The owner asked for the end while this was read: the read of the end is the one shown.
+    if (mode !== "end" && this.ending) return this.reread("end");
+    // The owner scrolled away from the end they asked for while it was read: nothing of it is shown or owed.
+    if (mode === "end" && !this.ending) return;
     // A refresh that failed is owed: a settled agent's last messages are read on a later tick.
     if (!next) { this.failed = true; if (mode === "follow" || mode === "end") this.latestAvailable = true; this.host.changed?.(); return; }
-    // An automatic refresh never moves a reader who left the end while it was read.
-    if (mode === "follow" && !(this.pending?.following ?? this.following)) { if (settling) this.latestAvailable = true; return; }
-    this.history = next; this.known = known; this.failed = false; this.latestAvailable = false;
+    this.arrived = { from: history, history: next, known, mode, settling, ...(saved ? { saved } : {}) };
+    this.host.changed?.();
+  }
+
+  /**
+   * What `reread` read takes the resident pages' place as a frame is laid out, the frame that places the reader,
+   * and only if what it was read for still holds then: the owner may have scrolled since it was asked for.
+   */
+  private arrive(): void {
+    const arrived = this.arrived;
+    this.arrived = undefined;
+    if (!arrived || arrived.from !== this.history) return;
+    const { mode, saved } = arrived;
+    if (mode === "end" && !this.ending) return;
+    // An automatic refresh never moves a reader who left the end.
+    if (mode === "follow" && !(this.pending?.following ?? this.following)) { if (arrived.settling) this.latestAvailable = true; return; }
+    // A recording that changed under the reader is shown around their row, unless they are at its end by now.
+    const held = mode === "place" && !this.atEnd();
+    this.history = arrived.history; this.known = arrived.known; this.failed = false; this.latestAvailable = false;
     this.joining = undefined; this.trimming = undefined;
     if (mode === "open") this.reopen = undefined;
     if (mode === "end") this.ending = false;
     if (saved) this.pending = saved;
-    else if (keep) this.joining = { edge: "older", exact: false };
+    else if (held) this.joining = { edge: "older", exact: false };
     else if (mode !== "open" || !this.moved || this.following) { this.pending = undefined; this.jump = "end"; this.toward = "older"; this.pushed = false; }
-    this.host.rewrapped?.(); this.host.changed?.();
-    if (this.ending) await this.reread("end");
+    this.host.rewrapped?.();
   }
 
   private recording(history: AgentHistory, row: AgentRow): RecordedChat {
@@ -353,6 +388,7 @@ export class AgentConversation {
   private render(width: number): string[] {
     const row = this.host.row(), lines: string[] = [], now = this.host.now();
     const say = (text: string, color: string) => wrapTextWithAnsi(text, Math.max(1, width - 1)).map(line => " " + color + line + RESET);
+    this.arrive();
     // The resident pages changed since the last frame: the reader's row is taken from that frame and where they
     // have scrolled to since, before this frame is laid out.
     const hold = this.joining && this.grip(this.joining.edge, this.joining.exact);
