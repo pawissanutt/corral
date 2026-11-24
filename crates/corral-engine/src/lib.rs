@@ -6,6 +6,7 @@
 
 pub mod artifacts;
 mod checkout;
+mod citations;
 pub mod config;
 mod dispatch;
 pub mod error;
@@ -34,6 +35,7 @@ use std::{
 
 use anyhow::{Context, Result};
 
+pub use citations::ArtifactCitation;
 pub use config::Config;
 pub use error::{as_refusal, refuse};
 pub use model::*;

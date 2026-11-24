@@ -13,6 +13,7 @@ serde_path_to_error = "0.1"
 toml.workspace = true
 jiff.workspace = true
 regex.workspace = true
+pulldown-cmark.workspace = true
 sha2.workspace = true
 rusqlite = { version = "0.40", features = ["bundled"] }
 glob = "0.3"

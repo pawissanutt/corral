@@ -1,10 +1,12 @@
+use std::{borrow::Cow, path::PathBuf};
+
 use anyhow::{Context, Result};
 use corral_types::{TASK_SIZES, normalize_tags};
 use jiff::Timestamp;
 use serde_json::json;
 
 use crate::{
-    Engine, Next, Op, Run, Runner,
+    Applied, ArtifactKind, Engine, Next, Op, Run, Runner,
     error::refuse,
     events::{EventKind, NewEvent},
     model::{Actor, Blocked, Outcome, Status, Task},
@@ -17,6 +19,63 @@ impl Engine {
     pub fn new_task(&self, new: NewTask) -> Result<Task> {
         self.store
             .transaction(|store| self.insert_new_task(store, new, &[]))
+    }
+
+    /// Publish the task and its reference attachments together, so a ready task
+    /// cannot be dispatched before the artifacts in its body are available.
+    pub fn file_task(&self, new: NewTask, paths: &[PathBuf]) -> Result<(Applied, Vec<String>)> {
+        self.store.transaction(|store| {
+            let task = self.insert_new_task(store, new, &[])?;
+            let references = self.attach_references_in(store, &task.id, paths)?;
+            let mut applied = crate::applied_task(task);
+            applied.seq = store.latest_seq()?;
+            Ok((applied, references))
+        })
+    }
+
+    fn attach_references_in(
+        &self,
+        store: &Store,
+        id: &str,
+        paths: &[PathBuf],
+    ) -> Result<Vec<String>> {
+        if paths.is_empty() {
+            return Ok(Vec::new());
+        }
+        let run = self.artifact_run(store, id)?;
+        paths
+            .iter()
+            .map(|path| {
+                self.add_artifact_file_in(
+                    store,
+                    self.artifact_target(id, run.as_deref()),
+                    path,
+                    ArtifactKind::Reference,
+                    None,
+                    Some(self.config.artifacts.max_bytes),
+                )
+                .map(|artifact| artifact.reference())
+            })
+            .collect()
+    }
+
+    pub(crate) fn message_with_attachments<'a>(
+        &self,
+        store: &Store,
+        id: &str,
+        text: &'a str,
+        paths: &[PathBuf],
+    ) -> Result<Cow<'a, str>> {
+        let references = self.attach_references_in(store, id, paths)?;
+        if references.is_empty() {
+            return Ok(Cow::Borrowed(text));
+        }
+        let mut message = text.to_owned();
+        if !text.is_empty() {
+            message.push_str("\n\n");
+        }
+        message.push_str(&references.join("\n"));
+        Ok(Cow::Owned(message))
     }
 
     /// The caller holds the creating transaction, including any dedup lookup.
@@ -164,12 +223,22 @@ impl Engine {
     }
 
     pub fn comment(&self, id: &str, text: &str) -> Result<Task> {
+        self.comment_with_attachments(id, text, &[])
+    }
+
+    pub fn comment_with_attachments(
+        &self,
+        id: &str,
+        text: &str,
+        paths: &[PathBuf],
+    ) -> Result<Task> {
         self.store.transaction(|store| {
             let mut task = store.require_task(id)?;
+            let text = self.message_with_attachments(store, id, text, paths)?;
             if !task.body.is_empty() {
                 task.body.push_str("\n\n");
             }
-            task.body.push_str(text);
+            task.body.push_str(&text);
             self.touch(&mut task);
             store.update_task(&task)?;
             self.task_event(store, id, EventKind::Commented, json!({"text":text}))?;

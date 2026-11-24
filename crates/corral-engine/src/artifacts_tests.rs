@@ -112,6 +112,70 @@ fn tool_output_is_recorded_once_per_run_and_name() {
 }
 
 #[test]
+fn markdown_sections_return_exact_source_and_explain_missing_sections() {
+    let root = crate::tests::tempdir();
+    let engine = Engine::init(root.path(), None).unwrap();
+    let task = "T-012";
+    engine.store.insert_task(&crate::tests::task(task)).unwrap();
+    let fact = "## 4. Fact model\r\n\r\n```md\r\n# Not a heading\r\n```\r\n\r\n### *Detail*\r\nmore\r\n\r\n";
+    let last = "Last topic\r\n----------\r\nend\r\n";
+    let markdown = format!("# Start\r\n\r\n{fact}{last}");
+    let artifact = engine
+        .add_artifact_bytes(
+            task,
+            markdown.as_bytes(),
+            ArtifactKind::Reference,
+            "Custom title",
+        )
+        .unwrap();
+    let reference = artifact.reference();
+    for (section, expected) in [("4-fact-model", fact), ("last-topic", last)] {
+        assert_eq!(
+            engine
+                .show_artifact(&format!("{reference}#{section}"))
+                .unwrap(),
+            expected.as_bytes()
+        );
+    }
+    assert_eq!(
+        engine.show_artifact(&reference).unwrap(),
+        markdown.as_bytes()
+    );
+    let unknown = engine
+        .show_artifact(&format!("{reference}#missing"))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        unknown.contains("start, 4-fact-model, detail, last-topic"),
+        "{unknown}"
+    );
+    for (title, kind, bytes) in [
+        (
+            "gate output",
+            ArtifactKind::Log,
+            b"# Setup\ncommand failed\n".as_slice(),
+        ),
+        (
+            "setup.sh",
+            ArtifactKind::Reference,
+            b"# Setup\necho hello\n",
+        ),
+        (
+            "Setup script",
+            ArtifactKind::Reference,
+            b"#!/bin/sh\n# Setup\necho hello\n",
+        ),
+    ] {
+        let artifact = engine.add_artifact_bytes(task, bytes, kind, title).unwrap();
+        let error = engine
+            .show_artifact(&format!("{}#setup", artifact.reference()))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("not Markdown"), "{error}");
+    }
+}
+
+#[test]
 fn artifact_replacement_refuses_stale_reference_and_names_chain_tip() {
     let root = crate::tests::tempdir();
     let engine = Engine::init(root.path(), None).unwrap();

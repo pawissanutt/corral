@@ -10,7 +10,7 @@ use crate::{
     checkout::Checkout,
     config::{CommandContext, EffectiveProject, render_command, render_wrap, valid_env_key},
     events::EventKind,
-    prompt::write_prompt,
+    prompt::{PromptReferences, write_prompt},
     refuse,
     runner::{
         InputTag,
@@ -216,8 +216,12 @@ impl Engine {
     }
 
     pub fn reply(&self, id: &str, text: &str) -> Result<Run> {
-        self.reply_with(id, None, text, |runner, session, origin| {
-            runner.send(session, text, origin)
+        self.reply_with_attachments(id, text, &[])
+    }
+
+    pub fn reply_with_attachments(&self, id: &str, text: &str, paths: &[PathBuf]) -> Result<Run> {
+        self.reply_with(id, None, text, paths, |runner, session, origin, message| {
+            runner.send(session, message, origin)
         })
         .map(|(run, ())| run)
     }
@@ -229,9 +233,13 @@ impl Engine {
         text: &str,
         tag: InputTag<'_>,
     ) -> Result<SubmitReply> {
-        self.reply_with(id, Some(run), text, |runner, session, origin| {
-            runner.send_tagged(session, text, origin, tag)
-        })
+        self.reply_with(
+            id,
+            Some(run),
+            text,
+            &[],
+            |runner, session, origin, message| runner.send_tagged(session, message, origin, tag),
+        )
         .map(|(_, reply)| reply)
     }
 
@@ -240,7 +248,8 @@ impl Engine {
         id: &str,
         expected_run: Option<&str>,
         text: &str,
-        send: impl FnOnce(PiRunner<'_>, &SessionRef, Origin) -> Result<T>,
+        paths: &[PathBuf],
+        send: impl FnOnce(PiRunner<'_>, &SessionRef, Origin, &str) -> Result<T>,
     ) -> Result<(Run, T)> {
         self.store.transaction(|store| {
             let mut task = store.require_task(id)?;
@@ -259,7 +268,8 @@ impl Engine {
             } else {
                 Origin::Owner
             };
-            let delivered = send(self.session_runner(), session, origin)
+            let message = self.message_with_attachments(store, id, text, paths)?;
+            let delivered = send(self.session_runner(), session, origin, &message)
                 .map_err(|error| {
                     if let Some(refusal) = as_refusal(&error) {
                         refuse(
@@ -285,7 +295,7 @@ impl Engine {
                 Some(&run.id),
                 EventKind::Replied,
                 self.actor,
-                json!({"text":text}),
+                json!({"text":message}),
             )?;
             if task.status == Status::Blocked {
                 set_lifecycle(&mut task, Status::Running);
@@ -542,7 +552,7 @@ impl Engine {
         pending.dir = Some(dir.clone());
         let prompt_file = dir.join("prompt.md");
         let bin = crate::binary_path()?;
-        let artifacts = store.list_artifacts(Some(&task.id))?;
+        let references = PromptReferences::load(self, store, task, note)?;
         write_prompt(
             &prompt_file,
             &bin,
@@ -550,7 +560,7 @@ impl Engine {
             &run,
             note,
             &self.config,
-            &artifacts,
+            &references,
         )?;
         let label = format!("{} {}", task.id, task.title);
         let command = render_command(

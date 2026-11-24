@@ -12,7 +12,7 @@ use std::{
     collections::BTreeMap,
     env,
     io::{self, Write},
-    path::Path,
+    path::{Path, PathBuf},
     process::ExitCode,
     thread,
     time::Duration,
@@ -29,7 +29,8 @@ use serde::Serialize;
 use serde_json::{Map, json};
 
 use args::{
-    ArtifactCommand, Cli, Command, ConfigCommand, ExtCommand, Id, Text, UsageCommand, Verdict,
+    ArtifactCommand, Cli, Command, ConfigCommand, ExtCommand, Id, Message, Text, UsageCommand,
+    Verdict,
 };
 use output::{Output, TaskView};
 
@@ -135,6 +136,8 @@ fn run(command: Command, out: &mut Output<'_>) -> Result<u8> {
     match command {
         Command::New {
             title,
+            body_file,
+            attach,
             project,
             idea,
             ready,
@@ -149,6 +152,11 @@ fn run(command: Command, out: &mut Output<'_>) -> Result<u8> {
         } => {
             let task = NewTask {
                 title,
+                body: body_file
+                    .as_deref()
+                    .map(editor::read_text)
+                    .transpose()?
+                    .unwrap_or_default(),
                 project,
                 priority,
                 kind,
@@ -170,7 +178,7 @@ fn run(command: Command, out: &mut Output<'_>) -> Result<u8> {
                     .unwrap_or_default(),
                 ..NewTask::default()
             };
-            apply(&engine, out, Op::New { task }, false)?;
+            file_task(&engine, out, task, &attach)?;
         }
         Command::List {
             status,
@@ -196,12 +204,16 @@ fn run(command: Command, out: &mut Output<'_>) -> Result<u8> {
             })?;
             out.value(tasks.as_slice(), output::tasks)?;
         }
-        Command::Show(Id { id }) => out.show(&TaskView {
-            task: engine.store.require_task(&id)?,
-            runs: engine.store.list_runs(&id)?,
-            checks: engine.store.list_latest_checks(&id)?,
-            artifacts: engine.list_artifacts(Some(&id))?,
-        })?,
+        Command::Show(Id { id }) => {
+            let task = engine.store.require_task(&id)?;
+            out.show(&TaskView {
+                references: engine.artifact_references(&task.body),
+                task,
+                runs: engine.store.list_runs(&id)?,
+                checks: engine.store.list_latest_checks(&id)?,
+                artifacts: engine.list_artifacts(Some(&id))?,
+            })?;
+        }
         Command::Log(Id { id }) => {
             engine.store.require_task(&id)?;
             let events = engine.store.list_events(&id)?;
@@ -209,11 +221,14 @@ fn run(command: Command, out: &mut Output<'_>) -> Result<u8> {
         }
         Command::Edit(flags) => {
             let (id, edit) = editor::prepare(&engine, flags)?;
+            warn_task_text(
+                &engine,
+                edit.title.as_deref().unwrap_or_default(),
+                edit.body.as_deref().unwrap_or_default(),
+            );
             apply(&engine, out, Op::Edit { id, edit }, false)?;
         }
-        Command::Comment(Text { id, text }) => {
-            apply(&engine, out, Op::Comment { id, text }, false)?
-        }
+        Command::Comment(message) => write_message(&engine, out, message, false)?,
         Command::Move { id, status, force } => apply(&engine, out, Op::Move { id, status }, force)?,
         Command::Dispatch {
             id,
@@ -221,7 +236,7 @@ fn run(command: Command, out: &mut Output<'_>) -> Result<u8> {
             base,
             force,
         } => apply(&engine, out, Op::Dispatch { id, profile, base }, force)?,
-        Command::Reply(Text { id, text }) => apply(&engine, out, Op::Reply { id, text }, false)?,
+        Command::Reply(message) => write_message(&engine, out, message, true)?,
         Command::Stop(Id { id }) => apply(&engine, out, Op::Stop { id }, false)?,
         Command::Retry {
             id,
@@ -239,7 +254,10 @@ fn run(command: Command, out: &mut Output<'_>) -> Result<u8> {
             },
             false,
         )?,
-        Command::Done { id, summary } => apply(&engine, out, Op::Done { id, summary }, false)?,
+        Command::Done { id, summary } => {
+            warn_unresolved(&engine, &summary);
+            apply(&engine, out, Op::Done { id, summary }, false)?;
+        }
         Command::Gate(Id { id }) => apply(&engine, out, Op::Gate { id }, false)?,
         Command::Review { id, profile } => apply(&engine, out, Op::Review { id, profile }, false)?,
         Command::Verdict {
@@ -252,6 +270,9 @@ fn run(command: Command, out: &mut Output<'_>) -> Result<u8> {
                 Some(path) => Some(editor::read_text(&path)?),
                 None => notes,
             };
+            if let Some(notes) = &notes {
+                warn_unresolved(&engine, notes);
+            }
             apply(
                 &engine,
                 out,
@@ -360,6 +381,63 @@ fn run(command: Command, out: &mut Output<'_>) -> Result<u8> {
 
 fn apply(engine: &Engine, out: &mut Output<'_>, op: Op, force: bool) -> Result<()> {
     out.applied(&engine.apply(op, force)?)
+}
+
+fn warn_task_text(engine: &Engine, title: &str, body: &str) {
+    // Resolve both fields together so a citation repeated across them warns once.
+    warn_unresolved(engine, &format!("{title}\n\n{body}"));
+}
+
+fn warn_unresolved(engine: &Engine, text: &str) {
+    for reference in engine.unresolved_references(text) {
+        // These diagnostics must not make a write fail, even if stderr is closed.
+        let _ = writeln!(
+            io::stderr().lock(),
+            "warning: unresolved reference {reference}"
+        );
+    }
+}
+
+fn file_task(
+    engine: &Engine,
+    out: &mut Output<'_>,
+    task: NewTask,
+    paths: &[PathBuf],
+) -> Result<()> {
+    let (applied, attachments) = engine.file_task(task, paths)?;
+    // Resolve after attachment, since the supplied text can cite the new artifacts.
+    let task = applied.task.as_ref().context("new did not return a task")?;
+    warn_task_text(engine, &task.title, &task.body);
+    out.filed(&applied, &attachments)
+}
+
+fn write_message(
+    engine: &Engine,
+    out: &mut Output<'_>,
+    message: Message,
+    reply: bool,
+) -> Result<()> {
+    let Message {
+        text: Text { id, text },
+        attach,
+    } = message;
+    let result = if reply {
+        engine
+            .reply_with_attachments(&id, &text, &attach)
+            .and_then(|run| Ok((engine.store.require_task(&id)?, Some(run))))
+    } else {
+        engine
+            .comment_with_attachments(&id, &text, &attach)
+            .map(|task| (task, None))
+    };
+    warn_unresolved(engine, &text);
+    let (task, run) = result?;
+    out.applied(&Applied {
+        task: Some(task),
+        run,
+        seq: engine.store.latest_seq()?,
+        ..Applied::default()
+    })
 }
 
 fn checked_config(root: &Path) -> Result<Config> {
@@ -669,7 +747,7 @@ fn artifact(engine: &Engine, out: &mut Output<'_>, command: ArtifactCommand) -> 
             })
         }
         ArtifactCommand::Show { reference } if out.json => {
-            let artifact = engine.require_artifact(&reference)?;
+            let artifact = engine.require_artifact_citation(&reference)?;
             out.value(&artifact, output::artifact_line)
         }
         ArtifactCommand::Show { reference } => out

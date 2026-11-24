@@ -461,7 +461,7 @@ impl Engine {
         })
     }
 
-    fn artifact_run(&self, store: &Store, task: &str) -> Result<Option<String>> {
+    pub(crate) fn artifact_run(&self, store: &Store, task: &str) -> Result<Option<String>> {
         // Run-launched CLI commands inherit this context. Owner submissions
         // (including daemon RPCs) are task-level attachments.
         if !matches!(self.actor, Actor::Agent | Actor::Reviewer)
@@ -484,7 +484,11 @@ impl Engine {
         Ok(exists.then_some(run))
     }
 
-    fn artifact_target<'a>(&self, task: &'a str, run: Option<&'a str>) -> ArtifactTarget<'a> {
+    pub(crate) fn artifact_target<'a>(
+        &self,
+        task: &'a str,
+        run: Option<&'a str>,
+    ) -> ArtifactTarget<'a> {
         ArtifactTarget {
             owner: ArtifactOwner::Task(task),
             run,
@@ -624,12 +628,6 @@ impl Engine {
             format!("artifact {reference} does not exist; use corral artifact list to find it"),
             vec![],
         ))
-    }
-
-    /// Return the exact uncompressed bytes stored under an owner-local reference.
-    pub fn show_artifact(&self, reference: &str) -> Result<Vec<u8>> {
-        let artifact = self.require_artifact(reference)?;
-        fs::read(self.blob_path(&artifact.sha256)).context("read artifact blob")
     }
 
     /// Open a blob identified by catalog metadata. Useful for bounded paging;

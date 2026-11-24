@@ -4381,9 +4381,48 @@ Omit the owner from `artifact list` to list the whole catalog. Text output hides
 replaced rows by default; `--all` includes them, and JSON output always includes them.
 `artifact show <ref>` writes the stored bytes; `--json` shows metadata instead. The app finder also hides submission and record groups
 and replaced rows by default. Use its All control or a `kind:` filter to include hidden
-rows. Run prompts list up to 20 current task reference and report artifacts, newest
-first; reviewer prompts also include evidence. Parent and project library artifacts
-are not automatically included.
+rows.
+
+### Cite tasks, artifacts and Markdown sections
+
+Use `T-<n>` for a task, `T-<n>:<k>` for one of its artifacts and
+`T-<n>:<k>#<section>` for a section of a Markdown artifact. References are recognized
+at word boundaries, including inside backticks. Use the task ID as printed by Corral
+(including any leading zeroes). Project library addresses still work with `artifact show`
+but are not task-text citations.
+
+To form a section name, lowercase the heading text, remove characters other than
+letters, digits, spaces and hyphens, and replace spaces with hyphens. For example,
+`## 4. Fact model` becomes `4-fact-model`:
+
+```sh
+corral-next artifact show 'T-012:3#4-fact-model'
+```
+
+The command prints the original Markdown from that heading up to the next heading of
+an equal or higher level (or the end). An unknown section lists the available section
+names; a non-Markdown artifact cannot be read by section. Use a `.md` or `.markdown`
+filename or title to identify Markdown explicitly.
+
+```sh
+corral-next new 'Implement the design' --body-file task.md --attach design.md --attach notes.md --json
+corral-next comment T-012 'See the new findings' --attach findings.md
+corral-next reply T-012 'See the reproduction log' --attach reproduction.log
+```
+
+`new --json` returns the new references in `attachments`; `comment` and `reply` append
+attached references to the message. `show` lists the artifact references in the task
+body (`references` in JSON). Writing commands warn about unresolved citations without
+rejecting the text.
+
+The run prompt's **References** section lists artifacts cited in the body or run note,
+with their metadata and exact read commands, or `not found` when unresolved; it never
+copies the artifact contents. Prompts also list up to 20 current task reference and report
+artifacts, newest first (including evidence for reviewers), and name the parent task, if
+any, without copying its body. Parent and project library artifacts are not automatically
+listed.
+
+Artifacts are stored by content hash and never rewritten: attach a revised document as a new artifact and edit the texts that should cite it.
 
 ## `corral pin`
 

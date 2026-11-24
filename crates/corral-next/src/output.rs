@@ -6,7 +6,8 @@ use std::{
 
 use anyhow::{Context, Result};
 use corral_engine::{
-    Actor, Applied, Artifact, Check, Event, Next, Run, Task, UsageSummary, UsageTotal, as_refusal,
+    Actor, Applied, Artifact, ArtifactCitation, Check, Event, Next, Run, Task, UsageSummary,
+    UsageTotal, as_refusal,
 };
 use serde::Serialize;
 use unicode_width::UnicodeWidthStr;
@@ -46,30 +47,30 @@ impl Output<'_> {
     }
 
     pub fn applied(&mut self, applied: &Applied) -> Result<()> {
-        self.value(applied, |out, applied| {
-            if let Some(task) = &applied.task {
-                writeln!(
-                    out,
-                    "{}: {} — {}",
-                    task.id,
-                    task.status.as_str(),
-                    task.title
-                )?;
-            }
-            if let Some(run) = &applied.run {
-                writeln!(
-                    out,
-                    "{} {}: {}",
-                    run.role.as_str(),
-                    run.id,
-                    run.worktree.display()
-                )?;
-            }
-            if let Some(artifact) = &applied.artifact {
-                artifact_line(out, artifact)?;
-            }
-            Ok(())
-        })
+        self.value(applied, applied_lines)
+    }
+
+    pub fn filed(&mut self, applied: &Applied, attachments: &[String]) -> Result<()> {
+        #[derive(Serialize)]
+        struct FiledTask<'a> {
+            #[serde(flatten)]
+            applied: &'a Applied,
+            attachments: &'a [String],
+        }
+
+        self.value(
+            &FiledTask {
+                applied,
+                attachments,
+            },
+            |out, filed| {
+                applied_lines(out, filed.applied)?;
+                for reference in filed.attachments {
+                    writeln!(out, "  {reference}")?;
+                }
+                Ok(())
+            },
+        )
     }
 
     pub fn show(&mut self, view: &TaskView) -> Result<()> {
@@ -80,6 +81,7 @@ impl Output<'_> {
                 runs,
                 checks,
                 artifacts,
+                references,
             } = view;
             writeln!(out, "{}: {}", task.id, task.title)?;
             writeln!(
@@ -122,6 +124,16 @@ impl Output<'_> {
             }
             if !task.body.is_empty() {
                 writeln!(out, "\n{}", task.body)?;
+            }
+            if !references.is_empty() {
+                writeln!(out, "\nReferences:")?;
+                for citation in references {
+                    let title = citation
+                        .artifact
+                        .as_ref()
+                        .map_or("not found", |artifact| artifact.title.as_str());
+                    writeln!(out, "  {} — {title}", citation.reference)?;
+                }
             }
             writeln!(out, "\nRuns:")?;
             for run in runs {
@@ -166,6 +178,31 @@ impl Output<'_> {
     }
 }
 
+fn applied_lines(out: &mut StdoutLock<'static>, applied: &Applied) -> io::Result<()> {
+    if let Some(task) = &applied.task {
+        writeln!(
+            out,
+            "{}: {} — {}",
+            task.id,
+            task.status.as_str(),
+            task.title
+        )?;
+    }
+    if let Some(run) = &applied.run {
+        writeln!(
+            out,
+            "{} {}: {}",
+            run.role.as_str(),
+            run.id,
+            run.worktree.display()
+        )?;
+    }
+    if let Some(artifact) = &applied.artifact {
+        artifact_line(out, artifact)?;
+    }
+    Ok(())
+}
+
 fn next_command(program: &str, root: Option<&Path>, next: &Next) -> String {
     if let Some(root) = root {
         let arg = format!("--root={}", root.display());
@@ -181,6 +218,7 @@ pub(crate) struct TaskView {
     pub runs: Vec<Run>,
     pub checks: Vec<Check>,
     pub artifacts: Vec<Artifact>,
+    pub references: Vec<ArtifactCitation>,
 }
 
 pub(crate) fn tasks(out: &mut impl Write, tasks: &[Task]) -> io::Result<()> {

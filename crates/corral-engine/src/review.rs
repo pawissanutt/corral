@@ -19,7 +19,7 @@ use crate::{
     dispatch::{LaunchRequest, PendingLaunch},
     events::EventKind,
     pipeline::{GATE_FAILED, OperationFailure, PIPELINE_FAILED},
-    prompt::rereview_request,
+    prompt::{PromptReferences, rereview_request},
     refuse,
     tasks::{next_changes, next_force_approve, next_reply, next_retry, set_lifecycle},
 };
@@ -314,13 +314,13 @@ impl Engine {
                         .join(id)
                         .join(&reviewer.id)
                         .join("prompt.md");
-                    let artifacts = store.list_artifacts(Some(&task.id))?;
+                    let references = PromptReferences::load(self, store, &task, None)?;
                     let request = rereview_request(
                         &crate::binary_path()?,
                         &task,
                         &reviewer,
                         &prompt,
-                        &artifacts,
+                        &references,
                     )?;
                     match self.session_runner().send(session, &request, Origin::Auto) {
                         Ok(()) => {

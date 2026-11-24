@@ -48,6 +48,12 @@ pub(crate) enum Command {
     /// Create a task (Backlog unless --idea or --ready is set).
     New {
         title: String,
+        /// Read the task body from a UTF-8 file.
+        #[arg(long, value_name = "FILE")]
+        body_file: Option<PathBuf>,
+        /// Store a file as a reference artifact. Repeat for multiple files.
+        #[arg(long, value_name = "PATH")]
+        attach: Vec<PathBuf>,
         #[arg(short, long)]
         project: Option<String>,
         #[arg(long, conflicts_with = "ready")]
@@ -91,7 +97,7 @@ pub(crate) enum Command {
     /// Update task fields, or edit the title and body in $EDITOR with no flags.
     Edit(Edit),
     /// Append text to a task's body.
-    Comment(Text),
+    Comment(Message),
     /// Change a task's status.
     Move {
         id: String,
@@ -111,7 +117,7 @@ pub(crate) enum Command {
         force: bool,
     },
     /// Send text to the worker.
-    Reply(Text),
+    Reply(Message),
     /// Stop the worker session.
     Stop(Id),
     /// Restart a worker, optionally starting over from base.
@@ -230,6 +236,15 @@ pub(crate) struct Text {
 }
 
 #[derive(Args)]
+pub(crate) struct Message {
+    #[command(flatten)]
+    pub text: Text,
+    /// Store a file as an artifact and append its reference. Repeat for multiple files.
+    #[arg(long, value_name = "PATH")]
+    pub attach: Vec<PathBuf>,
+}
+
+#[derive(Args)]
 pub(crate) struct Edit {
     pub id: String,
     #[arg(long)]
@@ -297,7 +312,7 @@ pub(crate) enum ArtifactCommand {
         #[arg(long)]
         all: bool,
     },
-    /// Write the blob to stdout, or show its metadata with --json.
+    /// Write the blob or cited Markdown section to stdout, or show metadata with --json.
     Show {
         #[arg(value_name = "REF")]
         reference: String,

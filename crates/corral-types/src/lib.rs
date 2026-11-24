@@ -10,11 +10,13 @@ pub mod facts;
 pub mod lenses;
 mod op;
 pub mod pricing;
+mod references;
 mod system;
 mod task_metadata;
 
 pub use facts::*;
 pub use op::{ConfigProblem, Next, Op, Refusal};
+pub use references::{Reference, references_in, section_slug};
 pub use system::*;
 pub use task_metadata::{BUILTIN_TAGS, TASK_SIZES, TaskDifficulty, normalize_tags, validate_tag};
 

@@ -3,7 +3,7 @@ use std::{
     process::{Command, Output},
 };
 
-use serde_json::Value;
+use serde_json::{Value, json};
 
 fn cli(root: &Path, actor: &str, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_corral-next"))
@@ -28,6 +28,131 @@ fn init_task(root: &Path) -> String {
     let new = stdout(cli(root, "owner", &["--json", "new", "Artifact test"]));
     let task: Value = serde_json::from_slice(&new).unwrap();
     task["task"]["id"].as_str().unwrap().to_owned()
+}
+
+#[test]
+fn new_files_a_body_and_readable_attachments() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let owner = |args: &[&str]| stdout(cli(root, "owner", args));
+    owner(&["init", "--first-id", "12"]);
+    let body = "Read `T-012:1#fact-model` for the design.\n";
+    let section = "## Fact model\n\nArtifact-only details.\n\n";
+    let design = format!("# Design\n\n{section}## Other heading\n");
+    std::fs::write(root.join("body.md"), body).unwrap();
+    std::fs::write(root.join("design.md"), &design).unwrap();
+    std::fs::write(root.join("log.txt"), "Log data.\n").unwrap();
+
+    // A failed attachment must not publish a ready task with dangling citations.
+    let failed = cli(
+        root,
+        "owner",
+        &[
+            "new",
+            "Broken filing",
+            "--ready",
+            "--attach",
+            "design.md",
+            "--attach",
+            "missing.md",
+        ],
+    );
+    assert!(!failed.status.success(), "{failed:?}");
+
+    let filed = cli(
+        root,
+        "owner",
+        &[
+            "--json",
+            "new",
+            "File a design",
+            "--body-file",
+            "body.md",
+            "--attach",
+            "design.md",
+            "--attach",
+            "log.txt",
+        ],
+    );
+    assert!(filed.stderr.is_empty(), "{filed:?}");
+    let filed: Value = serde_json::from_slice(&stdout(filed)).unwrap();
+    assert_eq!(filed["task"]["body"], body);
+    assert_eq!(filed["attachments"], json!(["T-012:1", "T-012:2"]));
+    let id = filed["task"]["id"].as_str().unwrap();
+    let reference = filed["attachments"][0].as_str().unwrap();
+    let section_ref = format!("{reference}#fact-model");
+    assert_eq!(owner(&["artifact", "show", reference]), design.as_bytes());
+    assert_eq!(
+        owner(&["artifact", "show", &section_ref]),
+        section.as_bytes()
+    );
+    let metadata: Value =
+        serde_json::from_slice(&owner(&["--json", "artifact", "show", &section_ref])).unwrap();
+    assert_eq!(metadata["title"], "design.md");
+    assert_eq!(metadata["kind"], "reference");
+
+    let view: Value = serde_json::from_slice(&owner(&["--json", "show", id])).unwrap();
+    let citations = view["references"].as_array().unwrap();
+    assert_eq!(citations.len(), 1);
+    assert_eq!(citations[0]["reference"], section_ref);
+    assert_eq!(citations[0]["artifact"], metadata);
+    let shown = String::from_utf8(owner(&["show", id])).unwrap();
+    assert!(
+        shown
+            .lines()
+            .any(|line| line.contains(&section_ref) && line.contains("design.md"))
+    );
+    assert!(!shown.contains("Artifact-only details."));
+
+    for command in ["comment", "reply"] {
+        let mut args = vec![command, id, "Read the log", "--attach", "log.txt"];
+        if command == "comment" {
+            args.extend(["--attach", "missing.md"]);
+        }
+        let refused = cli(root, "owner", &args);
+        assert!(!refused.status.success(), "{refused:?}");
+    }
+    let after_failure: Value = serde_json::from_slice(&owner(&["--json", "show", id])).unwrap();
+    assert_eq!(after_failure["task"]["body"], body);
+    assert_eq!(after_failure["artifacts"], view["artifacts"]);
+    owner(&["comment", id, "Read the log", "--attach", "log.txt"]);
+    let after_comment: Value = serde_json::from_slice(&owner(&["--json", "show", id])).unwrap();
+    assert_eq!(
+        after_comment["task"]["body"],
+        format!("{body}\n\nRead the log\n\nT-012:3")
+    );
+    assert_eq!(owner(&["artifact", "show", "T-012:3"]), b"Log data.\n");
+}
+
+#[test]
+fn writing_warns_once_per_unknown_citation_without_rejecting_the_edit() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let id = init_task(root);
+    let body = format!("Known {id}; missing `T-901`, `T-902:3` and T-902:3.");
+    std::fs::write(root.join("body.md"), &body).unwrap();
+    let output = cli(
+        root,
+        "owner",
+        &[
+            "--json",
+            "edit",
+            &id,
+            "--title",
+            "About T-901",
+            "--body-file",
+            "body.md",
+        ],
+    );
+    assert!(output.status.success(), "{output:?}");
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(stderr.matches("warning:").count(), 2, "{stderr}");
+    for reference in ["T-901", "T-902:3"] {
+        assert_eq!(stderr.matches(reference).count(), 1, "{stderr}");
+    }
+    assert!(!stderr.contains(&id), "{stderr}");
+    let applied: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(applied["task"]["body"], body);
 }
 
 #[test]
