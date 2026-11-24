@@ -10,6 +10,7 @@ use std::{
     fs::File,
     io::{self, Read, Seek, SeekFrom},
     ops::Range,
+    path::PathBuf,
     sync::{LazyLock, Mutex, PoisonError},
 };
 
@@ -53,9 +54,15 @@ fn cited(engine: &Engine, address: &str) -> Result<(Artifact, File)> {
     Ok((artifact, file))
 }
 
-/// What the engine decided about a section, by artifact reference, blob digest and slug:
-/// where it lies, or that it is not there (no such heading, not Markdown).
-type Found = HashMap<(String, String, String), Option<Range<u64>>>;
+/// Which section of which artifact of which store: the store's state directory (one daemon
+/// process may serve several), the artifact reference, its blob digest and the slug. The
+/// engine's decision also rests on the attachment's source format in that store's catalog, so
+/// a decision never crosses stores.
+type Key = (PathBuf, String, String, String);
+
+/// What the engine decided about a section: where it lies, or that it is not there (no such
+/// heading, not Markdown).
+type Found = HashMap<Key, Option<Range<u64>>>;
 
 /// How many decided sections are held before they are let go together.
 const HELD: usize = 512;
@@ -64,11 +71,18 @@ const NO_SECTION: &str = "artifact section not found";
 
 static FOUND: LazyLock<Mutex<Found>> = LazyLock::new(Mutex::default);
 
+#[cfg(test)]
+thread_local! {
+    /// How many times this thread asked the engine to find a section.
+    pub(super) static PARSED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Where `section` lies in the artifact's stored bytes, as the engine finds it: decided once
-/// per artifact and section while held. Only the engine's own answer is ever used; a read
-/// that failed (not a refusal) is not held.
+/// per store, artifact and section while held. Only the engine's own answer is ever used; a
+/// read that failed (not a refusal) is not held.
 fn section_range(engine: &Engine, artifact: &Artifact, section: &str) -> Result<Range<u64>> {
     let key = (
+        engine.state_dir.clone(),
         artifact.reference(),
         artifact.sha256.clone(),
         section.to_owned(),
@@ -77,6 +91,8 @@ fn section_range(engine: &Engine, artifact: &Artifact, section: &str) -> Result<
     if let Some(decided) = held().get(&key) {
         return decided.clone().ok_or_else(|| NotFound(NO_SECTION).into());
     }
+    #[cfg(test)]
+    PARSED.with(|parsed| parsed.set(parsed.get() + 1));
     let decided = match engine.artifact_section_range(artifact, section) {
         Ok(range) => Some(range.start as u64..range.end as u64),
         Err(error) if error.is::<Refusal>() => None,

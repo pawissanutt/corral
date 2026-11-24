@@ -3,7 +3,7 @@
 use std::fs;
 
 use corral_engine::ArtifactKind;
-use corral_protocol::detail::{DetailBody, DetailGet, DetailRef};
+use corral_protocol::detail::{DetailBody, DetailGet, DetailRef, DetailReply};
 
 use super::tests::Fixture;
 use super::{NotFound, detail};
@@ -143,4 +143,77 @@ fn a_citation_resolves_without_content_and_a_long_section_pages_from_its_window(
     }
     assert!(pages > 1, "the section spans pages");
     assert_eq!(joined.as_bytes(), expected.as_slice());
+}
+
+/// A store holding one cited artifact: the same bytes in every store, attached under
+/// `filename`, whose extension makes it Markdown or not in that store's catalog.
+fn store_with(filename: &str, source: &str) -> (Fixture, String) {
+    let fixture = Fixture::new();
+    let task = fixture.named_task("cited", None);
+    let engine = fixture.shared.engine().unwrap();
+    let path = fixture.shared.root().join(filename);
+    fs::write(&path, source).unwrap();
+    let artifact = engine
+        .add_artifact(&task, &path, ArtifactKind::Reference, None)
+        .unwrap();
+    (fixture, format!("{}#goal", artifact.reference()))
+}
+
+fn ask(fixture: &Fixture, target: DetailRef, page: Option<String>) -> anyhow::Result<DetailReply> {
+    detail(
+        &fixture.shared,
+        DetailGet {
+            target,
+            page,
+            etag: None,
+        },
+    )
+}
+
+/// One daemon process can serve several stores. The same reference, bytes and slug resolve by
+/// each store's own catalog (Markdown in one, TOML in the other) whichever store asks first,
+/// and within one store paging a section asks the engine to find it once.
+#[test]
+fn a_section_decision_stays_in_its_store_and_is_made_once_there() {
+    let source = format!("# Goal\n{}", "a line of the goal\n".repeat(1000));
+    for markdown_first in [true, false] {
+        let (markdown, cited) = store_with("design.md", &source);
+        let (toml, same) = store_with("settings.toml", &source);
+        assert_eq!(cited, same, "both stores cite the same reference");
+        let citation = || DetailRef::Citation {
+            reference: cited.clone(),
+        };
+        let order = if markdown_first {
+            [&markdown, &toml]
+        } else {
+            [&toml, &markdown]
+        };
+        for fixture in order {
+            let answer = ask(fixture, citation(), None);
+            if std::ptr::eq(fixture, &markdown) {
+                assert!(answer.is_ok(), "Markdown store: {answer:?}");
+            } else {
+                assert!(answer.unwrap_err().is::<NotFound>(), "TOML store");
+            }
+        }
+        let before = super::citation::PARSED.with(std::cell::Cell::get);
+        let target = DetailRef::Artifact {
+            reference: cited.clone(),
+        };
+        let (mut page, mut pages) = (None, 0);
+        loop {
+            let reply = ask(&markdown, target.clone(), page).unwrap();
+            pages += 1;
+            match reply.next {
+                Some(next) => page = Some(next),
+                None => break,
+            }
+        }
+        assert!(pages > 1, "the section spans pages");
+        assert_eq!(
+            super::citation::PARSED.with(std::cell::Cell::get),
+            before,
+            "paging reuses the store's decision"
+        );
+    }
 }
