@@ -147,13 +147,8 @@ fn missing_def_reason(path: &str, coverage: Option<LensCoverage<'_>>) -> Option<
     if coverage.unread_files.contains(path) {
         return Some("file was not read completely by the provider");
     }
-    // Omission counts are reply-wide, not attributed to files or categories.
     coverage
-        .provider
-        .skipped
-        .values()
-        .chain(coverage.provider.omitted.values())
-        .any(|&n| n > 0)
+        .has_omissions()
         .then_some("provider answer had skipped or omitted facts")
 }
 

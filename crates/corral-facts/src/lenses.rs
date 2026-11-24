@@ -303,9 +303,20 @@ pub struct LensCoverage<'a> {
     pub unread_files: &'a BTreeSet<String>,
 }
 
+impl LensCoverage<'_> {
+    fn has_omissions(self) -> bool {
+        // Counts are reply-wide, not attributed to files or categories.
+        self.provider
+            .skipped
+            .values()
+            .chain(self.provider.omitted.values())
+            .any(|&count| count > 0)
+    }
+}
+
 /// Check all lenses and report separately what failed and what could not run.
 /// Pass coverage alongside any merged provider facts so a partial answer does
-/// not turn unseen definitions into stale anchors.
+/// not turn unseen definitions or entry points into stale lenses.
 pub fn check(
     sources: &LensSources,
     tree: &TreeFacts,
@@ -378,7 +389,7 @@ pub fn check(
                         Lens::Sequence {
                             entry: Some(entry), ..
                         } => {
-                            check_entry(&mut result, entry.kind, &entry.name, &tree.entry_points);
+                            check_entry(&mut result, entry.kind, &entry.name, &tree.entry_points, coverage);
                         }
                         Lens::Sequence { entry: None, .. } => {}
                     }
@@ -429,7 +440,13 @@ fn compare_variants<'a>(
     result.extra_states.sort_unstable();
 }
 
-fn check_entry(result: &mut LensResult, kind: EntryKind, name: &str, points: &EntryPoints) {
+fn check_entry(
+    result: &mut LensResult,
+    kind: EntryKind,
+    name: &str,
+    points: &EntryPoints,
+    coverage: Option<LensCoverage<'_>>,
+) {
     if let Some(entry) = points
         .entries
         .iter()
@@ -438,7 +455,15 @@ fn check_entry(result: &mut LensResult, kind: EntryKind, name: &str, points: &En
         anchor::locate(result, "entry", &entry.path, entry.line);
         return;
     }
-    if points.entries.iter().any(|entry| entry.kind == kind)
+    if coverage
+        .is_some_and(|coverage| coverage.provider.provides("entries") && coverage.has_omissions())
+    {
+        note(
+            &mut result.not_checked,
+            "entry",
+            "entry not checked: provider answer had skipped or omitted facts",
+        );
+    } else if points.entries.iter().any(|entry| entry.kind == kind)
         || points
             .coverage
             .values()

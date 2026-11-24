@@ -202,8 +202,10 @@ An anchor has a repository-relative `path`, an optional definition `name`, and o
 definition when known. Names are checked when a `facts` extension provides definitions; a missing
 name is not a failure when the provider could not read its file or reports an incomplete answer.
 When Corral knows the enum variants named by `states_from`, state IDs must match (exact spelling or
-snake case for Rust variants). A sequence entry is checked when facts cover its kind. An empty
-extension entry answer does not claim coverage for files or kinds that no detector covered.
+snake case for Rust variants). A sequence entry is checked when facts cover its kind. A positive
+match still counts when provider facts are partial, but a missing entry is not checked if the entry
+provider reports skipped or omitted facts. An empty extension entry answer does not claim coverage
+for files or kinds that no detector covered.
 
 - **Current**: all checks that could run passed. Checks that could not run are listed separately.
 - **Stale**: a path, a name or text that could be checked, or a known entry-point check failed. The

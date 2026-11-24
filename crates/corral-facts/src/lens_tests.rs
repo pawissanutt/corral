@@ -238,6 +238,79 @@ fn checks_committed_anchors_scoped_text_and_variant_coverage() {
 }
 
 #[test]
+fn partial_entry_facts_cannot_rule_out_a_sequence_entry() {
+    let repo = Repo::new();
+    repo.put("routes.txt", "GET /wanted\n");
+    let at = repo.commit(DATE, "source");
+    write(
+        &repo,
+        "route",
+        "sequence",
+        "route",
+        &at,
+        r#"entry = { kind = "route", name = "GET /wanted" }
+[[participants]]
+id = "routes"
+label = "Routes"
+anchor = { path = "routes.txt", text = "GET /wanted" }
+"#,
+    );
+    let rev = repo.commit(DATE, "route lens");
+    let sources = load(&repo, &rev);
+    let builtin = tree(&repo, &rev);
+    let check = |name: &str, omitted: u64| {
+        let mut facts = builtin.clone();
+        let output = format!(
+            r#"{{"type":"entry","path":"routes.txt","line":1,"kind":"route","name":{name:?}}}
+{{"type":"done","provided":["entries"],"skipped":{{}},"omitted":{{"limit":{omitted}}}}}
+"#,
+        );
+        let reply = Reply::parse(output.as_bytes(), &["entries"]).unwrap();
+        let unread_files = reply.unread_files();
+        let coverage = reply.merge_snapshot(&mut facts);
+        lenses::check(
+            &sources,
+            &facts,
+            Some(LensCoverage {
+                provider: &coverage,
+                unread_files: &unread_files,
+            }),
+        )
+        .pop()
+        .unwrap()
+    };
+
+    let unverified = check("GET /other", 1);
+    assert_eq!(unverified.status, LensStatus::Current);
+    assert!(unverified.failures.is_empty());
+    assert!(
+        unverified
+            .not_checked
+            .iter()
+            .any(|issue| issue.element == "entry")
+    );
+
+    let matched = check("GET /wanted", 1);
+    assert_eq!(matched.status, LensStatus::Current);
+    assert!(matched.not_checked.is_empty());
+    assert!(
+        matched
+            .locations
+            .iter()
+            .any(|location| location.element == "entry")
+    );
+
+    let unknown = check("GET /other", 0);
+    assert_eq!(unknown.status, LensStatus::Stale);
+    assert!(
+        unknown
+            .failures
+            .iter()
+            .any(|issue| issue.element == "entry")
+    );
+}
+
+#[test]
 fn malformed_files_do_not_hide_other_lenses() {
     let repo = Repo::new();
     repo.put("code.rs", CODE);
