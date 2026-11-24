@@ -268,11 +268,12 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
         : kind === "explore" ? exploreLoadout(parent).filter(name => execution?.research?.profile !== "docs" || ["web_fetch", "web_read", "web_search", "codemode"].includes(name))
         : ["read", "grep", "find", "ls", "bash"].filter(name => parent.includes(name))
       : kind === "slice" ? [...BASE_TOOLS, ...options.localTools.filter(tool => !DELEGATION[tool.name]).map(tool => tool.name)]
-        : ["read", "grep", "find", "ls", ...(kind === "review" ? ["bash"] : [])];
+        : ["read", "grep", "find", "ls", ...(kind === "review" ? ["bash"] : []),
+          ...(kind === "explore" && parent.includes("codemode") ? ["codemode"] : [])];
     const allowed = new Set([...loadout, ...(kind === "review" ? ["review_verdict"] : []),
       ...(kind === "slice" ? ["ask_owner"] : []), ...communication.map(tool => tool.name)]);
     const nestedAllowed = new Set(loadout);
-    const code = research && allowed.has("codemode") ? researchCode(nestedAllowed) : undefined;
+    const code = kind === "explore" && allowed.has("codemode") ? researchCode(nestedAllowed) : undefined;
     let session: Sdk.AgentSession | undefined;
     let pending: ResolvedModel | undefined;
     let profileTier = initialModel.serviceTier;
@@ -358,7 +359,7 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
             } });
           pi.on("tool_call", event => {
             let reason: string | undefined;
-            if (research) reason = executionRefusal(event.toolName, event.parentToolCallId !== undefined,
+            if (kind === "explore") reason = executionRefusal(event.toolName, event.parentToolCallId !== undefined,
               event.parentToolCallId !== undefined ? nestedAllowed : allowed);
             else if (!allowed.has(event.toolName) || DELEGATION[event.toolName] || event.parentToolCallId !== undefined) reason = "Build children cannot delegate or invoke tools outside their loadout";
             else if (event.toolName === "edit" || event.toolName === "write") {

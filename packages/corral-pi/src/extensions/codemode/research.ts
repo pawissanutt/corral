@@ -5,5 +5,5 @@ import { CodeRuntime } from "./runtime.ts";
 
 export function researchCode(allowed: ReadonlySet<string>) {
   const runtime = new CodeRuntime({ emit() {}, journal() {}, async notify() { return ""; } });
-  return { runtime, tool: codemodeTool(runtime, names => names.filter(name => !executionRefusal(name, true, allowed))) };
+  return { runtime, tool: codemodeTool(runtime, names => names.filter(name => !executionRefusal(name, true, allowed)), true) };
 }

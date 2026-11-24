@@ -225,6 +225,25 @@ test("explore Code Mode is isolated and nested calls obey the read-only child ce
   } finally { f.cleanup(); }
 });
 
+test("Build Explore inherits Code Mode without expanding its file-only ceiling", async () => {
+  const f = fixture();
+  f.body(async () => {
+    expect(f.tools).toContain("codemode");
+    expect(f.registered.has("codemode")).toBe(true);
+    expect(await f.emit("tool_call", { toolName: "read", input: {}, parentToolCallId: "cell" })).toBeUndefined();
+    for (const name of ["bash", "write", "agent_message", "codemode"]) {
+      expect(await f.emit("tool_call", { toolName: name, input: {}, parentToolCallId: "cell" })).toMatchObject({ block: true });
+    }
+    f.messages.push(answer("Evidence"));
+  });
+  try {
+    const handle = createSdkRunner({ ...f.options, parentLoadout: ["codemode"] })
+      .run({ id: "explore", title: "Explore", brief: "Trace", owns: [], kind: "explore" },
+        { profile: "fixture", provider: "fixture", model: "fixture" }, { ...f.hooks, execution: undefined }, new AbortController().signal);
+    expect((await handle.done).failed).toBeUndefined();
+  } finally { f.cleanup(); }
+});
+
 test("research reserves a tool-free synthesis request at the deadline", async () => {
   const f = fixture();
   f.hooks.execution!.deadlineAt = 5000;

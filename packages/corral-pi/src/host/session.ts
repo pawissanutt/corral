@@ -580,6 +580,7 @@ export class HostSession {
       parent: { provider: this.provider, model: options.model.startsWith(`${this.provider}/`) ? options.model.slice(this.provider.length + 1) : options.model,
         effort: options.effort },
       agentDir: options.agentDir, wake: this.inputWake,
+      parentLoadout: options.capabilities?.enabled.includes("codemode") ? ["codemode"] : [],
       localTools: () => this.localTools.filter(tool => !this.buildControls?.tools.includes(tool)),
       deliverToParent: async text => {
         const result = await this.submitAutomated(text);

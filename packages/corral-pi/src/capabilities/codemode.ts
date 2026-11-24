@@ -52,15 +52,20 @@ function answer(reports: readonly CellReport[], fallback: string) {
 }
 
 /** `callable` filters Pi's callable tools through the host's execution check for nested calls. */
-export function codemodeTool(runtime: CodeRuntime, callable: (names: readonly string[]) => string[]): ToolDefinition {
+export function codemodeTool(runtime: CodeRuntime, callable: (names: readonly string[]) => string[], foregroundOnly = false): ToolDefinition {
+  const description = foregroundOnly ? DESCRIPTION.replace(/A cell still running after.*?variables first\./, "Cells run in the foreground until completion or cancellation. {reset:true} discards all variables first.") : DESCRIPTION;
+  const parameters = foregroundOnly ? Type.Object({
+    code: Type.Optional(Type.String({ minLength: 1, maxLength: 256 * 1024, description: "Raw JavaScript, not a JSON string or fence" })),
+    reset: Type.Optional(Type.Boolean({ description: "Discard every kernel variable, then run code if given" })),
+  }) : Parameters;
   return {
-    name: CODEMODE_TOOL, label: "Code Mode", exposure: "model-only", description: DESCRIPTION, parameters: Parameters,
+    name: CODEMODE_TOOL, label: "Code Mode", exposure: "model-only", description, parameters,
     promptSnippet: "Prefer direct tools for one independent operation, independent results printed unchanged (parallel direct calls in one turn run concurrently), and edits, writes or other state changes unless a later step in the same cell depends on the result. Use cells for dependent chains, filtering or summarising large results before they reach context, loops over many items, computation, or earlier-cell variables.",
     prepareLoadout: (loadout) => {
       const names = callable(loadout.callable.map((tool) => tool.name).filter((name) => name !== CODEMODE_TOOL));
       // The legacy launch alias stays callable, but new scripts should use bash({ wait_ms: 0 }).
       const advertised = names.includes("bash") ? names.filter(name => name !== "job_start") : names;
-      return { descriptions: { [CODEMODE_TOOL]: `${DESCRIPTION}\nCallable as tools.<name>: ${advertised.join(", ") || "none"}.` } };
+      return { descriptions: { [CODEMODE_TOOL]: `${description}\nCallable as tools.<name>: ${advertised.join(", ") || "none"}.` } };
     },
     async execute(toolCallId, params: Params, signal, update, ctx) {
       if (params.cancel !== undefined) {
@@ -79,7 +84,7 @@ export function codemodeTool(runtime: CodeRuntime, callable: (names: readonly st
         if (report) update?.({ content: [], details: { cells: [report] } });
       });
       try {
-        return answer([...lost, await runtime.run(toolCallId, params.code, ctx, signal, params.wait_ms ?? DEFAULT_WAIT_MS)], "");
+        return answer([...lost, await runtime.run(toolCallId, params.code, ctx, signal, foregroundOnly ? Infinity : params.wait_ms ?? DEFAULT_WAIT_MS)], "");
       } finally {
         release();
       }

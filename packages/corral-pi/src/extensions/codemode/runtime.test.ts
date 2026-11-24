@@ -65,6 +65,26 @@ function harness() {
   };
 }
 
+test("research cells stay foreground and return their nested results", async () => {
+  const fx = harness();
+  const started = Promise.withResolvers<void>();
+  const gate = Promise.withResolvers<AgentToolCallOutcome>();
+  const executor: Executor = { executeTool: async () => { started.resolve(); return gate.promise; } };
+  const tool = codemodeTool(fx.runtime, names => [...names], true);
+  try {
+    expect(tool.description).not.toContain("detaches");
+    expect(JSON.stringify(tool.parameters)).not.toContain("wait_ms");
+    let finished = false;
+    const pending = tool.execute("research", { code: 'print(await tools.read({path:"file-1"}))', wait_ms: 0 },
+      undefined, undefined, executor as ExtensionToolContext).then(result => { finished = true; return result; });
+    await started.promise;
+    await new Promise(resolve => setTimeout(resolve, 10));
+    expect(finished).toBe(false);
+    gate.resolve(outcome(1));
+    expect(JSON.stringify((await pending).content)).toContain("read file-1");
+  } finally { gate.resolve(outcome(1)); await fx.runtime.close(); }
+});
+
 test("parallel children expose ordered arguments and failures live and in final tool details", async () => {
   const fx = harness();
   const started = Promise.withResolvers<void>();

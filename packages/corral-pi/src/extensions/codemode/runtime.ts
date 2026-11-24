@@ -292,7 +292,7 @@ export class CodeRuntime {
     let abort: (() => void) | undefined;
     const outcome = await Promise.race([
       cell.result.then(() => "settled" as const),
-      new Promise<"detach">((resolve) => { timer = setTimeout(() => resolve("detach"), waitMs); }),
+      new Promise<"detach">((resolve) => { if (Number.isFinite(waitMs)) timer = setTimeout(() => resolve("detach"), waitMs); }),
       new Promise<"abort">((resolve) => {
         abort = () => resolve("abort");
         if (signal?.aborted) abort();
