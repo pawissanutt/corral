@@ -1,8 +1,10 @@
+use std::collections::BTreeSet;
+
 use serde::{Deserialize, Serialize};
 
 pub use corral_types::facts::*;
 
-use crate::provider::ChangeFact;
+use crate::{DataFacts, provider::ChangeFact};
 
 /// An immutable resolved revision. Obtain it with [`crate::resolve_revision`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -49,6 +51,7 @@ pub struct TreeFacts {
     pub spawns: Vec<SpawnFact>,
     pub runtime: RuntimeFacts,
     pub entry_points: EntryPoints,
+    pub data: DataFacts,
     pub coverage: Coverage,
 }
 
@@ -104,6 +107,9 @@ pub struct ProjectDelta {
     pub module_references: Vec<ModuleReferenceChange>,
     pub runtime: RuntimeDelta,
     pub entry_points: EntryPointDelta,
+    pub data: Vec<DataChange>,
+    /// Changed paths whose data shape was not readable in at least one tree.
+    pub data_unreadable: BTreeSet<String>,
     /// None means not provided; Some(empty) means the provider found no rows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub changes: Option<Vec<ChangeFact>>,

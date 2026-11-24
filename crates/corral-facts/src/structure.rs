@@ -3,7 +3,7 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use crate::{entries, git, manifests, model::*, runtime, syntax::Scanner};
+use crate::{data, entries, git, manifests, model::*, runtime, syntax::Scanner};
 
 pub(crate) fn collect(repo: &Path, tree: &str, operation_enums: &[String]) -> Result<TreeFacts> {
     let mut paths = Vec::new();
@@ -11,7 +11,9 @@ pub(crate) fn collect(repo: &Path, tree: &str, operation_enums: &[String]) -> Re
     let mut manifest_text = BTreeMap::new();
     let mut runtime_text = BTreeMap::new();
     let mut source_text = BTreeMap::new();
+    let mut data = data::Builder::default();
     let skipped_non_utf8_paths = git::tree(repo, tree, |file| {
+        data.read(file.path, file.text);
         if let Some(text) = file.text {
             if is_manifest(file.path) {
                 manifest_text.insert(file.path.to_owned(), text.to_owned());
@@ -45,10 +47,15 @@ pub(crate) fn collect(repo: &Path, tree: &str, operation_enums: &[String]) -> Re
             let read_status = if parsed.contains(&path)
                 || source_text.contains_key(&path)
                 || configs.parsed.contains(path.as_str())
+                || data.read_status(&path) == Some(ReadStatus::Complete)
             {
                 coverage.complete += 1;
                 ReadStatus::Complete
-            } else if is_manifest(&path) || scans(lang) || runtime::is_config(&path) {
+            } else if is_manifest(&path)
+                || scans(lang)
+                || runtime::is_config(&path)
+                || data.read_status(&path) == Some(ReadStatus::Failed)
+            {
                 coverage.failed += 1;
                 ReadStatus::Failed
             } else {
@@ -134,6 +141,11 @@ pub(crate) fn collect(repo: &Path, tree: &str, operation_enums: &[String]) -> Re
     );
     let runtime = runtime.finish();
     let entry_points = entries::finish(&containers, &runtime, entry_coverage, entry_sites);
+    let data = data.finish(
+        files
+            .iter()
+            .map(|file| (file.path.as_str(), file.language.as_str())),
+    );
     Ok(TreeFacts {
         file_references,
         module_references,
@@ -148,6 +160,7 @@ pub(crate) fn collect(repo: &Path, tree: &str, operation_enums: &[String]) -> Re
             .collect(),
         runtime,
         entry_points,
+        data,
         files,
         containers: directory_nodes(containers),
         modules: modules.into_iter().collect(),

@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
-    EntryDetector, EntryPoint, EntryPoints, ReadStatus, Reference, ReferenceBasis, RuntimeUnit,
-    TreeFacts, entries::Owners, structure,
+    DataFacts, DataSource, DataType, EntryDetector, EntryPoint, EntryPoints, FileFact, ReadStatus,
+    Reference, ReferenceBasis, RuntimeUnit, TreeFacts, entries::Owners, structure,
 };
 
 use super::{ProviderCoverage, Reply, Row};
@@ -36,6 +36,7 @@ impl Reply {
             .map(|file| (file.path.clone(), file))
             .collect();
         let mut refs = BTreeMap::<_, u64>::new();
+        let mut types = Vec::new();
         let mut entries = EntryOverlay::new(&mut tree.entry_points, &tree.runtime.units);
         for row in rows {
             let Some(row) = entries.consume(
@@ -69,10 +70,13 @@ impl Reply {
                     let total = refs.entry((from, to, kind)).or_default();
                     *total = total.saturating_add(count);
                 }
+                row if coverage.provides("types") => types.extend(data_type(row)),
                 _ => {} // Don't apply rows for categories the provider did not answer.
             }
         }
         entries.finish();
+        tree.data
+            .overlay(types, file_languages(by_path.values().map(|file| &**file)));
         if coverage.provides("files") {
             tree.coverage.complete = 0;
             tree.coverage.unsupported = 0;
@@ -107,6 +111,26 @@ impl Reply {
         coverage
     }
 
+    /// Apply only the type rows of a validated snapshot reply to the built-in model.
+    pub fn snapshot_data(self, tree: &TreeFacts) -> (DataFacts, ProviderCoverage) {
+        let Self { rows, mut coverage } = self;
+        let mut facts = tree.data.clone();
+        if coverage.provides("types") {
+            let paths: BTreeSet<_> = tree.files.iter().map(|file| file.path.as_str()).collect();
+            let types = rows
+                .into_iter()
+                .filter_map(data_type)
+                .filter(|row| {
+                    let known = paths.contains(row.path.as_str());
+                    coverage.dropped_unknown_files += u64::from(!known);
+                    known
+                })
+                .collect();
+            facts.overlay(types, file_languages(tree.files.iter()));
+        }
+        (facts, coverage)
+    }
+
     /// Apply only the entry rows of a validated snapshot reply to the built-in
     /// entry points. The returned coverage counts unknown paths only in entry rows.
     pub fn snapshot_entries(self, tree: &TreeFacts) -> (EntryPoints, ProviderCoverage) {
@@ -134,6 +158,33 @@ impl Reply {
         entries.finish();
         (points, coverage)
     }
+}
+
+fn file_languages<'a>(
+    files: impl Iterator<Item = &'a FileFact>,
+) -> impl Iterator<Item = (&'a str, &'a str)> {
+    files.map(|file| (file.path.as_str(), file.language.as_str()))
+}
+
+fn data_type(row: Row) -> Option<DataType> {
+    let Row::Type {
+        path,
+        name,
+        line,
+        kind,
+        fields,
+    } = row
+    else {
+        return None;
+    };
+    Some(DataType {
+        path,
+        name,
+        line,
+        kind,
+        source: DataSource::Extension,
+        fields,
+    })
 }
 
 struct EntryOverlay<'a> {

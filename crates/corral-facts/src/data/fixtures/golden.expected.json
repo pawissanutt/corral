@@ -1,0 +1,39 @@
+{
+  "types": [
+    {"path": "schema/model.schema.json", "name": "Address/Local", "line": 3, "kind": "record", "source": "json_schema", "fields": [
+      {"name": "zip", "type": "string", "line": 5, "optional": true}
+    ]},
+    {"path": "schema/model.schema.json", "name": "Customer", "line": 10, "kind": "record", "source": "json_schema", "fields": [
+      {"name": "home", "type": "#/$defs/Address~1Local", "line": 12, "optional": false},
+      {"name": "previous", "type": "array<#/$defs/Address~1Local>", "line": 13, "optional": true},
+      {"name": "remote", "type": "https://example.test/address.json#/$defs/Address", "line": 14, "optional": true}
+    ]},
+    {"path": "sql/model.sql", "name": "app.Customers", "line": 2, "kind": "table", "source": "sql", "fields": [
+      {"name": "id", "type": "BIGINT", "line": 3, "optional": false}
+    ]},
+    {"path": "sql/model.sql", "name": "app.orders", "line": 5, "kind": "table", "source": "sql", "fields": [
+      {"name": "product", "type": "VARCHAR(32)", "line": 6, "optional": false},
+      {"name": "customer_id", "type": "BIGINT", "line": 7, "optional": true},
+      {"name": "reviewed_by", "type": "BIGINT", "line": 8, "optional": true}
+    ]},
+    {"path": "wire/model.rs", "name": "wire::Address", "line": 4, "kind": "record", "source": "rust_serde", "fields": [
+      {"name": "zip", "type": "String", "line": 5, "optional": false}
+    ]},
+    {"path": "wire/model.rs", "name": "wire::Customer", "line": 9, "kind": "record", "source": "rust_serde", "fields": [
+      {"name": "address", "type": "Option < Address >", "line": 10, "optional": true}
+    ]},
+    {"path": "wire/model.rs", "name": "wire::Lookup", "line": 14, "kind": "enum", "source": "rust_serde", "fields": [
+      {"name": "Found", "type": "(Customer)", "line": 15, "optional": false},
+      {"name": "Missing", "type": "()", "line": 16, "optional": false}
+    ]}
+  ],
+  "edges": [
+    {"kind": "has", "from": {"path": "schema/model.schema.json", "name": "Customer"}, "to": {"path": "schema/model.schema.json", "name": "Address/Local"}, "field": "home", "line": 12},
+    {"kind": "has", "from": {"path": "schema/model.schema.json", "name": "Customer"}, "to": {"path": "schema/model.schema.json", "name": "Address/Local"}, "field": "previous", "line": 13},
+    {"kind": "has", "from": {"path": "sql/model.sql", "name": "app.orders"}, "to": {"path": "sql/model.sql", "name": "app.Customers"}, "field": "customer_id", "line": 7},
+    {"kind": "has", "from": {"path": "sql/model.sql", "name": "app.orders"}, "to": {"path": "sql/model.sql", "name": "app.Customers"}, "field": "reviewed_by", "line": 8},
+    {"kind": "has", "from": {"path": "wire/model.rs", "name": "wire::Customer"}, "to": {"path": "wire/model.rs", "name": "wire::Address"}, "field": "address", "line": 10},
+    {"kind": "has", "from": {"path": "wire/model.rs", "name": "wire::Lookup"}, "to": {"path": "wire/model.rs", "name": "wire::Customer"}, "field": "Found", "line": 15}
+  ],
+  "coverage": {"JSON": ["json_schema"], "Rust": ["rust_serde"], "SQL": ["sql"]}
+}

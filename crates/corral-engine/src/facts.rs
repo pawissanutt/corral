@@ -8,8 +8,9 @@ use std::{
 
 use anyhow::{Context, Result};
 use corral_facts::{
-    EntryPoint, EntryPointDelta, EntryPoints, FactsCache, ProjectDelta, ProjectFacts, Revision,
-    TreeFacts, compare_entry_points, lenses,
+    DataChange, DataFacts, DataSource, DataType, EntryPoint, EntryPointDelta, EntryPoints,
+    FactsCache, ProjectDelta, ProjectFacts, Revision, TreeFacts, compare_data,
+    compare_entry_points, lenses,
     provider::{ProviderCoverage, Reply},
     resolve_revision,
 };
@@ -26,7 +27,7 @@ use crate::{
     extension::{self, CommandContext},
 };
 
-const SNAPSHOT_WANT: &[&str] = &["files", "definitions", "references", "entries"];
+const SNAPSHOT_WANT: &[&str] = &["files", "definitions", "references", "entries", "types"];
 const DELTA_WANT: &[&str] = &["changes", "dependents", "tests"];
 const TIMEOUT: Duration = Duration::from_secs(600);
 const MAX_STDOUT: usize = 64 * 1024 * 1024;
@@ -230,6 +231,21 @@ impl<'a> FactsReader<'a> {
         )
     }
 
+    /// Enrich only the historical data view; reuse the shared snapshot reply cache.
+    pub fn enrich_data_tree(&self, rev: &Revision, tree: &mut TreeFacts) -> Option<FactsReport> {
+        self.ask(
+            rev,
+            None,
+            SNAPSHOT_WANT,
+            ProviderMode::AllowStart,
+            |reply| {
+                let (data, coverage) = reply.snapshot_data(tree);
+                tree.data = data;
+                Ok(coverage)
+            },
+        )
+    }
+
     /// Keep explicit file-read provenance for lens checks without treating
     /// the built-in fallback statuses as extension answers.
     pub fn enrich_lens_tree(
@@ -313,6 +329,91 @@ impl<'a> FactsReader<'a> {
                     entries.entries.iter().try_for_each(validate)?;
                 }
                 result = Some((entries, provided));
+                Ok(coverage)
+            },
+        )?;
+        result
+    }
+
+    /// Compare like with like: never compare one extension snapshot against a
+    /// built-in fallback after a failed, missing, or incomplete types answer.
+    pub fn enrich_data_delta(
+        &self,
+        (base, before): (&Revision, &TreeFacts),
+        (head, after): (&Revision, &TreeFacts),
+        builtin: &ProjectDelta,
+        validate: impl Fn(&DataType) -> Result<()>,
+    ) -> Option<(Vec<DataChange>, BTreeSet<String>)> {
+        if base.tree() == head.tree() {
+            return None;
+        }
+        let old = self.provider_data(base, before, &validate)?;
+        let new = self.provider_data(head, after, &validate)?;
+        let old_files: BTreeSet<_> = before.files.iter().map(|file| file.path.as_str()).collect();
+        let new_files: BTreeSet<_> = after.files.iter().map(|file| file.path.as_str()).collect();
+        let use_overlay = |path: &str| match (
+            old.source_at(path) == Some(DataSource::Extension),
+            new.source_at(path) == Some(DataSource::Extension),
+        ) {
+            (true, true) => true,
+            (true, false) => !new_files.contains(path),
+            (false, true) => !old_files.contains(path),
+            (false, false) => false,
+        };
+        // Type rows only cover their own files. Fall back at an existing file
+        // if only one side used the provider, even after two successful replies.
+        let mut changes = compare_data(&old, &new)
+            .into_iter()
+            .filter(|row| use_overlay(&row.path))
+            .collect::<Vec<_>>();
+        if changes.is_empty() && !builtin.files.iter().any(|file| use_overlay(&file.path)) {
+            return None;
+        }
+        changes.extend(
+            builtin
+                .data
+                .iter()
+                .filter(|row| !use_overlay(&row.path))
+                .cloned(),
+        );
+        changes.sort_by(|a, b| (&a.path, &a.name).cmp(&(&b.path, &b.name)));
+        let unreadable = builtin
+            .data_unreadable
+            .iter()
+            .filter(|path| !use_overlay(path))
+            .cloned()
+            .collect();
+        Some((changes, unreadable))
+    }
+
+    fn provider_data(
+        &self,
+        rev: &Revision,
+        tree: &TreeFacts,
+        validate: &impl Fn(&DataType) -> Result<()>,
+    ) -> Option<DataFacts> {
+        let mut result = None;
+        self.ask(
+            rev,
+            None,
+            SNAPSHOT_WANT,
+            ProviderMode::AllowStart,
+            |reply| {
+                let (data, coverage) = reply.snapshot_data(tree);
+                if coverage.provides("types")
+                    && coverage.dropped_unknown_files == 0
+                    && !coverage
+                        .skipped
+                        .values()
+                        .chain(coverage.omitted.values())
+                        .any(|&count| count != 0)
+                {
+                    data.types
+                        .iter()
+                        .filter(|ty| ty.source == DataSource::Extension)
+                        .try_for_each(validate)?;
+                    result = Some(data);
+                }
                 Ok(coverage)
             },
         )?;

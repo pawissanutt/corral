@@ -3,13 +3,13 @@ use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use corral_facts::{
-    Activity, ActivityCommit, FileFact, ModuleId, ProjectDelta, ProjectFacts, ReadStatus,
-    TreeFacts, is_manifest,
+    Activity, ActivityCommit, DataFacts, FileFact, ModuleId, ProjectDelta, ProjectFacts,
+    ReadStatus, TreeFacts, is_manifest,
     provider::{ChangeKind, ChangedFact},
 };
 use corral_types::{
-    SystemActivity, SystemAt, SystemCategorySummary, SystemImpactCategory, SystemMapRow,
-    SystemNodeStats, SystemReviewRow, SystemRuntimeRow, lenses::LensImpact,
+    SystemActivity, SystemAt, SystemCategorySummary, SystemDataRow, SystemImpactCategory,
+    SystemMapRow, SystemNodeStats, SystemReviewRow, SystemRuntimeRow, lenses::LensImpact,
 };
 
 use super::SystemFeatures;
@@ -73,6 +73,33 @@ pub(crate) fn runtime(tree: &TreeFacts, entries: bool) -> Vec<SystemRuntimeRow> 
         );
     }
     rows
+}
+
+pub(crate) fn data(facts: &DataFacts) -> Vec<SystemDataRow> {
+    use SystemDataRow as Row;
+    facts
+        .coverage
+        .iter()
+        .map(|(language, sources)| Row::Coverage {
+            language: language.clone(),
+            sources: sources.clone(),
+        })
+        .chain(
+            facts
+                .unreadable_paths()
+                .iter()
+                .cloned()
+                .map(|path| Row::Unreadable { path }),
+        )
+        .chain(
+            facts
+                .types
+                .iter()
+                .cloned()
+                .map(|data_type| Row::Type { data_type }),
+        )
+        .chain(facts.edges.iter().cloned().map(|edge| Row::Has { edge }))
+        .collect()
 }
 
 fn map_rows(
@@ -321,12 +348,12 @@ fn record_touch(
 
 pub(crate) fn review(
     delta: &ProjectDelta,
-    before: &TreeFacts,
-    after: &TreeFacts,
+    (before, after): (&TreeFacts, &TreeFacts),
     lenses: Option<&[LensImpact]>,
     enriched_head: Option<&TreeFacts>,
     at: Option<&SystemAt>,
     features: SystemFeatures,
+    extension_provided_data: bool,
 ) -> anyhow::Result<(Vec<SystemCategorySummary>, Vec<SystemReviewRow>)> {
     use SystemImpactCategory as Category;
     use SystemReviewRow as Row;
@@ -378,7 +405,12 @@ pub(crate) fn review(
                     .as_ref()
                     .and_then(|files| files.get(path))
                     .is_some_and(|file| file.read_status == ReadStatus::Complete));
-        if file.read_status != ReadStatus::Complete && !read_by_extension {
+        if features.data && delta.data_unreadable.contains(path) {
+            unread.push(Row::NotRead {
+                path: change.path.clone(),
+                read_status: ReadStatus::Failed,
+            });
+        } else if file.read_status != ReadStatus::Complete && !read_by_extension {
             unread.push(Row::NotRead {
                 path: change.path.clone(),
                 read_status: file.read_status,
@@ -519,6 +551,26 @@ pub(crate) fn review(
                 .map(|impact| Row::Lens { impact }),
         );
         review.finish_category(Category::Lenses, lenses.is_some());
+    }
+
+    if features.data {
+        // Like Runtime, data changes are task-wide; a type in another package
+        // can be part of this task's stored or wire contract.
+        review.rows.extend(
+            delta
+                .data
+                .iter()
+                .cloned()
+                .map(|change| Row::DataChange { change }),
+        );
+        let provided = !delta.data.is_empty()
+            || (delta.data_unreadable.is_empty()
+                && (extension_provided_data
+                    || delta
+                        .files
+                        .iter()
+                        .any(|file| before.data.can_compare_path(&after.data, &file.path))));
+        review.finish_category(Category::DataModel, provided);
     }
 
     // The Review map is structural, at the submitted head and the level asked for. History

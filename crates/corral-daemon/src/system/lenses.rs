@@ -148,14 +148,8 @@ impl Cache {
         let mut pending = LensEntry::pending(revision);
         pending.touched = entry.touched;
         let retired = std::mem::replace(entry, pending);
-        self.lens_row(&key.project, revision);
+        self.detail_row(&key.project, revision);
         Some(retired)
-    }
-
-    pub(super) fn lens_row(&mut self, project: &str, revision: u64) {
-        if let Some(entry) = self.maps.get_mut(project) {
-            entry.row_revision = revision;
-        }
     }
 }
 

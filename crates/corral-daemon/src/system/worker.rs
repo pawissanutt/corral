@@ -1,5 +1,6 @@
 //! One worker per daemon. Pending built-ins go first; a running provider is
 //! never waited on by a read, engine operation, or daemon shutdown.
+mod data_work;
 mod lens_work;
 
 use std::{
@@ -11,11 +12,12 @@ use std::{
 use anyhow::{Context, Result, ensure};
 use corral_engine::{config::Slot, facts::FactsReader};
 use corral_facts::Revision;
-use corral_types::{SystemReviewRow, SystemRuntimeRow, facts::ChangeKind};
+use corral_types::{DataSource, SystemReviewRow, SystemRuntimeRow, facts::ChangeKind};
 
 use super::{
     Cache, Configuration, Impact, ImpactFacts, Queue, Snapshot, Stage, Submission, bounded_error,
     bounded_report,
+    data::DataKey,
     lenses::{LensKey, LensSnapshot},
     provider_row_fits, submitted,
 };
@@ -72,6 +74,11 @@ enum Work {
         snapshot: Snapshot,
         branch: Option<String>,
     },
+    Data {
+        key: DataKey,
+        revision: u64,
+        enrich: Option<Revision>,
+    },
     Lens {
         key: LensKey,
         snapshot: LensSnapshot,
@@ -92,6 +99,10 @@ impl Worker {
                 continue;
             }
             match &job.work {
+                Work::Data { key, enrich, .. } => match enrich {
+                    Some(rev) => self.data_enrich(&job, key, rev),
+                    None => self.data_builtin(&job, key),
+                },
                 Work::Lens {
                     key,
                     snapshot,
@@ -233,7 +244,13 @@ impl Worker {
                     })?;
                 }
             }
-            Ok(())
+            enriched
+                .structure
+                .data
+                .types
+                .iter()
+                .filter(|ty| ty.source == DataSource::Extension)
+                .try_for_each(data_work::check_type)
         });
         if self.requeue_if_tip_moved(job, project, branch, head) {
             return;
@@ -411,7 +428,10 @@ impl Worker {
             return;
         }
         // An unavailable or oversized delta reply does not invalidate the
-        // independent snapshots used for entries (and vice versa).
+        // independent snapshots used for entries and types (and vice versa).
+        if report.error.is_some() {
+            delta = facts.delta.clone();
+        }
         let entries =
             reader.enrich_entry_delta((base, &facts.base), (head, &facts.head), |entry| {
                 provider_row_fits(&SystemReviewRow::Entry {
@@ -422,15 +442,35 @@ impl Worker {
         if !self.check_submission(job, submission) {
             return;
         }
-        let entry_enriched = entries.is_some();
         if let Some(entries) = entries {
-            if report.error.is_some() {
-                delta = facts.delta.clone();
-            }
             delta.entry_points = entries;
             report.coverage.provided.push("entries".into());
         } else {
             report.coverage.not_provided.push("entries".into());
+        }
+        let data = reader.enrich_data_delta(
+            (base, &facts.base),
+            (head, &facts.head),
+            &facts.delta,
+            data_work::check_type,
+        );
+        if !self.check_submission(job, submission) {
+            return;
+        }
+        let data = data.filter(|(changes, _)| {
+            changes.iter().all(|change| {
+                provider_row_fits(&SystemReviewRow::DataChange {
+                    change: change.clone(),
+                })
+                .is_ok()
+            })
+        });
+        if let Some((changes, unreadable)) = data {
+            delta.data = changes;
+            delta.data_unreadable = unreadable;
+            report.coverage.provided.push("types".into());
+        } else {
+            report.coverage.not_provided.push("types".into());
         }
         let lenses = if facts.lenses.is_some() {
             lens_work::review_lenses(&reader, (base, &facts.base), (head, &facts.head), true)
@@ -448,21 +488,17 @@ impl Worker {
             return;
         }
         let report = Arc::new(report);
-        let enriched = if report.error.is_none() || entry_enriched || lenses.is_some() {
-            Arc::new(ImpactFacts {
-                // A failed delta must not be used even if the lens snapshot answered.
-                delta: if report.error.is_some() && !entry_enriched {
-                    facts.delta.clone()
-                } else {
-                    delta
-                },
-                base: Arc::clone(&facts.base),
-                head: Arc::clone(&facts.head),
-                lenses: lenses.or_else(|| facts.lenses.clone()),
-            })
-        } else {
-            Arc::clone(facts)
-        };
+        let enriched =
+            if report.error.is_none() || !report.coverage.provided.is_empty() || lenses.is_some() {
+                Arc::new(ImpactFacts {
+                    delta,
+                    base: Arc::clone(&facts.base),
+                    head: Arc::clone(&facts.head),
+                    lenses: lenses.or_else(|| facts.lenses.clone()),
+                })
+            } else {
+                Arc::clone(facts)
+            };
         self.publish(job, move |cache| {
             let revision = cache.stamp();
             let Some(entry) = cache.reviews.get_mut(&submission.task) else {
@@ -531,6 +567,7 @@ impl Cache {
         enum Key<'a> {
             Map(&'a String),
             Lens(&'a LensKey),
+            Data(&'a DataKey),
             Review(&'a String),
         }
         let maps = self.maps.iter().filter_map(|(id, entry)| {
@@ -542,9 +579,13 @@ impl Cache {
         let lenses = self.lenses.iter().filter_map(|(key, entry)| {
             Some((entry.pending?, entry.snapshot.revision, Key::Lens(key)))
         });
+        let data = self.data.iter().filter_map(|(key, entry)| {
+            Some((entry.pending?, entry.snapshot.revision, Key::Data(key)))
+        });
         let (stage, _, key) = maps
             .chain(reviews)
             .chain(lenses)
+            .chain(data)
             .min_by_key(|(stage, revision, _)| (*stage, *revision))?;
         let config = Arc::clone(self.configuration.as_ref()?);
         let work = match key {
@@ -557,6 +598,16 @@ impl Cache {
                     stage,
                     snapshot: entry.snapshot.clone(),
                     branch: entry.branch.clone(),
+                }
+            }
+            Key::Data(key) => {
+                let key = key.clone();
+                let entry = self.data.get_mut(&key)?;
+                entry.pending = None;
+                Work::Data {
+                    key,
+                    revision: entry.snapshot.revision,
+                    enrich: entry.enrich.take(),
                 }
             }
             Key::Lens(key) => {
@@ -623,6 +674,10 @@ impl Job {
                     .maps
                     .get(project)
                     .is_some_and(|entry| entry.snapshot.revision == snapshot.revision),
+                Work::Data { key, revision, .. } => cache
+                    .data
+                    .get(key)
+                    .is_some_and(|entry| entry.snapshot.revision == *revision),
                 Work::Lens { key, snapshot, .. } => cache
                     .lenses
                     .get(key)

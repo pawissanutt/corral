@@ -20,11 +20,13 @@ const LEGACY_SYSTEM: SystemFeatures = SystemFeatures {
     runtime: false,
     entries: false,
     lenses: false,
+    data: false,
 };
 const ENTRIES: SystemFeatures = SystemFeatures {
     runtime: false,
     entries: true,
     lenses: false,
+    data: false,
 };
 
 fn container(path: &str) -> ContainerFact {
@@ -74,6 +76,7 @@ fn tree(files: Vec<FileFact>, containers: &[&str]) -> TreeFacts {
         spawns: vec![],
         runtime: Default::default(),
         entry_points: Default::default(),
+        data: Default::default(),
         coverage: Coverage::default(),
     }
 }
@@ -299,6 +302,8 @@ fn delta(files: Vec<FileChange>) -> ProjectDelta {
         module_references: vec![],
         runtime: Default::default(),
         entry_points: Default::default(),
+        data: Default::default(),
+        data_unreadable: Default::default(),
         changes: None,
         dependents: None,
         tests: None,
@@ -368,8 +373,7 @@ fn review_uses_head_ownership_base_for_deletes_and_builtin_edge_changes() {
     });
     let (categories, rows) = review(
         &delta,
-        &before,
-        &after,
+        (&before, &after),
         Some(&[]),
         None,
         None,
@@ -377,7 +381,9 @@ fn review_uses_head_ownership_base_for_deletes_and_builtin_edge_changes() {
             runtime: true,
             entries: true,
             lenses: true,
+            data: true,
         },
+        false,
     )
     .unwrap();
     assert_eq!(
@@ -395,6 +401,7 @@ fn review_uses_head_ownership_base_for_deletes_and_builtin_edge_changes() {
     assert_eq!(summary(&categories, Category::ExternalProcesses), (true, 1));
     assert_eq!(summary(&categories, Category::Tests), (true, 1));
     assert_eq!(summary(&categories, Category::NotRead), (true, 1));
+    assert_eq!(summary(&categories, Category::DataModel), (false, 0));
     assert!(rows.contains(&Review::Module {
         module: new,
         added: 3,
@@ -442,8 +449,16 @@ fn review_reports_a_manifest_edit_with_no_dependency_or_edge_delta() {
     let before = tree(vec![file("app/Cargo.toml", &code, 4)], &["app"]);
     let delta = delta(vec![change("app/Cargo.toml", 1, 1)]);
     // The manifest's package version changed, not its dependency declarations.
-    let (categories, rows) =
-        review(&delta, &before, &before, None, None, None, LEGACY_SYSTEM).unwrap();
+    let (categories, rows) = review(
+        &delta,
+        (&before, &before),
+        None,
+        None,
+        None,
+        LEGACY_SYSTEM,
+        false,
+    )
+    .unwrap();
     assert_eq!(
         summary(&categories, Category::PackageDependencies),
         (true, 1)
@@ -461,7 +476,16 @@ fn review_serves_the_heads_package_level_when_asked() {
     let head = tree(vec![file("app/src/feature/mod.rs", &code, 4)], &["app"]);
     let delta = delta(vec![change("app/src/feature/mod.rs", 1, 1)]);
     let at = SystemAt::Container { path: "app".into() };
-    let (_, rows) = review(&delta, &head, &head, None, None, Some(&at), LEGACY_SYSTEM).unwrap();
+    let (_, rows) = review(
+        &delta,
+        (&head, &head),
+        None,
+        None,
+        Some(&at),
+        LEGACY_SYSTEM,
+        false,
+    )
+    .unwrap();
     assert!(rows.iter().any(|row| matches!(row,
         Review::Map { row: Map::Module { module, .. } } if *module == code)));
     assert!(!rows.iter().any(|row| matches!(
@@ -484,8 +508,16 @@ fn review_distinguishes_empty_provider_answers_and_groups_calls_with_anchors() {
     );
     let after = tree(vec![src, file("b/lib.rs", &b, 3)], &["a", "b"]);
     let mut delta = delta(vec![change("a/deleted.rs", 0, 3), change("a/new.rs", 3, 0)]);
-    let (categories, builtin) =
-        review(&delta, &before, &after, None, None, None, LEGACY_SYSTEM).unwrap();
+    let (categories, builtin) = review(
+        &delta,
+        (&before, &after),
+        None,
+        None,
+        None,
+        LEGACY_SYSTEM,
+        false,
+    )
+    .unwrap();
     assert!(builtin.contains(&Review::NotRead {
         path: "a/new.rs".into(),
         read_status: ReadStatus::Unsupported,
@@ -499,7 +531,16 @@ fn review_distinguishes_empty_provider_answers_and_groups_calls_with_anchors() {
     }
     delta.changes = Some(vec![]);
     delta.dependents = Some(vec![]);
-    let (categories, _) = review(&delta, &before, &after, None, None, None, LEGACY_SYSTEM).unwrap();
+    let (categories, _) = review(
+        &delta,
+        (&before, &after),
+        None,
+        None,
+        None,
+        LEGACY_SYSTEM,
+        false,
+    )
+    .unwrap();
     for cat in [
         Category::Definitions,
         Category::CallEdges,
@@ -548,8 +589,16 @@ fn review_distinguishes_empty_provider_answers_and_groups_calls_with_anchors() {
     };
     delta.tests = Some(vec![candidate.clone()]);
     // The delta's semantic row is evidence even without a snapshot at this head.
-    let (categories, rows) =
-        review(&delta, &before, &after, None, None, None, LEGACY_SYSTEM).unwrap();
+    let (categories, rows) = review(
+        &delta,
+        (&before, &after),
+        None,
+        None,
+        None,
+        LEGACY_SYSTEM,
+        false,
+    )
+    .unwrap();
     assert_eq!(summary(&categories, Category::Definitions), (true, 1));
     assert_eq!(summary(&categories, Category::CallEdges), (true, 1));
     assert_eq!(summary(&categories, Category::Dependents), (true, 1));
@@ -616,7 +665,8 @@ fn review_entry_changes_use_their_side_of_the_diff_and_scoped_coverage() {
     delta.entry_points.added.push(added.clone());
     delta.entry_points.removed.push(removed.clone());
     let scoped = |at: Option<&SystemAt>| {
-        let (categories, rows) = review(&delta, &base, &head, None, None, at, ENTRIES).unwrap();
+        let (categories, rows) =
+            review(&delta, (&base, &head), None, None, at, ENTRIES, false).unwrap();
         (
             summary(&categories, Category::EntryPoints),
             rows.into_iter()
@@ -655,12 +705,12 @@ fn review_entry_changes_use_their_side_of_the_diff_and_scoped_coverage() {
             entry_points: Default::default(),
             ..delta
         },
-        &base,
-        &head,
+        (&base, &head),
         None,
         None,
         None,
         ENTRIES,
+        false,
     )
     .unwrap();
     assert_eq!(summary(&categories, Category::EntryPoints), (true, 0));

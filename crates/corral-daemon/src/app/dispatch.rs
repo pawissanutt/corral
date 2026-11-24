@@ -70,7 +70,10 @@ pub(crate) fn welcome(shared: &Shared, hello: wire::Hello) -> wire::Welcome {
                 ) || system
                     && matches!(
                         cap.as_str(),
-                        app::SYSTEM_RUNTIME_V1 | app::SYSTEM_ENTRIES_V1 | app::SYSTEM_LENSES_V1
+                        app::SYSTEM_RUNTIME_V1
+                            | app::SYSTEM_ENTRIES_V1
+                            | app::SYSTEM_LENSES_V1
+                            | app::SYSTEM_DATA_V1
                     )
                     || cfg!(target_os = "linux")
                         && matches!(cap.as_str(), app::SESSION_FILES_V1 | app::SESSION_HTML_V1)
@@ -233,6 +236,7 @@ pub(crate) fn serve(
                 query.target,
                 DetailRef::SystemMap { .. }
                     | DetailRef::SystemRuntime { .. }
+                    | DetailRef::SystemData { .. }
                     | DetailRef::SystemLenses { .. }
                     | DetailRef::SystemLens { .. }
                     | DetailRef::SystemReview { .. }

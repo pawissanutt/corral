@@ -6,6 +6,8 @@ use serde::Serialize;
 
 use super::*;
 
+#[path = "data_delta_tests.rs"]
+mod data_delta_tests;
 #[path = "entry_tests.rs"]
 mod entry_tests;
 #[path = "lens_tests.rs"]

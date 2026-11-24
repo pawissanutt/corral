@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::model::*;
+use crate::{DataFacts, model::*};
 
 pub(crate) fn compare(
     before: &TreeFacts,
@@ -45,6 +45,15 @@ pub(crate) fn compare(
             })
         })
         .collect();
+    let data_unreadable = files
+        .iter()
+        .filter(|file| {
+            [&before.data, &after.data]
+                .into_iter()
+                .any(|data| data.unreadable_paths().contains(&file.path))
+        })
+        .map(|file| file.path.clone())
+        .collect();
     ProjectDelta {
         files,
         skipped_non_utf8_paths,
@@ -52,10 +61,121 @@ pub(crate) fn compare(
         module_references,
         runtime: runtime(&before.runtime, &after.runtime),
         entry_points: crate::entries::compare(&before.entry_points, &after.entry_points),
+        data: compare_data(&before.data, &after.data),
+        data_unreadable,
         changes: None,
         dependents: None,
         tests: None,
     }
+}
+
+/// Compare declarations and field shapes, not their positions or order in a source file.
+pub fn compare_data(before: &DataFacts, after: &DataFacts) -> Vec<DataChange> {
+    let old = data_declarations(before);
+    let new = data_declarations(after);
+    let mut changes = Vec::new();
+    for id in keys(&old, &new) {
+        if before.unreadable.contains(id.0) || after.unreadable.contains(id.0) {
+            continue;
+        }
+        let make = |ty: &DataType, contract, change| DataChange {
+            path: ty.path.clone(),
+            name: ty.name.clone(),
+            line: ty.line,
+            kind: ty.kind,
+            source: ty.source,
+            contract,
+            change,
+        };
+        let left = old.get(id);
+        let right = new.get(id);
+        let old_contract = left.is_some_and(|ty| before.contracts.contains(&ty.id()));
+        let new_contract = right.is_some_and(|ty| after.contracts.contains(&ty.id()));
+        match (left, right) {
+            (Some(a), Some(b)) if a.kind == b.kind => {
+                changes.extend(field_changes(a, b).map(|change| {
+                    let ty = if matches!(change, DataChangeKind::FieldRemoved { .. }) {
+                        a
+                    } else {
+                        b
+                    };
+                    make(ty, old_contract || new_contract, change)
+                }));
+            }
+            (a, b) => {
+                if let Some(a) = a {
+                    changes.push(make(a, old_contract, DataChangeKind::TypeRemoved));
+                }
+                if let Some(b) = b {
+                    changes.push(make(b, new_contract, DataChangeKind::TypeAdded));
+                }
+            }
+        }
+    }
+    changes
+}
+
+#[derive(PartialOrd, Ord, PartialEq, Eq)]
+enum DeclarationKey<'a> {
+    Named(&'a str),
+    Pointer(&'a str),
+}
+
+fn data_declarations(data: &DataFacts) -> BTreeMap<(&str, DeclarationKey<'_>), &DataType> {
+    let pointers = data.schema_pointers();
+    data.types
+        .iter()
+        .map(|ty| {
+            let path = ty.path.as_str();
+            let name = ty.name.as_str();
+            let key = if ty.source == DataSource::JsonSchema {
+                pointers
+                    .get(&(path, name))
+                    .map_or(DeclarationKey::Named(name), |pointer| {
+                        DeclarationKey::Pointer(pointer)
+                    })
+            } else {
+                DeclarationKey::Named(name)
+            };
+            ((path, key), ty)
+        })
+        .collect()
+}
+
+fn field_changes(before: &DataType, after: &DataType) -> impl Iterator<Item = DataChangeKind> {
+    let old: BTreeMap<_, _> = before
+        .fields
+        .iter()
+        .map(|field| (&field.name, field))
+        .collect();
+    let new: BTreeMap<_, _> = after
+        .fields
+        .iter()
+        .map(|field| (&field.name, field))
+        .collect();
+    let mut changes = Vec::new();
+    for name in keys(&old, &new) {
+        use DataChangeKind::*;
+        let change = match (old.get(name).copied(), new.get(name).copied()) {
+            (None, Some(field)) => FieldAdded {
+                field: field.clone(),
+            },
+            (Some(field), None) => FieldRemoved {
+                field: field.clone(),
+            },
+            (Some(a), Some(b)) if a.ty != b.ty => FieldRetyped {
+                before: a.clone(),
+                after: b.clone(),
+            },
+            (Some(a), Some(b)) if a.optional != b.optional => FieldOptionalityChanged {
+                before: a.clone(),
+                after: b.clone(),
+            },
+            _ => continue,
+        };
+        changes.push(change);
+    }
+    changes.into_iter()
 }
 
 fn runtime(before: &RuntimeFacts, after: &RuntimeFacts) -> RuntimeDelta {

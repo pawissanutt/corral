@@ -3,18 +3,19 @@ use std::sync::atomic::Ordering;
 
 use anyhow::{Context, Result, ensure};
 use corral_engine::facts::FactsReport;
+use corral_facts::DataFacts;
 use corral_protocol::{
     app::APP_CONTROL_MAX,
     detail::{DetailBody, DetailGet, DetailRef, DetailReply},
 };
 use corral_types::{
-    SystemCategorySummary, SystemImpactCategory, SystemLens, SystemLensSummary, SystemLenses,
-    SystemMap, SystemProvider, SystemReview, SystemRuntime, SystemStatus,
+    SystemCategorySummary, SystemData, SystemImpactCategory, SystemLens, SystemLensSummary,
+    SystemLenses, SystemMap, SystemProvider, SystemReview, SystemRuntime, SystemStatus,
 };
 
 use serde::Serialize;
 
-use crate::state::Shared;
+use crate::{state::Shared, system::Snapshot};
 
 use super::{NotFound, REPLY_MAX, details, fingerprint, json_len};
 
@@ -26,6 +27,7 @@ pub(crate) struct SystemFeatures {
     pub runtime: bool,
     pub entries: bool,
     pub lenses: bool,
+    pub data: bool,
 }
 
 impl SystemFeatures {
@@ -34,6 +36,7 @@ impl SystemFeatures {
             SystemImpactCategory::Runtime => self.runtime,
             SystemImpactCategory::EntryPoints => self.entries,
             SystemImpactCategory::Lenses => self.lenses,
+            SystemImpactCategory::DataModel => self.data,
             _ => true,
         }
     }
@@ -85,6 +88,22 @@ pub(super) fn read(
             });
             (etag, offset, body)
         }
+        DetailRef::SystemData { project, at } => match at {
+            Some(at) => data(
+                shared,
+                query,
+                project,
+                shared.system.data_at(shared, project, at)?,
+                |data| data,
+            )?,
+            None => data(
+                shared,
+                query,
+                project,
+                shared.system.map(shared, project)?,
+                |facts| &facts.structure.data,
+            )?,
+        },
         DetailRef::SystemLenses { project } => {
             let snapshot = shared.system.lenses(shared, project, None)?;
             let (etag, offset) = selection(shared, query, snapshot.revision, &())?;
@@ -171,8 +190,7 @@ pub(super) fn read(
             let (categories, rows) = match (offset, impact.facts.as_deref()) {
                 (Some(_), Some(facts)) => projection::review(
                     &facts.delta,
-                    &facts.base,
-                    &facts.head,
+                    (&facts.base, &facts.head),
                     facts.lenses.as_deref(),
                     impact
                         .head_snapshot
@@ -180,6 +198,10 @@ pub(super) fn read(
                         .map(|snapshot| &snapshot.structure),
                     at.as_ref(),
                     features,
+                    impact
+                        .provider
+                        .as_ref()
+                        .is_some_and(|report| report.coverage.provides("types")),
                 )?,
                 _ => (
                     SystemImpactCategory::ALL
@@ -229,6 +251,31 @@ pub(super) fn read(
         next,
     )
     .map(Some)
+}
+
+fn data<T>(
+    shared: &Shared,
+    query: &DetailGet,
+    project: &str,
+    snapshot: Snapshot<T>,
+    model: impl Fn(&T) -> &DataFacts,
+) -> Result<(String, Option<usize>, DetailBody)> {
+    let (etag, offset) = selection(shared, query, snapshot.revision, &())?;
+    let rows = match (offset, snapshot.facts.as_deref()) {
+        (Some(_), Some(facts)) => projection::data(model(facts)),
+        _ => Vec::new(),
+    };
+    let (rows, omitted_rows) = bounded_rows(rows)?;
+    let body = DetailBody::SystemData(SystemData {
+        project: project.to_owned(),
+        commit: snapshot.head,
+        status: status(snapshot.building),
+        error: snapshot.error,
+        provider: provider(snapshot.provider.as_deref()),
+        omitted_rows,
+        rows,
+    });
+    Ok((etag, offset, body))
 }
 
 /// A huge manifest field or repository path must not strand all later rows.

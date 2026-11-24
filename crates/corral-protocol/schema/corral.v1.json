@@ -2201,6 +2201,22 @@
           {
             "properties": {
               "body": {
+                "$ref": "#/components/schemas/SystemData"
+              },
+              "kind": {
+                "const": "system_data",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "body": {
                 "$ref": "#/components/schemas/SystemLenses"
               },
               "kind": {
@@ -2823,6 +2839,29 @@
             "type": "object"
           },
           {
+            "description": "`system.v1`: data types, has edges and per-language coverage at the project head\nor an explicitly selected full Git commit ID.",
+            "properties": {
+              "at": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "const": "system_data",
+                "type": "string"
+              },
+              "project": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "project"
+            ],
+            "type": "object"
+          },
+          {
             "description": "`system.v1`: saved lens summaries at the observed project head.",
             "properties": {
               "kind": {
@@ -2868,7 +2907,7 @@
             "type": "object"
           },
           {
-            "description": "`system.v1`: impact of the latest submitted worker change. Runtime rows\nand summaries require `system.runtime.v1`; entry point changes and\nsummaries require `system.entries.v1`; lens impact requires `system.lenses.v1`.",
+            "description": "`system.v1`: impact of the latest submitted worker change. Runtime rows\nand summaries require `system.runtime.v1`; entry point changes and\nsummaries require `system.entries.v1`; lens impact requires `system.lenses.v1`;\ndata model changes and summaries require `system.data.v1`.",
             "properties": {
               "at": {
                 "anyOf": [
@@ -9874,6 +9913,10 @@
         "type": "object",
         "x-rust-type": "corral_types::SystemAt"
       },
+      "SystemData": {
+        "type": "object",
+        "x-rust-type": "corral_types::SystemData"
+      },
       "SystemLens": {
         "type": "object",
         "x-rust-type": "corral_types::SystemLens"
@@ -12089,7 +12132,7 @@
             ]
           },
           "x-required-in": [
-            31
+            32
           ]
         },
         {
@@ -12099,7 +12142,7 @@
             "type": "string"
           },
           "x-required-in": [
-            24
+            25
           ]
         },
         {
@@ -12109,7 +12152,7 @@
             "type": "string"
           },
           "x-required-in": [
-            13
+            14
           ]
         },
         {
@@ -12119,8 +12162,8 @@
             "$ref": "#/components/schemas/ChangesComparison"
           },
           "x-required-in": [
-            16,
-            17
+            17,
+            18
           ]
         },
         {
@@ -12130,7 +12173,7 @@
             "type": "string"
           },
           "x-required-in": [
-            36
+            37
           ]
         },
         {
@@ -12170,8 +12213,8 @@
             ]
           },
           "x-required-in": [
-            31,
-            33
+            32,
+            34
           ]
         },
         {
@@ -12191,8 +12234,7 @@
           "x-required-in": [
             0,
             1,
-            7,
-            9,
+            8,
             10,
             11,
             12,
@@ -12214,7 +12256,8 @@
             28,
             29,
             30,
-            36
+            31,
+            37
           ]
         },
         {
@@ -12224,7 +12267,7 @@
             "type": "string"
           },
           "x-required-in": [
-            15
+            16
           ]
         },
         {
@@ -12234,7 +12277,7 @@
             "type": "string"
           },
           "x-required-in": [
-            28
+            29
           ]
         },
         {
@@ -12264,6 +12307,10 @@
               },
               {
                 "const": "system_runtime",
+                "type": "string"
+              },
+              {
+                "const": "system_data",
                 "type": "string"
               },
               {
@@ -12425,7 +12472,7 @@
             "type": "integer"
           },
           "x-required-in": [
-            20
+            21
           ]
         },
         {
@@ -12436,10 +12483,10 @@
           },
           "x-required-in": [
             3,
-            17,
             18,
             19,
-            20
+            20,
+            21
           ]
         },
         {
@@ -12452,7 +12499,8 @@
             4,
             5,
             6,
-            7
+            7,
+            8
           ]
         },
         {
@@ -12462,7 +12510,7 @@
             "type": "string"
           },
           "x-required-in": [
-            34
+            35
           ]
         },
         {
@@ -12493,7 +12541,7 @@
             ]
           },
           "x-required-in": [
-            32
+            33
           ]
         },
         {
@@ -12505,7 +12553,7 @@
           "x-required-in": [
             2,
             3,
-            8
+            9
           ]
         },
         {
@@ -12534,8 +12582,8 @@
             ]
           },
           "x-required-in": [
-            31,
-            33
+            32,
+            34
           ]
         },
         {
@@ -12545,7 +12593,7 @@
             "type": "string"
           },
           "x-required-in": [
-            10
+            11
           ]
         },
         {
@@ -12559,7 +12607,7 @@
             "type": "integer"
           },
           "x-required-in": [
-            33
+            34
           ]
         }
       ],

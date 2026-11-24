@@ -6,12 +6,12 @@ use std::{
 };
 
 use corral_protocol::{
-    app::{DETAIL_GET, SYSTEM_ENTRIES_V1, SYSTEM_RUNTIME_V1, SYSTEM_V1},
+    app::{DETAIL_GET, SYSTEM_DATA_V1, SYSTEM_ENTRIES_V1, SYSTEM_RUNTIME_V1, SYSTEM_V1},
     detail::{DetailBody, DetailGet, DetailRef, DetailReply},
 };
 use corral_types::{
-    RuntimeEdgeKind, SystemAt, SystemImpactCategory, SystemMapRow, SystemReview, SystemReviewRow,
-    SystemRow, SystemRuntimeRow, SystemStatus,
+    DataChangeKind, RuntimeEdgeKind, SystemAt, SystemImpactCategory, SystemMapRow, SystemReview,
+    SystemReviewRow, SystemRow, SystemRuntimeRow, SystemStatus,
 };
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
@@ -20,6 +20,7 @@ use rustix::{
 
 use super::*;
 
+mod data;
 mod lenses;
 
 const WAIT: Duration = Duration::from_secs(8);
@@ -41,7 +42,10 @@ fn socket_system_map_and_review_refresh_from_background_facts() {
     fs::write(repo.join("app/src/lib.rs"), "pub mod feature;\n").unwrap();
     fs::write(
         repo.join(CHANGED),
-        "pub fn value() -> u8 { let _ = std::process::Command::new(\"git\"); 1 }\n",
+        r#"pub fn value() -> u8 { let _ = std::process::Command::new("git"); 1 }
+#[derive(serde::Serialize)]
+struct Record { id: u64 }
+"#,
     )
     .unwrap();
     // Small rows fill one page without requiring hundreds of source files.
@@ -82,6 +86,11 @@ fn socket_system_map_and_review_refresh_from_background_facts() {
     let _ = std::process::Command::new("git");
     let _ = std::process::Command::new("demo-helper");
     2
+}
+#[derive(serde::Serialize)]
+struct Record {
+    id: u64,
+    count: u64,
 }
 "#,
     )
@@ -136,10 +145,17 @@ fn socket_system_map_and_review_refresh_from_background_facts() {
         since: None,
         scope: None,
     };
-    let (mut legacy, welcome) =
-        connect(&path, vec![wire::TASKS_V1.into(), SYSTEM_ENTRIES_V1.into()]);
+    let (mut legacy, welcome) = connect(
+        &path,
+        vec![
+            wire::TASKS_V1.into(),
+            SYSTEM_ENTRIES_V1.into(),
+            SYSTEM_DATA_V1.into(),
+        ],
+    );
     assert!(!welcome.caps.iter().any(|cap| cap == SYSTEM_V1));
     assert!(!welcome.caps.iter().any(|cap| cap == SYSTEM_ENTRIES_V1));
+    assert!(!welcome.caps.iter().any(|cap| cap == SYSTEM_DATA_V1));
     for detail in [&map, &runtime, &review] {
         let error = legacy.call(DETAIL_GET, detail).unwrap_err();
         assert_eq!(error.code, rpc::ErrorCode::InvalidParams, "{error:?}");
@@ -151,10 +167,15 @@ fn socket_system_map_and_review_refresh_from_background_facts() {
     let (mut previous_system_client, welcome) = connect(&path, caps.clone());
     assert!(welcome.caps.iter().any(|cap| cap == SYSTEM_V1));
     assert!(!welcome.caps.iter().any(|cap| cap == SYSTEM_RUNTIME_V1));
-    caps.extend([SYSTEM_RUNTIME_V1.into(), SYSTEM_ENTRIES_V1.into()]);
+    caps.extend([
+        SYSTEM_RUNTIME_V1.into(),
+        SYSTEM_ENTRIES_V1.into(),
+        SYSTEM_DATA_V1.into(),
+    ]);
     let (mut client, welcome) = connect(&path, caps.clone());
     assert!(welcome.caps.iter().any(|cap| cap == SYSTEM_RUNTIME_V1));
     assert!(welcome.caps.iter().any(|cap| cap == SYSTEM_ENTRIES_V1));
+    assert!(welcome.caps.iter().any(|cap| cap == SYSTEM_DATA_V1));
     // A separate connection for the topic avoids unsolicited deltas interleaving
     // with detail replies (the lightweight test Client only reads RPC responses).
     let mut topic = Client::connect_with(&path, caps);
@@ -222,6 +243,15 @@ fn socket_system_map_and_review_refresh_from_background_facts() {
             .iter()
             .any(|entry| entry.category == SystemImpactCategory::EntryPoints)
     );
+    assert!(built_in.categories.iter().any(|category| category.category
+        == SystemImpactCategory::DataModel
+        && category.provided
+        && category.total == 1));
+    assert!(built_in.rows.iter().any(|row| matches!(row,
+        SystemReviewRow::DataChange { change }
+            if change.path == CHANGED && change.line == 8 && change.contract
+                && matches!(&change.change, DataChangeKind::FieldAdded { field } if field.name == "count" && field.line == 10)
+    )));
     let previous = previous_system_client.ok::<DetailReply>(DETAIL_GET, &review);
     assert_ne!(previous.etag, before.etag);
     let Some(DetailBody::SystemReview(previous)) = previous.body else {
@@ -229,11 +259,15 @@ fn socket_system_map_and_review_refresh_from_background_facts() {
     };
     assert!(previous.categories.iter().all(|entry| !matches!(
         entry.category,
-        SystemImpactCategory::Runtime | SystemImpactCategory::EntryPoints
+        SystemImpactCategory::Runtime
+            | SystemImpactCategory::EntryPoints
+            | SystemImpactCategory::DataModel
     )));
     assert!(!previous.rows.iter().any(|row| matches!(
         row,
-        SystemReviewRow::RuntimeUnit { .. } | SystemReviewRow::RuntimeEdge { .. }
+        SystemReviewRow::RuntimeUnit { .. }
+            | SystemReviewRow::RuntimeEdge { .. }
+            | SystemReviewRow::DataChange { .. }
     )));
     assert_eq!(changed_files(&previous.rows), [HELPER, CHANGED]);
     // Approval can persist a different run base before it rewrites the head.

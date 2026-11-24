@@ -1,5 +1,6 @@
 //! Immutable observations for System and Review. Reads may schedule work, but
 //! the worker alone reads Git and calls providers.
+mod data;
 mod lenses;
 mod worker;
 
@@ -16,6 +17,7 @@ use corral_engine::{Config, Store, config::Slot, facts::FactsReport};
 use corral_facts::{ProjectDelta, ProjectFacts, Revision, TreeFacts};
 use corral_protocol::app::APP_CONTROL_MAX;
 use corral_types::{Event, EventKind, Role, SystemRow, SystemStatus, lenses::LensImpact};
+use data::{DataEntry, DataKey};
 use lenses::{LensEntry, LensKey};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -31,11 +33,11 @@ const REVIEWS: usize = 32;
 const ERROR_BYTES: usize = 1024;
 
 #[derive(Clone)]
-pub(crate) struct Snapshot {
+pub(crate) struct Snapshot<Facts = ProjectFacts> {
     pub head: Option<String>,
     pub building: bool,
     pub revision: u64,
-    pub facts: Option<Arc<ProjectFacts>>,
+    pub facts: Option<Arc<Facts>>,
     pub provider: Option<Arc<FactsReport>>,
     pub error: Option<String>,
 }
@@ -89,6 +91,7 @@ struct Cache {
     maps: BTreeMap<String, MapEntry>,
     reviews: BTreeMap<String, ReviewEntry>,
     lenses: BTreeMap<LensKey, LensEntry>,
+    data: BTreeMap<DataKey, DataEntry>,
     // Keep the latest answer even if a review was the project's first request
     // or that particular review was later evicted from the detail cache.
     extension_answers: BTreeMap<String, ExtensionAnswers>,
@@ -148,6 +151,7 @@ impl System {
                 std::mem::take(&mut cache.maps),
                 std::mem::take(&mut cache.reviews),
                 std::mem::take(&mut cache.lenses),
+                std::mem::take(&mut cache.data),
             )
         };
         drop(retired);
@@ -436,6 +440,7 @@ impl Cache {
         let maps = std::mem::take(&mut self.maps);
         let reviews = std::mem::take(&mut self.reviews);
         let lenses = std::mem::take(&mut self.lenses);
+        let data = std::mem::take(&mut self.data);
         for project in config.source.projects.keys() {
             if self.all || maps.contains_key(project) {
                 self.activate(project);
@@ -444,7 +449,7 @@ impl Cache {
         self.configuration = Some(Arc::new(config));
         self.extension_answers.clear();
         self.reload_required = false;
-        (maps, reviews, lenses)
+        (maps, reviews, lenses, data)
     }
 
     /// Return whether a request was newly queued.
@@ -476,10 +481,14 @@ impl Cache {
         ))
     }
 
-    fn review_row(&mut self, project: &str, revision: u64, provider: Option<&FactsReport>) {
+    pub(super) fn detail_row(&mut self, project: &str, revision: u64) {
         if let Some(entry) = self.maps.get_mut(project) {
             entry.row_revision = revision;
         }
+    }
+
+    fn review_row(&mut self, project: &str, revision: u64, provider: Option<&FactsReport>) {
+        self.detail_row(project, revision);
         if let Some(provider) = provider {
             let answers = self
                 .extension_answers
@@ -491,7 +500,7 @@ impl Cache {
     }
 }
 
-impl Snapshot {
+impl<Facts> Snapshot<Facts> {
     fn pending(revision: u64) -> Self {
         Self {
             head: None,

@@ -7,6 +7,7 @@
 //! A repeat request with the same resolved revision makes no Git calls.
 
 mod cache;
+mod data;
 mod delta;
 mod entries;
 mod git;
@@ -19,6 +20,8 @@ mod structure;
 mod syntax;
 
 pub use cache::FactsCache;
+pub use data::DataFacts;
+pub use delta::compare_data;
 pub use entries::compare as compare_entry_points;
 pub use model::*;
 pub use structure::is_manifest;

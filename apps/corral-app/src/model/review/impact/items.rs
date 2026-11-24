@@ -162,6 +162,7 @@ pub(super) const fn title(category: Category) -> &'static str {
         Category::NotRead => "Not read",
         Category::EntryPoints => "Entry points",
         Category::Lenses => "Lenses",
+        Category::DataModel => "Data model",
     }
 }
 
@@ -178,6 +179,7 @@ pub(super) const fn zero(category: Category) -> &'static str {
         Category::NotRead => "Every changed file was read.",
         Category::EntryPoints => "No entry point added or removed.",
         Category::Lenses => "No lens element touched, added or removed.",
+        Category::DataModel => "No data type or field changed.",
     }
 }
 
@@ -226,6 +228,7 @@ pub(super) const fn category_of(row: &Row) -> Option<Category> {
         Row::RuntimeUnit { .. } | Row::RuntimeEdge { .. } => Category::Runtime,
         Row::Entry { .. } => Category::EntryPoints,
         Row::Lens { .. } => Category::Lenses,
+        Row::DataChange { .. } => Category::DataModel,
         Row::Map { .. } | Row::Container { .. } | Row::Module { .. } | Row::File { .. } => {
             return None;
         }
@@ -565,6 +568,8 @@ fn row_item(cx: &Ctx, n: usize, row: &Row) -> Option<Item> {
             }
         }
         Row::Lens { impact } => lens_item(cx, key, impact),
+        // This client does not negotiate system.data.v1; the Data view renders these rows.
+        Row::DataChange { .. } => return None,
         Row::Map { .. } | Row::Container { .. } | Row::Module { .. } | Row::File { .. } => {
             return None;
         }

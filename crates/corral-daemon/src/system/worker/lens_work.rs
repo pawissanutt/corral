@@ -67,7 +67,7 @@ impl Worker {
             entry.pending = enrich.as_ref().map(|_| Stage::Enrich);
             entry.enrich = enrich;
             entry.defer_refresh();
-            cache.lens_row(&key.project, revision);
+            cache.detail_row(&key.project, revision);
         });
     }
 
@@ -106,7 +106,7 @@ impl Worker {
             entry.snapshot.revision = revision;
             entry.snapshot.excerpts = Some(excerpts.into());
             let old = entry.snapshot.results.replace(results.into());
-            cache.lens_row(&key.project, revision);
+            cache.detail_row(&key.project, revision);
             old
         });
     }

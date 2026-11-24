@@ -4,7 +4,7 @@
 mod delta;
 mod snapshot;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub use corral_types::{DefinitionFact, ProviderCoverage};
 
@@ -12,7 +12,7 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Deserializer, Serialize, de::value::StringDeserializer};
 
 pub use self::delta::{ChangeFact, ChangeKind, ChangedFact, DependentFact, TestCandidate};
-use crate::{EntryKind, ReadStatus, ReferenceKind};
+use crate::{DataField, DataKind, EntryKind, ReadStatus, ReferenceKind};
 
 /// An entire validated reply, stored separately from the built-in facts.
 #[derive(Debug, Serialize, Deserialize)]
@@ -28,6 +28,8 @@ impl Reply {
         let output = std::str::from_utf8(output).context("facts reply is not UTF-8")?;
         let mut lines = output.lines().enumerate();
         let mut rows = Vec::new();
+        let mut type_ids = BTreeSet::new();
+        let mut remaining_type_budget = crate::data::REPLY_BUDGET;
         for (index, line) in lines.by_ref() {
             let number = index + 1;
             // Serde's internally tagged enum also supports sequence input.
@@ -61,6 +63,20 @@ impl Reply {
             }
             row.validate()
                 .with_context(|| format!("malformed facts row at line {number}"))?;
+            if let Row::Type {
+                path, name, fields, ..
+            } = &row
+            {
+                remaining_type_budget = crate::data::extension_shape_cost(path, name, fields)
+                    .and_then(|cost| remaining_type_budget.checked_sub(cost))
+                    .with_context(|| {
+                        format!("malformed facts row at line {number}: data shape budget exceeded")
+                    })?;
+                ensure!(
+                    type_ids.insert((path.clone(), name.clone())),
+                    "malformed facts row at line {number}: duplicate data type"
+                );
+            }
             rows.push(row);
         }
         anyhow::bail!("facts reply is missing a final done row")
@@ -94,6 +110,14 @@ enum Row {
         kind: EntryKind,
         name: String,
     },
+    Type {
+        path: String,
+        name: String,
+        line: u64,
+        #[serde(deserialize_with = "enum_name")]
+        kind: DataKind,
+        fields: Vec<DataField>,
+    },
     Change {
         #[serde(flatten)]
         change: ChangeFact,
@@ -122,6 +146,24 @@ impl Row {
             ),
             Self::Reference { count, .. } => ensure!(*count > 0, "zero reference count"),
             Self::Entry { line, .. } => ensure!(*line > 0, "zero entry line"),
+            Self::Type {
+                name, line, fields, ..
+            } => {
+                ensure!(
+                    *line > 0 && !name.trim().is_empty(),
+                    "invalid data declaration"
+                );
+                let mut names = BTreeSet::new();
+                for field in fields {
+                    ensure!(
+                        field.line > 0
+                            && !field.name.trim().is_empty()
+                            && !field.ty.trim().is_empty(),
+                        "invalid data field"
+                    );
+                    ensure!(names.insert(&field.name), "duplicate data field name");
+                }
+            }
             Self::Change { change } => ensure!(change.line > 0, "zero change line"),
             Self::Dependent { dependent } => ensure!(dependent.line > 0, "zero dependent line"),
             _ => {}
@@ -131,9 +173,10 @@ impl Row {
 
     fn has_known_paths(&self, contains: impl Fn(&str) -> bool) -> bool {
         match self {
-            Self::File { path, .. } | Self::Definition { path, .. } | Self::Entry { path, .. } => {
-                contains(path)
-            }
+            Self::File { path, .. }
+            | Self::Definition { path, .. }
+            | Self::Entry { path, .. }
+            | Self::Type { path, .. } => contains(path),
             Self::Reference { from, to, .. } => contains(from) && contains(to),
             Self::Change { change } => {
                 contains(&change.path)

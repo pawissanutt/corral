@@ -137,6 +137,46 @@ fn slot_selects_only_one_enabled_provider_in_scope() {
 }
 
 #[test]
+fn data_review_falls_back_for_a_shared_file_with_only_one_type_overlay() {
+    use corral_facts::DataChangeKind;
+
+    let fixture = Fixture::new();
+    let repo = fixture.workspace.path().join("repo");
+    let put = |text| fs::write(repo.join("wire.rs"), text).unwrap();
+    put("#[derive(Serialize)] struct Wire { id: u32 }");
+    fixture.git(&["add", "."]);
+    fixture.git(&["commit", "-m", "base"]);
+    let reader = fixture.reader();
+    let base = reader.resolve_revision("HEAD").unwrap();
+    put("#[derive(Serialize)] struct Wire { id: u32, label: String }");
+    fs::write(repo.join("new.proto"), "message New {}").unwrap();
+    fixture.git(&["add", "."]);
+    fixture.git(&["commit", "-m", "head"]);
+    let head = reader.resolve_revision("HEAD").unwrap();
+    fixture.script(&format!(r#"
+if grep -q '{}' ../request.json; then
+    printf '%s\n' '{{"type":"type","path":"wire.rs","name":"Wire","line":1,"kind":"record","fields":[{{"name":"provider_id","line":1,"type":"u32"}}]}}'
+    printf '%s\n' '{{"type":"type","path":"new.proto","name":"New","line":1,"kind":"message","fields":[]}}'
+fi
+printf '%s\n' '{{"type":"done","provided":["types"],"skipped":{{}},"omitted":{{}}}}'
+"#,head.commit()));
+    let before = reader.builtin_tree(&base).unwrap();
+    let after = reader.builtin_tree(&head).unwrap();
+    let builtin = reader.builtin_delta(&base, &head).unwrap();
+    let (changes, unreadable) = reader
+        .enrich_data_delta((&base, &before), (&head, &after), &builtin, |_| Ok(()))
+        .unwrap();
+    assert!(unreadable.is_empty());
+    assert!(
+        matches!(changes.as_slice(), [added, wire]
+            if added.name == "New" && added.source == DataSource::Extension && added.change == DataChangeKind::TypeAdded
+            && wire.name == "Wire" && wire.contract && matches!(&wire.change, DataChangeKind::FieldAdded {field} if field.name == "label")
+        ),
+        "{changes:#?}"
+    );
+}
+
+#[test]
 fn definitions_enrich_builtin_facts_and_cache_by_tree() {
     let fixture = Fixture::new();
     let reader = fixture.reader();
@@ -169,7 +209,7 @@ ROWS
     assert_eq!(report.coverage.provided, ["definitions"]);
     assert_eq!(
         report.coverage.not_provided,
-        ["files", "references", "entries"]
+        ["files", "references", "entries", "types"]
     );
     assert_eq!(report.coverage.dropped_unknown_files, 1);
     assert_eq!(report.coverage.skipped["unsupported"], 1);
@@ -269,7 +309,7 @@ ROWS
     let report = reader.enrich_snapshot(&mut facts).unwrap();
     assert_eq!(
         fixture.request()["want"],
-        json!(["files", "definitions", "references", "entries"])
+        json!(["files", "definitions", "references", "entries", "types"])
     );
     assert_eq!(report.error, None);
     assert_eq!(report.coverage.provided, ["entries"]);

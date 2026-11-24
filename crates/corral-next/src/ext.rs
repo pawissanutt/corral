@@ -142,7 +142,7 @@ pub(crate) fn check(
                 ("rev".into(), json!("HEAD")),
                 (
                     "want".into(),
-                    json!(["files", "definitions", "references", "entries"]),
+                    json!(["files", "definitions", "references", "entries", "types"]),
                 ),
             ]),
         );

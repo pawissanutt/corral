@@ -1,0 +1,19 @@
+{
+  "$defs": {
+    "Address/Local": {
+      "properties": {
+        "zip": {"type": "string"}
+      }
+    }
+  },
+  "definitions": {
+    "Customer": {
+      "properties": {
+        "home": {"$ref": "#/$defs/Address~1Local"},
+        "previous": {"type": "array", "items": {"$ref": "#/$defs/Address~1Local"}},
+        "remote": {"$ref": "https://example.test/address.json#/$defs/Address"}
+      },
+      "required": ["home"]
+    }
+  }
+}

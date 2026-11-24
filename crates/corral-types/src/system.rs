@@ -125,6 +125,39 @@ pub enum SystemRuntimeRow {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SystemData {
+    pub project: String,
+    /// The resolved commit, at the project head by default.
+    pub commit: Option<String>,
+    pub status: SystemStatus,
+    pub error: Option<String>,
+    pub provider: Option<SystemProvider>,
+    /// Rows omitted to stay within the wire budget.
+    pub omitted_rows: usize,
+    pub rows: Vec<SystemDataRow>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SystemDataRow {
+    Coverage {
+        language: String,
+        /// An empty set means no source supplied data facts, not a measured zero.
+        sources: BTreeSet<DataSource>,
+    },
+    Unreadable {
+        path: String,
+    },
+    Type {
+        #[serde(rename = "type")]
+        data_type: DataType,
+    },
+    Has {
+        edge: DataEdge,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SystemLenses {
     pub project: String,
     pub head: Option<String>,
@@ -227,10 +260,11 @@ pub enum SystemImpactCategory {
     NotRead,
     EntryPoints,
     Lenses,
+    DataModel,
 }
 
 impl SystemImpactCategory {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 12] = [
         Self::PackageDependencies,
         Self::ModuleReferences,
         Self::Definitions,
@@ -242,6 +276,7 @@ impl SystemImpactCategory {
         Self::NotRead,
         Self::EntryPoints,
         Self::Lenses,
+        Self::DataModel,
     ];
 }
 
@@ -328,6 +363,10 @@ pub enum SystemReviewRow {
     },
     Lens {
         impact: LensImpact,
+    },
+    /// Removed types and fields are anchored at the base; other changes at the head.
+    DataChange {
+        change: DataChange,
     },
     Dependent {
         dependent: DependentFact,

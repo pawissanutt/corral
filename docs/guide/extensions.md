@@ -95,7 +95,7 @@ facts remain available. A call runs from the project repository and has a 10-min
 deadline and 64 MiB stdout limit. Requests are:
 
 ```json
-{"v":1,"query":"snapshot","repo":"/absolute/repo","rev":"commit","want":["files","definitions","references","entries"]}
+{"v":1,"query":"snapshot","repo":"/absolute/repo","rev":"commit","want":["files","definitions","references","entries","types"]}
 {"v":1,"query":"delta","repo":"/absolute/repo","base":"commit","head":"commit","want":["changes","dependents","tests"]}
 ```
 
@@ -110,6 +110,7 @@ All rows must be valid, even for unrequested categories; malformed output, a mis
 | `definition` | `path`, `name`, `line`, `end_line`, `kind` |
 | `reference` | `from`, `to`, `kind` (`import`, `use`, `call`), `count` |
 | `entry` | `path`, `line`, `kind` (`command`, `route`, `operation`), `name` |
+| `type` | `path`, `name`, `line`, `kind` (`record`, `enum`, `table`, `message`), `fields` (array of `name`, `type`, `line`, optional boolean `optional`) |
 | `change` | `change` (`added`, `removed`, `changed`), `fact` (`definition` or `reference`), `path`, `name`, `line`; reference changes also need `to_path`, `to_name` |
 | `dependent` | `path`, `name`, `line`, `of` |
 | `test` | `path`, `name` |
@@ -130,6 +131,28 @@ are compared after applying these replacements to both the base and head snapsho
 snapshot fails or its entry rows cannot fit the wire budget, Review compares built-in entries
 on both sides. The separate delta request still asks for `changes`, `dependents`, and `tests`,
 not `entries`; a failure of that request does not discard valid entry snapshots.
+
+For data model snapshots, include `types` in `done.provided` and emit one row per declaration:
+
+```json
+{"type":"type","path":"src/messages.proto","name":"Envelope","line":1,"kind":"message","fields":[{"name":"body","type":"Payload","line":2,"optional":true}]}
+```
+
+`optional` defaults to false. A `type` row replaces built-in data declarations only in its
+own file; returning no accepted rows leaves built-in facts unchanged. Name-based links use
+unambiguous candidates with the same file extension. Unprovided languages have no source
+coverage, not a count of zero. Review compares type and field shapes from the two snapshots,
+ignoring line shifts. It falls back to built-ins if either provider snapshot lacks a usable
+`types` answer (including reported skips or omissions), or per file if an existing file was
+covered on only one side. Do not send `type` rows in a `delta` reply.
+
+Built-in data sources read committed JSON Schema and OpenRPC components, SQL `CREATE TABLE`
+statements, and Rust structs and enums with a Serde derive. JSON links use local pointers;
+colliding declaration names in a file are qualified by pointer. These are source shapes, not
+compatibility verdicts: there is no macro expansion, Serde execution, type checking, SQL
+migration replay, or remote schema resolution. Data readers cap both per-file and whole-tree
+expansion; provider `type` rows also have a reply-wide budget. Unreadable sources do not count
+as zero or as removed declarations.
 
 Results are cached by tree and provider configuration; inputs should correspond to the
 requested revision.

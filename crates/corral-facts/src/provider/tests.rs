@@ -33,6 +33,7 @@ fn rejects_entire_reply_without_exactly_one_final_done_or_with_a_malformed_row()
         r#"{"type":"entry","path":"src.rs","line":1,"kind":"handler","name":"serve"}"#,
         r#"{"type":"entry","path":"src.rs","line":1,"kind":{"command":null},"name":"serve"}"#,
         r#"{"type":"entry","path":"src.rs","line":1,"kind":"command"}"#,
+        r#"{"type":"type","path":"src.rs","name":"Wire","line":1,"kind":"record","fields":[{"name":"a","type":"bool","line":0}]}"#,
         r#"{"type":"change","change":"removed","fact":"reference","path":"src.rs","name":"f","line":1,"to_path":"other.rs"}"#,
         r#"{"type":"change","change":"removed","fact":0,"path":"src.rs","name":"f","line":1}"#,
         r#"{"type":"dependent","path":"src.rs","name":"g","line":1}"#,
@@ -94,6 +95,54 @@ fn delta_filters_paths_against_the_right_tree_before_considering_coverage() {
     assert_eq!(delta.tests, None);
 }
 
+#[test]
+fn data_rows_replace_only_their_files_and_relink_against_the_merged_types() {
+    use crate::DataSource;
+    let mut tree = tree(&["src.rs", "keep.rs", "storage.sql"]);
+    tree.files[2].language = "SQL".into();
+    let mut builder = crate::data::Builder::default();
+    builder.read("src.rs", Some("#[derive(Serialize)] struct Old;"));
+    builder.read(
+        "keep.rs",
+        Some("#[derive(Serialize)] struct Kept { child: Wire }"),
+    );
+    builder.read(
+        "storage.sql",
+        Some(r#"CREATE TABLE stored (wire INT REFERENCES "Wire"(id));"#),
+    );
+    tree.data = builder.finish([
+        ("src.rs", "rust"),
+        ("keep.rs", "rust"),
+        ("storage.sql", "SQL"),
+    ]);
+    assert!(tree.data.edges.is_empty());
+    let answer = br#"{"type":"type","path":"src.rs","name":"Wire","line":1,"kind":"message","fields":[{"name":"v","type":"String","line":2}]}
+{"type":"type","path":"not-in-tree.rs","name":"Stra","line":1,"kind":"record","fields":[]}
+{"type":"done","provided":["types"],"skipped":{},"omitted":{}}"#;
+    let ignored = Reply::parse(answer, &[]).unwrap().snapshot_data(&tree).0;
+    assert_eq!(ignored, tree.data);
+    let reply = Reply::parse(answer, &["types"]).unwrap();
+    let cached = serde_json::to_vec(&reply).unwrap();
+    let reply: Reply = serde_json::from_slice(&cached).unwrap();
+    let coverage = reply.merge_snapshot(&mut tree);
+    assert_eq!(coverage.dropped_unknown_files, 1);
+    assert_eq!(
+        tree.data
+            .types
+            .iter()
+            .map(|ty| ty.name.as_str())
+            .collect::<Vec<_>>(),
+        ["Kept", "Wire", "stored"]
+    );
+    assert_eq!(
+        tree.data.coverage["rust"],
+        BTreeSet::from([DataSource::RustSerde, DataSource::Extension])
+    );
+    assert_eq!(tree.data.edges.len(), 1);
+    assert_eq!(tree.data.edges[0].to.name, "Wire");
+    assert!(!tree.data.types[1].fields[0].optional);
+}
+
 fn tree(paths: &[&str]) -> TreeFacts {
     TreeFacts {
         files: paths
@@ -121,6 +170,7 @@ fn tree(paths: &[&str]) -> TreeFacts {
         spawns: vec![],
         runtime: Default::default(),
         entry_points: Default::default(),
+        data: Default::default(),
         coverage: Coverage::default(),
     }
 }

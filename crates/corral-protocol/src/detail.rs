@@ -1,6 +1,6 @@
 //! Etag-aware, bounded app details. Page tokens are opaque and selector-bound.
 use corral_types::{
-    SystemAt, SystemLens, SystemLenses, SystemMap, SystemReview, SystemRuntime, UsageBy,
+    SystemAt, SystemData, SystemLens, SystemLenses, SystemMap, SystemReview, SystemRuntime, UsageBy,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -56,6 +56,13 @@ pub enum DetailRef {
     SystemRuntime {
         project: String,
     },
+    /// `system.v1`: data types, has edges and per-language coverage at the project head
+    /// or an explicitly selected full Git commit ID.
+    SystemData {
+        project: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        at: Option<String>,
+    },
     /// `system.v1`: saved lens summaries at the observed project head.
     SystemLenses {
         project: String,
@@ -70,7 +77,8 @@ pub enum DetailRef {
     },
     /// `system.v1`: impact of the latest submitted worker change. Runtime rows
     /// and summaries require `system.runtime.v1`; entry point changes and
-    /// summaries require `system.entries.v1`; lens impact requires `system.lenses.v1`.
+    /// summaries require `system.entries.v1`; lens impact requires `system.lenses.v1`;
+    /// data model changes and summaries require `system.data.v1`.
     SystemReview {
         task: String,
         /// The head's map level and entry point scope; the project level when absent.
@@ -246,6 +254,7 @@ pub enum DetailBody {
     ReviewFile(PatchPage),
     SystemMap(#[schemars(with = "crate::schema_types::SystemMap")] SystemMap),
     SystemRuntime(#[schemars(with = "crate::schema_types::SystemRuntime")] SystemRuntime),
+    SystemData(#[schemars(with = "crate::schema_types::SystemData")] SystemData),
     SystemLenses(#[schemars(with = "crate::schema_types::SystemLenses")] SystemLenses),
     SystemLens(#[schemars(with = "crate::schema_types::SystemLens")] SystemLens),
     SystemReview(#[schemars(with = "crate::schema_types::SystemReview")] SystemReview),

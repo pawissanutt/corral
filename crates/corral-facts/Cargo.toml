@@ -9,11 +9,14 @@ license.workspace = true
 anyhow.workspace = true
 corral-types.workspace = true
 heck = "0.5"
+proc-macro2 = { version = "1", features = ["span-locations"] }
+quote = "1"
 regex.workspace = true
 saphyr-parser.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+syn = { version = "2", features = ["full"] }
 toml.workspace = true
 toml_edit.workspace = true
 tempfile.workspace = true
