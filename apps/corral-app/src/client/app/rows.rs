@@ -98,8 +98,20 @@ impl AppState {
                 });
                 Topic::Agents
             }
-            SubDelta::Assistant { delta } => {
+            SubDelta::Assistant { mut delta } => {
                 feed.update(|feed| {
+                    // A snapshot prepared before the End receipt cannot reopen that thread.
+                    for row in &mut delta.rows {
+                        if row.state != AssistantState::Ended
+                            && let Some(ended) =
+                                feed.assistants.get(row.id.as_str()).filter(|old| {
+                                    old.kind != AssistantKind::Build
+                                        && old.state == AssistantState::Ended
+                                })
+                        {
+                            *row = ended.clone();
+                        }
+                    }
                     changed = apply(&mut feed.assistants, delta.rows, delta.left, replacement);
                     feed.forget_ended_quick();
                 });

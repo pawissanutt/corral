@@ -44,9 +44,7 @@ const SESSION_FIELD: &str = "field-message";
 const TARGET: f32 = 44.0;
 
 pub(super) fn act(app: AppState, action: Action) {
-    app.reduce(app.session, move |state, feed, _, _| {
-        state.act(action, feed)
-    });
+    app.session_input(action, false);
 }
 
 /// Sends the draft with `policy`, unless the button that sends it is unavailable now. An empty
@@ -92,16 +90,16 @@ fn send(
         }
     };
     let carried = !attachments.is_empty();
-    act(
-        app,
+    let sent = app.session_input(
         Action::Send {
             session: id.clone(),
             text,
             policy,
             attachments,
         },
+        ask.is_some(),
     );
-    if carried {
+    if carried && sent {
         app.clear_staged(id);
     }
 }
@@ -162,6 +160,23 @@ fn build(
 ) -> AnyElement {
     let form = app.form;
     let entry = element_ref();
+    let scope = id.clone();
+    let composer = computed(move || {
+        let mut composer = composer.get()?;
+        let blocked = app.feed.with(|feed| {
+            app.assistant.with(|chats| {
+                app.session
+                    .with(|state| state.input_block(&scope, ask.is_some(), chats, feed))
+            })
+        });
+        if let Some(why) = blocked {
+            composer.send.unavailable = Some(why.into());
+            if let Some(queue) = &mut composer.queue {
+                queue.unavailable = Some(why.into());
+            }
+        }
+        Some(composer)
+    });
     let attach = match ask {
         Some(ask) => Attach::ask(ask),
         None => Attach::page(app, &id, composer),
@@ -248,7 +263,7 @@ fn field(
         .on_submit(move |_: &str| {
             if let Some(actions) = command.get_untracked() {
                 for action in actions {
-                    act(app, action);
+                    app.session_input(action, ask.is_some());
                 }
                 return;
             }

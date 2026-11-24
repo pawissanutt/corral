@@ -9,6 +9,7 @@ use corral_protocol::session_host::SessionSend;
 use corral_protocol::session_state::SendPolicy;
 
 use crate::model::agents::Control;
+use crate::model::assistant::{self, EndState};
 use crate::model::daemon::Feed;
 use crate::model::effect::Effect;
 use crate::model::hue::Hue;
@@ -348,6 +349,44 @@ impl State {
         ui.notices.push(Hue::Neutral, words, now);
     }
 
+    /// Ask keeps its composer mounted while an End is pending, so the draft stays editable.
+    /// A press from a composer still keyed to the old chat must not make a send or clear it.
+    pub fn input_block(
+        &self,
+        session: &Id,
+        ask: bool,
+        chats: &assistant::State,
+        feed: &Feed,
+    ) -> Option<&'static str> {
+        if ask && *session != self.ask_id() {
+            return Some("Ask is switching threads");
+        }
+        if assistant::ended(feed, session.as_str()) {
+            return Some("This thread has ended");
+        }
+        matches!(
+            assistant::end_state(chats, feed, session.as_str()),
+            Some(EndState::Pending)
+        )
+        .then_some("Wait for End thread to finish")
+    }
+
+    /// Run the composer or slash menu action, rechecking the live handoff at activation.
+    pub fn act_input(
+        &mut self,
+        action: Action,
+        ask: bool,
+        chats: &assistant::State,
+        feed: &Feed,
+    ) -> Vec<Effect> {
+        if let Action::Send { session, .. } = &action
+            && self.input_block(session, ask, chats, feed).is_some()
+        {
+            return Vec::new();
+        }
+        self.act(action, feed)
+    }
+
     /// Sends text under a new command id, which is also its input id; the echo shows it until
     /// the transcript serves a message under that id.
     fn send(
@@ -454,26 +493,34 @@ impl State {
     /// chat's transcript then retires by their input ids. Once that chat has ended Ask is back on
     /// `quick`, so its next send starts a new chat.
     fn key_ask(&mut self, feed: &Feed) {
+        let quick = Id::from(assistant::QUICK);
         if let Some(chat) = &self.ask {
-            if crate::model::assistant::row(feed, chat.as_str())
-                .is_some_and(|row| row.state == corral_protocol::rows::AssistantState::Ended)
-            {
+            if assistant::ended(feed, chat.as_str()) {
+                let draft = self
+                    .sessions
+                    .get_mut(chat)
+                    .map(|ui| std::mem::take(&mut ui.draft));
+                if let Some(draft) = draft.filter(|text| !text.is_empty()) {
+                    let next = &mut self.ui_mut(&quick).draft;
+                    *next = if next.is_empty() {
+                        draft
+                    } else {
+                        format!("{draft}\n\n{next}")
+                    };
+                }
                 self.ask = None;
             }
             return;
         }
-        let quick = Id::from(crate::model::assistant::QUICK);
-        let Some(chat) = self
-            .sessions
-            .get(&quick)
-            .and_then(|ui| {
-                ui.echoes
-                    .iter()
-                    .find_map(|sent| echo::ack(feed, sent.key.as_str()))
+        let Some(chat) = self.sessions.get(&quick).and_then(|ui| {
+            ui.echoes.iter().find_map(|sent| {
+                let session = echo::ack(feed, sent.key.as_str())?.session;
+                (!session.is_empty()
+                    && session != quick.as_str()
+                    && !assistant::ended(feed, &session))
+                .then_some(session)
             })
-            .map(|ack| ack.session)
-            .filter(|session| !session.is_empty() && *session != quick.as_str())
-        else {
+        }) else {
             return;
         };
         let chat = Id::from(chat.as_str());

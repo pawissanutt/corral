@@ -725,6 +725,8 @@ fn request_deadline(method: &str, params: &Value) -> u64 {
         | wire::session::SESSION_RELAUNCH
         | wire::session_host::SESSION_SEND
         | wire::assistant::ASSISTANT_WARM => APP_LAUNCH_DEADLINE_MS,
+        // End waits for the chat host to stop, including the daemon's shutdown fallback.
+        wire::assistant::ASSISTANT_SESSION if params["op"] == "end" => APP_COMMAND_DEADLINE_MS,
         // These wait on an operation, on a running host or on prune.
         wire::op::OP_SUBMIT
         | wire::op::OP_RESULT

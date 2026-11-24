@@ -24,9 +24,7 @@ use crate::state::AppState;
 
 /// Runs one of the session page's actions through its reducer, which applies its effects.
 fn run(app: AppState, action: crate::model::session::Action) {
-    app.reduce(app.session, move |state, feed, _, _| {
-        state.act(action, feed)
-    });
+    app.session_input(action, false);
 }
 
 /// Runs one of the New build sheet's, the rewind sheet's or the Remove sheet's actions against

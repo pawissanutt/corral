@@ -71,6 +71,22 @@ impl AppState {
         });
     }
 
+    /// Run a composer or slash-menu action. The caller may retire staged attachments only
+    /// if the reducer actually emitted a send, not if it held the draft during End thread.
+    pub fn session_input(&self, action: crate::model::session::Action, ask: bool) -> bool {
+        let mut sent = false;
+        self.reduce(self.session, |state, feed, _, _| {
+            let effects = self
+                .assistant
+                .with_untracked(|chats| state.act_input(action, ask, chats, feed));
+            sent = effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::SessionSend { .. }));
+            effects
+        });
+        sent
+    }
+
     /// Tracked: whether corrald serves the destination to this session.
     pub fn available(&self, destination: Destination) -> Availability {
         self.feed

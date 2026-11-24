@@ -254,19 +254,17 @@ fn send_ask(app: AppState, ask: Ask, id: &Id, text: String, policy: SendPolicy) 
     };
     let (context, project) = untracked(|| (app.composer_record_context(), app.composer_project()));
     let text = assistant::with_context(&text, context.as_ref(), project.as_ref());
-    let session = id.clone();
-    app.reduce(app.session, move |state, feed, _, _| {
-        state.act(
-            SessionAction::Send {
-                session,
-                text,
-                policy,
-                attachments,
-            },
-            feed,
-        )
-    });
-    app.clear_staged(id);
+    if app.session_input(
+        SessionAction::Send {
+            session: id.clone(),
+            text,
+            policy,
+            attachments,
+        },
+        true,
+    ) {
+        app.clear_staged(id);
+    }
 }
 
 /// Over the composer: why Send waits on the attachments, Ask's project and record chips, the

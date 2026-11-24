@@ -121,6 +121,25 @@ impl AppState {
             self.changes_inflight = false;
         }
         let id = tag.or_else(|| params["cmd_id"].as_str().map(str::to_owned));
+        // A successful End is authoritative before the Assistant subscription catches up.
+        let mut ended = None;
+        let outcome = outcome.and_then(|result| {
+            if method == ASSISTANT_SESSION && params["op"] == "end" {
+                ended = serde_json::from_value::<wire::rows::AssistantRow>(result.clone())
+                    .ok()
+                    .filter(|row| {
+                        params["session"].as_str() == Some(row.id.as_str())
+                            && row.state == wire::rows::AssistantState::Ended
+                    });
+                if ended.is_none() {
+                    return Err((
+                        wire::rpc::ErrorCode::Internal,
+                        "corrald did not confirm that the thread ended".into(),
+                    ));
+                }
+            }
+            Ok(result)
+        });
         let result = match outcome {
             Ok(value) => value,
             Err((code, message)) => {
@@ -207,6 +226,10 @@ impl AppState {
                     operation.loading = false;
                     operation.value = Some(result.clone());
                     operation.error = None;
+                }
+                if let Some(row) = ended {
+                    feed.assistants.insert(Id::from(row.id.as_str()), row);
+                    feed.forget_ended_quick();
                 }
             });
         }
