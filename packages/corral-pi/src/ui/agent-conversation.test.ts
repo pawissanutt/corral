@@ -405,6 +405,32 @@ test("pages that draw no rows are not traded across a full window, and a push ag
   expect(reads).toHaveLength(81);
 });
 
+test("scrolling back down to a recording's end whose last pages add no rows keeps the view following", async () => {
+  const row = recorded();
+  // A reply and its call, then one tool result over 64 pages: the result's row is one line however much of it is read.
+  const reads: string[] = [];
+  const { view, open, rest } = reader(() => row, async (_id, request) => {
+    const index = request.cursor === undefined ? 65 : Number(request.cursor);
+    reads.push(String(index));
+    const rows: TranscriptRow[] = index === 0 ? [{ id: "u", kind: "user", text: "RECORDED_PROMPT", record: 0, item: 0 }]
+      : index === 1 ? [{ id: "a", kind: "assistant", text: "READING_IT", record: 100, item: 0 },
+        { id: "c", kind: "call", tool: "read", callId: "call", text: '{"path":"big.ts"}', record: 100, item: 1 }]
+      : [{ id: `o${index}`, kind: "tool", tool: "read", callId: "call", text: `line ${index}\n`, record: 200, item: 0,
+        ...(index > 2 ? { from: index } : {}), ...(index < 65 ? { more: true } : {}) }];
+    return { stamp: "same", rows, ...(index ? { older: String(index - 1) } : {}), ...(index < 65 ? { newer: String(index + 1) } : {}) };
+  });
+  await open(24);
+  expect(reads).toHaveLength(64);
+  expect(view.following).toBeTrue();
+  // Everything fits on screen. A push up reads on to the start and gives up the two newest pages.
+  view.scroll.scrollBy(-3); await settle(); await rest(24);
+  expect(reads.slice(-2)).toEqual(["1", "0"]);
+  // A push down reads them again. Neither adds a row: the reader's row is the recording's last, and the view follows it.
+  view.scroll.scrollBy(3); await settle(); await rest(24);
+  expect(reads.slice(-2)).toEqual(["64", "65"]);
+  expect(view.following).toBeTrue();
+});
+
 test("the bottom of the resident pages is not the recording's end: a page joins under the reader's rows, and leaving keeps that row", async () => {
   const row = recorded();
   const { read, reads } = recording(() => 70, () => "same");

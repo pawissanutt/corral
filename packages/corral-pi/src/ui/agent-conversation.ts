@@ -494,8 +494,11 @@ export class AgentConversation {
       const anchor = hold?.anchor, span = anchor && this.spans.find(item => item.id === anchor.id);
       // A change above leaves the reader's row where it is from the end of its message, whose first rows may have
       // changed; a change below, from its start.
-      if (hold && anchor && span) this.place(hold.edge === "older" ? span.to - anchor.tail : span.from + anchor.offset);
-      else if (hold?.edge === "older" && hold.below !== undefined) this.place(lines.length - hold.below);
+      // A reader the view was following, whose row is still the last one, is followed on: holding a row never
+      // pauses a view that the hold does not move.
+      const keep = (top: number) => this.place(this.following && top >= lines.length - this.scroll.viewportHeight ? "end" : top);
+      if (hold && anchor && span) keep(hold.edge === "older" ? span.to - anchor.tail : span.from + anchor.offset);
+      else if (hold?.edge === "older" && hold.below !== undefined) keep(lines.length - hold.below);
       else if (hold ? hold.edge === "older" : this.jump === "end") this.place("end");
       else if (!hold) this.place(0);
       this.jump = undefined;
