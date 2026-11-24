@@ -258,7 +258,8 @@ fn runtime_folds_scripts_merges_sites_and_bands_every_kind() {
     }
     let top_of = |name: &str| {
         let card = scene.cards.iter().position(|c| c.name == name);
-        card.and_then(|c| placed.rect(c)).map(|r| r.y)
+        let y = card.and_then(|c| placed.rect(c)).map(|r| r.y);
+        y.unwrap_or_else(|| panic!("{name} is not placed"))
     };
     let captions: Vec<&str> = placed.captions.iter().map(|c| c.text).collect();
     for title in ["Packages and folders", "CI jobs", "Binaries", "npm scripts"] {

@@ -173,7 +173,8 @@ pub(super) fn layered(
     let rank: Vec<i32> = bands.filter(|b| b.len() == n).map_or(rank, <[i32]>::to_vec);
     let max_r = rank.iter().copied().max().unwrap_or(0);
     let min_r = rank.iter().copied().min().unwrap_or(0);
-    // A rank wider than the room wraps onto more rows; one rank never references itself.
+    // A rank wider than the room wraps onto more rows. Ranked by references, one rank never
+    // references itself; a fixed band can, and such an edge is routed under its row.
     let mut by_rank: Vec<Vec<usize>> = vec![Vec::new(); (max_r - min_r + 1) as usize];
     for x in 0..n {
         by_rank[(max_r - rank[x]) as usize].push(x);

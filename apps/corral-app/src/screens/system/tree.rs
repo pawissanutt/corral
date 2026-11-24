@@ -208,7 +208,8 @@ fn row(app: AppState, index: usize, line: Line, host: Host) -> AnyElement {
                 view()
                     .min_w(px(0.0))
                     .flex_grow(1.0)
-                    // Shrinks long before the name does, which only wraps once these are gone.
+                    // Shrinks long before the name does: a name wider than the row wraps beside
+                    // what little of these is left, never under them.
                     .flex_shrink(1000.0)
                     .child(
                         // Stretched to its cell and set to its right, so it is cut inside it.

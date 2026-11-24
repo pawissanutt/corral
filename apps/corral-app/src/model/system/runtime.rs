@@ -3,8 +3,9 @@
 //! Cards are the units (binaries, npm scripts, compose services, images, systemd units, CI
 //! jobs) and the packages that start or build them or hold entry points; edges are `starts`,
 //! `runs`, `depends_on` and `builds`, one per pair of cards with every site that establishes
-//! it. Connected cards are layered; the rest are grouped by kind. The npm scripts fold into one
-//! card unless the owner unfolds them.
+//! it. The layered layout lays every card, connected or not, in its kind's band (`band`); the
+//! tree lists them under the same kinds (`group`). The npm scripts fold into one card unless the
+//! owner unfolds them.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -30,7 +31,7 @@ pub const fn kind_slug(kind: RuntimeUnitKind) -> &'static str {
     }
 }
 
-/// Where a card's kind sits in the view's order, and the title of its group.
+/// Where a card's kind sits in the tree's order, and the title its band and section share.
 pub fn group(kind: Kind) -> (usize, &'static str) {
     match kind {
         Kind::Unit(RuntimeUnitKind::Binary) => (0, "Binaries"),
