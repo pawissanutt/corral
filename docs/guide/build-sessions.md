@@ -57,6 +57,17 @@ scopes, and see attribution and changes outside assigned ownership.
 **Board** shows workspace tasks and blocked or failed work. Refresh it and review
 proposed plans; you can file a proposal, file and start its tasks, or dismiss it.
 
+## Artifacts in Code sessions
+
+A trusted `corral-pi code` session bound to a Corral workspace has `corral_artifact`;
+a guarded Build or bare session does not. Code attaches to its configured project by
+default, or can specify a task or project with `to`. Without a project or bound task,
+provide `to`. To revise a report, edit the working file and attach it again with the
+previous reference in `replaces`; this publishes a new row without changing the old
+one. Plan mode refuses `corral_artifact` calls while planning or awaiting plan review. See
+[corral-pi](corral-pi.md#attaching-artifacts) for tool parameters and
+[the artifact reference](cli.md#corral-artifact) for library and list behavior.
+
 ## Delegation
 
 Build uses `standard` delegation unless configured otherwise. To encourage the parent to

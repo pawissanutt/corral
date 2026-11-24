@@ -1,7 +1,8 @@
 # Artifacts: classification, revisions and a project library
 
-Status: **proposal**, revision 2 (2026-11-24). Nothing here is implemented. Revision 1 was cross-checked
-against the code by an independent architect (`architect-astra`) the same day; what changed is in the
+Status: **implemented** (T-2047–T-2054); this document retains the 2026-11-24 proposal and its
+historical baseline for context. For current usage see the [artifact guide](../guide/cli.md#corral-artifact).
+Revision 1 was cross-checked by an independent architect (`architect-astra`); what changed is in the
 [review log](#12-review-log).
 
 It applies to the simple engine ([simple-engine.md](simple-engine.md)), which stays authoritative. The
@@ -37,7 +38,7 @@ Two complaints, both measured on the workspace store on 2026-11-24 (`corral-next
 | Rows on four tasks (T-2000 to T-2003) | 2,390 |
 | Most repeats of one file on one task | 5 |
 
-The cause is the scan at `done`. Every submission attaches each file it changed, and each ignored
+At the time, the cause was the scan at `done`. Every submission attached each file it changed, and each ignored
 evidence-scratch file, that matches `[artifacts] globs`, with no `kind` and no check for an identical
 earlier row (`crates/corral-engine/src/review.rs:70-78`, `artifacts.rs` `scan_artifacts`). The workspace
 sets the globs itself (`.corral-next/corral.toml:30-36`): `docs/**/records/*`, `**/*report*.html` and
@@ -49,18 +50,18 @@ go through the agent's task attachment (`pi/roles/worker/tools.ts:61`, `:67`).
 
 **Artifacts do not carry context into work.**
 
-- An artifact needs a task: the table's owner column references `tasks(id)`
+- An artifact needed a task: the table's owner column referenced `tasks(id)`
   (`crates/corral-engine/src/store.rs:565`), and the Pi tool refuses without one
   (`pi/tools/define.ts:54-55`).
 - A Code session is trusted and unguarded (`pi/build/launch.ts:67`, `pi/roles/build/guard.ts:227-238`),
-  so its shell can already run `artifact add` against a task. It has no typed tool, and there is nowhere
+  so its shell could already run `artifact add` against a task. It had no typed tool, and there was nowhere
   to put a report that belongs to no task.
 - A guarded Build session's shell may run `artifact list` and `show` only (`guard.ts:177-178`).
 - Chat borrows a task: T-2044 holds 15 mockup and app screenshots and a comparison report attached by
   the assistant.
-- A run's prompt carries the task body, notes and tools, and tells a worker how to attach
-  (`crates/corral-engine/src/prompt.rs:10-52`). It does not list what is already attached.
-- An artifact cannot be revised. A second `add` is a second, unrelated row.
+- A run's prompt carried the task body, notes and tools, and told a worker how to attach
+  (`crates/corral-engine/src/prompt.rs:10-52`). It did not list what was already attached.
+- An artifact could not be revised. A second `add` was a second, unrelated row.
 
 ## 2. Rules for this change
 
@@ -116,16 +117,14 @@ Until then a title tells them apart.
 
 Hidden rows are one filter token away (`kind:gate`), never unreachable.
 
-The review screen is unaffected by hiding, because it does not read these rows by kind: the Diff tab
-finds the patch through the worker run's artifact event (`crates/corral-engine/src/events.rs:199-209`,
-`crates/corral-daemon/src/views/review.rs:18-37`), the Report tab reads `Run.summary`, and the Log tab
-follows the gate check's log reference (`review.rs:226-254`). Its Shot tab lists every artifact of the
-task today (`app/model/review/evidence.rs:117-145`); after, it lists the three shown groups.
+The review screen's Diff, Summary and Gate log views use the run's diff event, summary and gate
+log reference respectively. Its Artifacts view filters by the three shown groups
+(`app/model/review/evidence.rs`).
 
 ### 3.3 Who sets it
 
 - **Agents** declare it. `corral_artifact` takes a required enum of `reference`, `report` and `evidence`
-  (today `kind` is optional free text, `pi/roles/common/tools.ts:22`).
+  (before implementation `kind` was optional free text).
 - **The CLI** accepts every kind except `legacy`. Only the owner has a default, `reference`. An add with
   no `--kind` from any other actor (agent, reviewer, assistant, auto, extension) is refused, and the
   refusal names the flag.
@@ -134,7 +133,7 @@ task today (`app/model/review/evidence.rs:117-145`); after, it lists the three s
 - **The scan** stamps `report`: a glob is the owner's statement that those files are reports. It skips a
   file when a row with the same title and content already exists on the task. This is the scan's own
   rule, not a general one: nothing finds a scanned row through its event.
-- **The host** stamps `log` for the session record (today `report`, `pi/roles/worker/tools.ts:61`) and for
+- **The host** stamps `log` for the session record (formerly `report`, `pi/roles/worker/tools.ts`) and for
   the transcript export (already `log`, `pi/host/export.ts:29`), and `usage` as today.
 
 Recommended alongside, as an edit to the owner's configuration and not part of the code change: remove
@@ -164,8 +163,8 @@ Rows and blobs stay immutable. An add may name the row it replaces:
 | Behaviour | Rule |
 |---|---|
 | The new row | Stores `replaces: "corral:3"`. It gets the next number and its own event, as any add does |
-| Refused when | The named row is missing, belongs to another owner, or is already replaced. The refusal names the newest row of the chain |
-| Lists and the finder | Leave out a row that another row replaces, unless "all" is on. `replaced_by` is supplied by the catalog, as `project` and `run` already are (`lib.rs:238-243`) |
+| Refused when | The named row is missing, belongs to another owner, or is already replaced. For an already-replaced row, the refusal names the newest row of the chain |
+| Lists and the finder | Text CLI lists leave out replaced rows unless `--all` is on; JSON includes them. The finder includes hidden rows with All or a `kind:` token. `replaced_by` is supplied by the catalog |
 | `corral:3` | Still returns that exact content. Its metadata says what replaced it |
 
 This is the answer to read-only against read-write. The agent's working copy is an ordinary file it
@@ -189,8 +188,8 @@ mockups and reference documents that no single task owns, and reports from sessi
 - `corral-next artifact add <task|project> <path> …`; no new flag. A name that is neither is refused,
   naming `list --all` and `config`.
 - References keep their shape: `corral:3`. To keep them unambiguous, configuration validation refuses a
-  project whose name has the form of a task ID or contains `:`. Today a name need only be non-empty
-  (`crates/corral-engine/src/config.rs:298-306`).
+  project whose name has the form of a task ID or contains `:`. Previously a name needed only to be non-empty
+  (`crates/corral-engine/src/config.rs`).
 - Storage: a second table `project_artifacts(project, ordinal, sha256, document)`, created if absent at
   open, and a view over both tables that every read uses. Writes branch once. The existing table and
   its foreign key are untouched, so no migration exists and an older binary keeps working, blind to
@@ -216,15 +215,15 @@ One tool, extended. No second tool, no inline-content variant and no read tool.
 
 | Role | Today | After |
 |---|---|---|
-| Worker, reviewer | `corral_artifact` to the bound task (`pi/roles/worker/index.ts:17`, `pi/roles/reviewer/index.ts:15`) | The same, with the required `kind` and optional `replaces` |
-| Code (trusted) | No tool; the shell can add to a task | `corral_artifact`, to the session's project by default or to a named task |
-| Chat | Shell `artifact add` against a task | `corral_artifact` with a required `to` |
+| Worker, reviewer | `corral_artifact` to the bound task (`pi/roles/worker/index.ts`, `pi/roles/reviewer/index.ts`) | Defaults to the bound task; `to` can select another task or project, with required `kind` and optional `replaces` |
+| Code (trusted) | No tool; the shell can add to a task | `corral_artifact`, to the session's project by default or to a named task or project |
+| Chat | Shell `artifact add` against a task | `corral_artifact`, defaulting to the bound project when available, otherwise requiring `to` |
 | Guarded Build, bare sessions | No add | Unchanged |
 
 - The tool gains optional `to` (a task ID or a project name) and `replaces`. The target is `to`, else the
   bound task, else the session's project (`pi/tools/define.ts:54-58`, `pi/tools/corral.ts:94-98`). A Code
-  session has a project only when its repository is a configured one (`pi/build/launch.ts:75-80`); with
-  none, `to` is required and the tool says so.
+  session can select a project explicitly or detect one from its configured repository (`pi/build/launch.ts`);
+  with no target, `to` is required and the tool says so. Plan mode refuses publishing.
 - The tool takes a path, not content. Revising a long report is then an incremental file edit followed
   by a publish, not the whole document resent in a tool call. Images work the same way.
 - Reads stay on the shell: `artifact list` and `artifact show <ref>`, with an image redirected to a file
@@ -233,8 +232,8 @@ One tool, extended. No second tool, no inline-content variant and no read tool.
 
 ## 7. Reading: prompts and views
 
-**Run prompt** (`crates/corral-engine/src/prompt.rs`, called from `dispatch.rs:545`; the resident
-re-review prompt at `prompt.rs:107-130` follows the same rule). A `## References` section lists the task's
+**Run prompt** (`crates/corral-engine/src/prompt.rs`, called from dispatch; the resident
+re-review prompt in `prompt.rs` follows the same rule). A `## References` section lists the task's
 own Reference and Deliverable rows that nothing replaces, newest first and at most 20, as reference,
 kind and title, with the command that reads one. A reviewer's list adds Proof. A parent's rows and the
 library are not listed: the owner names such a reference in the task body and the agent reads it with
@@ -244,7 +243,7 @@ the same command. The body is not parsed.
 Record rows, and replaced rows, are left out unless the filter has a `kind:` token or "all" is on.
 `ArtifactNarrowing` (`crates/corral-protocol/src/detail/artifact.rs`) gains that one switch.
 
-**Task Overview** (`app/screens/task/overview.rs:285`). The flat list becomes References, Reports, Proof.
+**Task Overview** (`app/screens/task/overview.rs`). The list groups visible artifacts as References, Reports and Proof.
 
 **Pi terminal views** (`pi/ui/artifact-view.ts`, `task-store.ts`, `proof-view.ts`, `proof-parts.ts`). The
 row schema takes the kind enum and the same default filter. The schema also gains the `extension`

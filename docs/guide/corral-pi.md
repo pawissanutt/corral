@@ -229,6 +229,20 @@ conversation records and never forces Git to delete a worktree or branch.
 - **Build:** works in Git directly, without a task. You choose whether to keep,
   continue or land the work.
 
+### Attaching artifacts
+
+`corral_artifact` is available to workers, reviewers, chat assistants, and trusted
+Code sessions bound to a Corral workspace. Guarded Build and bare sessions do not
+have it. It takes a required `path` and `kind` (`reference`, `report`, or `evidence`),
+plus optional `title`, `to` (task ID or project name), and `replaces` (an earlier
+artifact reference). Relative paths resolve from the session working directory.
+The destination defaults to the bound task, then the session's project; if neither is
+available, supply `to`. Plan mode refuses `corral_artifact` calls.
+
+Run prompts list the task's current reference and report artifacts, and reviewer
+prompts also list evidence. See [artifact kinds and revisions](cli.md#corral-artifact)
+for the library, filtering and CLI rules.
+
 Workspace memory is ordinary Markdown under `.corral-next/memory/`. The roles are
 told where it lives; an assistant can edit the files with normal file tools.
 
