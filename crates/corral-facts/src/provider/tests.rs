@@ -115,6 +115,7 @@ fn tree(paths: &[&str]) -> TreeFacts {
         module_references: vec![],
         package_edges: vec![],
         spawns: vec![],
+        runtime: Default::default(),
         coverage: Coverage::default(),
     }
 }

@@ -4,12 +4,12 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use corral_facts::{
     Activity, ActivityCommit, FileFact, ModuleId, ProjectDelta, ProjectFacts, ReadStatus,
-    TreeFacts, is_manifest,
+    RuntimeFacts, TreeFacts, is_manifest,
     provider::{ChangeKind, ChangedFact},
 };
 use corral_types::{
     SystemActivity, SystemAt, SystemCategorySummary, SystemImpactCategory, SystemMapRow,
-    SystemNodeStats, SystemReviewRow,
+    SystemNodeStats, SystemReviewRow, SystemRuntimeRow,
 };
 
 use crate::views::NotFound;
@@ -35,6 +35,22 @@ pub(crate) fn map(
         snapshot.revision.committed_at(),
         at,
     )
+}
+
+pub(crate) fn runtime(facts: &RuntimeFacts) -> Vec<SystemRuntimeRow> {
+    facts
+        .units
+        .iter()
+        .cloned()
+        .map(|unit| SystemRuntimeRow::Unit { unit })
+        .chain(
+            facts
+                .edges
+                .iter()
+                .cloned()
+                .map(|edge| SystemRuntimeRow::Edge { edge }),
+        )
+        .collect()
 }
 
 fn map_rows(
@@ -287,6 +303,7 @@ pub(crate) fn review(
     after: &TreeFacts,
     enriched_head: Option<&TreeFacts>,
     at: Option<&SystemAt>,
+    runtime_review: bool,
 ) -> anyhow::Result<(Vec<SystemCategorySummary>, Vec<SystemReviewRow>)> {
     use SystemImpactCategory as Category;
     use SystemReviewRow as Row;
@@ -386,6 +403,22 @@ pub(crate) fn review(
 
     review.rows.extend(spawn_changes(before, after));
     review.finish_category(Category::ExternalProcesses, true);
+
+    if runtime_review {
+        review
+            .rows
+            .extend(delta.runtime.units.iter().map(|change| Row::RuntimeUnit {
+                before: change.before.clone(),
+                after: change.after.clone(),
+            }));
+        review
+            .rows
+            .extend(delta.runtime.edges.iter().map(|change| Row::RuntimeEdge {
+                before: change.before.clone(),
+                after: change.after.clone(),
+            }));
+        review.finish_category(Category::Runtime, true);
+    }
 
     if let Some(dependents) = &delta.dependents {
         let changed: HashSet<_> = delta.files.iter().map(|file| file.path.as_str()).collect();

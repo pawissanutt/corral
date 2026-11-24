@@ -45,7 +45,15 @@ impl std::fmt::Display for NotFound {
 impl std::error::Error for NotFound {}
 
 pub(crate) fn detail(shared: &Shared, query: DetailGet) -> Result<DetailReply> {
-    if let Some(reply) = system::read(shared, &query)? {
+    detail_for_client(shared, query, false)
+}
+
+pub(crate) fn detail_for_client(
+    shared: &Shared,
+    query: DetailGet,
+    runtime_review: bool,
+) -> Result<DetailReply> {
+    if let Some(reply) = system::read(shared, &query, runtime_review)? {
         return Ok(reply);
     }
     let engine = shared.engine()?;

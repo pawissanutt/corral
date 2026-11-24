@@ -137,6 +137,7 @@ pub(super) const fn title(category: Category) -> &'static str {
         Category::Definitions => "Definitions",
         Category::CallEdges => "Call edges",
         Category::ExternalProcesses => "External processes",
+        Category::Runtime => "Runtime",
         Category::Dependents => "Dependents",
         Category::Tests => "Tests",
         Category::NotRead => "Not read",
@@ -150,6 +151,7 @@ pub(super) const fn zero(category: Category) -> &'static str {
         Category::Definitions => "No definition added, removed or changed.",
         Category::CallEdges => "No call edge added or removed.",
         Category::ExternalProcesses => "No process spawn site added or removed.",
+        Category::Runtime => "No runtime unit or edge changed.",
         Category::Dependents => "No code outside the change references a changed definition.",
         Category::Tests => "No test file changed and no test selected.",
         Category::NotRead => "Every changed file was read.",
@@ -198,6 +200,7 @@ pub(super) const fn category_of(row: &Row) -> Option<Category> {
         Row::Dependent { .. } => Category::Dependents,
         Row::TestFile { .. } | Row::TestCandidate { .. } => Category::Tests,
         Row::NotRead { .. } => Category::NotRead,
+        Row::RuntimeUnit { .. } | Row::RuntimeEdge { .. } => Category::Runtime,
         Row::Map { .. } | Row::Container { .. } | Row::Module { .. } | Row::File { .. } => {
             return None;
         }
@@ -472,8 +475,11 @@ fn row_item(cx: &Ctx, n: usize, row: &Row) -> Option<Item> {
             target: cx.file(path),
             ..item(key, Sign::Neutral, path.clone(), String::new())
         },
-        Row::Map { .. } | Row::Container { .. } | Row::Module { .. } | Row::File { .. } => {
-            return None;
-        }
+        Row::Map { .. }
+        | Row::Container { .. }
+        | Row::Module { .. }
+        | Row::File { .. }
+        | Row::RuntimeUnit { .. }
+        | Row::RuntimeEdge { .. } => return None,
     })
 }

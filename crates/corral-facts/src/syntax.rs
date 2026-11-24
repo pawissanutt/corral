@@ -26,10 +26,16 @@ pub(crate) struct Scanner<'a> {
 pub(crate) struct Scan {
     pub references: Vec<(String, ReferenceKind)>,
     pub unresolved: u64,
-    pub spawns: Vec<String>,
+    pub spawns: Vec<(String, usize)>,
 }
 
 impl Scan {
+    fn spawn(&mut self, program: &str, token: &str, start: usize) {
+        // The lexer returns subslices of the same source text.
+        self.spawns
+            .push((program.to_owned(), token.as_ptr() as usize - start));
+    }
+
     fn reference(&mut self, target: Option<&str>, kind: ReferenceKind) {
         if let Some(target) = target {
             self.references.push((target.to_owned(), kind));
@@ -101,16 +107,17 @@ impl<'a> Scanner<'a> {
 
     pub(crate) fn scan(&self, file: &FileFact, text: &str) -> Scan {
         let mut scan = Scan::default();
+        let start = text.as_ptr() as usize;
         match file.language.as_str() {
-            "Rust" => self.scan_rust(file, &tokens(&RUST, text), &mut scan),
-            "TypeScript" | "JavaScript" => self.scan_js(file, &tokens(&JS, text), &mut scan),
-            "Python" => scan_python(&tokens(&PYTHON, text), &mut scan),
+            "Rust" => self.scan_rust(file, &tokens(&RUST, text), start, &mut scan),
+            "TypeScript" | "JavaScript" => self.scan_js(file, &tokens(&JS, text), start, &mut scan),
+            "Python" => scan_python(&tokens(&PYTHON, text), start, &mut scan),
             _ => {}
         }
         scan
     }
 
-    fn scan_rust(&self, file: &FileFact, tokens: &[&str], scan: &mut Scan) {
+    fn scan_rust(&self, file: &FileFact, tokens: &[&str], start: usize, scan: &mut Scan) {
         let (root, entry) = self.rust_scope(file);
         let stem = file.path.strip_suffix(".rs").unwrap_or(&file.path);
         let current = if entry == Some(file.path.as_str()) || basename(stem) == "mod" {
@@ -167,7 +174,7 @@ impl<'a> Scanner<'a> {
                     .is_some_and(|token| token.starts_with('\''))
                 && let Some(program) = literal_arg(&tokens[i + 1..], false)
             {
-                scan.spawns.push(program.to_owned());
+                scan.spawn(program, token, start);
             }
         }
     }
@@ -304,7 +311,7 @@ impl<'a> Scanner<'a> {
             .or_else(|| self.rust_file(&join(stem, "mod.rs"), container))
     }
 
-    fn scan_js(&self, file: &FileFact, tokens: &[&str], scan: &mut Scan) {
+    fn scan_js(&self, file: &FileFact, tokens: &[&str], start: usize, scan: &mut Scan) {
         let mut bindings = ProcessBindings::default();
         for (i, token) in tokens.iter().enumerate() {
             let after = &tokens[i + 1..];
@@ -356,7 +363,7 @@ impl<'a> Scanner<'a> {
                 && let Some(arg) = literal_arg(&tokens[i + 1..], true)
                 && let Some(program) = js_program(api, arg)
             {
-                scan.spawns.push(program.to_owned());
+                scan.spawn(program, token, start);
             }
         }
     }
@@ -779,7 +786,7 @@ fn js_program<'a>(api: &str, arg: &'a str) -> Option<&'a str> {
         .then_some(first)
 }
 
-fn scan_python(tokens: &[&str], scan: &mut Scan) {
+fn scan_python(tokens: &[&str], start: usize, scan: &mut Scan) {
     let mut bindings = ProcessBindings::default();
     for (i, token) in tokens.iter().enumerate() {
         if *token != "import" {
@@ -824,7 +831,7 @@ fn scan_python(tokens: &[&str], scan: &mut Scan) {
                 _ => None,
             };
             if let Some(program) = program {
-                scan.spawns.push(program.to_owned());
+                scan.spawn(program, token, start);
             }
         }
     }

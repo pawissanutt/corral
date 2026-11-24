@@ -90,6 +90,24 @@ pub enum SystemMapRow {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SystemRuntime {
+    pub project: String,
+    pub head: Option<String>,
+    pub status: SystemStatus,
+    pub error: Option<String>,
+    /// Rows omitted to stay within the wire budget.
+    pub omitted_rows: usize,
+    pub rows: Vec<SystemRuntimeRow>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SystemRuntimeRow {
+    Unit { unit: RuntimeUnit },
+    Edge { edge: RuntimeEdge },
+}
+
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SystemNodeStats {
     pub lines: u64,
@@ -151,18 +169,20 @@ pub enum SystemImpactCategory {
     Definitions,
     CallEdges,
     ExternalProcesses,
+    Runtime,
     Dependents,
     Tests,
     NotRead,
 }
 
 impl SystemImpactCategory {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::PackageDependencies,
         Self::ModuleReferences,
         Self::Definitions,
         Self::CallEdges,
         Self::ExternalProcesses,
+        Self::Runtime,
         Self::Dependents,
         Self::Tests,
         Self::NotRead,
@@ -236,6 +256,14 @@ pub enum SystemReviewRow {
         process: String,
         before: u64,
         after: u64,
+    },
+    RuntimeUnit {
+        before: Option<RuntimeUnit>,
+        after: Option<RuntimeUnit>,
+    },
+    RuntimeEdge {
+        before: Option<RuntimeEdge>,
+        after: Option<RuntimeEdge>,
     },
     Dependent {
         dependent: DependentFact,

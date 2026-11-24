@@ -57,6 +57,7 @@ fn tree(files: Vec<FileFact>, containers: &[&str]) -> TreeFacts {
         module_references: vec![],
         package_edges: vec![],
         spawns: vec![],
+        runtime: Default::default(),
         coverage: Coverage::default(),
     }
 }
@@ -280,6 +281,7 @@ fn delta(files: Vec<FileChange>) -> ProjectDelta {
         skipped_non_utf8_paths: 0,
         dependencies: vec![],
         module_references: vec![],
+        runtime: Default::default(),
         changes: None,
         dependents: None,
         tests: None,
@@ -347,7 +349,7 @@ fn review_uses_head_ownership_base_for_deletes_and_builtin_edge_changes() {
         before: 2,
         after: 5,
     });
-    let (categories, rows) = review(&delta, &before, &after, None, None).unwrap();
+    let (categories, rows) = review(&delta, &before, &after, None, None, true).unwrap();
     assert_eq!(
         categories
             .iter()
@@ -410,7 +412,7 @@ fn review_reports_a_manifest_edit_with_no_dependency_or_edge_delta() {
     let before = tree(vec![file("app/Cargo.toml", &code, 4)], &["app"]);
     let delta = delta(vec![change("app/Cargo.toml", 1, 1)]);
     // The manifest's package version changed, not its dependency declarations.
-    let (categories, rows) = review(&delta, &before, &before, None, None).unwrap();
+    let (categories, rows) = review(&delta, &before, &before, None, None, false).unwrap();
     assert_eq!(
         summary(&categories, Category::PackageDependencies),
         (true, 1)
@@ -428,7 +430,7 @@ fn review_serves_the_heads_package_level_when_asked() {
     let head = tree(vec![file("app/src/feature/mod.rs", &code, 4)], &["app"]);
     let delta = delta(vec![change("app/src/feature/mod.rs", 1, 1)]);
     let at = SystemAt::Container { path: "app".into() };
-    let (_, rows) = review(&delta, &head, &head, None, Some(&at)).unwrap();
+    let (_, rows) = review(&delta, &head, &head, None, Some(&at), false).unwrap();
     assert!(rows.iter().any(|row| matches!(row,
         Review::Map { row: Map::Module { module, .. } } if *module == code)));
     assert!(!rows.iter().any(|row| matches!(
@@ -451,7 +453,7 @@ fn review_distinguishes_empty_provider_answers_and_groups_calls_with_anchors() {
     );
     let after = tree(vec![src, file("b/lib.rs", &b, 3)], &["a", "b"]);
     let mut delta = delta(vec![change("a/deleted.rs", 0, 3), change("a/new.rs", 3, 0)]);
-    let (categories, builtin) = review(&delta, &before, &after, None, None).unwrap();
+    let (categories, builtin) = review(&delta, &before, &after, None, None, false).unwrap();
     assert!(builtin.contains(&Review::NotRead {
         path: "a/new.rs".into(),
         read_status: ReadStatus::Unsupported,
@@ -465,7 +467,7 @@ fn review_distinguishes_empty_provider_answers_and_groups_calls_with_anchors() {
     }
     delta.changes = Some(vec![]);
     delta.dependents = Some(vec![]);
-    let (categories, _) = review(&delta, &before, &after, None, None).unwrap();
+    let (categories, _) = review(&delta, &before, &after, None, None, false).unwrap();
     for cat in [
         Category::Definitions,
         Category::CallEdges,
@@ -514,7 +516,7 @@ fn review_distinguishes_empty_provider_answers_and_groups_calls_with_anchors() {
     };
     delta.tests = Some(vec![candidate.clone()]);
     // The delta's semantic row is evidence even without a snapshot at this head.
-    let (categories, rows) = review(&delta, &before, &after, None, None).unwrap();
+    let (categories, rows) = review(&delta, &before, &after, None, None, false).unwrap();
     assert_eq!(summary(&categories, Category::Definitions), (true, 1));
     assert_eq!(summary(&categories, Category::CallEdges), (true, 1));
     assert_eq!(summary(&categories, Category::Dependents), (true, 1));

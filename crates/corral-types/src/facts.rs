@@ -127,6 +127,110 @@ pub struct SpawnFact {
     pub count: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeUnitKind {
+    Binary,
+    Script,
+    Service,
+    Image,
+    Unit,
+    Job,
+}
+
+/// Stable across edits that move a declaration within the same file.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct RuntimeUnitId {
+    pub kind: RuntimeUnitKind,
+    pub name: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeUnit {
+    pub id: RuntimeUnitId,
+    pub line: u64,
+    /// Owning repository-relative container, empty for root.
+    pub container: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entry_point: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub build_context: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dockerfile: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ports: Vec<String>,
+    /// Literal compose names, including any not declared in the same file.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub depends_on: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct RuntimeSite {
+    pub path: String,
+    pub line: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeEdgeKind {
+    Starts,
+    Runs,
+    DependsOn,
+    Builds,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeBasis {
+    Declared,
+    Syntax,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RuntimeSource {
+    Container { path: String },
+    Unit { id: RuntimeUnitId },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct RuntimeEdge {
+    pub kind: RuntimeEdgeKind,
+    pub from: RuntimeSource,
+    pub to: RuntimeUnitId,
+    pub basis: RuntimeBasis,
+    pub site: RuntimeSite,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeFacts {
+    pub units: Vec<RuntimeUnit>,
+    pub edges: Vec<RuntimeEdge>,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeDelta {
+    pub units: Vec<RuntimeUnitChange>,
+    pub edges: Vec<RuntimeEdgeChange>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeUnitChange {
+    pub before: Option<RuntimeUnit>,
+    pub after: Option<RuntimeUnit>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeEdgeChange {
+    pub before: Option<RuntimeEdge>,
+    pub after: Option<RuntimeEdge>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DependencyChange {
     pub before: Option<DependencyFact>,

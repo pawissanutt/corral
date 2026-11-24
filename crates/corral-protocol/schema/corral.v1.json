@@ -2160,6 +2160,22 @@
           {
             "properties": {
               "body": {
+                "$ref": "#/components/schemas/SystemRuntime"
+              },
+              "kind": {
+                "const": "system_runtime",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "body": {
                 "$ref": "#/components/schemas/SystemReview"
               },
               "kind": {
@@ -2733,7 +2749,24 @@
             "type": "object"
           },
           {
-            "description": "`system.v1`: impact of the latest submitted worker change.",
+            "description": "`system.v1`: project runtime units and edges at its observed head.",
+            "properties": {
+              "kind": {
+                "const": "system_runtime",
+                "type": "string"
+              },
+              "project": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "project"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "`system.v1`: impact of the latest submitted worker change. Runtime rows\nand summaries require the negotiated `system.runtime.v1` capability.",
             "properties": {
               "at": {
                 "anyOf": [
@@ -9732,6 +9765,10 @@
         "type": "object",
         "x-rust-type": "corral_types::SystemRow"
       },
+      "SystemRuntime": {
+        "type": "object",
+        "x-rust-type": "corral_types::SystemRuntime"
+      },
       "Task": {
         "type": "object",
         "x-rust-type": "corral_types::Task"
@@ -11868,7 +11905,7 @@
             ]
           },
           "x-required-in": [
-            28
+            29
           ]
         },
         {
@@ -11878,7 +11915,7 @@
             "type": "string"
           },
           "x-required-in": [
-            21
+            22
           ]
         },
         {
@@ -11888,7 +11925,7 @@
             "type": "string"
           },
           "x-required-in": [
-            10
+            11
           ]
         },
         {
@@ -11898,8 +11935,8 @@
             "$ref": "#/components/schemas/ChangesComparison"
           },
           "x-required-in": [
-            13,
-            14
+            14,
+            15
           ]
         },
         {
@@ -11909,7 +11946,7 @@
             "type": "string"
           },
           "x-required-in": [
-            33
+            34
           ]
         },
         {
@@ -11949,8 +11986,8 @@
             ]
           },
           "x-required-in": [
-            28,
-            30
+            29,
+            31
           ]
         },
         {
@@ -11962,7 +11999,6 @@
           "x-required-in": [
             0,
             1,
-            6,
             7,
             8,
             9,
@@ -11984,7 +12020,8 @@
             25,
             26,
             27,
-            33
+            28,
+            34
           ]
         },
         {
@@ -11994,7 +12031,7 @@
             "type": "string"
           },
           "x-required-in": [
-            12
+            13
           ]
         },
         {
@@ -12004,7 +12041,7 @@
             "type": "string"
           },
           "x-required-in": [
-            25
+            26
           ]
         },
         {
@@ -12030,6 +12067,10 @@
               },
               {
                 "const": "system_map",
+                "type": "string"
+              },
+              {
+                "const": "system_runtime",
                 "type": "string"
               },
               {
@@ -12183,7 +12224,7 @@
             "type": "integer"
           },
           "x-required-in": [
-            17
+            18
           ]
         },
         {
@@ -12194,10 +12235,10 @@
           },
           "x-required-in": [
             3,
-            14,
             15,
             16,
-            17
+            17,
+            18
           ]
         },
         {
@@ -12207,7 +12248,8 @@
             "type": "string"
           },
           "x-required-in": [
-            4
+            4,
+            5
           ]
         },
         {
@@ -12217,7 +12259,7 @@
             "type": "string"
           },
           "x-required-in": [
-            31
+            32
           ]
         },
         {
@@ -12248,7 +12290,7 @@
             ]
           },
           "x-required-in": [
-            29
+            30
           ]
         },
         {
@@ -12260,7 +12302,7 @@
           "x-required-in": [
             2,
             3,
-            5
+            6
           ]
         },
         {
@@ -12289,8 +12331,8 @@
             ]
           },
           "x-required-in": [
-            28,
-            30
+            29,
+            31
           ]
         },
         {
@@ -12300,7 +12342,7 @@
             "type": "string"
           },
           "x-required-in": [
-            7
+            8
           ]
         },
         {
@@ -12314,7 +12356,7 @@
             "type": "integer"
           },
           "x-required-in": [
-            30
+            31
           ]
         }
       ],

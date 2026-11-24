@@ -1,5 +1,5 @@
 //! Etag-aware, bounded app details. Page tokens are opaque and selector-bound.
-use corral_types::{SystemAt, SystemMap, SystemReview, UsageBy};
+use corral_types::{SystemAt, SystemMap, SystemReview, SystemRuntime, UsageBy};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 pub mod artifact;
@@ -48,7 +48,12 @@ pub enum DetailRef {
         #[schemars(with = "Option<crate::schema_types::SystemAt>")]
         at: Option<SystemAt>,
     },
-    /// `system.v1`: impact of the latest submitted worker change.
+    /// `system.v1`: project runtime units and edges at its observed head.
+    SystemRuntime {
+        project: String,
+    },
+    /// `system.v1`: impact of the latest submitted worker change. Runtime rows
+    /// and summaries require the negotiated `system.runtime.v1` capability.
     SystemReview {
         task: String,
         /// The head's map level to serve with the impact; the project level when absent.
@@ -223,6 +228,7 @@ pub enum DetailBody {
     Review(ReviewDetail),
     ReviewFile(PatchPage),
     SystemMap(#[schemars(with = "crate::schema_types::SystemMap")] SystemMap),
+    SystemRuntime(#[schemars(with = "crate::schema_types::SystemRuntime")] SystemRuntime),
     SystemReview(#[schemars(with = "crate::schema_types::SystemReview")] SystemReview),
     Session(SessionPage),
     SessionItem(SessionItemPage),

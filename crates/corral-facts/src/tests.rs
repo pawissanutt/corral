@@ -6,6 +6,9 @@ use serde::Serialize;
 
 use super::*;
 
+#[path = "runtime_tests.rs"]
+mod runtime_tests;
+
 struct Repo(tempfile::TempDir);
 
 impl Repo {

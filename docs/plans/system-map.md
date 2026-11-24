@@ -100,6 +100,7 @@ Beside the diff, for any task with a submitted change: the Map at the task's hea
 | Definitions | Added, removed, changed | extension |
 | Call edges | Added, removed, grouped by module pair | extension |
 | External processes | Spawn sites added or removed | built-in |
+| Runtime | Runtime units and links added, removed or changed | built-in |
 | Dependents | Definitions outside the change that reference changed ones | extension |
 | Tests | Test files changed; test candidates for the change | built-in for files, extension for candidates |
 | Not read | Changed files neither Corral nor an extension understands (config, docs, other languages) | built-in |
@@ -123,7 +124,9 @@ provider needs no knowledge of packages or modules.
 | Module | container plus first path segment under its source root | derived | built-in |
 | Definition | file, full name within the file, line | kind | a `facts` extension |
 | Reference | from file (or definition) to file (or definition) | kind (`import`, `use`, `call`), count, basis | built-in (import and use paths), extension (resolved) |
-| Spawn | from file to process name | site count | built-in detector |
+| Spawn | from file to unmatched process name | site count | built-in detector |
+| Runtime unit | kind, name and declaration file | declaration line, owning container, literal runtime settings | built-in detector |
+| Runtime link | kind, endpoints and source site | basis (`declared` or `syntax`) | built-in detector |
 | Activity | file, commit | lines added and removed, date, subject, task | built-in |
 
 Every reference carries a **basis**, shown in the inspector:
@@ -150,6 +153,21 @@ References inside one module are counted but not drawn.
 
 The built-in provider needs no index and no state beyond a cache. A language it has no scanner for still
 gets files, containers, activity and coverage.
+
+### Runtime detail
+
+`system_runtime {project}` under `system.v1` pages units and links at the published System head.
+The `system_review` detail includes Runtime changes only when the client also negotiates
+`system.runtime.v1`, so older System clients can still read reviews.
+Units come from Cargo bin declarations and conventional targets, npm bins and scripts, Python
+project scripts, Compose services, Dockerfiles and Containerfiles, systemd units and GitHub Actions jobs.
+A `starts` link originates at the binary entry file when known, otherwise its container. `runs` matches
+only a declaration's literal first command word. Names must exactly match a unique repository binary;
+paths, wrappers and expansions are not resolved. Ambiguous in-repository names produce neither a
+link nor an external process. Unmatched spawns still appear as external processes. Compose dependencies link to services in the same file; builds link a tracked image
+(or the container owning a local build context) to the service. Detectors do not run or expand config,
+follow includes, or infer undeclared ports, inherited image commands or runtime-built process names.
+Moving an otherwise unchanged declaration or link to another line is not a Runtime Impact change.
 
 ## 6. Lenses
 

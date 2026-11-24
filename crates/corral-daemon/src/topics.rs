@@ -23,6 +23,7 @@ pub(crate) struct Subscriptions<'a> {
     session_state: bool,
     build_rows: bool,
     system: bool,
+    runtime_review: bool,
 }
 
 impl<'a> Subscriptions<'a> {
@@ -36,6 +37,7 @@ impl<'a> Subscriptions<'a> {
             session_state: false,
             build_rows: false,
             system: false,
+            runtime_review: false,
         }
     }
 
@@ -44,6 +46,8 @@ impl<'a> Subscriptions<'a> {
         self.session_state = caps.iter().any(|cap| cap == wire::app::SESSION_STATE_V1);
         self.build_rows = caps.iter().any(|cap| cap == wire::app::BUILD_V1);
         self.system = caps.iter().any(|cap| cap == wire::app::SYSTEM_V1);
+        self.runtime_review =
+            self.system && caps.iter().any(|cap| cap == wire::app::SYSTEM_RUNTIME_V1);
         if !self.system {
             self.rows.retain(|sub| sub.topic != Topic::System);
         }
@@ -51,6 +55,10 @@ impl<'a> Subscriptions<'a> {
 
     pub(crate) fn has_system(&self) -> bool {
         self.system
+    }
+
+    pub(crate) fn has_runtime_review(&self) -> bool {
+        self.runtime_review
     }
 
     pub fn open(&mut self, open: SubOpen) -> Result<()> {

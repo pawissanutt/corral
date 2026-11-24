@@ -39,6 +39,7 @@ shared! {
     SystemMap: "object",
     SystemReview: "object",
     SystemRow: "object",
+    SystemRuntime: "object",
     Task: "object",
     UsageBy: "string",
     UsageSummary: "object",

@@ -6,11 +6,12 @@ use std::{
 };
 
 use corral_protocol::{
-    app::{DETAIL_GET, SYSTEM_V1},
+    app::{DETAIL_GET, SYSTEM_RUNTIME_V1, SYSTEM_V1},
     detail::{DetailBody, DetailGet, DetailRef, DetailReply},
 };
 use corral_types::{
-    SystemAt, SystemImpactCategory, SystemMapRow, SystemReviewRow, SystemRow, SystemStatus,
+    RuntimeEdgeKind, SystemAt, SystemImpactCategory, SystemMapRow, SystemReview, SystemReviewRow,
+    SystemRow, SystemRuntimeRow, SystemStatus,
 };
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
@@ -21,6 +22,8 @@ use super::*;
 
 const WAIT: Duration = Duration::from_secs(8);
 const CHANGED: &str = "app/src/feature/mod.rs";
+const HELPER: &str = "app/src/bin/demo-helper.rs";
+const SCRIPTS: usize = 100;
 const EXTENSION: &str = "fixture";
 
 #[test]
@@ -34,8 +37,21 @@ fn socket_system_map_and_review_refresh_from_background_facts() {
     )
     .unwrap();
     fs::write(repo.join("app/src/lib.rs"), "pub mod feature;\n").unwrap();
-    fs::write(repo.join(CHANGED), "pub fn value() -> u8 { 1 }\n").unwrap();
-    git(&repo, &["add", "app"]);
+    fs::write(
+        repo.join(CHANGED),
+        "pub fn value() -> u8 { let _ = std::process::Command::new(\"git\"); 1 }\n",
+    )
+    .unwrap();
+    // Small rows fill one page without requiring hundreds of source files.
+    let scripts = (0..SCRIPTS)
+        .map(|n| (format!("script-{n}"), json!("echo example")))
+        .collect::<serde_json::Map<_, _>>();
+    fs::write(
+        repo.join("package.json"),
+        json!({"name": "runtime-fixture", "scripts": scripts}).to_string(),
+    )
+    .unwrap();
+    git(&repo, &["add", "app", "package.json"]);
     git(&repo, &["commit", "-m", "add example package"]);
     let mut extension = BlockedDelta::configure(fixture.root());
     let engine = fixture.shared().engine().unwrap();
@@ -55,7 +71,19 @@ fn socket_system_map_and_review_refresh_from_background_facts() {
         .unwrap()
         .id;
     let run = engine.apply(dispatch(&task), false).unwrap().run.unwrap();
-    fs::write(run.worktree.join(CHANGED), "pub fn value() -> u8 { 2 }\n").unwrap();
+    fs::create_dir_all(run.worktree.join("app/src/bin")).unwrap();
+    fs::write(run.worktree.join(HELPER), "fn main() {}\n").unwrap();
+    fs::write(
+        run.worktree.join(CHANGED),
+        r#"pub fn value() -> u8 {
+    let _ = std::process::Command::new("git");
+    let _ = std::process::Command::new("git");
+    let _ = std::process::Command::new("demo-helper");
+    2
+}
+"#,
+    )
+    .unwrap();
     let submitted = engine
         .apply(
             Op::Done {
@@ -86,6 +114,13 @@ fn socket_system_map_and_review_refresh_from_background_facts() {
         etag: None,
         page: None,
     };
+    let runtime = DetailGet {
+        target: DetailRef::SystemRuntime {
+            project: "demo".into(),
+        },
+        etag: None,
+        page: None,
+    };
     let review = DetailGet {
         target: DetailRef::SystemReview {
             task: task.clone(),
@@ -101,16 +136,20 @@ fn socket_system_map_and_review_refresh_from_background_facts() {
     };
     let (mut legacy, welcome) = connect(&path, vec![wire::TASKS_V1.into()]);
     assert!(!welcome.caps.iter().any(|cap| cap == SYSTEM_V1));
-    for detail in [&map, &review] {
+    for detail in [&map, &runtime, &review] {
         let error = legacy.call(DETAIL_GET, detail).unwrap_err();
         assert_eq!(error.code, rpc::ErrorCode::InvalidParams, "{error:?}");
     }
     let error = legacy.call(wire::SUB_OPEN, &sub).unwrap_err();
     assert_eq!(error.code, rpc::ErrorCode::InvalidParams, "{error:?}");
 
-    let caps = vec![wire::TASKS_V1.into(), SYSTEM_V1.into()];
-    let (mut client, welcome) = connect(&path, caps.clone());
+    let mut caps = vec![wire::TASKS_V1.into(), SYSTEM_V1.into()];
+    let (mut previous_system_client, welcome) = connect(&path, caps.clone());
     assert!(welcome.caps.iter().any(|cap| cap == SYSTEM_V1));
+    assert!(!welcome.caps.iter().any(|cap| cap == SYSTEM_RUNTIME_V1));
+    caps.push(SYSTEM_RUNTIME_V1.into());
+    let (mut client, welcome) = connect(&path, caps.clone());
+    assert!(welcome.caps.iter().any(|cap| cap == SYSTEM_RUNTIME_V1));
     // A separate connection for the topic avoids unsolicited deltas interleaving
     // with detail replies (the lightweight test Client only reads RPC responses).
     let mut topic = Client::connect_with(&path, caps);
@@ -170,7 +209,24 @@ fn socket_system_map_and_review_refresh_from_background_facts() {
             })
             .collect::<Vec<_>>()
     };
-    assert_eq!(changed_files(&built_in.rows), [CHANGED]);
+    assert_eq!(changed_files(&built_in.rows), [HELPER, CHANGED]);
+    assert_runtime_review(&built_in);
+    let previous = previous_system_client.ok::<DetailReply>(DETAIL_GET, &review);
+    assert_ne!(previous.etag, before.etag);
+    let Some(DetailBody::SystemReview(previous)) = previous.body else {
+        panic!("expected legacy System review: {previous:?}");
+    };
+    assert!(
+        previous
+            .categories
+            .iter()
+            .all(|entry| entry.category != SystemImpactCategory::Runtime)
+    );
+    assert!(!previous.rows.iter().any(|row| matches!(
+        row,
+        SystemReviewRow::RuntimeUnit { .. } | SystemReviewRow::RuntimeEdge { .. }
+    )));
+    assert_eq!(changed_files(&previous.rows), [HELPER, CHANGED]);
     // Approval can persist a different run base before it rewrites the head.
     // The already-submitted change and etag must be independent of that update.
     let mut rebasing = submitted.clone();
@@ -222,7 +278,8 @@ fn socket_system_map_and_review_refresh_from_background_facts() {
     assert_eq!(after.task, task);
     assert_eq!(after.head, built_in.head);
     assert_eq!(after.base, built_in.base);
-    assert_eq!(changed_files(&after.rows), [CHANGED]);
+    assert_eq!(changed_files(&after.rows), [HELPER, CHANGED]);
+    assert_runtime_review(&after);
     let provider = after.provider.as_ref().unwrap();
     assert_eq!(provider.extension, EXTENSION);
     assert_eq!(provider.error, None);
@@ -272,17 +329,103 @@ fn socket_system_map_and_review_refresh_from_background_facts() {
     assert!(landed.revision > enriched.revision);
     assert_eq!(landed.snapshot_provided, None);
     assert_eq!(landed.review_provided, Some(vec!["changes".into()]));
-    let current = client.ok::<DetailReply>(DETAIL_GET, map);
+    let current = client.ok::<DetailReply>(DETAIL_GET, &map);
     let Some(DetailBody::SystemMap(current)) = current.body else {
         panic!("expected built-in map after provider failure: {current:?}");
     };
     assert_eq!(current.head.as_deref(), Some(candidate_head));
-    assert!(!current.rows.is_empty());
+    let processes: Vec<_> = current
+        .rows
+        .iter()
+        .filter_map(|row| match row {
+            SystemMapRow::Spawn { container, spawn } => {
+                Some((container.as_str(), spawn.process.as_str(), spawn.count))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(processes, [("app", "git", 2)]);
     assert!(
         current
             .provider
             .is_some_and(|provider| provider.error.is_some())
     );
+    assert_runtime_pages(&mut previous_system_client, runtime, map, candidate_head);
+}
+
+fn assert_runtime_review(review: &SystemReview) {
+    for (category, total) in [
+        (SystemImpactCategory::ExternalProcesses, 1),
+        (SystemImpactCategory::Runtime, 2),
+    ] {
+        assert!(
+            review
+                .categories
+                .iter()
+                .any(|entry| entry.category == category && entry.provided && entry.total == total)
+        );
+    }
+    assert!(review.rows.iter().any(|row| matches!(row,
+        SystemReviewRow::Spawn { path, process, before: 1, after: 2 }
+            if path == CHANGED && process == "git"
+    )));
+    assert!(review.rows.iter().any(|row| matches!(row,
+        SystemReviewRow::RuntimeUnit { before: None, after: Some(unit) } if unit.id.path == HELPER
+    )));
+    assert!(review.rows.iter().any(|row| matches!(row,
+        SystemReviewRow::RuntimeEdge { before: None, after: Some(edge) }
+            if edge.kind == RuntimeEdgeKind::Starts && edge.to.path == HELPER
+    )));
+}
+
+fn assert_runtime_pages(client: &mut Client, query: DetailGet, map: DetailGet, head: &str) {
+    let first = client.ok::<DetailReply>(DETAIL_GET, &query);
+    let Some(DetailBody::SystemRuntime(first_body)) = first.body else {
+        panic!("expected a runtime detail: {first:?}");
+    };
+    assert_eq!(first_body.head.as_deref(), Some(head));
+    assert_eq!(first_body.status, SystemStatus::Ready);
+    assert_eq!(first_body.error, None);
+    assert_eq!(first_body.omitted_rows, 0);
+    let token = first.next.expect("expected runtime continuation");
+    let error = client
+        .call(
+            DETAIL_GET,
+            DetailGet {
+                page: Some(token.clone()),
+                ..map
+            },
+        )
+        .unwrap_err();
+    assert_eq!(error.code, rpc::ErrorCode::InvalidParams);
+    let unchanged = client.ok::<DetailReply>(
+        DETAIL_GET,
+        DetailGet {
+            etag: Some(first.etag.clone()),
+            ..query.clone()
+        },
+    );
+    assert!(unchanged.body.is_none());
+    let last = client.ok::<DetailReply>(
+        DETAIL_GET,
+        DetailGet {
+            page: Some(token),
+            ..query
+        },
+    );
+    assert_eq!(last.etag, first.etag);
+    assert!(last.next.is_none());
+    let Some(DetailBody::SystemRuntime(last_body)) = last.body else {
+        panic!("expected a runtime continuation: {last:?}");
+    };
+    assert_eq!(last_body.head, first_body.head);
+    let rows: Vec<_> = first_body.rows.into_iter().chain(last_body.rows).collect();
+    assert_eq!(rows.len(), SCRIPTS + 2);
+    assert!(rows.iter().any(|row| matches!(row,
+        SystemRuntimeRow::Unit { unit } if unit.id.path == HELPER
+    )));
+    assert!(matches!(rows.last(), Some(SystemRuntimeRow::Edge { edge })
+        if edge.kind == RuntimeEdgeKind::Starts && edge.to.path == HELPER));
 }
 
 fn connect(path: &Path, caps: Vec<String>) -> (Client, wire::Welcome) {

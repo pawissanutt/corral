@@ -3,17 +3,20 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use crate::{git, manifests, model::*, syntax::Scanner};
+use crate::{git, manifests, model::*, runtime, syntax::Scanner};
 
 pub(crate) fn collect(repo: &Path, tree: &str) -> Result<TreeFacts> {
     let mut paths = Vec::new();
     let mut line_counts = Vec::new();
     let mut manifest_text = BTreeMap::new();
+    let mut runtime_text = BTreeMap::new();
     let mut source_text = BTreeMap::new();
     let skipped_non_utf8_paths = git::tree(repo, tree, |file| {
         if let Some(text) = file.text {
             if is_manifest(file.path) {
                 manifest_text.insert(file.path.to_owned(), text.to_owned());
+            } else if runtime::is_config(file.path) {
+                runtime_text.insert(file.path.to_owned(), text.to_owned());
             } else if scans(language(file.path)) {
                 source_text.insert(file.path.to_owned(), text.to_owned());
             }
@@ -29,6 +32,7 @@ pub(crate) fn collect(repo: &Path, tree: &str) -> Result<TreeFacts> {
         entries,
     } = manifests::extract(&manifest_text, &paths);
     let container_paths: BTreeSet<&str> = containers.iter().map(|c| c.path.as_str()).collect();
+    let configs = runtime::Configs::read(&runtime_text, &container_paths);
     let mut coverage = Coverage {
         skipped_non_utf8_paths,
         ..Coverage::default()
@@ -38,10 +42,13 @@ pub(crate) fn collect(repo: &Path, tree: &str) -> Result<TreeFacts> {
         .zip(line_counts)
         .map(|(path, lines)| {
             let lang = language(&path);
-            let read_status = if parsed.contains(&path) || source_text.contains_key(&path) {
+            let read_status = if parsed.contains(&path)
+                || source_text.contains_key(&path)
+                || configs.parsed.contains(path.as_str())
+            {
                 coverage.complete += 1;
                 ReadStatus::Complete
-            } else if is_manifest(&path) || scans(lang) {
+            } else if is_manifest(&path) || scans(lang) || runtime::is_config(&path) {
                 coverage.failed += 1;
                 ReadStatus::Failed
             } else {
@@ -69,6 +76,8 @@ pub(crate) fn collect(repo: &Path, tree: &str) -> Result<TreeFacts> {
         .collect();
     let modules: BTreeSet<_> = files.iter().map(|file| file.module.clone()).collect();
     let scanner = Scanner::new(&files, &containers, &dependencies, &entries);
+    let mut runtime =
+        runtime::Runtime::collect(&manifest_text, configs, &by_path, &container_paths);
     let mut refs = BTreeMap::new();
     let mut spawn_counts = BTreeMap::new();
     for (path, text) in source_text {
@@ -83,8 +92,16 @@ pub(crate) fn collect(repo: &Path, tree: &str) -> Result<TreeFacts> {
             coverage.resolved_references += 1;
             *refs.entry((&from.path, &to.path, kind)).or_default() += 1;
         }
-        for process in scan.spawns {
-            *spawn_counts.entry((&from.path, process)).or_default() += 1;
+        let (mut previous, mut line) = (0, 1);
+        for (process, offset) in scan.spawns {
+            line += text.as_bytes()[previous..offset]
+                .iter()
+                .filter(|&&b| b == b'\n')
+                .count() as u64;
+            previous = offset;
+            if !runtime.spawn(from, &process, line) {
+                *spawn_counts.entry((&from.path, process)).or_default() += 1;
+            }
         }
     }
     let file_references = references(refs, ReferenceBasis::Syntax);
@@ -106,6 +123,7 @@ pub(crate) fn collect(repo: &Path, tree: &str) -> Result<TreeFacts> {
                 count,
             })
             .collect(),
+        runtime: runtime.finish(),
         files,
         containers: directory_nodes(containers),
         modules: modules.into_iter().collect(),
@@ -202,7 +220,7 @@ fn references<T: Clone>(
         .collect()
 }
 
-fn owner<'a>(path: &'a str, containers: &BTreeSet<&str>) -> &'a str {
+pub(crate) fn owner<'a>(path: &'a str, containers: &BTreeSet<&str>) -> &'a str {
     let mut dir = path;
     while let Some((parent, _)) = dir.rsplit_once('/') {
         if containers.contains(parent) {

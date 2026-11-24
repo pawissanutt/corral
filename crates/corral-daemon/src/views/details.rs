@@ -407,6 +407,7 @@ pub(super) fn paginate(body: &mut DetailBody, offset: usize) -> Result<Option<us
         }
         DetailBody::Review(model) => paginate_fields!(model, checks, files),
         DetailBody::SystemMap(model) => paginate_fields!(model, rows),
+        DetailBody::SystemRuntime(model) => paginate_fields!(model, rows),
         DetailBody::SystemReview(model) => paginate_fields!(model, rows),
         DetailBody::Timeline(model) => paginate_fields!(model, runs, events),
         DetailBody::Burnup(model) => paginate_fields!(model, events),

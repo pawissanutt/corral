@@ -45,7 +45,9 @@ pub struct TreeFacts {
     /// Includes same-module references; renderers may choose not to draw those edges.
     pub module_references: Vec<Reference<ModuleId>>,
     pub package_edges: Vec<PackageEdge>,
+    /// Unmatched process names, grouped by file and name.
     pub spawns: Vec<SpawnFact>,
+    pub runtime: RuntimeFacts,
     pub coverage: Coverage,
 }
 
@@ -99,6 +101,7 @@ pub struct ProjectDelta {
     pub skipped_non_utf8_paths: u64,
     pub dependencies: Vec<DependencyChange>,
     pub module_references: Vec<ModuleReferenceChange>,
+    pub runtime: RuntimeDelta,
     /// None means not provided; Some(empty) means the provider found no rows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub changes: Option<Vec<ChangeFact>>,

@@ -12,6 +12,7 @@ mod git;
 mod manifests;
 mod model;
 pub mod provider;
+mod runtime;
 mod structure;
 mod syntax;
 

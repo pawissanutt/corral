@@ -9,7 +9,7 @@ use corral_protocol::{
 };
 use corral_types::{
     SystemCategorySummary, SystemImpactCategory, SystemMap, SystemProvider, SystemReview,
-    SystemStatus,
+    SystemRuntime, SystemStatus,
 };
 
 use serde::Serialize;
@@ -21,11 +21,15 @@ use super::{details, fingerprint, json_len};
 #[path = "../system/projection.rs"]
 mod projection;
 
-pub(super) fn read(shared: &Shared, query: &DetailGet) -> Result<Option<DetailReply>> {
+pub(super) fn read(
+    shared: &Shared,
+    query: &DetailGet,
+    runtime_review: bool,
+) -> Result<Option<DetailReply>> {
     let (etag, offset, mut body) = match &query.target {
         DetailRef::SystemMap { project, at } => {
             let snapshot = shared.system.map(shared, project)?;
-            let (etag, offset) = selection(shared, query, snapshot.revision)?;
+            let (etag, offset) = selection(shared, query, snapshot.revision, false)?;
             let facts = snapshot.facts.as_deref();
             let rows = match (offset, facts) {
                 (Some(_), Some(facts)) => projection::map(facts, at.as_ref())?,
@@ -44,9 +48,27 @@ pub(super) fn read(shared: &Shared, query: &DetailGet) -> Result<Option<DetailRe
             });
             (etag, offset, body)
         }
+        DetailRef::SystemRuntime { project } => {
+            let snapshot = shared.system.map(shared, project)?;
+            let (etag, offset) = selection(shared, query, snapshot.revision, false)?;
+            let rows = match (offset, snapshot.facts.as_deref()) {
+                (Some(_), Some(facts)) => projection::runtime(&facts.structure.runtime),
+                _ => Vec::new(),
+            };
+            let (rows, omitted_rows) = bounded_rows(rows)?;
+            let body = DetailBody::SystemRuntime(SystemRuntime {
+                project: project.clone(),
+                head: snapshot.head,
+                status: status(snapshot.building),
+                error: snapshot.error,
+                omitted_rows,
+                rows,
+            });
+            (etag, offset, body)
+        }
         DetailRef::SystemReview { task, at } => {
             let impact = shared.system.review(shared, task)?;
-            let (etag, offset) = selection(shared, query, impact.revision)?;
+            let (etag, offset) = selection(shared, query, impact.revision, runtime_review)?;
             let (categories, rows) = match (offset, impact.facts.as_deref()) {
                 (Some(_), Some(facts)) => projection::review(
                     &facts.delta,
@@ -57,10 +79,14 @@ pub(super) fn read(shared: &Shared, query: &DetailGet) -> Result<Option<DetailRe
                         .as_ref()
                         .map(|snapshot| &snapshot.structure),
                     at.as_ref(),
+                    runtime_review,
                 )?,
                 _ => (
                     SystemImpactCategory::ALL
                         .into_iter()
+                        .filter(|category| {
+                            runtime_review || *category != SystemImpactCategory::Runtime
+                        })
                         .map(|category| SystemCategorySummary {
                             category,
                             provided: false,
@@ -124,8 +150,14 @@ fn bounded_rows<T: Serialize>(rows: Vec<T>) -> Result<(Vec<T>, usize)> {
 
 /// An observation's generation changes at either stage and tokens are bound to
 /// the exact drill-in selector, including across daemon restarts.
-fn selection(shared: &Shared, query: &DetailGet, revision: u64) -> Result<(String, Option<usize>)> {
-    let etag = fingerprint(&(shared.epoch(), &query.target, revision))?;
+fn selection(
+    shared: &Shared,
+    query: &DetailGet,
+    revision: u64,
+    runtime_review: bool,
+) -> Result<(String, Option<usize>)> {
+    // An older client cannot read Runtime variants, and its cursor can't page the opt-in shape.
+    let etag = fingerprint(&(shared.epoch(), &query.target, revision, runtime_review))?;
     let offset = if query.page.is_none() && query.etag.as_ref() == Some(&etag) {
         None
     } else {

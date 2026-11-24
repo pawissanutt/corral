@@ -1,0 +1,6 @@
+unit {"id":{"kind":"binary","name":"launch","path":"launch/src/main.rs"},"line":1,"container":"launch"}
+unit {"id":{"kind":"binary","name":"work","path":"worker/Cargo.toml"},"line":4,"container":"worker","entry_point":"worker/src/bin/work.rs"}
+edge {"kind":"starts","from":{"kind":"unit","id":{"kind":"binary","name":"launch","path":"launch/src/main.rs"}},"to":{"kind":"binary","name":"work","path":"worker/Cargo.toml"},"basis":"syntax","site":{"path":"launch/src/main.rs","line":3}}
+external {"path":"launch/src/main.rs","process":"decoy","count":1}
+external {"path":"launch/src/main.rs","process":"git","count":1}
+unit-change {"before":{"id":{"kind":"binary","name":"work","path":"worker/Cargo.toml"},"line":4,"container":"worker","entry_point":"worker/src/bin/work.rs"},"after":{"id":{"kind":"binary","name":"work","path":"worker/Cargo.toml"},"line":4,"container":"worker","entry_point":"worker/src/bin/decoy.rs"}}

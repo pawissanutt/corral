@@ -36,6 +36,7 @@ pub(crate) fn welcome(shared: &Shared, hello: wire::Hello) -> wire::Welcome {
             wire::ASSISTANT_V1 | attachment::ASSISTANT_ATTACH_V1
         )
     }) && assistant::configured(shared).unwrap_or(false);
+    let system = hello.caps.iter().any(|cap| cap == app::SYSTEM_V1);
     wire::Welcome {
         proto: wire::Proto {
             major: wire::PROTO_MAJOR,
@@ -66,8 +67,9 @@ pub(crate) fn welcome(shared: &Shared, hello: wire::Hello) -> wire::Welcome {
                         | wire::CLOSED_V1
                         | device::DEVICE_V1
                         | device::PUSH_V1
-                ) || cfg!(target_os = "linux")
-                    && matches!(cap.as_str(), app::SESSION_FILES_V1 | app::SESSION_HTML_V1)
+                ) || system && cap == app::SYSTEM_RUNTIME_V1
+                    || cfg!(target_os = "linux")
+                        && matches!(cap.as_str(), app::SESSION_FILES_V1 | app::SESSION_HTML_V1)
                     || chat
                         && matches!(
                             cap.as_str(),
@@ -224,7 +226,9 @@ pub(crate) fn serve(
             let query: DetailGet = decode(params)?;
             if matches!(
                 query.target,
-                DetailRef::SystemMap { .. } | DetailRef::SystemReview { .. }
+                DetailRef::SystemMap { .. }
+                    | DetailRef::SystemRuntime { .. }
+                    | DetailRef::SystemReview { .. }
             ) && !topics.has_system()
             {
                 return Err(Failure::new(ErrorCode::InvalidParams, "system.v1 required"));
@@ -238,7 +242,11 @@ pub(crate) fn serve(
             {
                 device_id()?;
             }
-            Ok(views::detail(shared, query)?)
+            if topics.has_runtime_review() {
+                Ok(views::detail_for_client(shared, query, true)?)
+            } else {
+                Ok(views::detail(shared, query)?)
+            }
         }),
         app::CHANGES_PAGE => answer!({
             let seen = match session {

@@ -536,7 +536,12 @@ pub fn impact(review: &SystemReview, extension: Option<&str>, more: &BTreeSet<us
     );
 
     let mut sections = Vec::new();
-    for (index, category) in Category::ALL.into_iter().enumerate() {
+    // Until the app renders runtime rows, don't present them as wire omissions.
+    for (index, category) in Category::ALL
+        .into_iter()
+        .filter(|category| *category != Category::Runtime)
+        .enumerate()
+    {
         // Continuation pages repeat the summaries; the first is the answer.
         let summary = review.categories.iter().find(|c| c.category == category);
         let provided = summary.is_some_and(|s| s.provided);

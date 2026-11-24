@@ -1,0 +1,19 @@
+unit {"id":{"kind":"binary","name":"serve","path":"backend/pyproject.toml"},"line":4,"container":"backend","command":"backend:main"}
+unit {"id":{"kind":"binary","name":"ui","path":"ui/package.json"},"line":3,"container":"ui","command":"cli.js"}
+unit {"id":{"kind":"script","name":"build","path":"ui/package.json"},"line":5,"container":"ui","command":"vite build"}
+unit {"id":{"kind":"service","name":"api","path":"compose.yaml"},"line":2,"container":"","command":"[\"serve\",\"--mode\",\"old\"]","build_context":"./backend","ports":["8080:80"],"depends_on":["db"]}
+unit {"id":{"kind":"service","name":"db","path":"compose.yaml"},"line":7,"container":"","image":"postgres:16"}
+unit {"id":{"kind":"image","name":"Dockerfile","path":"backend/Dockerfile"},"line":1,"container":"backend","command":"[\"--mode\",\"prod\"]","entry_point":"[\"serve\"]"}
+unit {"id":{"kind":"unit","name":"api.service","path":"deploy/api.service"},"line":3,"container":"deploy","command":"serve --foreground"}
+unit {"id":{"kind":"job","name":"check","path":".github/workflows/test.yml"},"line":2,"container":".github"}
+edge {"kind":"runs","from":{"kind":"unit","id":{"kind":"service","name":"api","path":"compose.yaml"}},"to":{"kind":"binary","name":"serve","path":"backend/pyproject.toml"},"basis":"declared","site":{"path":"compose.yaml","line":6}}
+edge {"kind":"runs","from":{"kind":"unit","id":{"kind":"image","name":"Dockerfile","path":"backend/Dockerfile"}},"to":{"kind":"binary","name":"serve","path":"backend/pyproject.toml"},"basis":"declared","site":{"path":"backend/Dockerfile","line":2}}
+edge {"kind":"runs","from":{"kind":"unit","id":{"kind":"unit","name":"api.service","path":"deploy/api.service"}},"to":{"kind":"binary","name":"serve","path":"backend/pyproject.toml"},"basis":"declared","site":{"path":"deploy/api.service","line":4}}
+edge {"kind":"runs","from":{"kind":"unit","id":{"kind":"job","name":"check","path":".github/workflows/test.yml"}},"to":{"kind":"binary","name":"ui","path":"ui/package.json"},"basis":"declared","site":{"path":".github/workflows/test.yml","line":4}}
+edge {"kind":"depends_on","from":{"kind":"unit","id":{"kind":"service","name":"api","path":"compose.yaml"}},"to":{"kind":"service","name":"db","path":"compose.yaml"},"basis":"declared","site":{"path":"compose.yaml","line":5}}
+edge {"kind":"builds","from":{"kind":"unit","id":{"kind":"image","name":"Dockerfile","path":"backend/Dockerfile"}},"to":{"kind":"service","name":"api","path":"compose.yaml"},"basis":"declared","site":{"path":"compose.yaml","line":3}}
+unit-change {"before":{"id":{"kind":"service","name":"api","path":"compose.yaml"},"line":2,"container":"","command":"[\"serve\",\"--mode\",\"old\"]","build_context":"./backend","ports":["8080:80"],"depends_on":["db"]},"after":{"id":{"kind":"service","name":"api","path":"compose.yaml"},"line":2,"container":"","command":"[\"another-program\"]","build_context":"./backend","ports":["9090:80"]}}
+unit-change {"before":null,"after":{"id":{"kind":"service","name":"cache","path":"compose.yaml"},"line":6,"container":"","image":"redis:7"}}
+unit-change {"before":{"id":{"kind":"service","name":"db","path":"compose.yaml"},"line":7,"container":"","image":"postgres:16"},"after":null}
+edge-change {"before":{"kind":"runs","from":{"kind":"unit","id":{"kind":"service","name":"api","path":"compose.yaml"}},"to":{"kind":"binary","name":"serve","path":"backend/pyproject.toml"},"basis":"declared","site":{"path":"compose.yaml","line":6}},"after":null}
+edge-change {"before":{"kind":"depends_on","from":{"kind":"unit","id":{"kind":"service","name":"api","path":"compose.yaml"}},"to":{"kind":"service","name":"db","path":"compose.yaml"},"basis":"declared","site":{"path":"compose.yaml","line":5}},"after":null}
