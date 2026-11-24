@@ -49,7 +49,7 @@ impl FactsCache {
     /// A cache hit does not access the repository.
     pub fn tree_facts(&self, repo: &Path, tree: &str) -> Result<TreeFacts> {
         let tree = object_id(tree)?;
-        self.get("trees-v5", &self.entry_key(&tree), || {
+        self.get("trees-v6", &self.entry_key(&tree), || {
             structure::collect(repo, &tree, &self.operation_enums)
         })
     }
@@ -94,7 +94,7 @@ impl FactsCache {
             });
         }
         let key = self.entry_key(&format!("{base_tree}-{head_tree}"));
-        self.get("deltas-v5", &key, || {
+        self.get("deltas-v6", &key, || {
             let before = self.tree_facts(repo, &base_tree)?;
             let after = self.tree_facts(repo, &head_tree)?;
             let (files, skipped_non_utf8_paths) = git::changes(repo, &base_commit, &head_commit)?;

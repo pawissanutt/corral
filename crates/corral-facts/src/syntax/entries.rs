@@ -279,21 +279,13 @@ impl Scan {
             .push((kind, name, token.as_ptr() as usize - start));
     }
 
-    fn route(
-        &mut self,
-        detector: EntryDetector,
-        method: &str,
-        path: &str,
-        token: &str,
-        start: usize,
-    ) {
+    fn route(&mut self, method: &str, path: &str, token: &str, start: usize) {
         self.entry(
             EntryKind::Route,
             format!("{} {path}", method.to_ascii_uppercase()),
             token,
             start,
         );
-        self.entry_detectors.insert(detector);
     }
 }
 
@@ -307,8 +299,13 @@ pub(super) fn rust(
     match tokens[i] {
         "enum" => rust_enum(&tokens[..i], &tokens[i + 1..], start, operation_enums, scan),
         "route" if tokens[..i].ends_with(&["."]) => {
-            if let Some((method, path)) = axum(&tokens[i + 1..]) {
-                scan.route(EntryDetector::Axum, method, path, tokens[i], start);
+            if let Some((method, source)) = axum(&tokens[i + 1..]) {
+                scan.entry_detectors.insert(EntryDetector::Axum);
+                if let [token] = source
+                    && let Some(path) = rust_string(token).filter(|path| path.starts_with('/'))
+                {
+                    scan.route(method, path, tokens[i], start);
+                }
             }
         }
         _ => {}
@@ -322,12 +319,23 @@ fn http_method(token: &str) -> bool {
     )
 }
 
-fn axum<'a>(tokens: &[&'a str]) -> Option<(&'a str, &'a str)> {
-    let ["(", path, ",", handler @ ..] = tokens else {
+fn route_args<'a, 't>(mut tokens: &'t [&'a str]) -> Option<(&'t [&'a str], &'t [&'a str])> {
+    if !eat(&mut tokens, "(") {
         return None;
-    };
-    let path = rust_string(path).filter(|path| path.starts_with('/'))?;
-    let mut handler = handler;
+    }
+    // Inspect only the first argument; a handler body can contain more route calls.
+    let source = until_comma(&mut tokens)?;
+    if source.is_empty()
+        || !eat(&mut tokens, ",")
+        || matches!(tokens.first(), None | Some(&("," | ")" | "]" | "}" | ";")))
+    {
+        return None;
+    }
+    Some((source, tokens))
+}
+
+fn axum<'a, 't>(tokens: &'t [&'a str]) -> Option<(&'a str, &'t [&'a str])> {
+    let (source, mut handler) = route_args(tokens)?;
     let method = path_last(&mut handler)?;
     if !http_method(method) && method != "any" {
         return None;
@@ -336,7 +344,7 @@ fn axum<'a>(tokens: &[&'a str]) -> Option<(&'a str, &'a str)> {
         return None;
     }
     eat(&mut handler, ",");
-    handler.starts_with(&[")"]).then_some((method, path))
+    handler.starts_with(&[")"]).then_some((method, source))
 }
 
 pub(super) fn express(tokens: &[&str], i: usize, start: usize, scan: &mut Scan) {
@@ -350,11 +358,13 @@ pub(super) fn express(tokens: &[&str], i: usize, start: usize, scan: &mut Scan) 
     if matches!(head.last(), Some(&("." | "?."))) {
         return;
     }
-    if let ["(", source, ",", handler, ..] = &tokens[i + 1..]
-        && !matches!(*handler, ")" | ",")
-        && let Some(path) = literal(source, true).filter(|path| path.starts_with('/'))
-    {
-        scan.route(EntryDetector::Express, method, path, tokens[i], start);
+    if let Some((source, _)) = route_args(&tokens[i + 1..]) {
+        scan.entry_detectors.insert(EntryDetector::Express);
+        if let [token] = source
+            && let Some(path) = literal(token, true).filter(|path| path.starts_with('/'))
+        {
+            scan.route(method, path, tokens[i], start);
+        }
     }
 }
 
@@ -526,7 +536,7 @@ fn until_comma<'a, 't>(rest: &mut &'t [&'a str]) -> Option<&'t [&'a str]> {
     let original = *rest;
     while let Some((&token, tail)) = rest.split_first() {
         match token {
-            "," => break,
+            "," | ")" | "]" | "}" | ";" => break,
             "(" | "[" | "{" => {
                 take_group(rest, token)?;
             }

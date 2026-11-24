@@ -71,10 +71,21 @@ pub(crate) fn finish(
     EntryPoints { entries, coverage }
 }
 
-pub(crate) fn compare(before: &EntryPoints, after: &EntryPoints) -> EntryPointDelta {
+/// Compare entry-point snapshots, with entries sorted by kind, name, path, then line.
+/// Changes in line or ownership alone are not reported.
+pub fn compare(before: &EntryPoints, after: &EntryPoints) -> EntryPointDelta {
     let old = group(&before.entries);
     let new = group(&after.entries);
-    let mut delta = EntryPointDelta::default();
+    let mut delta = EntryPointDelta {
+        extension_containers: before
+            .coverage
+            .iter()
+            .chain(&after.coverage)
+            .filter(|(_, detectors)| detectors.contains(&EntryDetector::Extension))
+            .map(|(container, _)| container.clone())
+            .collect(),
+        ..EntryPointDelta::default()
+    };
     for key in old.keys().chain(new.keys()).collect::<BTreeSet<_>>() {
         let left = old.get(key).map(Vec::as_slice).unwrap_or_default();
         let right = new.get(key).map(Vec::as_slice).unwrap_or_default();

@@ -6,7 +6,7 @@ entry {"kind":"route","name":"GET /tasks","path":"backend/src/http.rs","line":4,
 entry {"kind":"route","name":"POST /jobs","path":"web/app.ts","line":5,"owner":{"kind":"container","path":"web"}}
 entry {"kind":"operation","name":"Read","path":"backend/src/ops.rs","line":2,"owner":{"kind":"unit","id":{"kind":"binary","name":"backend","path":"backend/src/main.rs"}}}
 entry {"kind":"operation","name":"Write","path":"backend/src/ops.rs","line":3,"owner":{"kind":"unit","id":{"kind":"binary","name":"backend","path":"backend/src/main.rs"}}}
-detectors {"backend":["clap","axum","operation_enum"],"docs":[],"web":["express","npm_bin"]}
+detectors {"backend":["clap","axum","operation_enum"],"docs":[],"dynamic":["axum","express"],"web":["express","npm_bin"]}
 added {"kind":"route","name":"PUT /jobs","path":"web/app.ts","line":5,"owner":{"kind":"container","path":"web"}}
 added {"kind":"operation","name":"Reject","path":"backend/src/ops.rs","line":3,"owner":{"kind":"unit","id":{"kind":"binary","name":"backend","path":"backend/src/main.rs"}}}
 removed {"kind":"route","name":"POST /jobs","path":"web/app.ts","line":5,"owner":{"kind":"container","path":"web"}}

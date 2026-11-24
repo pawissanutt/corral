@@ -18,6 +18,7 @@ mod structure;
 mod syntax;
 
 pub use cache::FactsCache;
+pub use entries::compare as compare_entry_points;
 pub use model::*;
 pub use structure::is_manifest;
 

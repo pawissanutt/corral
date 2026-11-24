@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
-    EntryDetector, EntryPoint, ReadStatus, Reference, ReferenceBasis, TreeFacts, entries::Owners,
-    structure,
+    EntryDetector, EntryPoint, EntryPoints, ReadStatus, Reference, ReferenceBasis, RuntimeUnit,
+    TreeFacts, entries::Owners, structure,
 };
 
 use super::{ProviderCoverage, Reply, Row};
@@ -18,9 +18,15 @@ impl Reply {
             .map(|file| (file.path.clone(), file))
             .collect();
         let mut refs = BTreeMap::<_, u64>::new();
-        let mut entries = Vec::new();
-        let mut owners = None;
+        let mut entries = EntryOverlay::new(&mut tree.entry_points, &tree.runtime.units);
         for row in rows {
+            let Some(row) = entries.consume(
+                row,
+                |path| by_path.get(path).map(|file| file.container.as_str()),
+                &mut coverage,
+            ) else {
+                continue;
+            };
             if !row.has_known_paths(|path| by_path.contains_key(path)) {
                 coverage.dropped_unknown_files += 1;
                 continue;
@@ -45,42 +51,10 @@ impl Reply {
                     let total = refs.entry((from, to, kind)).or_default();
                     *total = total.saturating_add(count);
                 }
-                Row::Entry {
-                    path,
-                    line,
-                    kind,
-                    name,
-                } if coverage.provides("entries") => {
-                    if let Some(file) = by_path.get(&path) {
-                        let container = &file.container;
-                        let owners = owners.get_or_insert_with(|| Owners::new(&tree.runtime.units));
-                        entries.push(EntryPoint {
-                            kind,
-                            name,
-                            path,
-                            line,
-                            owner: owners.of(container),
-                        });
-                        tree.entry_points
-                            .coverage
-                            .entry(container.clone())
-                            .or_default()
-                            .insert(EntryDetector::Extension);
-                    }
-                }
                 _ => {} // Don't apply rows for categories the provider did not answer.
             }
         }
-        if !entries.is_empty() {
-            let covered = entries
-                .iter()
-                .map(|entry| entry.path.as_str())
-                .collect::<BTreeSet<_>>();
-            let existing = &mut tree.entry_points.entries;
-            existing.retain(|entry| !covered.contains(entry.path.as_str()));
-            existing.extend(entries);
-            existing.sort_unstable();
-        }
+        entries.finish();
         if coverage.provides("files") {
             tree.coverage.complete = 0;
             tree.coverage.unsupported = 0;
@@ -113,5 +87,104 @@ impl Reply {
                 structure::roll_up(&tree.file_references, basis, &by_path, &tree.dependencies);
         }
         coverage
+    }
+
+    /// Apply only the entry rows of a validated snapshot reply to the built-in
+    /// entry points. The returned coverage counts unknown paths only in entry rows.
+    pub fn snapshot_entries(self, tree: &TreeFacts) -> (EntryPoints, ProviderCoverage) {
+        let Self { rows, mut coverage } = self;
+        let mut points = tree.entry_points.clone();
+        let mut entries = EntryOverlay::new(&mut points, &tree.runtime.units);
+        let mut by_path = None;
+        for row in rows {
+            let _ = entries.consume(
+                row,
+                |path| {
+                    by_path
+                        .get_or_insert_with(|| {
+                            tree.files
+                                .iter()
+                                .map(|file| (file.path.as_str(), file.container.as_str()))
+                                .collect::<BTreeMap<_, _>>()
+                        })
+                        .get(path)
+                        .copied()
+                },
+                &mut coverage,
+            );
+        }
+        entries.finish();
+        (points, coverage)
+    }
+}
+
+struct EntryOverlay<'a> {
+    points: &'a mut EntryPoints,
+    units: &'a [RuntimeUnit],
+    owners: Option<Owners<'a>>,
+    entries: Vec<EntryPoint>,
+}
+
+impl<'a> EntryOverlay<'a> {
+    fn new(points: &'a mut EntryPoints, units: &'a [RuntimeUnit]) -> Self {
+        Self {
+            points,
+            units,
+            owners: None,
+            entries: Vec::new(),
+        }
+    }
+
+    // Consume entry rows, passing other categories back for full snapshot merges.
+    fn consume<'file>(
+        &mut self,
+        row: Row,
+        container_of: impl FnOnce(&str) -> Option<&'file str>,
+        coverage: &mut ProviderCoverage,
+    ) -> Option<Row> {
+        let Row::Entry {
+            path,
+            line,
+            kind,
+            name,
+        } = row
+        else {
+            return Some(row);
+        };
+        let Some(container) = container_of(&path) else {
+            coverage.dropped_unknown_files += 1;
+            return None;
+        };
+        if coverage.provides("entries") {
+            let owners = self.owners.get_or_insert_with(|| Owners::new(self.units));
+            self.entries.push(EntryPoint {
+                kind,
+                name,
+                path,
+                line,
+                owner: owners.of(container),
+            });
+            self.points
+                .coverage
+                .entry(container.to_owned())
+                .or_default()
+                .insert(EntryDetector::Extension);
+        }
+        None
+    }
+
+    fn finish(self) {
+        if self.entries.is_empty() {
+            return;
+        }
+        let covered = self
+            .entries
+            .iter()
+            .map(|entry| entry.path.as_str())
+            .collect::<BTreeSet<_>>();
+        let existing = &mut self.points.entries;
+        existing.retain(|entry| !covered.contains(entry.path.as_str()));
+        existing.extend(self.entries);
+        existing.sort_unstable();
     }
 }

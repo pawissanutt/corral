@@ -84,9 +84,10 @@ operation_enums = ["Op"]
 Selectors match exact Rust enum names, not qualified paths. These are source heuristics:
 no macro expansion, conditional compilation, command hierarchy, generated commands (such
 as Clap's `help`), dynamic routes, chained Axum handlers or handler resolution. The runtime
-detail lists applicable detectors by container; an empty list means **no detector**, not
-zero entry points. Review compares built-in entry points at the submitted base and head;
-line-only moves are not additions or removals.
+detail lists applicable detectors by container. A recognized route call with a dynamic
+path counts toward detector coverage without producing an entry point. An empty detector
+list means **no detector**, not zero entry points. Review compares entry points at the
+submitted base and head; line-only moves are not additions or removals.
 
 `facts` is an optional slot for enriching built-in system facts. The daemon publishes
 built-in facts first and runs providers in the background. If a provider fails, built-in
@@ -124,8 +125,11 @@ none. For snapshots, `entry` rows such as
 replace all built-in entry points only for files with at least one accepted `entry` row.
 An empty `entries` answer leaves built-in entry points unchanged. Corral assigns each entry
 point to its container's only binary, or to the container itself if it does not have exactly
-one binary, and records extension coverage for the affected containers. Delta requests still
-ask for `changes`, `dependents`, and `tests`, not `entries`.
+one binary, and records extension coverage for the affected containers. Entry-point changes
+are compared after applying these replacements to both the base and head snapshots. If a
+snapshot fails or its entry rows cannot fit the wire budget, Review compares built-in entries
+on both sides. The separate delta request still asks for `changes`, `dependents`, and `tests`,
+not `entries`; a failure of that request does not discard valid entry snapshots.
 
 Results are cached by tree and provider configuration; inputs should correspond to the
 requested revision.

@@ -1,6 +1,6 @@
 //! Pure, unpaged display rows from immutable facts. Git and provider work happens elsewhere.
 use std::cmp::Reverse;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use corral_facts::{
     Activity, ActivityCommit, FileFact, ModuleId, ProjectDelta, ProjectFacts, ReadStatus,
@@ -500,9 +500,10 @@ pub(crate) fn review(
                     }),
             );
         }
+        let extension_containers = &delta.entry_points.extension_containers;
         let provided = review.rows.len() > start
-            || entry_detectors_applied(before, &base_files, at)
-            || entry_detectors_applied(after, &head_files, at);
+            || entry_detectors_applied(before, &base_files, at, extension_containers)
+            || entry_detectors_applied(after, &head_files, at, extension_containers);
         review.finish_category(Category::EntryPoints, provided);
     }
 
@@ -519,10 +520,18 @@ pub(crate) fn review(
     Ok((review.categories, review.rows))
 }
 
-fn entry_detectors_applied(tree: &TreeFacts, files: &Files<'_>, at: Option<&SystemAt>) -> bool {
+fn entry_detectors_applied(
+    tree: &TreeFacts,
+    files: &Files<'_>,
+    at: Option<&SystemAt>,
+    extension_containers: &BTreeSet<String>,
+) -> bool {
     let coverage = &tree.entry_points.coverage;
     let container = match at {
-        None => return coverage.values().any(|detectors| !detectors.is_empty()),
+        None => {
+            return !extension_containers.is_empty()
+                || coverage.values().any(|detectors| !detectors.is_empty());
+        }
         Some(SystemAt::Container { path }) => path,
         Some(SystemAt::Module { module }) => &module.container,
         Some(SystemAt::File { path }) => {
@@ -532,9 +541,10 @@ fn entry_detectors_applied(tree: &TreeFacts, files: &Files<'_>, at: Option<&Syst
             &file.container
         }
     };
-    coverage
-        .get(container)
-        .is_some_and(|detectors| !detectors.is_empty())
+    extension_containers.contains(container)
+        || coverage
+            .get(container)
+            .is_some_and(|detectors| !detectors.is_empty())
 }
 
 /// A review's map carries no history: its activity windows stay empty.

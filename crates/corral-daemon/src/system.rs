@@ -510,9 +510,7 @@ fn submitted(root: &Path, task: &str) -> Result<Submission> {
 }
 
 fn provided(report: &FactsReport) -> Option<Vec<String>> {
-    report
-        .error
-        .is_none()
+    (report.error.is_none() || !report.coverage.provided.is_empty())
         .then(|| report.coverage.provided.clone())
 }
 
@@ -526,10 +524,7 @@ fn bounded_error(mut text: String) -> String {
 
 /// Keep the built-in observation if a provider reply cannot be paged. Reserve
 /// room for the detail envelope, built-in metadata and row discriminators.
-fn bounded_report(
-    mut report: FactsReport,
-    rows_fit: impl FnOnce() -> Result<()>,
-) -> Arc<FactsReport> {
+fn bounded_report(mut report: FactsReport, rows_fit: impl FnOnce() -> Result<()>) -> FactsReport {
     if report.error.is_none() {
         let fit = (|| -> Result<()> {
             ensure!(
@@ -548,7 +543,7 @@ fn bounded_report(
         }
     }
     report.error = report.error.map(bounded_error);
-    Arc::new(report)
+    report
 }
 
 fn provider_row_fits(row: &impl Serialize) -> Result<()> {

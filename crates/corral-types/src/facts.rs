@@ -1,5 +1,5 @@
 //! Structural facts shared by the provider, daemon and protocol clients.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -245,13 +245,16 @@ pub struct EntryPoint {
 pub struct EntryPoints {
     pub entries: Vec<EntryPoint>,
     /// One row per container. An empty set means no detector applied, not zero entry points.
-    pub coverage: BTreeMap<String, std::collections::BTreeSet<EntryDetector>>,
+    pub coverage: BTreeMap<String, BTreeSet<EntryDetector>>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EntryPointDelta {
     pub added: Vec<EntryPoint>,
     pub removed: Vec<EntryPoint>,
+    /// Containers covered by extension entry rows in either snapshot.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub extension_containers: BTreeSet<String>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]

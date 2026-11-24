@@ -24,7 +24,11 @@ fn entry_points_golden() {
     );
     let express = "import express from 'express';\nconst app = express();\n// app.get('/comment', fn);\nconst hint = \"app.get('/string', fn)\";\napp.post('/jobs', jobs);\napp.get(dynamic, handler);\n";
     repo.put("web/app.ts", express);
+    repo.put("dynamic/router.rs", "router.route(path, get(handler));\n");
+    repo.put("dynamic/app.js", "app.get(prefix + '/tasks', handler);\n");
     repo.put("docs/readme.md", "No entry detector here.\n");
+    // Express get with one argument reads a setting; it does not register a route.
+    repo.put("docs/config.js", "app.get('env'); processSetting(a, b);\n");
     let base = repo.commit("2025-01-01T00:00:00Z", "entry declarations");
     // Same cache root and tree, different operation selector configuration.
     let before = default_cache.tree_facts(repo.path(), base.tree()).unwrap();

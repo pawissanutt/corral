@@ -222,6 +222,11 @@ fn extension_entries_replace_only_covered_files() {
         "const app = express();\napp.get(\"/untouched\", handler);\n",
     )
     .unwrap();
+    fs::write(
+        reader.repo.join("app/stable.ts"),
+        "app.get(\"/native\", handler);\n",
+    )
+    .unwrap();
     fixture.git(&["add", "."]);
     fixture.git(&["commit", "-m", "entry fixture"]);
     let revision = reader.resolve_revision("HEAD").unwrap();
@@ -242,13 +247,24 @@ fn extension_entries_replace_only_covered_files() {
             .any(|entry| entry.path == "app/other.ts")
     );
     fixture.script(
-        r#"
+        &r#"
+case "$(cat ../request.json)" in
+    *'"query":"delta"'*) exit 9 ;;
+    *'"rev":"BASE_REV"'*) operation=Serve ;;
+    *)
+        if [ -f ../fail-head ]; then
+            printf '%s\n' '{"type":"entry","path":"app/index.ts","line":0,"kind":"operation","name":"invalid"}'
+        fi
+        operation=Update
+        ;;
+esac
+printf '{"type":"entry","path":"app/index.ts","line":3,"kind":"operation","name":"%s"}\n' "$operation"
 cat <<'ROWS'
-{"type":"entry","path":"app/index.ts","line":3,"kind":"operation","name":"Serve"}
+{"type":"entry","path":"app/stable.ts","line":1,"kind":"route","name":"GET /stable"}
 {"type":"entry","path":"missing.ts","line":1,"kind":"command","name":"ghost"}
 {"type":"done","provided":["entries"],"skipped":{},"omitted":{}}
 ROWS
-"#,
+"#.replace("BASE_REV", revision.commit()),
     );
     let report = reader.enrich_snapshot(&mut facts).unwrap();
     assert_eq!(
@@ -261,20 +277,31 @@ ROWS
     let mut expected = builtin;
     expected
         .entries
-        .retain(|entry| entry.path != "app/index.ts");
-    expected.entries.push(EntryPoint {
+        .retain(|entry| !matches!(entry.path.as_str(), "app/index.ts" | "app/stable.ts"));
+    let owner = RuntimeSource::Unit {
+        id: RuntimeUnitId {
+            kind: RuntimeUnitKind::Binary,
+            name: "serve".into(),
+            path: "app/package.json".into(),
+        },
+    };
+    let serve = EntryPoint {
         kind: EntryKind::Operation,
         name: "Serve".into(),
         path: "app/index.ts".into(),
         line: 3,
-        owner: RuntimeSource::Unit {
-            id: RuntimeUnitId {
-                kind: RuntimeUnitKind::Binary,
-                name: "serve".into(),
-                path: "app/package.json".into(),
-            },
+        owner: owner.clone(),
+    };
+    expected.entries.extend([
+        serve.clone(),
+        EntryPoint {
+            kind: EntryKind::Route,
+            name: "GET /stable".into(),
+            path: "app/stable.ts".into(),
+            line: 1,
+            owner,
         },
-    });
+    ]);
     expected.entries.sort();
     expected
         .coverage
@@ -282,6 +309,63 @@ ROWS
         .unwrap()
         .insert(EntryDetector::Extension);
     assert_eq!(facts.structure.entry_points, expected);
+
+    // The provider changes index.ts without a built-in change there, and hides
+    // a real built-in change in stable.ts with its unchanged authoritative row.
+    fs::write(
+        reader.repo.join("app/stable.ts"),
+        "app.get(\"/native-changed\", handler);\n",
+    )
+    .unwrap();
+    fixture.git(&["add", "."]);
+    fixture.git(&["commit", "-m", "updated entries"]);
+    let head = reader.resolve_revision("HEAD").unwrap();
+    let builtin_delta = reader.builtin_delta(&revision, &head).unwrap();
+    assert_eq!(
+        builtin_delta.entry_points.added[0].name,
+        "GET /native-changed"
+    );
+    let mut delta = builtin_delta.clone();
+    let report = reader.enrich_delta(&revision, &head, &mut delta).unwrap();
+    assert!(report.error.is_some());
+    assert_eq!(delta.entry_points, builtin_delta.entry_points);
+    // A failed delta request does not suppress changes from valid snapshots.
+    let before = (&revision, &reader.builtin_tree(&revision).unwrap());
+    let after = (&head, &reader.builtin_tree(&head).unwrap());
+    let entries = reader
+        .enrich_entry_delta(before, after, |_| Ok(()))
+        .unwrap();
+    assert_eq!(entries.extension_containers, ["app".into()].into());
+    assert_eq!(entries.removed.as_slice(), std::slice::from_ref(&serve));
+    assert_eq!(
+        entries.added,
+        [EntryPoint {
+            name: "Update".into(),
+            ..serve
+        }]
+    );
+
+    // A row rejected by the caller's presentation budget invalidates the pair.
+    assert!(
+        reader
+            .enrich_entry_delta(before, after, |entry| {
+                anyhow::ensure!(entry.name != "Update", "unservable entry");
+                Ok(())
+            })
+            .is_none()
+    );
+
+    // Force a cache miss for both answers; one bad snapshot must not leave a
+    // provider-only removal or addition on the side that did succeed.
+    let mut config = fixture.config.clone();
+    config.extensions.get_mut("fixture").unwrap().facts = Some("exec sh ../provider.sh".into());
+    fs::write(fixture.workspace.path().join("fail-head"), "").unwrap();
+    let failing = FactsReader::new(fixture.workspace.path(), &config, "sample").unwrap();
+    assert!(
+        failing
+            .enrich_entry_delta(before, after, |_| Ok(()))
+            .is_none()
+    );
 }
 
 #[test]

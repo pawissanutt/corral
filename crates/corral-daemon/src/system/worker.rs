@@ -9,7 +9,7 @@ use std::{
 use anyhow::{Context, Result, ensure};
 use corral_engine::{config::Slot, facts::FactsReader};
 use corral_facts::Revision;
-use corral_types::SystemRuntimeRow;
+use corral_types::{SystemReviewRow, SystemRuntimeRow, facts::ChangeKind};
 
 use super::{
     Cache, Configuration, Impact, ImpactFacts, Queue, Snapshot, Stage, Submission, bounded_error,
@@ -221,6 +221,7 @@ impl Worker {
         if self.requeue_if_tip_moved(job, project, branch, head) {
             return;
         }
+        let report = Arc::new(report);
         let enriched = if report.error.is_none() {
             Arc::new(enriched)
         } else {
@@ -366,7 +367,7 @@ impl Worker {
         let Some(report) = reader.enrich_delta(base, head, &mut delta) else {
             return;
         };
-        let report = bounded_report(report, || {
+        let mut report = bounded_report(report, || {
             delta
                 .changes
                 .iter()
@@ -382,7 +383,30 @@ impl Worker {
         if !self.check_submission(job, submission) {
             return;
         }
-        let enriched = if report.error.is_none() {
+        // An unavailable or oversized delta reply does not invalidate the
+        // independent snapshots used for entries (and vice versa).
+        let entries =
+            reader.enrich_entry_delta((base, &facts.base), (head, &facts.head), |entry| {
+                provider_row_fits(&SystemReviewRow::Entry {
+                    change: ChangeKind::Removed, // the longer of the two discriminants
+                    entry: entry.clone(),
+                })
+            });
+        if !self.check_submission(job, submission) {
+            return;
+        }
+        let entry_enriched = entries.is_some();
+        if let Some(entries) = entries {
+            if report.error.is_some() {
+                delta = facts.delta.clone();
+            }
+            delta.entry_points = entries;
+            report.coverage.provided.push("entries".into());
+        } else {
+            report.coverage.not_provided.push("entries".into());
+        }
+        let report = Arc::new(report);
+        let enriched = if report.error.is_none() || entry_enriched {
             Arc::new(ImpactFacts {
                 delta,
                 base: Arc::clone(&facts.base),

@@ -7,7 +7,8 @@ use std::{
 
 use anyhow::{Context, Result};
 use corral_facts::{
-    FactsCache, ProjectDelta, ProjectFacts, Revision, TreeFacts,
+    EntryPoint, EntryPointDelta, EntryPoints, FactsCache, ProjectDelta, ProjectFacts, Revision,
+    TreeFacts, compare_entry_points,
     provider::{ProviderCoverage, Reply},
     resolve_revision,
 };
@@ -134,10 +135,49 @@ impl<'a> FactsReader<'a> {
         delta: &mut ProjectDelta,
     ) -> Option<FactsReport> {
         self.ask(head, Some(base), DELTA_WANT, |reply| {
-            let before = self.cache.tree_facts(&self.repo, base.tree())?;
-            let after = self.cache.tree_facts(&self.repo, head.tree())?;
-            Ok(reply.merge_delta(delta, &before, &after))
+            let before = self.builtin_tree(base)?;
+            let after = (base.tree() != head.tree())
+                .then(|| self.builtin_tree(head))
+                .transpose()?;
+            Ok(reply.merge_delta(delta, &before, after.as_ref().unwrap_or(&before)))
         })
+    }
+
+    /// Compare provider-overlaid snapshots independently of the other delta categories.
+    /// None leaves the caller's built-in entry delta intact.
+    pub fn enrich_entry_delta(
+        &self,
+        (base, before): (&Revision, &TreeFacts),
+        (head, after): (&Revision, &TreeFacts),
+        validate: impl Fn(&EntryPoint) -> Result<()>,
+    ) -> Option<EntryPointDelta> {
+        // Reuse the runtime view's immutable snapshot requests without loading activity.
+        // Never compare one provider snapshot against the other side after a failure.
+        let (old, base_provided) = self.provider_entries(base, before, &validate)?;
+        if base.tree() == head.tree() {
+            return base_provided.then(|| compare_entry_points(&old, &old));
+        }
+        let (new, head_provided) = self.provider_entries(head, after, &validate)?;
+        (base_provided || head_provided).then(|| compare_entry_points(&old, &new))
+    }
+
+    fn provider_entries(
+        &self,
+        rev: &Revision,
+        tree: &TreeFacts,
+        validate: &impl Fn(&EntryPoint) -> Result<()>,
+    ) -> Option<(EntryPoints, bool)> {
+        let mut result = None;
+        self.ask(rev, None, SNAPSHOT_WANT, |reply| {
+            let (entries, coverage) = reply.snapshot_entries(tree);
+            let provided = coverage.provides("entries");
+            if provided {
+                entries.entries.iter().try_for_each(validate)?;
+            }
+            result = Some((entries, provided));
+            Ok(coverage)
+        })?;
+        result
     }
 
     fn ask(

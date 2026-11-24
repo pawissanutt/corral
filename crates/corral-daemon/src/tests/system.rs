@@ -255,6 +255,17 @@ fn socket_system_map_and_review_refresh_from_background_facts() {
         "socket mutation while the provider is blocked"
     );
 
+    // Fix the head's snapshot reply before Review can cache it. Its metadata
+    // is valid but unservable when the landed map later presents that snapshot.
+    let long_reason = "x".repeat(corral_protocol::app::APP_CONTROL_MAX);
+    fs::write(
+        fixture.root().join("overflow-facts"),
+        json!({
+            "type": "done", "provided": ["files"], "skipped": {}, "omitted": { (long_reason): 1 }
+        })
+        .to_string(),
+    )
+    .unwrap();
     // Clear the notification for the built-in delta before releasing enrichment;
     // the next revision is a wakeup to revalidate the same selector and etag.
     let built_in_revision = next_system(&mut topic, |row| row.revision > initial.revision).revision;
@@ -298,17 +309,6 @@ fn socket_system_map_and_review_refresh_from_background_facts() {
         SystemReviewRow::Definition { path, name, .. } if path == CHANGED && name == "feature::value"
     )));
 
-    // The next snapshot has valid but unservable provider metadata. It must
-    // fail as enrichment, leaving the newly landed built-in map readable.
-    let long_reason = "x".repeat(corral_protocol::app::APP_CONTROL_MAX);
-    fs::write(
-        fixture.root().join("overflow-facts"),
-        json!({
-            "type": "done", "provided": ["files"], "skipped": {}, "omitted": { (long_reason): 1 }
-        })
-        .to_string(),
-    )
-    .unwrap();
     // A separate Engine connection lands the change; the system subscription has
     // no direct operation callback or detail read to update the project's head.
     engine
