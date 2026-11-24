@@ -8,8 +8,11 @@
 //! was left out of the list. `reach` says where "Open in System" can take an item.
 
 mod changes;
+mod foot;
 mod items;
+mod place;
 mod reach;
+mod this_task;
 
 use std::collections::{BTreeMap, BTreeSet};
 
