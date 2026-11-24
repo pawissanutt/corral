@@ -2,8 +2,9 @@
 //! 5). A send is known only by its command id, which travels unchanged as the host's input id:
 //! its echo is drawn after the last served message while no served message has the id
 //! `<session>/input/<command id>`, and is retired the moment one has, or once the acknowledgement
-//! says the host handled it without a message (an answer, a child steer, a slash command). Text
-//! and time never match a send to a message.
+//! says the host handled it without a message (an answer, a child steer, a slash command). A
+//! late acknowledgement under an ended thread also takes its echo out of any other scope.
+//! Text and time never match a send to a message.
 
 use corral_protocol::assistant::SendAttachment;
 use corral_protocol::detail::SessionPage;
@@ -87,14 +88,14 @@ pub fn ack(feed: &Feed, key: &str) -> Option<SessionSent> {
     feed.operations.get(key)?.decode::<SessionSent>()
 }
 
-/// Whether send `sent` to `scope` is retired: a served message carries its input id, or the host
-/// consumed it without a message.
-pub fn retired(sent: &Sent, page: Option<&SessionPage>, feed: &Feed) -> bool {
+/// Whether this scope no longer needs the echo. An acknowledgement under an ended thread
+/// must not follow Ask back to `quick` or into a fresh thread.
+pub fn retired(sent: &Sent, scope: &str, page: Option<&SessionPage>, feed: &Feed) -> bool {
     let ack = ack(feed, sent.key.as_str());
-    if ack
-        .as_ref()
-        .is_some_and(|ack| ack.disposition == InputDisposition::Handled)
-    {
+    if ack.as_ref().is_some_and(|ack| {
+        ack.disposition == InputDisposition::Handled
+            || (ack.session != scope && crate::model::assistant::ended(feed, &ack.session))
+    }) {
         return true;
     }
     let Some(page) = page else {
@@ -178,7 +179,7 @@ fn words(state: &EchoState) -> (String, Hue) {
 pub fn shown(scope: &Id, ui: &Ui, page: Option<&SessionPage>, feed: &Feed) -> Vec<Echo> {
     ui.echoes
         .iter()
-        .filter(|sent| !retired(sent, page, feed))
+        .filter(|sent| !retired(sent, scope.as_str(), page, feed))
         .map(|sent| {
             let state = state(sent, scope.as_str(), feed);
             let (words, hue) = words(&state);

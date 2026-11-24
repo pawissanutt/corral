@@ -480,7 +480,8 @@ impl State {
             let page = transcript::page(feed.detail(&DetailRef::Session {
                 id: scope.to_string(),
             }));
-            ui.echoes.retain(|sent| !echo::retired(sent, page, feed));
+            ui.echoes
+                .retain(|sent| !echo::retired(sent, scope.as_str(), page, feed));
             dock::settle(ui, scope.as_str(), feed);
             super::fleet::settle(ui, feed);
             let mut refused = Vec::new();

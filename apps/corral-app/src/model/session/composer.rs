@@ -270,7 +270,7 @@ fn last(cx: &Cx<'_>) -> Option<(Hue, String)> {
         .echoes
         .iter()
         .rev()
-        .find(|sent| !echo::retired(sent, page, cx.feed))?;
+        .find(|sent| !echo::retired(sent, cx.id.as_str(), page, cx.feed))?;
     match echo::state(sent, cx.id.as_str(), cx.feed) {
         EchoState::Pending => Some((Hue::Neutral, "last input pending admission".into())),
         EchoState::Queued { .. } => Some((Hue::Neutral, "last input queued".into())),
