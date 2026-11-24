@@ -253,10 +253,11 @@ test("a following live reader refreshes on settlement without retaining its prov
 test("reopening a recording restores its row within the latest page or an earlier page", async () => {
   const initial = rowOf(helper({ phase: "completed" }));
   const row = { ...initial, capabilities: { open: true, transcript: true } };
-  let stamp = "same";
+  let stamp = "same", failOnce = false;
   const view = new AgentConversation({ row: () => row, chat: new HelperChat(() => undefined, "/tmp"),
     color: agentColor, now: () => NOW, click: () => false, focus() {}, back() {},
     read: async (_id, request) => {
+      if (failOnce) { failOnce = false; throw new Error("transient read failure"); }
       const page = request.cursor === "older" ? "EARLY" : "CURRENT";
       return { stamp, rows: Array.from({ length: 20 }, (_, i) => ({ id: `${page}-${i}`, kind: "assistant", text: `${page}_${i}_ROW` })),
         ...(page === "CURRENT" ? { older: "older" } : { newer: "newer" }) };
@@ -274,6 +275,11 @@ test("reopening a recording restores its row within the latest page or an earlie
   view.scroll.scrollTo(22, { disableFollow: true });
   const older = frame();
   expect(older).toContain("EARLY_6_ROW");
+  view.remember();
+  failOnce = true;
+  expect(await reopen()).not.toContain("EARLY_");
+  expect(view.navigate("latest")).toBeTrue(); await Promise.resolve();
+  expect(frame()).toBe(older);
   view.remember();
   expect(await reopen()).toBe(older);
   stamp = "changed";

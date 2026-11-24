@@ -175,7 +175,8 @@ export class AgentConversation {
         if (settling) this.latestAvailable = true;
         return;
       }
-      if (initial && this.checkpoint) {
+      // A failed reopen keeps its checkpoint until a successful latest read can validate it.
+      if (direction === "latest" && this.checkpoint) {
         const saved = this.checkpoint;
         this.checkpoint = undefined;
         if (history.resume(saved.pages, page)) {
