@@ -1,6 +1,6 @@
 use corral_protocol::detail::{DetailBody, DetailRef, ModelChoice, SessionModels};
 use corral_protocol::session_host::SessionAction;
-use corral_protocol::session_state::{Capability, SessionState};
+use corral_protocol::session_state::{Capability, SendPolicy, SessionState};
 
 use super::{Action, Cx, Facts, PickerAction, PickerKind, SessionRole, State, Ui, model_picker};
 use crate::model::Id;
@@ -77,6 +77,34 @@ fn assistant_composer_waits_for_the_model_reply_before_sending() {
         panic!("expected a model change");
     };
     assert!(!ready(&feed, &state));
+    let template = "/summarize";
+    state.act(
+        Action::Draft {
+            session: id.clone(),
+            text: template.into(),
+        },
+        &feed,
+    );
+    let submit = || Action::Send {
+        session: id.clone(),
+        text: template.into(),
+        policy: SendPolicy::Steer,
+        attachments: Vec::new(),
+    };
+    let sent = state.act(submit(), &feed);
+    let cycled = state.act(
+        Action::Picker(PickerAction::NextModel {
+            session: id.clone(),
+            delta: 1,
+        }),
+        &feed,
+    );
+    assert_eq!(
+        (sent.is_empty(), cycled.is_empty()),
+        (true, true),
+        "slash send and model cycling must both wait"
+    );
+    assert_eq!(state.ui(id.as_str()).draft, template);
     assert!(
         state
             .act(
@@ -99,6 +127,10 @@ fn assistant_composer_waits_for_the_model_reply_before_sending() {
         },
     );
     assert!(ready(&feed, &state));
+    assert!(matches!(
+        state.act(submit(), &feed).as_slice(),
+        [Effect::SessionSend { .. }]
+    ));
 }
 
 /// A session on the subscription model with `models` as its catalog, whose host keeps

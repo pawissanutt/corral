@@ -27,10 +27,10 @@ mod picker;
 #[path = "slash.rs"]
 mod slash;
 
-pub(super) use picker::changing as model_changing;
 pub use picker::{
     PickRow, Picker, PickerAction, PickerKind, PickerUi, ScopeSwitch, picker as model_picker,
 };
+pub(super) use picker::{change_pending as model_change_pending, changing as model_changing};
 pub use slash::{SlashMenu, SlashRow, slash};
 
 /// Each part's rows, in catalog order.

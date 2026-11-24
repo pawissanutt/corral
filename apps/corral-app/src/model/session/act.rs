@@ -415,6 +415,10 @@ impl State {
         attachments: Vec<SendAttachment>,
         feed: &Feed,
     ) -> Vec<Effect> {
+        // Served slash commands also dispatch Send without using the composer's button.
+        if super::actions::model_change_pending(self.ui(session.as_str()), feed) {
+            return Vec::new();
+        }
         if let Some(effects) = dock::compose_send(self, &session, &text, feed) {
             return effects;
         }

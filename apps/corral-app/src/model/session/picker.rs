@@ -555,7 +555,7 @@ pub(in crate::model::session) fn changing(cx: &Cx<'_>) -> bool {
     change_pending(cx.ui, cx.feed)
 }
 
-fn change_pending(ui: &super::super::Ui, feed: &Feed) -> bool {
+pub(in crate::model::session) fn change_pending(ui: &super::super::Ui, feed: &Feed) -> bool {
     ui.dock.pending.iter().any(|(key, pending)| {
         matches!(
             pending,
@@ -592,10 +592,6 @@ fn send(
 
 /// Uses `effort` with the session's current model.
 fn effort(state: &mut State, session: &Id, effort: String, feed: &Feed) -> Vec<Effect> {
-    // An effort action targets the model shown. Do not enqueue its old model behind a switch.
-    if change_pending(state.ui(session.as_str()), feed) {
-        return Vec::new();
-    }
     match current_model(feed, session.as_str()) {
         Some(model) => send(state, session, model, Some(effort), EFFORT_CHANGE),
         None => {
@@ -640,6 +636,19 @@ fn state_serves(feed: &Feed, session: &str) -> bool {
 }
 
 pub(crate) fn act(state: &mut State, action: PickerAction, feed: &Feed) -> Vec<Effect> {
+    // Shortcuts and already-rendered actions can reach the reducer despite muted controls.
+    match &action {
+        PickerAction::Choose(session)
+        | PickerAction::Pick { session, .. }
+        | PickerAction::Effort { session, .. }
+        | PickerAction::CycleEffort(session)
+        | PickerAction::NextModel { session, .. }
+            if change_pending(state.ui(session.as_str()), feed) =>
+        {
+            return Vec::new();
+        }
+        _ => {}
+    }
     match action {
         PickerAction::Open { session, kind } => open(state, &session, kind, feed),
         PickerAction::Close(session) => {

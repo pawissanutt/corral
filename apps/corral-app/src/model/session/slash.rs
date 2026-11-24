@@ -138,6 +138,10 @@ fn host_command(cx: &Cx<'_>, command: &SlashCommand, args: Option<&str>) -> Slas
             attachments: Vec::new(),
         }],
     };
+    let changing_model = super::picker::changing(cx)
+        && run
+            .iter()
+            .any(|action| matches!(action, Action::Send { .. }));
     SlashRow {
         id: format!("cmd-host-{}", command.name.replace(':', "-")),
         label: if command.description.trim().is_empty() {
@@ -148,7 +152,11 @@ fn host_command(cx: &Cx<'_>, command: &SlashCommand, args: Option<&str>) -> Slas
         command: name,
         args: command.args_hint.clone(),
         source: source(command.source),
-        unavailable: refused(cx),
+        unavailable: if changing_model {
+            Some("Waiting for the model change to finish".into())
+        } else {
+            refused(cx)
+        },
         run,
     }
 }
