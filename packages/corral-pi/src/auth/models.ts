@@ -4,8 +4,11 @@
 // [--provider amazon-bedrock]`, or
 // `corral-pi-host models --provider ...` for a compiled installation. It prints
 // Pi's configured catalog for those providers as `{"models":[{"selector","provider","id"}]}`, where
-// `selector` is the provider-qualified ID a profile names. It never reads a credential, refreshes
-// a token or reaches the network.
+// `selector` is the provider-qualified ID. Pi's runnable catalog is offline. Only an
+// explicit CLI request for antigravity-cli delegates account discovery to agy; those
+// rows are not available to the host runtime, its pickers or profile resolution.
+import { parseArgs } from "node:util";
+import { AGY_PROVIDER, type AgyListedModel, discoverAgyModels } from "../agy/account.ts";
 import { type CatalogPolicy, createModelCatalog, NO_CATALOG_CREDENTIALS } from "../host/catalog.ts";
 import { HOST_PROVIDER_IDS, PROVIDERS, type ProviderId, isProviderId } from "./providers.ts";
 
@@ -35,14 +38,28 @@ export function runModels(argv: readonly string[]): void {
   globalThis.fetch = (async () => {
     throw new Error("network_refused: model listing is offline");
   }) as unknown as typeof globalThis.fetch;
-  const providers = argv.flatMap((arg, index) => argv[index - 1] === "--provider" ? [arg] : []);
-  const unknown = providers.find((provider) => !isProviderId(provider));
-  if (providers.length === 0 || unknown !== undefined) {
-    process.stderr.write(`corral agent models failed: ${unknown === undefined ? "no --provider given"
-      : `unknown provider ${unknown}`}; use ${HOST_PROVIDER_IDS.join(", ")}\n`);
+  let providers: string[];
+  try {
+    providers = parseArgs({ args: [...argv], options: { provider: { type: "string", multiple: true } } }).values.provider ?? [];
+  } catch {
+    process.stderr.write("Usage: corral-pi models --provider <id> [--provider <id>]\n");
     process.exit(2);
   }
-  listModels(providers as ProviderId[]).then((models) => {
+  const unknown = providers.find((provider) => !isProviderId(provider) && provider !== AGY_PROVIDER);
+  if (providers.length === 0 || unknown !== undefined) {
+    process.stderr.write(`corral agent models failed: ${unknown === undefined ? "no --provider given"
+      : `unknown provider ${unknown}`}; use ${[...HOST_PROVIDER_IDS, AGY_PROVIDER].join(", ")}\n`);
+    process.exit(2);
+  }
+  const list = async () => {
+    if (!providers.includes(AGY_PROVIDER)) return listModels(providers.filter(isProviderId));
+    const runnable = providers.filter(isProviderId);
+    const configured = runnable.length ? await listModels([...new Set(runnable)]) : [];
+    const agy = discoverAgyModels();
+    return providers.flatMap<ListedModel | AgyListedModel>(provider =>
+      provider === AGY_PROVIDER ? agy : configured.filter(model => model.provider === provider));
+  };
+  list().then((models) => {
     process.stdout.write(`${JSON.stringify({ models })}\n`);
     process.exit(0);
   }, (error: unknown) => {
@@ -51,4 +68,4 @@ export function runModels(argv: readonly string[]): void {
   });
 }
 
-if (import.meta.main) runModels(process.argv);
+if (import.meta.main) runModels(process.argv.slice(2));

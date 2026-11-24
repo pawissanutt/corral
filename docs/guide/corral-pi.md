@@ -174,6 +174,26 @@ login for its children.
 For daemon chat, configure a Pi profile or harness and put `corral-pi` on the daemon's
 `PATH`; chat does not require automatic dispatch or landing.
 
+### Antigravity account setup (discovery only)
+
+Install Google's Antigravity CLI (`agy`) on `PATH`. From a terminal, use:
+
+```sh
+corral-pi login --provider antigravity-cli
+corral-pi models --provider antigravity-cli
+```
+
+Login delegates to `agy acp --login`. Antigravity owns the sign-in flow and
+credentials; Corral does not store a copy. Discovery calls `agy models` and
+lists the account's exact Gemini IDs, including an `effort` field where the ID
+advertises one. It reports an absent CLI, a signed-out account, no advertised
+Gemini models, and a failed catalog request separately. Discovery was checked
+with agy 1.5.16.
+
+These IDs are not selectable in Corral sessions, profiles, or fallbacks. In
+agy 1.5.14, ACP did not prevent native file reads and ambient plugin/MCP startup
+outside Corral's approval path. No Google API route is configured by these commands.
+
 ### Terminal chat
 
 Run `corral-pi chat` from any directory inside your workspace. It looks for the

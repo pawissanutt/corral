@@ -6,6 +6,7 @@ import { parseArgs } from "node:util";
 import { TOML } from "bun";
 import { z } from "zod";
 
+import { AGY_PROVIDER } from "../agy/account.ts";
 import type { AwsBinding } from "../auth/aws.ts";
 import type { CapabilityGuidance } from "../capabilities/guidance.ts";
 import { type ProviderId, isAwsRegion, isProviderId } from "../auth/providers.ts";
@@ -113,6 +114,10 @@ export function modelSettings(values: ModelFlags, mode?: "startup") {
     throw new Error("--no-fallback cannot be combined with --fallback");
   }
   const prefix = values.model?.split("/", 1)[0];
+  if (values.provider === AGY_PROVIDER || (prefix === AGY_PROVIDER && values.model?.includes("/")) ||
+      values.fallback?.some(value => value.startsWith(`${AGY_PROVIDER}/`))) {
+    throw new Error(`${AGY_PROVIDER} supports account login and model discovery only; Corral sessions cannot use it yet`);
+  }
   const qualified = values.model?.includes("/") && isProviderId(prefix) ? prefix : undefined;
   const provider = values.provider ?? qualified ?? (mode === "startup" && values.model === undefined ? undefined : "openai-codex");
   if ((provider !== undefined && !isProviderId(provider)) || (qualified && qualified !== provider)) {
