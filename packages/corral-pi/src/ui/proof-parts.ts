@@ -2,7 +2,7 @@
 // Pure presentation of `corral show --json`; nothing here reads or infers freshness. A gate result belongs to the
 // commit it ran on and a review to its round; data kept from an earlier read is `retained`, stated once by the
 // shared chip header.
-import type { TaskCheck, TaskView } from "./task-store.ts";
+import { artifactShown, type TaskCheck, type TaskView } from "./task-store.ts";
 import { chip } from "./panel-parts.ts";
 
 export type SectionId = "gate" | "notes" | "findings" | "artifacts" | "summary";
@@ -45,7 +45,7 @@ export function sectionCount(data: TaskView, id: SectionId): string {
     case "gate": return gateCheck(data)?.result ?? "missing";
     case "notes": return "newest round";
     case "findings": return String(reviewChecks(data).length);
-    case "artifacts": return String(data.artifacts.length);
+    case "artifacts": return String(data.artifacts.filter(artifactShown).length);
     case "summary": return "assertion";
   }
 }

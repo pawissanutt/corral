@@ -4,7 +4,7 @@
 // shared chip header first (its state chip and read note), then the shared problem line, then the body.
 import { stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { TaskStore, TaskView } from "./task-store.ts";
-import { artifactRef } from "./task-store.ts";
+import { artifactRef, artifactShown } from "./task-store.ts";
 import { pad, plainLabel, PANEL_BG, PANEL_BLUE, PANEL_TEXT, PANEL_MUTED, PANEL_RULE, RESET } from "./panels-view.ts";
 import { splitRow } from "./panels-chrome.ts";
 import { gateCheck, proofItems, proofRun, reviewChecks, sectionCount, SECTION_LABEL, short, topChips, type SectionId } from "./proof-parts.ts";
@@ -65,9 +65,9 @@ function sectionDetail(data: TaskView, run: string | undefined, id: SectionId, o
       break;
     case "artifacts":
       note("Registered files, not proof");
-      if (!data.artifacts.length) note("No artifacts registered");
-      for (const a of data.artifacts) {
-        const meta = `${a.kind ? `${plainLabel(a.kind)} · ` : ""}sha256 ${a.sha256.slice(0, 8)}…`;
+      if (!data.artifacts.some(artifactShown)) note("No artifacts registered");
+      for (const a of data.artifacts.filter(artifactShown)) {
+        const meta = `${plainLabel(a.kind)} · sha256 ${a.sha256.slice(0, 8)}…`;
         out.push(`${PANEL_BLUE}▤${PANEL_TEXT} ${plainFit(`${artifactRef(a)} ${a.title}`, width - 4 - visibleWidth(meta))}  ${PANEL_MUTED}${plainFit(meta, width - 4)}${PANEL_TEXT}`);
       }
       break;

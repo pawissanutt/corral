@@ -24,9 +24,27 @@ const CheckSchema = z.object({
   kind: z.enum(["gate", "review"]), key: Text, result: z.enum(["pass", "fail"]),
   notes: Optional, log: Optional, by: Text, at: Text,
 });
+/** The engine's artifact kinds; never null. */
+export const ARTIFACT_KINDS = ["reference", "report", "evidence", "diff", "summary", "gate", "log", "usage", "tool", "legacy"] as const;
+export type ArtifactKind = (typeof ARTIFACT_KINDS)[number];
+/** Reference -> Reference; report -> Deliverable; evidence -> Proof; diff, summary -> Submission; the rest -> Record. */
+export function artifactGroup(kind: ArtifactKind): "Reference" | "Deliverable" | "Proof" | "Submission" | "Record" {
+  switch (kind) {
+    case "reference": return "Reference";
+    case "report": return "Deliverable";
+    case "evidence": return "Proof";
+    case "diff": case "summary": return "Submission";
+    default: return "Record";
+  }
+}
+/** Shown by default: not a Submission or Record row, and not replaced. Lists and counts share this. */
+export function artifactShown(a: { readonly kind: ArtifactKind; readonly replaced_by?: string | null | undefined }): boolean {
+  const group = artifactGroup(a.kind);
+  return group !== "Submission" && group !== "Record" && !a.replaced_by;
+}
 const ArtifactSchema = z.object({
   task: Text, id: z.number().int().positive(), sha256: Text, bytes: z.number().int().nonnegative(),
-  kind: Optional, title: Text, at: Text, by: Text,
+  kind: z.enum(ARTIFACT_KINDS), title: Text, at: Text, by: Text, replaced_by: Optional,
 });
 const ViewSchema = z.object({
   task: TaskSchema,

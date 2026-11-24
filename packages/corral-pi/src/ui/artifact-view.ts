@@ -13,6 +13,7 @@ import {
 } from "./panel-parts.ts";
 import { readState, type ReadState } from "./read-state.ts";
 import { SPLIT_MIN } from "./proof-view.ts";
+import { ARTIFACT_KINDS, artifactShown } from "./task-store.ts";
 
 /**
  * Main-view columns from which a comparison puts A and B on one row; below, one row each. The workbench draws this
@@ -24,7 +25,8 @@ const Label = z.string().max(4096);
 /** `corral artifact list <task> --json`: the engine's artifacts of one task, oldest first. */
 const Schema = z.array(z.object({
   task: Label, id: z.number().int().positive(), sha256: Label, bytes: z.number().int().nonnegative(),
-  kind: Label.nullable(), title: Label, at: Label, by: z.enum(["owner", "agent", "reviewer", "assistant", "auto"]),
+  kind: z.enum(ARTIFACT_KINDS), title: Label, at: Label, by: z.enum(["owner", "agent", "reviewer", "assistant", "auto", "extension"]),
+  replaced_by: Label.nullable().optional(),
 }));
 export type ArtifactCatalog = z.infer<typeof Schema>;
 type Entry = ArtifactCatalog[number];
@@ -97,6 +99,8 @@ export class ArtifactView implements Component {
   private error: string | undefined; private failedAt: number | undefined;
   marks: string[] = [];
   compare = false;
+  /** False hides Submission and Record rows and replaced rows; `a` toggles. */
+  showAll = false;
   notice = "";
   private selected: string | undefined;
   private opened: Opened | undefined;
@@ -140,12 +144,20 @@ export class ArtifactView implements Component {
     }
     finally { this.refreshing = false; if (!this.disposed) this.options.changed(); }
   }
+  /** The rows the list shows: all of them, or by default the shown groups. */
+  private get visible(): Entry[] { return (this.current ?? []).filter(a => this.showAll || artifactShown(a)); }
   private entry(reference: string | undefined): Entry | undefined {
     return reference === undefined ? undefined : this.current?.find(a => ref(a) === reference);
   }
   handleInput(data: string): boolean {
     if (!this.options.canInteract()) return false;
-    const list = this.current ?? [];
+    const list = this.visible;
+    if (data === "a") {
+      this.showAll = !this.showAll;
+      const rows = this.visible;
+      if (!rows.some(a => ref(a) === this.selected)) this.selected = rows[0] && ref(rows[0]);
+      this.opened = undefined; this.options.changed(); return true;
+    }
     if (data === "j" || data === "k" || matchesKey(data, "down") || matchesKey(data, "up")) {
       const index = list.findIndex(a => ref(a) === this.selected);
       const next = list[Math.max(0, Math.min(list.length - 1, index + (data === "j" || matchesKey(data, "down") ? 1 : -1)))];
@@ -285,13 +297,14 @@ export class ArtifactView implements Component {
   render(width: number): string[] {
     const lines: string[] = []; this.hits.clear();
     const full = (text: string) => lines.push(...wrap(PANEL_TEXT + text, width));
-    const { identity } = this.options, data = this.current, items = data ?? [];
+    const { identity } = this.options, data = this.current, items = this.visible, hidden = (data?.length ?? 0) - items.length;
     const back = backLine("Proof", "Artifacts", identity.task ?? "no task", width);
     this.backTo = back.to; lines.push(back.line);
     const state = this.state, legend = this.options.legend?.() ?? false;
     lines.push(...chipHeader([
       ...(state.phase === "not_applicable" ? [] : [chip("canonical catalog")]),
       ...(data ? [chip(`${items.length} ${items.length === 1 ? "artifact" : "artifacts"}, newest first`)] : []),
+      ...(data && hidden > 0 ? [chip(`${hidden} hidden · a shows all`)] : data && this.showAll ? [chip("all shown · a hides records")] : []),
       ...this.marks.map((m, i) => chip(`${i ? "B" : "A"} ${stripTerminalSequences(truncateToWidth(plainLabel(this.entry(m)?.title ?? m), 24, "…"))}`)),
     ], width, state, Date.now(), { unbound: !this.options.bound() }));
     lines.push(...stateBanner(state, "artifact catalog", width, legend));

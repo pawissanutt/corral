@@ -22,8 +22,8 @@ const row = (id: number, title: string, extra: Partial<ArtifactCatalog[number]> 
 });
 /** The engine's `artifact list` order: oldest first. */
 const catalog: ArtifactCatalog = [
-  row(1, "notes.md", { kind: null, by: "owner" }),
-  row(2, "shot.png", { kind: "screenshot", sha256: sha(png), bytes: png.length }),
+  row(1, "notes.md", { kind: "reference", by: "owner" }),
+  row(2, "shot.png", { kind: "evidence", sha256: sha(png), bytes: png.length }),
   row(3, "report.md"),
   row(4, "changed.md", { sha256: "0".repeat(64) }),
 ];
@@ -41,6 +41,20 @@ const text = (view: ArtifactView, width = 100) => view.render(width).map(row => 
 /** One macrotask turn: the viewer and export promises Enter and x start have settled. */
 const settle = () => { const { promise, resolve } = Promise.withResolvers<void>(); setImmediate(resolve); return promise; };
 
+test("an extension row and a legacy row parse and render; the default list omits diff and replaced rows, a toggle shows them", async () => {
+  const { view } = harness([...catalog, row(6, "ext.md", { by: "extension", kind: "legacy" }), row(7, "change.diff", { kind: "diff" }),
+    row(8, "old.md", { replaced_by: "T-1:3" })]);
+  await view.refresh();
+  expect(view.state.phase).not.toBe("failed");
+  const shown = text(view);
+  expect(shown).toContain("4 artifacts, newest first"); expect(shown).toContain("3 hidden · a shows all");
+  for (const name of ["ext.md", "change.diff", "old.md"]) expect(shown).not.toContain(name);
+  view.handleInput("a");
+  const all = text(view);
+  expect(all).toContain("7 artifacts, newest first");
+  for (const name of ["ext.md", "change.diff", "old.md"]) expect(all).toContain(name);
+});
+
 test("catalog renders newest first with its provenance and reads no content", async () => {
   const { view, calls, reads } = harness(catalog);
   await view.refresh();
@@ -54,13 +68,13 @@ test("catalog renders newest first with its provenance and reads no content", as
   expect(shown).toContain("Added 2026-01-04T00:00:00Z");
   expect(shown).toContain("bytes not re-hashed");
   view.handleInput("j"); view.handleInput("j"); view.handleInput("j");
-  expect(text(view)).toContain("Kind — By owner");
+  expect(text(view)).toContain("Kind reference By owner");
   expect(view.render(52).every(row => visibleWidth(row) <= 52)).toBe(true);
   expect(calls).toEqual([]);
 });
 
 test("Enter shows text whose bytes match; changed bytes and other binary content are not shown", async () => {
-  const { view, calls, images } = harness([...catalog, row(5, "core.bin", { kind: "dump" })]);
+  const { view, calls, images } = harness([...catalog, row(5, "core.bin", { kind: "evidence" })]);
   const capabilities = getCapabilities();
   try {
     setCapabilities({ ...capabilities, images: null });

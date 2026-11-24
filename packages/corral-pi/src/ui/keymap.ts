@@ -240,7 +240,7 @@ function viewHints(state: HintState): Hint[] {
       return pick(J_K("section", "section"), ENTER("expand"), letter("a", "artifacts"), legend, letter("r", "refresh"), ESC("chat"));
     case "artifacts":
       return pick(J_K("select", "select"), ENTER("open"), ESC("proof"), letter("m", "mark"), letter("c", "compare"),
-        letter("x", "export"), legend, letter("r", "refresh"));
+        letter("a", "all"), letter("x", "export"), legend, letter("r", "refresh"));
     case "usage":
       return pick(UP_DOWN("scroll", "scroll"), ...escAfterFirst([legend], "chat"));
     case "sidebar":
