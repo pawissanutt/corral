@@ -1,17 +1,87 @@
-use std::{io::Read as _, ops::Range, path::Path};
+use std::{borrow::Cow, io::Read as _, ops::Range, path::Path};
 
 use anyhow::{Context, Result};
 use corral_types::{Artifact, Reference, references_in, section_slug};
 use pulldown_cmark::{Event, Parser, Tag, TagEnd};
+use rusqlite::params;
 use serde::Serialize;
 
-use crate::{ArtifactKind, Engine, Store, refuse};
+use crate::{ArtifactKind, Engine, Store, refuse, store::encode};
 
 /// A citation from task text and the immutable catalog row it names, if resolvable.
 #[derive(Debug, Serialize)]
 pub struct ArtifactCitation {
     pub reference: String,
     pub artifact: Option<Artifact>,
+}
+
+/// File-sourced artifacts carry a format hint in their catalog document, not
+/// in their blob or API title. Older and byte-sourced rows have no such hint.
+#[derive(Clone, Copy)]
+pub(crate) enum ArtifactSource {
+    Markdown,
+    Other,
+    Unknown,
+}
+
+impl ArtifactSource {
+    pub(crate) fn from_path(path: &Path) -> Self {
+        match path.extension() {
+            Some(ext) if ext.to_str().is_some_and(is_markdown_extension) => Self::Markdown,
+            Some(_) => Self::Other,
+            None => Self::Unknown,
+        }
+    }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Markdown => "markdown",
+            Self::Other => "other",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+pub(crate) fn encode_artifact_record(
+    artifact: &Artifact,
+    source: Option<ArtifactSource>,
+) -> Result<String> {
+    #[derive(Serialize)]
+    struct Record<'a> {
+        #[serde(flatten)]
+        artifact: &'a Artifact,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        source_format: Option<&'static str>,
+    }
+    let artifact = if artifact.replaced_by.is_some() {
+        Cow::Owned(Artifact {
+            replaced_by: None,
+            ..artifact.clone()
+        })
+    } else {
+        Cow::Borrowed(artifact)
+    };
+    encode(&Record {
+        artifact: &artifact,
+        source_format: source.map(ArtifactSource::as_str),
+    })
+}
+
+impl Store {
+    fn artifact_is_markdown(&self, artifact: &Artifact) -> Result<Option<bool>> {
+        let mut lookup = self.connection.prepare_cached(
+            "SELECT json_extract(document, '$.source_format') FROM artifact_catalog WHERE owner=?1 AND ordinal=?2",
+        ).context("prepare artifact source lookup")?;
+        let format: Option<String> = lookup
+            .query_row(params![artifact.task, artifact.id], |row| row.get(0))
+            .context("look up artifact source format")?;
+        Ok(match format.as_deref() {
+            Some("markdown") => Some(true),
+            Some("other") => Some(false),
+            Some(_) => None,
+            None => markdown_title(&artifact.title),
+        })
+    }
 }
 
 impl Engine {
@@ -71,7 +141,7 @@ impl Engine {
             return Ok(None);
         };
         if let Some(section) = reference.section() {
-            self.artifact_section(&artifact, section)?;
+            self.artifact_section(store, &artifact, section)?;
         } else {
             self.open_artifact_blob(&artifact)?;
         }
@@ -83,7 +153,7 @@ impl Engine {
         let (address, section) = artifact_selector(reference);
         let artifact = self.require_artifact(address)?;
         if let Some(section) = section {
-            self.artifact_section(&artifact, section)?;
+            self.artifact_section(&self.store, &artifact, section)?;
         }
         Ok(artifact)
     }
@@ -93,7 +163,7 @@ impl Engine {
         let (address, section) = artifact_selector(reference);
         let artifact = self.require_artifact(address)?;
         if let Some(section) = section {
-            return self.artifact_section(&artifact, section);
+            return self.artifact_section(&self.store, &artifact, section);
         }
         self.artifact_bytes(&artifact)
     }
@@ -106,8 +176,12 @@ impl Engine {
         Ok(bytes)
     }
 
-    fn artifact_section(&self, artifact: &Artifact, section: &str) -> Result<Vec<u8>> {
-        let bytes = self.artifact_bytes(artifact)?;
+    fn artifact_section(
+        &self,
+        store: &Store,
+        artifact: &Artifact,
+        section: &str,
+    ) -> Result<Vec<u8>> {
         let reference = artifact.reference();
         let not_markdown = || {
             refuse(
@@ -117,15 +191,13 @@ impl Engine {
                 vec![],
             )
         };
-        let text = std::str::from_utf8(&bytes).map_err(|_| not_markdown())?;
-        if text.contains('\0') {
+        let explicit = store.artifact_is_markdown(artifact)?;
+        if explicit == Some(false) {
             return Err(not_markdown());
         }
-        // The catalog has a title rather than a media type. Honor a file
-        // extension when present, and otherwise allow custom-titled Markdown
-        // with headings, unless the kind or contents identify another format.
-        let explicit = markdown_title(&artifact.title);
-        if explicit == Some(false)
+        let bytes = self.artifact_bytes(artifact)?;
+        let text = std::str::from_utf8(&bytes).map_err(|_| not_markdown())?;
+        if text.contains('\0')
             || (explicit.is_none()
                 && (text.starts_with("#!")
                     || matches!(
@@ -186,10 +258,11 @@ fn markdown_title(title: &str) -> Option<bool> {
     {
         return None;
     }
-    Some(matches!(
-        extension.to_ascii_lowercase().as_str(),
-        "md" | "markdown"
-    ))
+    Some(is_markdown_extension(extension))
+}
+
+fn is_markdown_extension(extension: &str) -> bool {
+    extension.eq_ignore_ascii_case("md") || extension.eq_ignore_ascii_case("markdown")
 }
 
 struct Heading {
@@ -201,29 +274,25 @@ struct Heading {
 fn markdown_headings(text: &str) -> Vec<Heading> {
     let mut events = Parser::new(text).into_offset_iter();
     let mut headings = Vec::new();
-    let mut depth = 0usize;
     while let Some((event, range)) = events.next() {
-        match event {
-            Event::Start(Tag::Heading { level, .. }) if depth == 0 => {
-                let mut words = String::new();
-                for (event, _) in events.by_ref() {
-                    match event {
-                        Event::End(TagEnd::Heading(_)) => break,
-                        Event::Text(text) | Event::Code(text) => words.push_str(&text),
-                        Event::SoftBreak | Event::HardBreak => words.push(' '),
-                        _ => {}
-                    }
-                }
-                headings.push(Heading {
-                    slug: section_slug(&words),
-                    level: level as u8,
-                    start: text[..range.start].rfind('\n').map_or(0, |i| i + 1),
-                });
+        let Event::Start(Tag::Heading { level, .. }) = event else {
+            continue;
+        };
+        let mut words = String::new();
+        for (event, _) in events.by_ref() {
+            match event {
+                Event::End(TagEnd::Heading(_)) => break,
+                Event::Text(text) | Event::Code(text) => words.push_str(&text),
+                Event::SoftBreak | Event::HardBreak => words.push(' '),
+                _ => {}
             }
-            Event::Start(_) => depth += 1,
-            Event::End(_) => depth -= 1,
-            _ => {}
         }
+        headings.push(Heading {
+            slug: section_slug(&words),
+            level: level as u8,
+            // Use the physical source line, including any quote or list marker.
+            start: text[..range.start].rfind(['\n', '\r']).map_or(0, |i| i + 1),
+        });
     }
     headings
 }

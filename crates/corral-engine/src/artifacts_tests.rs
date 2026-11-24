@@ -118,8 +118,10 @@ fn markdown_sections_return_exact_source_and_explain_missing_sections() {
     let task = "T-012";
     engine.store.insert_task(&crate::tests::task(task)).unwrap();
     let fact = "## 4. Fact model\r\n\r\n```md\r\n# Not a heading\r\n```\r\n\r\n### *Detail*\r\nmore\r\n\r\n";
+    let quote = "> ## Quoted section\r\n>\r\n> quoted text\r\n>\r\n> ```md\r\n> # Not a heading either\r\n> ```\r\n\r\n";
+    let item = "- ## List section\r\n\r\n  list text\r\n\r\n";
     let last = "Last topic\r\n----------\r\nend\r\n";
-    let markdown = format!("# Start\r\n\r\n{fact}{last}");
+    let markdown = format!("# Start\r\n\r\n{fact}{quote}{item}{last}");
     let artifact = engine
         .add_artifact_bytes(
             task,
@@ -129,7 +131,12 @@ fn markdown_sections_return_exact_source_and_explain_missing_sections() {
         )
         .unwrap();
     let reference = artifact.reference();
-    for (section, expected) in [("4-fact-model", fact), ("last-topic", last)] {
+    for (section, expected) in [
+        ("4-fact-model", fact),
+        ("quoted-section", quote),
+        ("list-section", item),
+        ("last-topic", last),
+    ] {
         assert_eq!(
             engine
                 .show_artifact(&format!("{reference}#{section}"))
@@ -146,7 +153,7 @@ fn markdown_sections_return_exact_source_and_explain_missing_sections() {
         .unwrap_err()
         .to_string();
     assert!(
-        unknown.contains("start, 4-fact-model, detail, last-topic"),
+        unknown.contains("start, 4-fact-model, detail, quoted-section, list-section, last-topic"),
         "{unknown}"
     );
     for (title, kind, bytes) in [
@@ -173,6 +180,53 @@ fn markdown_sections_return_exact_source_and_explain_missing_sections() {
             .to_string();
         assert!(error.contains("not Markdown"), "{error}");
     }
+}
+
+#[test]
+fn markdown_sections_use_the_attached_source_format_after_reopen() {
+    let root = crate::tests::tempdir();
+    let engine = Engine::init(root.path(), None).unwrap();
+    let task = "T-012";
+    engine.store.insert_task(&crate::tests::task(task)).unwrap();
+    // Identical bytes can be Markdown or a configuration file; format belongs to
+    // the attachment, not the content hash or the chosen display title.
+    let bytes = b"# Configuration\nsetting = true\n";
+    let attach = |filename, title| {
+        let path = root.path().join(filename);
+        fs::write(&path, bytes).unwrap();
+        engine
+            .add_artifact(task, &path, ArtifactKind::Reference, Some(title))
+            .unwrap()
+    };
+    let design = attach("design.md", "Design.rev");
+    let settings = attach("settings.toml", "Runtime settings");
+    attach("settings.toml", "design.md"); // Same display title and bytes as the upcoming scan.
+    assert_eq!(design.sha256, settings.sha256);
+    drop(engine);
+    let engine = Engine::open(root.path()).unwrap();
+    let section = |artifact: &crate::Artifact| format!("{}#configuration", artifact.reference());
+    assert_eq!(engine.show_artifact(&section(&design)).unwrap(), bytes);
+    let error = engine
+        .show_artifact(&section(&settings))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("not Markdown"), "{error}");
+
+    let path = root.path().join("design.md");
+    for _ in 0..2 {
+        engine
+            .store
+            .transaction(|store| {
+                engine.add_scanned_artifact_in(store, engine.artifact_target(task, None), &path)
+            })
+            .unwrap();
+    }
+    let artifacts = engine.list_artifacts(Some(task)).unwrap();
+    assert_eq!(artifacts.len(), 4, "scan adds the Markdown record once");
+    assert_eq!(
+        engine.show_artifact(&section(&artifacts[3])).unwrap(),
+        bytes
+    );
 }
 
 #[test]

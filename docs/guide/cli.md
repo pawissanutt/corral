@@ -4401,8 +4401,10 @@ corral-next artifact show 'T-012:3#4-fact-model'
 
 The command prints the original Markdown from that heading up to the next heading of
 an equal or higher level (or the end). An unknown section lists the available section
-names; a non-Markdown artifact cannot be read by section. Use a `.md` or `.markdown`
-filename or title to identify Markdown explicitly.
+names; a non-Markdown artifact cannot be read by section. For file attachments, the
+source filename identifies Markdown (`.md` or `.markdown`), regardless of the artifact's
+display title. Headings in quotes or lists can be cited; heading-like lines inside code
+fences cannot.
 
 ```sh
 corral-next new 'Implement the design' --body-file task.md --attach design.md --attach notes.md --json

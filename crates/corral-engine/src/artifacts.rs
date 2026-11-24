@@ -16,11 +16,12 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     ArtifactKind, Engine,
+    citations::{ArtifactSource, encode_artifact_record},
     config::reserved_project_name,
     error::refuse,
     events::{EventKind, NewEvent},
     model::Actor,
-    store::{Store, encode},
+    store::Store,
 };
 
 /// Narrow the artifact finder before applying its page bounds.
@@ -94,18 +95,16 @@ pub(crate) fn prepare_read_only_catalog(store: &Store) -> Result<()> {
 
 impl Store {
     pub fn insert_artifact(&self, artifact: &Artifact) -> Result<()> {
-        self.insert_owned_artifact(ArtifactOwner::Task(&artifact.task), artifact)
+        self.insert_owned_artifact(ArtifactOwner::Task(&artifact.task), artifact, None)
     }
 
-    fn insert_owned_artifact(&self, owner: ArtifactOwner<'_>, artifact: &Artifact) -> Result<()> {
-        let document = if artifact.replaced_by.is_some() {
-            encode(&Artifact {
-                replaced_by: None,
-                ..artifact.clone()
-            })?
-        } else {
-            encode(artifact)?
-        };
+    fn insert_owned_artifact(
+        &self,
+        owner: ArtifactOwner<'_>,
+        artifact: &Artifact,
+        source: Option<ArtifactSource>,
+    ) -> Result<()> {
+        let document = encode_artifact_record(artifact, source)?;
         let insert = match owner {
             ArtifactOwner::Task(_) => {
                 "INSERT INTO artifacts(task,ordinal,sha256,document) VALUES(?1,?2,?3,?4)"
@@ -134,12 +133,24 @@ impl Store {
             .context("allocate artifact reference")
     }
 
-    fn has_artifact_content(&self, task: &str, title: &str, sha256: &str) -> Result<bool> {
+    fn has_artifact_content(
+        &self,
+        task: &str,
+        title: &str,
+        content: &ArtifactContent<'_>,
+    ) -> Result<bool> {
+        // Legacy rows lack a format hint and keep deduplicating by filename/title.
         self.connection
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM artifact_catalog WHERE owner=?1 AND sha256=?2
-                    AND json_extract(document, '$.title')=?3)",
-                params![task, sha256, title],
+                    AND json_extract(document, '$.title')=?3
+                    AND coalesce(json_extract(document, '$.source_format'), ?4) IS ?4)",
+                params![
+                    task,
+                    content.hash,
+                    title,
+                    content.source.map(ArtifactSource::as_str)
+                ],
                 |row| row.get(0),
             )
             .context("check for an unchanged scanned artifact")
@@ -359,6 +370,22 @@ pub(crate) struct ArtifactTarget<'a> {
     pub replaces: Option<&'a str>,
 }
 
+struct ArtifactContent<'a> {
+    bytes: &'a [u8],
+    hash: String,
+    source: Option<ArtifactSource>,
+}
+
+impl<'a> ArtifactContent<'a> {
+    fn new(bytes: &'a [u8], path: Option<&Path>) -> Self {
+        Self {
+            bytes,
+            hash: format!("{:x}", Sha256::digest(bytes)),
+            source: path.map(ArtifactSource::from_path),
+        }
+    }
+}
+
 impl Engine {
     pub fn add_artifact(
         &self,
@@ -508,7 +535,13 @@ impl Engine {
     ) -> Result<Artifact> {
         let bytes = read_artifact_file(target.owner.id(), path, max)?;
         let filename = artifact_filename(path);
-        self.add_artifact_in(store, target, &bytes, kind, title.unwrap_or(&filename))
+        self.publish_artifact_in(
+            store,
+            target,
+            ArtifactContent::new(&bytes, Some(path)),
+            kind,
+            title.unwrap_or(&filename),
+        )
     }
 
     pub(crate) fn add_scanned_artifact_in(
@@ -520,9 +553,9 @@ impl Engine {
         let owner = target.owner.id();
         let bytes = read_artifact_file(owner, path, Some(self.config.artifacts.max_bytes))?;
         let title = artifact_filename(path);
-        let hash = format!("{:x}", Sha256::digest(&bytes));
-        if !store.has_artifact_content(owner, &title, &hash)? {
-            self.publish_artifact_in(store, target, &bytes, ArtifactKind::Report, &title, hash)?;
+        let content = ArtifactContent::new(&bytes, Some(path));
+        if !store.has_artifact_content(owner, &title, &content)? {
+            self.publish_artifact_in(store, target, content, ArtifactKind::Report, &title)?;
         }
         Ok(())
     }
@@ -535,19 +568,28 @@ impl Engine {
         kind: ArtifactKind,
         title: &str,
     ) -> Result<Artifact> {
-        let hash = format!("{:x}", Sha256::digest(bytes));
-        self.publish_artifact_in(store, target, bytes, kind, title, hash)
+        self.publish_artifact_in(
+            store,
+            target,
+            ArtifactContent::new(bytes, None),
+            kind,
+            title,
+        )
     }
 
     fn publish_artifact_in(
         &self,
         store: &Store,
         target: ArtifactTarget<'_>,
-        bytes: &[u8],
+        content: ArtifactContent<'_>,
         kind: ArtifactKind,
         title: &str,
-        hash: String,
     ) -> Result<Artifact> {
+        let ArtifactContent {
+            bytes,
+            hash,
+            source,
+        } = content;
         if kind == ArtifactKind::Legacy {
             return Err(refuse("legacy is reserved for existing artifacts", vec![]));
         }
@@ -574,7 +616,7 @@ impl Engine {
             replaces: target.replaces.map(str::to_owned),
             replaced_by: None,
         };
-        store.insert_owned_artifact(target.owner, &artifact)?;
+        store.insert_owned_artifact(target.owner, &artifact, source)?;
         let mut detail = json!({"reference":artifact.reference(),"sha256":artifact.sha256,"bytes":artifact.bytes,"title":artifact.title,"kind":artifact.kind});
         if let Some(reference) = target.replaces {
             detail["replaces"] = json!(reference);
