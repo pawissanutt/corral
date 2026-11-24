@@ -182,6 +182,30 @@ impl Engine {
         artifact: &Artifact,
         section: &str,
     ) -> Result<Vec<u8>> {
+        let (mut bytes, range) = self.section_source(store, artifact, section)?;
+        bytes.truncate(range.end);
+        Ok(bytes.split_off(range.start))
+    }
+
+    /// Where a cited section lies in the artifact's stored bytes, by the rules `show_artifact`
+    /// cuts it with. One read of the source, so a reader can then page the section from the
+    /// blob without reading the source again.
+    pub fn artifact_section_range(
+        &self,
+        artifact: &Artifact,
+        section: &str,
+    ) -> Result<Range<usize>> {
+        Ok(self.section_source(&self.store, artifact, section)?.1)
+    }
+
+    /// The artifact's stored bytes and where `section` lies in them; refused when it is not
+    /// Markdown or has no such section.
+    fn section_source(
+        &self,
+        store: &Store,
+        artifact: &Artifact,
+        section: &str,
+    ) -> Result<(Vec<u8>, Range<usize>)> {
         let reference = artifact.reference();
         let not_markdown = || {
             refuse(
@@ -217,7 +241,7 @@ impl Engine {
             .find(|(_, heading)| heading.slug == section)
         {
             let range = section_range(text, &headings[i + 1..], hit);
-            return Ok(bytes[range].to_vec());
+            return Ok((bytes, range));
         }
         let mut slugs = headings
             .iter()

@@ -202,7 +202,14 @@ pub enum DetailRef {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         time_zone: Option<String>,
     },
+    /// An artifact's content; a citation naming a section (`T-12:3#goal`) serves that
+    /// section's source as the engine cuts it.
     Artifact {
+        reference: String,
+    },
+    /// Whether an artifact citation (`T-12:3`, `T-12:3#goal`) resolves, without its content
+    /// (`citations.v1`).
+    Citation {
         reference: String,
     },
     Artifacts {
@@ -284,6 +291,7 @@ pub enum DetailBody {
     Burnup(Burnup),
     UsageSeries(UsageSeries),
     Artifact(ArtifactPage),
+    Citation(CitationDetail),
     Artifacts(ArtifactsPage),
     Closed(ClosedPage),
     #[serde(other, deserialize_with = "skip_body")]

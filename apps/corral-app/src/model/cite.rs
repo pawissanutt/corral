@@ -2,14 +2,15 @@
 //! `T-12:3#section` a section of it. They are found with corral-types' grammar
 //! (`references_in`), never a parser of the app's, and resolved against the task details the
 //! app reads: a task resolves when corrald serves its detail, an artifact (or a section of one)
-//! when corrald serves its content under the citation, which the engine resolves by its own
-//! rules. Until then a citation is being looked up; once corrald answers `not_found` it is not
+//! when corrald answers the citation (`DetailRef::Citation`), resolved by the engine's rules
+//! without sending its content, which is read only when the viewer opens it. Until then a citation is being looked up; once corrald answers `not_found` it is not
 //! found, stays plain text and opens nothing; any other failure leaves it unknown.
 
-use corral_protocol::detail::DetailRef;
+use corral_protocol::app::CITATIONS_V1;
+use corral_protocol::detail::{DetailBody, DetailRef};
 use corral_types::{Artifact, references_in};
 
-use crate::model::artifacts::{content_target, display_kind};
+use crate::model::artifacts::display_kind;
 use crate::model::daemon::Feed;
 use crate::model::work::{loaded_task, task_ref};
 use crate::model::{Effect, Id, Live};
@@ -37,7 +38,7 @@ pub struct Cite {
 }
 
 impl Cite {
-    /// What corrald is asked for to resolve an artifact citation: the artifact, or its section.
+    /// What corrald is asked about for an artifact citation: the artifact, or its section.
     pub fn read(&self) -> Option<String> {
         let artifact = self.artifact.as_deref()?;
         Some(match &self.section {
@@ -84,11 +85,11 @@ pub fn cites_in<'a>(texts: impl IntoIterator<Item = &'a str>) -> Vec<Cite> {
 }
 
 /// The details that resolve `cites`, each once: every cited task's, and for an artifact
-/// citation the content corrald serves under it, which says whether it opens.
+/// citation corrald's answer whether it resolves, which carries none of its content.
 pub fn targets(cites: &[Cite]) -> Vec<DetailRef> {
     let mut targets: Vec<DetailRef> = Vec::new();
     for cite in cites {
-        let content = cite.read().map(|read| content_target(&read));
+        let content = cite.read().map(|read| citation_ref(&read));
         for target in std::iter::once(task_ref(&cite.task)).chain(content) {
             if !targets.contains(&target) {
                 targets.push(target);
@@ -130,8 +131,15 @@ fn task(feed: &Feed, id: &str) -> Result<Option<String>, Found> {
     })
 }
 
+/// The request that resolves an artifact citation without reading its content.
+pub fn citation_ref(reference: &str) -> DetailRef {
+    DetailRef::Citation {
+        reference: reference.to_owned(),
+    }
+}
+
 /// The cited artifact among every artifact row the app holds: the task's detail first, then
-/// the finder's served pages.
+/// a citation corrald resolved, then the finder's served pages.
 pub fn held(feed: &Feed, reference: &str, task: &str) -> Option<Artifact> {
     if let Some(detail) = loaded_task(feed, task) {
         return detail
@@ -144,7 +152,10 @@ pub fn held(feed: &Feed, reference: &str, task: &str) -> Option<Artifact> {
         .values()
         .flat_map(|cache| cache.bodies())
         .find_map(|body| match body {
-            corral_protocol::detail::DetailBody::Artifacts(page) => page
+            DetailBody::Citation(found) if found.artifact.reference() == reference => {
+                Some(found.artifact.clone())
+            }
+            DetailBody::Artifacts(page) => page
                 .rows
                 .iter()
                 .find(|row| row.reference() == reference)
@@ -166,25 +177,24 @@ pub fn resolve(feed: &Feed, cite: &Cite) -> Found {
     if task == Err(Found::Missing) {
         return Found::Missing;
     }
-    let content = feed.detail(&content_target(&read));
-    let error = content.and_then(|cache| cache.error.as_ref());
+    // An older corrald cannot resolve one without its content, which is not read here.
+    if !feed.capable(CITATIONS_V1) {
+        return Found::Unavailable;
+    }
+    let probe = feed.detail(&citation_ref(&read));
+    let error = probe.and_then(|cache| cache.error.as_ref());
     if error.is_some_and(|error| error.code == "not_found") {
         return Found::Missing;
     }
-    // Any other failure leaves it unknown, even over content an earlier read cached.
+    // Any other failure leaves it unknown, even over an answer an earlier read cached.
     if error.is_some() || task == Err(Found::Unavailable) {
         return Found::Unavailable;
     }
-    if !content.is_some_and(|cache| cache.body().is_some()) {
-        return Found::Looking;
-    }
-    // corrald served it, so it exists: a detail that does not list it yet is behind.
-    match held(feed, address, &cite.task) {
-        Some(artifact) => Found::Artifact(Box::new(artifact)),
-        None => match task {
-            Err(found) => found,
-            Ok(_) => Found::Looking,
-        },
+    match probe.and_then(|cache| cache.body()) {
+        Some(DetailBody::Citation(found)) if found.artifact.reference() == address => {
+            Found::Artifact(Box::new(found.artifact.clone()))
+        }
+        _ => Found::Looking,
     }
 }
 
@@ -201,12 +211,12 @@ pub fn versions(feed: &Feed, cites: &[Cite]) -> Vec<Option<String>> {
         .collect()
 }
 
-/// The content reads of `cites` corrald answered with an error, asked again once a cited
+/// The citation reads of `cites` corrald answered with an error, asked again once a cited
 /// task's detail changes (an artifact attached since, a blob restored): a miss is not kept.
 pub fn failed_reads(feed: &Feed, cites: &[Cite]) -> Vec<DetailRef> {
     targets(cites)
         .into_iter()
-        .filter(|target| matches!(target, DetailRef::Artifact { .. }))
+        .filter(|target| matches!(target, DetailRef::Citation { .. }))
         .filter(|target| {
             feed.detail(target)
                 .is_some_and(|cache| cache.error.is_some())
@@ -321,18 +331,19 @@ mod tests {
         );
     }
 
-    /// Only corrald's `not_found` (for the task, or for the content served under the citation,
-    /// which is where the engine decides a section or a blob is missing) makes a citation not
+    /// Only corrald's `not_found` (for the task, or for the citation, which is where the engine
+    /// decides a section or a blob is missing) makes a citation not
     /// found; any other failure leaves it unknown. Either way nothing opens. A zero-padded
     /// ordinal names the artifact the engine reads, under the label as written.
     #[test]
     fn only_corralds_not_found_makes_a_citation_not_found_and_neither_opens() {
         let mut feed = Feed::default();
+        feed.capabilities.insert(CITATIONS_V1.into());
         let [missing, failing, padded] =
             ["T-404", "T-5:2#goal", "T-6:03#goal"].map(|text| cites(text).remove(0));
         failed(&mut feed, task_ref("T-404"), "not_found");
-        failed(&mut feed, content_target("T-5:2#goal"), "unavailable");
-        failed(&mut feed, content_target("T-6:3#goal"), "not_found");
+        failed(&mut feed, citation_ref("T-5:2#goal"), "unavailable");
+        failed(&mut feed, citation_ref("T-6:3#goal"), "not_found");
         assert_eq!(padded.text, "T-6:03#goal");
         assert_eq!(padded.read().as_deref(), Some("T-6:3#goal"));
         for (cite, said) in [
@@ -346,5 +357,61 @@ mod tests {
                 cite.text
             );
         }
+    }
+
+    /// Showing a citation must not read what it cites: a large artifact would be downloaded
+    /// (and could overflow the device's bound) just because its citation is on screen. corrald's
+    /// answer alone opens it at its section.
+    #[test]
+    fn a_shown_citation_reads_no_content_and_opens_on_corralds_answer() {
+        use crate::model::daemon::{DetailCache, detail_key};
+        use corral_protocol::detail::CitationDetail;
+        use corral_types::{Actor, ArtifactKind};
+
+        let cite = cites("see T-7:1#goal").remove(0);
+        assert!(
+            targets(std::slice::from_ref(&cite))
+                .iter()
+                .all(|target| !matches!(target, DetailRef::Artifact { .. })),
+        );
+        let mut feed = Feed::default();
+        feed.capabilities.insert(CITATIONS_V1.into());
+        let artifact = Artifact {
+            task: "T-7".into(),
+            id: 1,
+            sha256: "0".repeat(64),
+            bytes: 30_000_000,
+            kind: ArtifactKind::Reference,
+            title: "design.md".into(),
+            at: jiff::Timestamp::UNIX_EPOCH,
+            by: Actor::Owner,
+            project: None,
+            run: None,
+            replaces: None,
+            replaced_by: None,
+        };
+        let target = citation_ref("T-7:1#goal");
+        feed.details.insert(
+            detail_key(&target),
+            DetailCache {
+                transcript_seams: Default::default(),
+                target,
+                pages: Vec::new(),
+                loading: false,
+                stale: false,
+                error: None,
+                merged: Some(DetailBody::Citation(CitationDetail {
+                    artifact,
+                    section_bytes: Some(120),
+                })),
+            },
+        );
+        assert_eq!(
+            press(&feed, &cite),
+            [Effect::OpenArtifact {
+                reference: "T-7:1".into(),
+                section: Some("goal".into()),
+            }]
+        );
     }
 }

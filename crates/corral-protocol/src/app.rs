@@ -31,6 +31,8 @@ pub const SYSTEM_ENTRIES_V1: &str = "system.entries.v1";
 pub const SYSTEM_LENSES_V1: &str = "system.lenses.v1";
 /// Data model impact rows in `system_review`.
 pub const SYSTEM_DATA_V1: &str = "system.data.v1";
+/// Resolve task-text citations without their content (`DetailRef::Citation`).
+pub const CITATIONS_V1: &str = "citations.v1";
 pub const REVIEW_V1: &str = "review.v1";
 pub const TIMELINE_V1: &str = "timeline.v1";
 pub const USAGE_V1: &str = "usage.v1";

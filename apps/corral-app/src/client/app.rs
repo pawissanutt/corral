@@ -56,6 +56,7 @@ pub(super) const CAPS: &[&str] = &[
     corral_protocol::config::PI_STARTUP_V1,
     ASSISTANT_V1,
     CLOSED_V1,
+    CITATIONS_V1,
     ASSISTANT_ATTACH_V1,
     SESSION_V1,
     SESSION_FLEET_V1,

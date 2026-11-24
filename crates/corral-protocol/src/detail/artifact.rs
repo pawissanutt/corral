@@ -18,6 +18,17 @@ pub struct ArtifactPage {
     pub truncated: bool,
 }
 
+/// A task-text citation that resolves, as the engine resolves it, without its content: the
+/// cited artifact's catalog row, and the size of the cited section's source when it names one.
+/// One that does not resolve is answered `not_found`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct CitationDetail {
+    #[schemars(with = "crate::schema_types::Artifact")]
+    pub artifact: Artifact,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section_bytes: Option<u64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ArtifactsPage {
     #[schemars(with = "Vec<crate::schema_types::Artifact>")]

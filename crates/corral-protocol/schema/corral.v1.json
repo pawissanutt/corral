@@ -1883,6 +1883,26 @@
         ],
         "type": "object"
       },
+      "CitationDetail": {
+        "description": "A task-text citation that resolves, as the engine resolves it, without its content: the\ncited artifact's catalog row, and the size of the cited section's source when it names one.\nOne that does not resolve is answered `not_found`.",
+        "properties": {
+          "artifact": {
+            "$ref": "#/components/schemas/Artifact"
+          },
+          "section_bytes": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "artifact"
+        ],
+        "type": "object"
+      },
       "ClientInfo": {
         "properties": {
           "kind": {
@@ -2681,6 +2701,22 @@
           {
             "properties": {
               "body": {
+                "$ref": "#/components/schemas/CitationDetail"
+              },
+              "kind": {
+                "const": "citation",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "body": {
                 "$ref": "#/components/schemas/ArtifactsPage"
               },
               "kind": {
@@ -3455,9 +3491,27 @@
             "type": "object"
           },
           {
+            "description": "An artifact's content; a citation naming a section (`T-12:3#goal`) serves that\nsection's source as the engine cuts it.",
             "properties": {
               "kind": {
                 "const": "artifact",
+                "type": "string"
+              },
+              "reference": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "reference"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Whether an artifact citation (`T-12:3`, `T-12:3#goal`) resolves, without its content\n(`citations.v1`).",
+            "properties": {
+              "kind": {
+                "const": "citation",
                 "type": "string"
               },
               "reference": {
@@ -12173,7 +12227,7 @@
             "type": "string"
           },
           "x-required-in": [
-            37
+            38
           ]
         },
         {
@@ -12257,7 +12311,7 @@
             29,
             30,
             31,
-            37
+            38
           ]
         },
         {
@@ -12430,6 +12484,10 @@
                 "type": "string"
               },
               {
+                "const": "citation",
+                "type": "string"
+              },
+              {
                 "const": "artifacts",
                 "type": "string"
               },
@@ -12510,7 +12568,8 @@
             "type": "string"
           },
           "x-required-in": [
-            35
+            35,
+            36
           ]
         },
         {

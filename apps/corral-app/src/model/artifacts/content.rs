@@ -238,6 +238,12 @@ pub fn content_of(
         Some(DetailBody::Artifact(page)) => page,
         _ => {
             let body = match &cache.error {
+                // The device's bound, not corrald's: what is cited exists and is too large to
+                // read here.
+                Some(error) if error.code == "too_large" => Body::Failed(format!(
+                    "{reference} is larger than this device reads ({}). `corral artifact show {reference}` shows all of it.",
+                    error.message.trim_end_matches('.')
+                )),
                 Some(error) => Body::Failed(format!(
                     "corrald could not serve {reference}: {}",
                     error.message

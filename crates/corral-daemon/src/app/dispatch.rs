@@ -65,6 +65,7 @@ pub(crate) fn welcome(shared: &Shared, hello: wire::Hello) -> wire::Welcome {
                         | wire::SETTINGS_V1
                         | settings::PI_STARTUP_V1
                         | wire::CLOSED_V1
+                        | app::CITATIONS_V1
                         | device::DEVICE_V1
                         | device::PUSH_V1
                 ) || system

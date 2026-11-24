@@ -16,6 +16,11 @@ pub fn detail(feed: &mut Feed, target: &DetailRef, page: Option<&str>) -> Result
     }
     match target {
         DetailRef::Artifacts { .. } => super::artifacts::list(feed, target, page),
+        DetailRef::Citation { reference } => {
+            let found = super::artifacts::citation(feed, reference)?;
+            put(feed, target.clone(), DetailBody::Citation(found));
+            Ok(())
+        }
         DetailRef::Task { id } => record(feed, id)
             .map(|_| ())
             .ok_or_else(|| format!("not_found: task {id}")),

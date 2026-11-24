@@ -1,5 +1,6 @@
 //! Read-only, bounded application projections over the simple engine.
 mod chat;
+mod citation;
 mod details;
 mod review;
 pub(crate) mod rows;

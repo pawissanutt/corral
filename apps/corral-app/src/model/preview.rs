@@ -148,6 +148,7 @@ fn base(now: u64, date: String, clock: String, time_zone: Option<jiff::tz::TimeZ
         SETTINGS_V1,
         ASSISTANT_V1,
         CLOSED_V1,
+        corral_protocol::app::CITATIONS_V1,
         DEVICE_V1,
         STREAM_TERMINAL_V1,
     ] {

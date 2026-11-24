@@ -240,6 +240,30 @@ pub(super) fn content(feed: &Feed, reference: &str) -> Result<ArtifactPage, Stri
     })
 }
 
+/// Whether a citation resolves, as corrald answers it: the cited row, and the cited section's
+/// size; any miss is not found, as `content` decides it.
+pub(super) fn citation(feed: &Feed, reference: &str) -> Result<CitationDetail, String> {
+    let page = content(feed, reference)?;
+    let rows = if page.task == LIBRARY {
+        library(feed)
+    } else {
+        record(feed, &page.task)
+            .map(|record| record.artifacts)
+            .unwrap_or_default()
+    };
+    let artifact = rows
+        .into_iter()
+        .find(|row| row.id.to_string() == page.key)
+        .ok_or_else(|| format!("not_found: artifact {reference}"))?;
+    let section_bytes = Reference::parse(reference)
+        .and_then(Reference::section)
+        .map(|_| page.content.len() as u64);
+    Ok(CitationDetail {
+        artifact,
+        section_bytes,
+    })
+}
+
 fn gate_log(record: &TaskDetail) -> String {
     record
         .checks

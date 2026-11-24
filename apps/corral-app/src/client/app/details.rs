@@ -443,7 +443,7 @@ impl AppState {
             id,
             ClientError {
                 code: "too_large".into(),
-                message: "Detail exceeds this device's bounded cache (8 MiB).".into(),
+                message: "Detail exceeds this device's bounded cache (8 MiB or 256 pages).".into(),
             },
         );
         true
