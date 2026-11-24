@@ -150,6 +150,13 @@ impl AppState {
         let Some(current) = session(&page) else {
             return self.invalid_transcript(feed, key, &id, "Expected a transcript page.".into());
         };
+        if matches!(&request.target, DetailRef::Session { id } if id == QUICK_THREAD)
+            && feed.with_untracked(|feed| crate::model::assistant::ended(feed, &current.id))
+        {
+            // A pre-End read can resolve the old alias. It must not restore that transcript
+            // under the scope where Ask will compose its next message.
+            return self.restart_detail(feed, key, id, request.target, CHANGED.into());
+        }
         let chain = self.detail_pages.get(key).map(Vec::as_slice).unwrap_or(&[]);
         let walking = request.page.is_some() && chain.is_empty();
         let next = current.older.clone();

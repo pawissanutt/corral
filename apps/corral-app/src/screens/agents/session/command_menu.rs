@@ -9,9 +9,9 @@
 use nsh_core::keymap::When;
 use nsh_core::prelude::*;
 
-use crate::model::Form;
 use crate::model::hue::Hue;
 use crate::model::session::{Action, CommandAction, SessionPage, SlashMenu, SlashRow};
+use crate::model::{Form, Id};
 use crate::state::AppState;
 use crate::ui::ask::models::session_picker;
 use crate::ui::kit::marks::hue_ink;
@@ -46,11 +46,18 @@ pub(super) fn menu(
     app: AppState,
     page: Memo<SessionPage>,
     menu: Memo<Option<SlashMenu>>,
+    ask: bool,
 ) -> AnyElement {
     let picker = computed(move || page.with(|p| p.picker.clone()));
     let list = dynamic(move || {
-        let menu = menu.get()?;
-        Some(untracked(|| slash_list(app, &menu)))
+        let mut menu = menu.get()?;
+        let session = session_of(&menu)?;
+        if let Some(why) = app.session_input_block(&session, ask) {
+            for row in &mut menu.rows {
+                row.unavailable = Some(why.into());
+            }
+        }
+        Some(untracked(|| slash_list(app, &menu, session, ask)))
     });
     view()
         .flex_none()
@@ -70,9 +77,9 @@ fn sized(form: Form, words: Text, mono: bool) -> Text {
 
 /// The open menu: its rows, the count beyond them, the read's note. ↑ ↓ move the highlight
 /// while it shows.
-fn slash_list(app: AppState, menu: &SlashMenu) -> AnyElement {
+fn slash_list(app: AppState, menu: &SlashMenu, session: Id, ask: bool) -> AnyElement {
     let form = app.form;
-    if let (Some(at), Some(session)) = (menu.at, session_of(menu)) {
+    if let Some(at) = menu.at {
         let len = menu.rows.len();
         for (key, step) in [("up", -1_isize), ("down", 1)] {
             let session = session.clone();
@@ -99,7 +106,7 @@ fn slash_list(app: AppState, menu: &SlashMenu) -> AnyElement {
         .rows
         .iter()
         .enumerate()
-        .map(|(index, row)| item(app, row, menu.at == Some(index)))
+        .map(|(index, row)| item(app, row, menu.at == Some(index), session.clone(), ask))
         .collect();
     let pad = |words: Text| {
         let line = view().child(words);
@@ -157,7 +164,7 @@ fn slash_list(app: AppState, menu: &SlashMenu) -> AnyElement {
 }
 
 /// The session the menu's rows act on, read from its Esc action.
-fn session_of(menu: &SlashMenu) -> Option<crate::model::Id> {
+fn session_of(menu: &SlashMenu) -> Option<Id> {
     match &menu.close {
         Action::Command(CommandAction::CloseMenu(session)) => Some(session.clone()),
         _ => None,
@@ -166,7 +173,7 @@ fn session_of(menu: &SlashMenu) -> Option<crate::model::Id> {
 
 /// One row: `⏎` before the highlighted one, its command and argument, what it does, where it
 /// comes from, and why it cannot run (muted) where it cannot.
-fn item(app: AppState, row: &SlashRow, highlighted: bool) -> AnyElement {
+fn item(app: AppState, row: &SlashRow, highlighted: bool, session: Id, ask: bool) -> AnyElement {
     let form = app.form;
     let enabled = row.unavailable.is_none();
     let lead = sized(
@@ -254,9 +261,7 @@ fn item(app: AppState, row: &SlashRow, highlighted: bool) -> AnyElement {
         })
         .when(enabled, |line| {
             line.cursor_pointer().on_press(move || {
-                for action in &actions {
-                    run(app, action.clone());
-                }
+                app.session_slash(&session, actions.clone(), ask);
             })
         })
         .child(lead)

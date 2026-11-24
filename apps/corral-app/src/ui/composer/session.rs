@@ -163,13 +163,7 @@ fn build(
     let scope = id.clone();
     let composer = computed(move || {
         let mut composer = composer.get()?;
-        let blocked = app.feed.with(|feed| {
-            app.assistant.with(|chats| {
-                app.session
-                    .with(|state| state.input_block(&scope, ask.is_some(), chats, feed))
-            })
-        });
-        if let Some(why) = blocked {
+        if let Some(why) = app.session_input_block(&scope, ask.is_some()) {
             composer.send.unavailable = Some(why.into());
             if let Some(queue) = &mut composer.queue {
                 queue.unavailable = Some(why.into());
@@ -262,9 +256,7 @@ fn field(
         .return_key_type(ReturnKeyType::Send)
         .on_submit(move |_: &str| {
             if let Some(actions) = command.get_untracked() {
-                for action in actions {
-                    app.session_input(action, ask.is_some());
-                }
+                app.session_slash(&id, actions, ask.is_some());
                 return;
             }
             let policy = composer.with_untracked(|c| c.as_ref().map(|c| c.send.policy));

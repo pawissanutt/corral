@@ -387,6 +387,24 @@ impl State {
         self.act(action, feed)
     }
 
+    /// A slash selection may clear the draft before running its command; fence the batch.
+    pub fn act_slash(
+        &mut self,
+        session: &Id,
+        actions: Vec<Action>,
+        ask: bool,
+        chats: &assistant::State,
+        feed: &Feed,
+    ) -> Vec<Effect> {
+        if self.input_block(session, ask, chats, feed).is_some() {
+            return Vec::new();
+        }
+        actions
+            .into_iter()
+            .flat_map(|action| self.act(action, feed))
+            .collect()
+    }
+
     /// Sends text under a new command id, which is also its input id; the echo shows it until
     /// the transcript serves a message under that id.
     fn send(

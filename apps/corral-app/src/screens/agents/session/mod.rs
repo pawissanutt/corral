@@ -128,7 +128,7 @@ pub fn page(app: AppState, id: Id) -> AnyElement {
         .child(conversation(
             app,
             true,
-            command_menu::menu(app, page, commands),
+            command_menu::menu(app, page, commands, false),
         ))
         .child(bottom(app, page, id.clone(), commands, false, true, true))
         .child(alerts(app, page))
@@ -213,7 +213,7 @@ pub fn phone(app: AppState, id: Id) -> PhonePage {
         .border_t_1()
         .border_color(color(Token::Rule))
         .child(dock::dock(app, page, false))
-        .child(command_menu::menu(app, page, commands))
+        .child(command_menu::menu(app, page, commands, false))
         .child(bottom(app, page, id, commands, false, true, false))
         .into_element();
     PhonePage {
@@ -256,7 +256,7 @@ pub fn compact(app: AppState, id: Id, page: Memo<SessionPage>, form: Compact) ->
     let tail = view()
         .flex_none()
         .child(dock::dock(app, page, false))
-        .child(command_menu::menu(app, page, commands))
+        .child(command_menu::menu(app, page, commands, !card))
         .child(bottom(app, page, id.clone(), commands, !card, !card, false))
         .when(!matches!(form, Compact::Composer | Compact::Card), |tail| {
             tail.child(status::bar(app, page, false))

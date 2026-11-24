@@ -71,6 +71,16 @@ impl AppState {
         });
     }
 
+    /// Tracked: why an input or a slash command cannot run during a thread handoff.
+    pub fn session_input_block(&self, session: &Id, ask: bool) -> Option<&'static str> {
+        self.feed.with(|feed| {
+            self.assistant.with(|chats| {
+                self.session
+                    .with(|state| state.input_block(session, ask, chats, feed))
+            })
+        })
+    }
+
     /// Run a composer or slash-menu action. The caller may retire staged attachments only
     /// if the reducer actually emitted a send, not if it held the draft during End thread.
     pub fn session_input(&self, action: crate::model::session::Action, ask: bool) -> bool {
@@ -85,6 +95,18 @@ impl AppState {
             effects
         });
         sent
+    }
+
+    pub fn session_slash(
+        &self,
+        session: &Id,
+        actions: Vec<crate::model::session::Action>,
+        ask: bool,
+    ) {
+        self.reduce(self.session, |state, feed, _, _| {
+            self.assistant
+                .with_untracked(|chats| state.act_slash(session, actions, ask, chats, feed))
+        });
     }
 
     /// Tracked: whether corrald serves the destination to this session.

@@ -103,6 +103,22 @@ fn ask_holds_its_draft_until_end_is_acknowledged_even_with_a_delayed_row() {
         )
     });
     assert!(send(&mut ask, &chats, &old).is_empty());
+    assert!(
+        feed.with_untracked(|feed| ask.act_slash(
+            &old,
+            vec![
+                session::Action::Draft {
+                    session: old.clone(),
+                    text: String::new()
+                },
+                session::Action::Command(session::CommandAction::CloseMenu(old.clone())),
+            ],
+            true,
+            &chats,
+            feed,
+        ))
+        .is_empty()
+    );
     assert_eq!(ask.ui(old.as_str()).draft, draft);
 
     let reason = "host refused End";
@@ -140,6 +156,18 @@ fn ask_holds_its_draft_until_end_is_acknowledged_even_with_a_delayed_row() {
         matches!(send(&mut ask.clone(), &chats, &old).as_slice(), [Effect::SessionSend { send, .. }] if send.id == old.as_str())
     );
 
+    let quick_detail = DetailRef::Session {
+        id: QUICK_THREAD.into(),
+    };
+    let detail = client.detail_request(
+        feed,
+        "old-quick-page".into(),
+        DetailGet {
+            target: quick_detail.clone(),
+            etag: None,
+            page: None,
+        },
+    );
     let (second, params) = end(&client, &mut chats);
     assert!(send(&mut ask, &chats, &old).is_empty());
     client
@@ -163,6 +191,33 @@ fn ask_holds_its_draft_until_end_is_acknowledged_even_with_a_delayed_row() {
     let quick = Id::from(QUICK_THREAD);
     assert_eq!(ask.ask_id(), quick);
     assert_eq!(ask.ui(QUICK_THREAD).draft, draft);
+
+    let mut old_page = empty_quick_page();
+    old_page.id = old.to_string();
+    let reread = client
+        .event(
+            feed,
+            Event::Reply {
+                method: DETAIL_GET,
+                tag: Some("old-quick-page".into()),
+                params: detail[0].1.clone(),
+                outcome: Ok(value(DetailReply {
+                    etag: "before-end".into(),
+                    as_of: String::new(),
+                    seq: 1,
+                    next: None,
+                    body: Some(DetailBody::Session(old_page)),
+                })),
+                error_data: None,
+            },
+        )
+        .unwrap();
+    assert!(matches!(reread.as_slice(), [(DETAIL_GET, _, _)]));
+    assert!(feed.with_untracked(|feed| {
+        feed.detail(&quick_detail)
+            .and_then(DetailCache::body)
+            .is_none()
+    }));
 
     // A subscription page captured before End must not put the old thread back under quick.
     let delta = SubDelta::Assistant {
