@@ -129,8 +129,45 @@ impl Engine {
         let reader = FactsReader::new(&self.root, &self.config, project)?;
         let dir = reader.lens_dir();
         let keys = [kind.draft_key(about)];
+        // Repair aliases are resolved against the current tree, not historic titles.
+        // A new or empty project may have no committed tree yet.
+        let repair_key = (|| -> Result<Option<String>> {
+            let tip = reader.project_tip(reader.base_branch()?.as_deref())?;
+            let rev = reader.resolve_revision(&tip)?;
+            let (results, _) = reader.check_lenses_cached(&rev)?;
+            let identities = results
+                .iter()
+                .map(|result| LensIdentity::read(&reader, &rev, result))
+                .collect::<Result<Vec<_>>>()?;
+            let prefix = format!("{}/", reader.lens_dir());
+            let matches = identities
+                .iter()
+                .enumerate()
+                .filter(|(index, identity)| {
+                    identity.as_ref().is_some_and(|lens| {
+                        lens.kind == kind
+                            && (lens.id == about
+                                || lens.title.trim() == about
+                                || results[*index].file == about
+                                || results[*index].file.strip_prefix(&prefix) == Some(about))
+                    })
+                })
+                .map(|(index, _)| index)
+                .collect::<Vec<_>>();
+            Ok(match matches.as_slice() {
+                [index] => Some(format!("repair-file:{:?}", results[*index].file)),
+                _ => None,
+            })
+        })()
+        .ok()
+        .flatten();
         self.store.transaction(|store| {
-            if let Some(task) = store.open_lens_task(project, &keys)? {
+            if let Some(task) = store.open_draft_lens_task(project, &keys)? {
+                return Ok(task);
+            }
+            if let Some(key) = &repair_key
+                && let Some(task) = store.open_lens_task(project, std::slice::from_ref(key))?
+            {
                 return Ok(task);
             }
             let subject = about.lines().next().unwrap_or(about);
@@ -192,7 +229,7 @@ impl Engine {
                 .unwrap_or(&result.file),
             lens.title.trim(),
         ] {
-            if alias.is_empty() || shared_id(&identities, alias) {
+            if alias.is_empty() || alias.trim() != alias || shared_id(&identities, alias) {
                 continue;
             }
             let points_to_result = match select_lens(&results, &identities, &dir_prefix, alias) {

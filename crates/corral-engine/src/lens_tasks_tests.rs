@@ -314,6 +314,10 @@ fn repair_ignores_old_aliases_of_a_different_repair() {
     git(&repo, &["commit", "-m", "change lens identities"]);
     let second = apply(&engine, repair("other.toml", false));
     assert_ne!(first.id, second.id);
+    assert_eq!(
+        apply(&engine, draft("state", "Lifecycle for jobs", false)).id,
+        second.id
+    );
 }
 
 #[test]
