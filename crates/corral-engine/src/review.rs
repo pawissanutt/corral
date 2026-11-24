@@ -12,7 +12,7 @@ use serde_json::json;
 use crate::{
     Actor, ArtifactKind, Blocked, Check, CheckKind, CheckResult, Engine, Next, Op, Origin, Outcome,
     Role, Run, Runner, Status, Store, Task,
-    artifacts::ArtifactTarget,
+    artifacts::{ArtifactOwner, ArtifactTarget},
     as_refusal,
     checkout::Checkout,
     config::EffectiveProject,
@@ -55,7 +55,7 @@ impl Engine {
                 let diff = corral_git::diff_text(&run.worktree, &run.base_sha)
                     .context("read submitted diff")?;
                 let target = || ArtifactTarget {
-                    task: id,
+                    owner: ArtifactOwner::Task(id),
                     run: Some(&run.id),
                     actor: self.actor,
                     replaces: None,
@@ -218,7 +218,7 @@ impl Engine {
             let artifact = self.add_artifact_file_in(
                 store,
                 ArtifactTarget {
-                    task: &run.task,
+                    owner: ArtifactOwner::Task(&run.task),
                     run: Some(&run.id),
                     actor,
                     replaces: None,

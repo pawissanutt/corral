@@ -62,7 +62,9 @@ impl Store {
             .busy_timeout(Duration::from_secs(5))
             .context("configure SQLite busy timeout")?;
         check_schema_version(&connection)?;
-        Ok(Self { connection })
+        let store = Self { connection };
+        crate::artifacts::prepare_read_only_catalog(&store)?;
+        Ok(store)
     }
 
     /// Compare successive results from the same connection to observe commits

@@ -29,11 +29,26 @@ fn stored_artifacts_with_unclassified_kinds_decode_as_legacy() {
             )
             .unwrap();
     }
-    let artifacts = engine.list_artifacts(Some(task)).unwrap();
+    // Simulate a store last opened by a writer without project libraries.
+    engine
+        .store
+        .connection
+        .execute_batch("DROP VIEW artifact_catalog; DROP TABLE project_artifacts;")
+        .unwrap();
+    let store = crate::Store::open_read_only(&engine.state_dir.join("corral.db")).unwrap();
+    let artifacts = store.list_artifacts(Some(task)).unwrap();
     assert_eq!(artifacts.len(), 3);
-    for artifact in artifacts {
+    for artifact in &artifacts {
         assert_eq!(artifact.kind, ArtifactKind::Legacy);
     }
+    assert_eq!(
+        store.get_artifact("T-001:1").unwrap().as_ref(),
+        artifacts.first()
+    );
+    assert_eq!(
+        store.artifacts_before(Default::default(), None, 1).unwrap()[0].reference(),
+        "T-001:3"
+    );
 }
 
 #[test]

@@ -305,6 +305,7 @@ fn deserialize_artifact_kind<'de, D: Deserializer<'de>>(de: D) -> Result<Artifac
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Artifact {
+    /// Owner ID: a task ID or the name of the project library.
     pub task: String,
     pub id: u32,
     pub sha256: String,
@@ -314,7 +315,7 @@ pub struct Artifact {
     pub title: String,
     pub at: Timestamp,
     pub by: Actor,
-    /// Project of the owning task, when supplied by the catalog.
+    /// Owning project for a library artifact, or the task's project when supplied by the catalog.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
     /// Run that recorded the artifact, if it was attached to a run.

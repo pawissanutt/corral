@@ -303,6 +303,11 @@ impl Config {
             );
             if name.trim().is_empty() {
                 problems.push(problem("projects", "names must not be empty"));
+            } else if reserved_project_name(name) {
+                problems.push(problem(
+                    format!("projects.{name}"),
+                    "project names must not look like task IDs or contain ':'",
+                ));
             }
             if project.path.as_os_str().is_empty() {
                 problems.push(problem(
@@ -811,6 +816,13 @@ pub(crate) fn shell_quote(value: &str) -> Result<String> {
     let mut quoted = String::with_capacity(value.len() + 2);
     append_quoted(&mut quoted, value, Quote::None)?;
     Ok(quoted)
+}
+
+pub(crate) fn reserved_project_name(name: &str) -> bool {
+    name.contains(':')
+        || name.strip_prefix("T-").is_some_and(|suffix| {
+            !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
+        })
 }
 
 pub(crate) fn valid_env_key(key: &str) -> bool {

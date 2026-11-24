@@ -276,8 +276,9 @@ pub(crate) enum Verdict {
 #[derive(Subcommand)]
 pub(crate) enum ArtifactCommand {
     Add {
+        /// Task ID or configured project name.
         #[arg(value_name = "OWNER")]
-        id: String,
+        owner: String,
         path: PathBuf,
         /// Artifact kind (required except for the owner, who defaults to reference).
         #[arg(long, value_parser = artifact_kind_parser())]
@@ -289,7 +290,9 @@ pub(crate) enum ArtifactCommand {
         replaces: Option<String>,
     },
     List {
-        id: Option<String>,
+        /// Task ID or configured project name (omit to list the whole catalog).
+        #[arg(value_name = "OWNER")]
+        owner: Option<String>,
         /// Include replaced artifacts in text output (JSON always includes them).
         #[arg(long)]
         all: bool,

@@ -305,6 +305,81 @@ fn artifact_chunks_preserve_utf8_boundaries_and_are_selector_bound() {
 }
 
 #[test]
+fn project_library_artifacts_round_trip_through_finder_and_detail() {
+    use corral_engine::{ArtifactKind, EventKind};
+
+    let fixture = Fixture::new();
+    let config = fixture.shared.root().join(".corral-next/corral.toml");
+    fs::write(&config, "[projects.\"Équipe\"]\npath = '.'\n").unwrap();
+    let engine = fixture.shared.engine().unwrap();
+    let file = fixture.shared.root().join("x.md");
+    fs::write(&file, "original library content").unwrap();
+    // The response byte budget forces two pages with only two rows.
+    let title = format!("Library {}", "x".repeat(31 * 1024));
+    let first = engine
+        .add_artifact("Équipe", &file, ArtifactKind::Reference, Some(&title))
+        .unwrap();
+    assert_eq!(first.reference(), "Équipe:1");
+    fs::write(&file, "updated library content").unwrap();
+    engine
+        .add_artifact("Équipe", &file, ArtifactKind::Reference, Some(&title))
+        .unwrap();
+    let events = engine.store.event_page(None, None, None, true, 2).unwrap();
+    assert_eq!(events.len(), 2);
+    assert!(
+        events
+            .iter()
+            .all(|event| event.kind == EventKind::Artifact && event.task.is_none())
+    );
+    assert_eq!(events[0].detail["reference"], "Équipe:2");
+
+    let finder = DetailRef::Artifacts {
+        filter: Some("ÉQUIPE:".into()),
+        narrowing: None,
+    };
+    let get = |target, page| {
+        detail(
+            &fixture.shared,
+            DetailGet {
+                target,
+                page,
+                etag: None,
+            },
+        )
+        .unwrap()
+    };
+    let page = get(finder.clone(), None);
+    let Some(DetailBody::Artifacts(rows)) = page.body else {
+        panic!("expected artifacts")
+    };
+    assert_eq!(rows.rows.len(), 1);
+    let anchor = rows.rows[0].reference();
+    assert_eq!(rows.rows[0].project.as_deref(), Some("Équipe"));
+    let next = get(finder, Some(page.next.expect("library anchor")));
+    let Some(DetailBody::Artifacts(rows)) = next.body else {
+        panic!("expected artifacts")
+    };
+    assert_eq!(rows.rows.len(), 1);
+    let mut references = [anchor, rows.rows[0].reference()];
+    references.sort();
+    assert_eq!(references, ["Équipe:1", "Équipe:2"]);
+    assert!(next.next.is_none());
+
+    // Stored references remain readable even after the project is removed from config.
+    fs::write(config, "").unwrap();
+    let shown = get(
+        DetailRef::Artifact {
+            reference: first.reference(),
+        },
+        None,
+    );
+    let Some(DetailBody::Artifact(body)) = shown.body else {
+        panic!("expected artifact")
+    };
+    assert_eq!(body.content, "original library content");
+}
+
+#[test]
 fn artifact_finder_orders_and_filters_before_stable_paging() {
     use corral_engine::{Actor, Artifact, ArtifactKind, EventKind, events::NewEvent};
     use corral_protocol::detail::ArtifactNarrowing;

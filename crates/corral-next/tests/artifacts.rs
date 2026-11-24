@@ -51,44 +51,74 @@ fn artifact_add_requires_kind_for_agent_and_defaults_to_reference_for_owner() {
 }
 
 #[test]
-fn artifact_list_hides_replaced_rows_only_in_default_text_output() {
+fn artifact_commands_refuse_unknown_owner_with_discovery_commands() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
-    let id = init_task(root);
+    stdout(cli(root, "owner", &["init"]));
+    std::fs::write(root.join("x.md"), "reference").unwrap();
+
+    for args in [
+        &["artifact", "add", "unknown", "x.md", "--kind", "reference"][..],
+        &["artifact", "list", "unknown"][..],
+        &["artifact", "show", "unknown:1"][..],
+    ] {
+        let refusal = cli(root, "owner", args);
+        assert_eq!(refusal.status.code(), Some(2), "{refusal:?}");
+        let diagnostic = String::from_utf8(refusal.stderr).unwrap();
+        for hint in ["unknown", "list --all", "config"] {
+            assert!(diagnostic.contains(hint), "{diagnostic}");
+        }
+    }
+}
+
+#[test]
+fn project_artifact_add_list_and_show_preserve_replaced_versions() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
     let owner = |args: &[&str]| stdout(cli(root, "owner", args));
+    owner(&["init"]);
+    let config = root.join(".corral-next/corral.toml");
+    let text = std::fs::read_to_string(&config).unwrap();
+    std::fs::write(&config, format!("{text}\n[projects.corral]\npath = '.'\n")).unwrap();
+    let id = "corral";
     let artifact_ref = |output: Vec<u8>| {
         let added: Value = serde_json::from_slice(&output).unwrap();
+        assert!(added["task"].is_null());
+        assert_eq!(added["artifact"]["task"], id);
+        assert_eq!(added["artifact"]["project"], id);
         format!("{id}:{}", added["artifact"]["id"].as_u64().unwrap())
     };
 
     let original = b"\x00old\r\n\xff";
-    std::fs::write(root.join("report.bin"), original).unwrap();
+    std::fs::write(root.join("x.md"), original).unwrap();
     let old_ref = artifact_ref(owner(&[
         "--json",
         "artifact",
         "add",
-        &id,
-        "report.bin",
+        id,
+        "x.md",
         "--kind",
-        "report",
+        "reference",
     ]));
-    std::fs::write(root.join("report.bin"), b"updated").unwrap();
+    assert_eq!(old_ref, "corral:1");
+    std::fs::write(root.join("x.md"), b"updated").unwrap();
     let new_ref = artifact_ref(owner(&[
         "--json",
         "artifact",
         "add",
-        &id,
-        "report.bin",
+        id,
+        "x.md",
         "--kind",
-        "report",
+        "reference",
         "--replaces",
         &old_ref,
     ]));
+    assert_eq!(new_ref, "corral:2");
 
-    let current = String::from_utf8(owner(&["artifact", "list", &id])).unwrap();
+    let current = String::from_utf8(owner(&["artifact", "list", id])).unwrap();
     assert_eq!(current.lines().count(), 1, "{current}");
     assert_eq!(current.split_whitespace().next(), Some(new_ref.as_str()));
-    let all = String::from_utf8(owner(&["artifact", "list", &id, "--all"])).unwrap();
+    let all = String::from_utf8(owner(&["artifact", "list", id, "--all"])).unwrap();
     let refs: Vec<_> = all
         .lines()
         .filter_map(|line| line.split_whitespace().next())
@@ -98,7 +128,7 @@ fn artifact_list_hides_replaced_rows_only_in_default_text_output() {
     assert!(refs.contains(&new_ref.as_str()), "{all}");
 
     let rows: Vec<Value> =
-        serde_json::from_slice(&owner(&["--json", "artifact", "list", &id])).unwrap();
+        serde_json::from_slice(&owner(&["--json", "artifact", "list", id])).unwrap();
     assert_eq!(rows.len(), 2);
     assert!(rows.iter().any(|row| row["replaced_by"] == new_ref));
     assert!(rows.iter().any(|row| row["replaces"] == old_ref));

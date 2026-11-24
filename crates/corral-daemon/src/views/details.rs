@@ -162,11 +162,8 @@ fn artifacts(
             let (at, reference) = anchor
                 .split_once('/')
                 .context("invalid: artifact page anchor")?;
-            let (task, id) = reference
-                .rsplit_once(':')
+            corral_engine::artifacts::parse_reference(reference)
                 .context("invalid: artifact page reference")?;
-            task_number(task)?;
-            ensure!(id.parse::<u32>().is_ok(), "invalid: artifact page ordinal");
             Ok::<_, anyhow::Error>((
                 at.parse().context("invalid: artifact page timestamp")?,
                 reference,

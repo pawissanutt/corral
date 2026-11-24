@@ -625,7 +625,7 @@ fn watch_sync(engine: &Engine, out: &mut Output<'_>) -> Result<()> {
 fn artifact(engine: &Engine, out: &mut Output<'_>, command: ArtifactCommand) -> Result<()> {
     match command {
         ArtifactCommand::Add {
-            id,
+            owner,
             path,
             kind,
             title,
@@ -645,23 +645,22 @@ fn artifact(engine: &Engine, out: &mut Output<'_>, command: ArtifactCommand) -> 
                     ));
                 }
             };
-            let task = engine.store.require_task(&id)?;
             let artifact = engine.add_artifact_with_replacement(
-                &id,
+                &owner,
                 &path,
                 kind,
                 title.as_deref(),
                 replaces.as_deref(),
             )?;
             out.applied(&Applied {
-                task: Some(task),
+                task: engine.store.get_task(&owner)?,
                 artifact: Some(artifact),
                 seq: engine.store.latest_seq()?,
                 ..Applied::default()
             })
         }
-        ArtifactCommand::List { id, all } => {
-            let artifacts = engine.list_artifacts(id.as_deref())?;
+        ArtifactCommand::List { owner, all } => {
+            let artifacts = engine.list_artifacts(owner.as_deref())?;
             out.value(&artifacts, |out, artifacts| {
                 artifacts
                     .iter()
@@ -670,10 +669,7 @@ fn artifact(engine: &Engine, out: &mut Output<'_>, command: ArtifactCommand) -> 
             })
         }
         ArtifactCommand::Show { reference } if out.json => {
-            let artifact = engine
-                .store
-                .get_artifact(&reference)?
-                .ok_or_else(|| refuse(format!("artifact {reference} does not exist"), vec![]))?;
+            let artifact = engine.require_artifact(&reference)?;
             out.value(&artifact, output::artifact_line)
         }
         ArtifactCommand::Show { reference } => out

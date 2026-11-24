@@ -23,10 +23,17 @@ test("engine argv preserves corrective commands and uses artifact references dir
     const path = await client.artifactFile("T-1:2");
     expect(readFileSync(path)).toEqual(Buffer.from(bytes));
     expect(statSync(path).mode & 0o777).toBe(0o600);
-    await expect(client.artifactFile("--help")).rejects.toThrow("Invalid artifact reference");
+    const library = await client.artifactFile("-../project name:1");
+    expect(readFileSync(library)).toEqual(Buffer.from(bytes));
+    expect(library.startsWith(join(root, "artifact-previews") + "/")).toBeTrue();
+    expect(library).not.toContain("project name");
+    for (const invalid of ["--help", " :1", "demo:0", "demo:4294967296", "demo:1:2"]) {
+      await expect(client.artifactFile(invalid)).rejects.toThrow("Invalid artifact reference");
+    }
     expect(engine.calls()).toEqual([
       ["--root", root, "--json", "done", "T-1", "--summary", "try again"],
-      ["--root", root, "artifact", "show", "T-1:2"],
+      ["--root", root, "artifact", "show", "--", "T-1:2"],
+      ["--root", root, "artifact", "show", "--", "-../project name:1"],
     ]);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

@@ -16,6 +16,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     ArtifactKind, Engine,
+    config::reserved_project_name,
     error::refuse,
     events::{EventKind, NewEvent},
     model::Actor,
@@ -34,25 +35,68 @@ pub struct ArtifactFilter<'a> {
 // Jiff serializes timestamps in UTC with an optional decimal fraction. With
 // the trailing Z removed, SQLite's text order matches chronological order.
 const CATALOG_SCHEMA: &str = "
+    CREATE TABLE IF NOT EXISTS project_artifacts(
+        project TEXT NOT NULL, ordinal INTEGER NOT NULL, sha256 TEXT NOT NULL,
+        document TEXT NOT NULL, PRIMARY KEY(project, ordinal));
     CREATE INDEX IF NOT EXISTS artifacts_by_time
         ON artifacts(rtrim(json_extract(document, '$.at'), 'Z'), task || ':' || ordinal);
+    CREATE INDEX IF NOT EXISTS project_artifacts_by_time
+        ON project_artifacts(rtrim(json_extract(document, '$.at'), 'Z'), project || ':' || ordinal);
     CREATE INDEX IF NOT EXISTS artifact_events_by_reference
         ON events(json_extract(detail, '$.reference')) WHERE kind='artifact';
     CREATE INDEX IF NOT EXISTS artifacts_by_replaces
-        ON artifacts(json_extract(document, '$.replaces'));";
+        ON artifacts(json_extract(document, '$.replaces'));
+    CREATE INDEX IF NOT EXISTS project_artifacts_by_replaces
+        ON project_artifacts(json_extract(document, '$.replaces'));";
 
-const REPLACED_BY: &str = "(SELECT newer.task || ':' || newer.ordinal FROM artifacts newer
-    WHERE json_extract(newer.document, '$.replaces') = (a.task || ':' || a.ordinal))";
+// Project the ordering and replacement expressions in each branch so SQLite
+// can use the base-table indexes for the merged catalog reads.
+const TASK_ARTIFACTS: &str = "SELECT a.task AS owner, a.ordinal, a.sha256, a.document, t.project,
+        a.task || ':' || a.ordinal AS reference,
+        rtrim(json_extract(a.document, '$.at'), 'Z') AS sort_time,
+        json_extract(a.document, '$.replaces') AS replaces
+    FROM main.artifacts a LEFT JOIN main.tasks t ON t.id=a.task";
+const REPLACED_BY: &str = "SELECT reference FROM artifact_catalog WHERE replaces=?1 LIMIT 1";
 
 pub(crate) fn prepare_catalog(store: &Store) -> Result<()> {
     store
         .connection
-        .execute_batch(CATALOG_SCHEMA)
-        .context("prepare artifact catalog indexes")
+        .execute_batch(&format!(
+            "{CATALOG_SCHEMA}
+             CREATE VIEW IF NOT EXISTS artifact_catalog AS
+             {TASK_ARTIFACTS}
+             UNION ALL SELECT project, ordinal, sha256, document, project, project || ':' || ordinal,
+                 rtrim(json_extract(document, '$.at'), 'Z'), json_extract(document, '$.replaces')
+             FROM project_artifacts;"
+        ))
+        .context("prepare artifact catalog")
+}
+
+pub(crate) fn prepare_read_only_catalog(store: &Store) -> Result<()> {
+    let exists: bool = store.connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM main.sqlite_schema WHERE type='view' AND name='artifact_catalog')",
+        [],
+        |row| row.get(0),
+    ).context("check for artifact catalog view")?;
+    if !exists {
+        // An older store has only task artifacts. Give this connection the same
+        // read interface without modifying the database or its schema version.
+        store
+            .connection
+            .execute_batch(&format!(
+                "CREATE TEMP VIEW artifact_catalog AS {TASK_ARTIFACTS};"
+            ))
+            .context("prepare legacy read-only artifact catalog")?;
+    }
+    Ok(())
 }
 
 impl Store {
     pub fn insert_artifact(&self, artifact: &Artifact) -> Result<()> {
+        self.insert_owned_artifact(ArtifactOwner::Task(&artifact.task), artifact)
+    }
+
+    fn insert_owned_artifact(&self, owner: ArtifactOwner<'_>, artifact: &Artifact) -> Result<()> {
         let document = if artifact.replaced_by.is_some() {
             encode(&Artifact {
                 replaced_by: None,
@@ -61,20 +105,29 @@ impl Store {
         } else {
             encode(artifact)?
         };
+        let insert = match owner {
+            ArtifactOwner::Task(_) => {
+                "INSERT INTO artifacts(task,ordinal,sha256,document) VALUES(?1,?2,?3,?4)"
+            }
+            ArtifactOwner::Project(_) => {
+                "INSERT INTO project_artifacts(project,ordinal,sha256,document) VALUES(?1,?2,?3,?4)"
+            }
+        };
         self.connection
             .execute(
-                "INSERT INTO artifacts(task,ordinal,sha256,document) VALUES(?1,?2,?3,?4)",
-                params![artifact.task, artifact.id, artifact.sha256, document],
+                insert,
+                params![owner.id(), artifact.id, artifact.sha256, document],
             )
             .context("insert artifact metadata")?;
         Ok(())
     }
 
-    pub fn next_artifact_id(&self, task: &str) -> Result<u32> {
+    pub fn next_artifact_id(&self, owner: &str) -> Result<u32> {
         self.connection
             .query_row(
-                "SELECT COALESCE(MAX(ordinal),0)+1 FROM artifacts WHERE task=?1",
-                [task],
+                "SELECT COALESCE((SELECT ordinal FROM artifact_catalog WHERE owner=?1
+                                  ORDER BY ordinal DESC LIMIT 1),0)+1",
+                [owner],
                 |row| row.get(0),
             )
             .context("allocate artifact reference")
@@ -83,7 +136,7 @@ impl Store {
     fn has_artifact_content(&self, task: &str, title: &str, sha256: &str) -> Result<bool> {
         self.connection
             .query_row(
-                "SELECT EXISTS(SELECT 1 FROM artifacts WHERE task=?1 AND sha256=?2
+                "SELECT EXISTS(SELECT 1 FROM artifact_catalog WHERE owner=?1 AND sha256=?2
                     AND json_extract(document, '$.title')=?3)",
                 params![task, sha256, title],
                 |row| row.get(0),
@@ -91,18 +144,21 @@ impl Store {
             .context("check for an unchanged scanned artifact")
     }
 
-    pub fn list_artifacts(&self, task: Option<&str>) -> Result<Vec<Artifact>> {
+    pub fn list_artifacts(&self, owner: Option<&str>) -> Result<Vec<Artifact>> {
         let mut statement = self
             .connection
-            .prepare(&format!(
-                "SELECT a.document, {REPLACED_BY} FROM artifacts a
-                  WHERE (?1 IS NULL OR a.task=?1) ORDER BY a.task, a.ordinal"
-            ))
+            .prepare(
+                "SELECT document, owner, ordinal FROM artifact_catalog
+                  WHERE (?1 IS NULL OR owner=?1) ORDER BY owner, ordinal",
+            )
             .context("prepare artifact listing")?;
-        let mut rows = statement.query([task]).context("query artifact listing")?;
+        let mut replacements = self.artifact_replacements()?;
+        let mut rows = statement.query([owner]).context("query artifact listing")?;
         let mut artifacts = Vec::new();
         while let Some(row) = rows.next().context("read artifact listing")? {
-            artifacts.push(decode_artifact(row, 1)?);
+            let mut artifact = decode_artifact(row)?;
+            artifact.replaced_by = replaced_by(&mut replacements, &artifact.reference())?;
+            artifacts.push(artifact);
         }
         Ok(artifacts)
     }
@@ -118,14 +174,14 @@ impl Store {
         let time = before.map(|(at, _)| at.to_string());
         let mut statement = self
             .connection
-            .prepare(&format!(
-                "SELECT a.document, t.project, a.task || ':' || a.ordinal AS reference,
-                        rtrim(json_extract(a.document, '$.at'), 'Z') AS sort_time, {REPLACED_BY}
-                   FROM artifacts a JOIN tasks t ON t.id=a.task
-                  WHERE (sort_time, reference) < (coalesce(?1, '~'), coalesce(?2, ''))
-                    AND (?3 IS NULL OR a.task=?3)
+            // Project sort_time so SQLite can merge the two ordered index scans.
+            .prepare(
+                "SELECT document, project, reference, sort_time FROM artifact_catalog
+                  WHERE sort_time <= coalesce(?1, '~')
+                    AND (sort_time, reference) < (coalesce(?1, '~'), coalesce(?2, ''))
+                    AND (?3 IS NULL OR owner=?3)
                   ORDER BY sort_time DESC, reference DESC",
-            ))
+            )
             .context("prepare artifact catalog page")?;
         let mut rows = statement
             .query(params![
@@ -151,6 +207,7 @@ impl Store {
                  ORDER BY seq LIMIT 1",
             )
             .context("prepare artifact run attribution")?;
+        let mut replacements = self.artifact_replacements()?;
         while selected.len() < limit {
             let Some(row) = rows.next().context("read artifact catalog row")? else {
                 break;
@@ -163,7 +220,7 @@ impl Store {
             {
                 continue;
             }
-            let mut artifact = decode_artifact(row, 4)?;
+            let mut artifact = decode_artifact(row)?;
             let kind = artifact.kind.as_str();
             if let Some(prefix) = &kind_prefix
                 && !kind.starts_with(prefix)
@@ -177,7 +234,7 @@ impl Store {
                 .context("artifact reference is not text")?;
             if !words.is_empty() {
                 let title = artifact.title.to_lowercase();
-                let reference = reference.to_ascii_lowercase();
+                let reference = reference.to_lowercase();
                 if !words.iter().all(|word| {
                     title.contains(word) || kind.contains(word) || reference.contains(word)
                 }) {
@@ -185,6 +242,7 @@ impl Store {
                 }
             }
             artifact.project = project;
+            artifact.replaced_by = replaced_by(&mut replacements, reference)?;
             artifact.run = run
                 .query_row([reference], |row| row.get(0))
                 .optional()
@@ -196,32 +254,38 @@ impl Store {
     }
 
     pub fn get_artifact(&self, reference: &str) -> Result<Option<Artifact>> {
-        let (task, id) = parse_reference(reference)?;
+        let (owner, id) = parse_reference(reference)?;
         let mut statement = self
             .connection
-            .prepare_cached(&format!(
-                "SELECT a.document, {REPLACED_BY} FROM artifacts a
-                  WHERE a.task=?1 AND a.ordinal=?2"
-            ))
+            .prepare_cached("SELECT document FROM artifact_catalog WHERE owner=?1 AND ordinal=?2")
             .context("prepare artifact lookup")?;
         let mut rows = statement
-            .query(params![task, id])
+            .query(params![owner, id])
             .context("query artifact reference")?;
         let Some(row) = rows.next().context("look up artifact reference")? else {
             return Ok(None);
         };
-        Ok(Some(decode_artifact(row, 1)?))
+        let mut artifact = decode_artifact(row)?;
+        let mut replacements = self.artifact_replacements()?;
+        artifact.replaced_by = replaced_by(&mut replacements, &artifact.reference())?;
+        Ok(Some(artifact))
+    }
+
+    fn artifact_replacements(&self) -> Result<rusqlite::CachedStatement<'_>> {
+        self.connection
+            .prepare_cached(REPLACED_BY)
+            .context("prepare artifact replacement lookup")
     }
 
     // Called inside the same writer transaction that allocates and publishes the new row.
-    fn validate_replacement(&self, task: &str, reference: &str) -> Result<String> {
+    fn validate_replacement(&self, owner: &str, reference: &str) -> Result<String> {
         let artifact = self
             .get_artifact(reference)?
             .ok_or_else(|| refuse(format!("artifact {reference} does not exist"), vec![]))?;
-        if artifact.task != task {
+        if artifact.task != owner {
             return Err(refuse(
                 format!(
-                    "artifact {reference} belongs to {}, not {task}",
+                    "artifact {reference} belongs to {}, not {owner}",
                     artifact.task
                 ),
                 vec![],
@@ -244,22 +308,39 @@ impl Store {
     }
 }
 
-fn decode_artifact(row: &rusqlite::Row<'_>, replacement_column: usize) -> Result<Artifact> {
-    let mut artifact: Artifact = serde_json::from_str(
+fn decode_artifact(row: &rusqlite::Row<'_>) -> Result<Artifact> {
+    serde_json::from_str(
         row.get_ref(0)
             .context("read artifact metadata")?
             .as_str()
             .context("artifact metadata is not text")?,
     )
-    .context("decode artifact metadata")?;
-    artifact.replaced_by = row
-        .get(replacement_column)
-        .context("read artifact replacement")?;
-    Ok(artifact)
+    .context("decode artifact metadata")
+}
+
+fn replaced_by(lookup: &mut rusqlite::Statement<'_>, reference: &str) -> Result<Option<String>> {
+    lookup
+        .query_row([reference], |row| row.get(0))
+        .optional()
+        .context("read artifact replacement")
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum ArtifactOwner<'a> {
+    Task(&'a str),
+    Project(&'a str),
+}
+
+impl<'a> ArtifactOwner<'a> {
+    fn id(self) -> &'a str {
+        match self {
+            Self::Task(id) | Self::Project(id) => id,
+        }
+    }
 }
 
 pub(crate) struct ArtifactTarget<'a> {
-    pub task: &'a str,
+    pub owner: ArtifactOwner<'a>,
     pub run: Option<&'a str>,
     pub actor: Actor,
     pub replaces: Option<&'a str>,
@@ -268,33 +349,38 @@ pub(crate) struct ArtifactTarget<'a> {
 impl Engine {
     pub fn add_artifact(
         &self,
-        task: &str,
+        owner: &str,
         path: &Path,
         kind: ArtifactKind,
         title: Option<&str>,
     ) -> Result<Artifact> {
-        self.add_artifact_with_replacement(task, path, kind, title, None)
+        self.add_artifact_with_replacement(owner, path, kind, title, None)
     }
 
     pub fn add_artifact_with_replacement(
         &self,
-        task: &str,
+        owner: &str,
         path: &Path,
         kind: ArtifactKind,
         title: Option<&str>,
         replaces: Option<&str>,
     ) -> Result<Artifact> {
         self.store.transaction(|store| {
-            store.require_task(task)?;
+            let owner = self.require_artifact_owner(store, owner)?;
             let replaces = replaces
-                .map(|reference| store.validate_replacement(task, reference))
+                .map(|reference| store.validate_replacement(owner.id(), reference))
                 .transpose()?;
-            let run = self.artifact_run(store, task)?;
+            let run = match owner {
+                ArtifactOwner::Task(task) => self.artifact_run(store, task)?,
+                ArtifactOwner::Project(_) => None,
+            };
             self.add_artifact_file_in(
                 store,
                 ArtifactTarget {
+                    owner,
+                    run: run.as_deref(),
+                    actor: self.actor,
                     replaces: replaces.as_deref(),
-                    ..self.artifact_target(task, run.as_deref())
                 },
                 path,
                 kind,
@@ -387,7 +473,7 @@ impl Engine {
 
     fn artifact_target<'a>(&self, task: &'a str, run: Option<&'a str>) -> ArtifactTarget<'a> {
         ArtifactTarget {
-            task,
+            owner: ArtifactOwner::Task(task),
             run,
             actor: self.actor,
             replaces: None,
@@ -403,7 +489,7 @@ impl Engine {
         title: Option<&str>,
         max: Option<u64>,
     ) -> Result<Artifact> {
-        let bytes = read_artifact_file(target.task, path, max)?;
+        let bytes = read_artifact_file(target.owner.id(), path, max)?;
         let filename = artifact_filename(path);
         self.add_artifact_in(store, target, &bytes, kind, title.unwrap_or(&filename))
     }
@@ -414,10 +500,11 @@ impl Engine {
         target: ArtifactTarget<'_>,
         path: &Path,
     ) -> Result<()> {
-        let bytes = read_artifact_file(target.task, path, Some(self.config.artifacts.max_bytes))?;
+        let owner = target.owner.id();
+        let bytes = read_artifact_file(owner, path, Some(self.config.artifacts.max_bytes))?;
         let title = artifact_filename(path);
         let hash = format!("{:x}", Sha256::digest(&bytes));
-        if !store.has_artifact_content(target.task, &title, &hash)? {
+        if !store.has_artifact_content(owner, &title, &hash)? {
             self.publish_artifact_in(store, target, &bytes, ArtifactKind::Report, &title, hash)?;
         }
         Ok(())
@@ -451,27 +538,32 @@ impl Engine {
         if !path.try_exists().context("inspect artifact blob")? {
             publish_blob(&path, bytes)?;
         }
+        let (task, project) = match target.owner {
+            ArtifactOwner::Task(task) => (Some(task.to_owned()), None),
+            ArtifactOwner::Project(project) => (None, Some(project.to_owned())),
+        };
+        let owner = target.owner.id();
         let artifact = Artifact {
-            task: target.task.to_owned(),
-            id: store.next_artifact_id(target.task)?,
+            task: owner.to_owned(),
+            id: store.next_artifact_id(owner)?,
             sha256: hash,
             bytes: bytes.len() as u64,
             kind,
             title: title.to_owned(),
             at: Timestamp::now(),
             by: target.actor,
-            project: None,
+            project,
             run: None,
             replaces: target.replaces.map(str::to_owned),
             replaced_by: None,
         };
-        store.insert_artifact(&artifact)?;
+        store.insert_owned_artifact(target.owner, &artifact)?;
         let mut detail = json!({"reference":artifact.reference(),"sha256":artifact.sha256,"bytes":artifact.bytes,"title":artifact.title,"kind":artifact.kind});
         if let Some(reference) = target.replaces {
             detail["replaces"] = json!(reference);
         }
         store.append_event(&NewEvent {
-            task: Some(artifact.task.clone()),
+            task,
             run: target.run.map(str::to_owned),
             kind: EventKind::Artifact,
             actor: target.actor,
@@ -480,18 +572,50 @@ impl Engine {
         Ok(artifact)
     }
 
-    pub fn list_artifacts(&self, task: Option<&str>) -> Result<Vec<Artifact>> {
-        self.store.list_artifacts(task)
+    fn require_artifact_owner<'a>(
+        &self,
+        store: &Store,
+        owner: &'a str,
+    ) -> Result<ArtifactOwner<'a>> {
+        if store.get_task(owner)?.is_some() {
+            return Ok(ArtifactOwner::Task(owner));
+        }
+        if !owner.trim().is_empty()
+            && !reserved_project_name(owner)
+            && self.config.projects.contains_key(owner)
+        {
+            return Ok(ArtifactOwner::Project(owner));
+        }
+        Err(refuse(
+            format!(
+                "unknown artifact owner {owner:?}; use corral list --all for tasks or corral config for projects"
+            ),
+            vec![],
+        ))
     }
 
-    /// Return the exact uncompressed bytes stored under a task-local reference.
+    pub fn list_artifacts(&self, owner: Option<&str>) -> Result<Vec<Artifact>> {
+        if let Some(owner) = owner {
+            self.require_artifact_owner(&self.store, owner)?;
+        }
+        self.store.list_artifacts(owner)
+    }
+
+    pub fn require_artifact(&self, reference: &str) -> Result<Artifact> {
+        if let Some(artifact) = self.store.get_artifact(reference)? {
+            return Ok(artifact);
+        }
+        let (owner, _) = parse_reference(reference)?;
+        self.require_artifact_owner(&self.store, owner)?;
+        Err(refuse(
+            format!("artifact {reference} does not exist; use corral artifact list to find it"),
+            vec![],
+        ))
+    }
+
+    /// Return the exact uncompressed bytes stored under an owner-local reference.
     pub fn show_artifact(&self, reference: &str) -> Result<Vec<u8>> {
-        let artifact = self.store.get_artifact(reference)?.ok_or_else(|| {
-            refuse(
-                format!("artifact {reference} does not exist; use corral artifact list to find it"),
-                vec![],
-            )
-        })?;
+        let artifact = self.require_artifact(reference)?;
         fs::read(self.blob_path(&artifact.sha256)).context("read artifact blob")
     }
 
@@ -597,20 +721,30 @@ fn scan_globs(
     Ok(found.into_iter().collect())
 }
 
-fn parse_reference(reference: &str) -> Result<(&str, u32)> {
-    let (task, id) = reference.rsplit_once(':').ok_or_else(|| {
-        refuse(
-            "artifact reference must be T-042:<n>; use corral artifact list",
-            vec![],
-        )
-    })?;
-    let id = id.parse().map_err(|_| {
-        refuse(
-            "artifact reference number is invalid; use corral artifact list",
-            vec![],
-        )
-    })?;
-    Ok((task, id))
+/// Parse a task or project artifact reference without checking catalog membership.
+pub fn parse_reference(reference: &str) -> Result<(&str, u32)> {
+    let (owner, id) = reference
+        .split_once(':')
+        .filter(|(owner, _)| !owner.trim().is_empty())
+        .ok_or_else(|| {
+            refuse(
+                "artifact reference must be <owner>:<n>; use corral artifact list",
+                vec![],
+            )
+        })?;
+    let id = id
+        .bytes()
+        .all(|byte| byte.is_ascii_digit())
+        .then(|| id.parse().ok())
+        .flatten()
+        .filter(|&id| id > 0)
+        .ok_or_else(|| {
+            refuse(
+                "artifact reference number is invalid; use corral artifact list",
+                vec![],
+            )
+        })?;
+    Ok((owner, id))
 }
 
 fn artifact_filename(path: &Path) -> Cow<'_, str> {

@@ -126,11 +126,11 @@ export class CorralClient {
     if (!this.configured || !this.options.sessionDir) throw new CorralCommandError("Artifact preview needs a local session and --corral <path>");
     const dir = join(this.options.sessionDir, "artifact-previews");
     mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const path = join(dir, reference);
+    const path = join(dir, sha256Hex(reference));
     const temp = join(dir, randomUUID());
     const fd = openSync(temp, "wx", 0o600);
     try {
-      const { code, stderr } = await this.run(["--root", this.options.root, "artifact", "show", reference],
+      const { code, stderr } = await this.run(["--root", this.options.root, "artifact", "show", "--", reference],
         { cwd: this.options.cwd, stdoutFd: fd });
       if (code !== 0) throw new CorralCommandError(stderr || `artifact show exited ${code}`);
       renameSync(temp, path);
@@ -163,5 +163,8 @@ export class CorralClient {
 }
 
 export function artifactReference(reference: string): boolean {
-  return /^T-\d+:[1-9]\d*$/.test(reference);
+  const parts = reference.split(":");
+  if (parts.length !== 2 || !parts[0]!.trim() || !parts[1] || /[^0-9]/.test(parts[1])) return false;
+  const ordinal = Number(parts[1]);
+  return ordinal > 0 && ordinal <= 0xffff_ffff;
 }

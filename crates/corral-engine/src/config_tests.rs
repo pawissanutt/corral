@@ -65,6 +65,20 @@ aliases = ["openai/custom-id"]
 }
 
 #[test]
+fn project_names_reserve_task_ids_and_reference_separator() {
+    let problems = Config::check(
+        Path::new("."),
+        "[projects.T-042]\npath = '.'\n[projects.'demo:docs']\npath = '.'\n",
+    )
+    .unwrap_err();
+    let keys: Vec<_> = problems
+        .iter()
+        .filter_map(|problem| problem.key.as_deref())
+        .collect();
+    assert_eq!(keys, ["projects.T-042", "projects.demo:docs"]);
+}
+
+#[test]
 fn session_wrap_config_validates_both_levels_and_inherits() {
     let config = r#"
 [runner]
