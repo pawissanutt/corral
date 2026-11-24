@@ -339,15 +339,20 @@ fn tabs(app: AppState, id: Id) -> AnyElement {
         move |tab| app.set_task_tab(tab),
         "tab-task",
     );
-    // Diff or Impact is the Changes tab's one switch, beside the tabs on every form; a phone
-    // too narrow for both puts it under them.
+    // Diff or Impact is the Changes tab's one switch, in the tab row on every form.
     let switch = dynamic(move || {
         (tab.get() == TaskTab::Changes).then(|| untracked(|| changes::view_switch(app, id.clone())))
     });
     let form = app.form;
+    // A phone is too narrow for both: the switch goes under the tabs, across the width.
+    if form == Form::Phone {
+        return view()
+            .child(strip)
+            .child(view().px(px(10.0)).pb(px(6.0)).child(switch))
+            .into_element();
+    }
     view()
         .flex_row()
-        .flex_wrap()
         .items_end()
         .gap(if form == Form::Terminal {
             term::cells(2.0)
@@ -356,7 +361,6 @@ fn tabs(app: AppState, id: Id) -> AnyElement {
         })
         .child(view().flex_1().min_w(px(0.0)).child(strip))
         .child(switch)
-        .when(form == Form::Phone, |v| v.pb(px(6.0)))
         .into_element()
 }
 
