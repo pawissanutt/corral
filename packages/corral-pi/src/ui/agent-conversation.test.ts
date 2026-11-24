@@ -456,23 +456,56 @@ test("a jump to the end while the newest pages are not resident reads the record
   expect(view.following).toBeTrue();
 });
 
-test("the end asked for once a full window was read again around the reader's row is the recording's new end", async () => {
+test("the end asked for while a full window changes is the recording's end: a page joining at either side, a read around the reader's row", async () => {
   const row = recorded();
   let count = 70, stamp = "one";
   const { read, reads } = recording(() => count, () => stamp);
   const { view, open, rest } = reader(() => row, read);
   await open();
-  // Up until the resident pages fill the window and still hold the newest turn.
-  for (let step = 0; step < 400 && !reads.includes("one:8"); step++) { view.scroll.scrollBy(-10); await rest(); }
-  expect(reads).not.toContain("one:6");
-  // The agent wrote another turn. The read back to the reader's row is of more pages than stay resident: it gives
-  // up the newest ones.
+  // Up until the window is full and has given up the newest turn alone.
+  for (let step = 0; step < 400 && !reads.includes("one:6"); step++) { view.scroll.scrollBy(-10); await rest(); }
+  expect(reads).not.toContain("one:5");
+  // Down to the last resident row, where that turn is read. They ask for the end before a frame joins it.
+  view.scroll.scrollBy(100000); await settle();
+  expect(reads.at(-1)).toBe("one:70");
+  view.scroll.scrollToEnd(); await rest();
+  expect(reading(view)).toContain("✓ read src/file-70.ts · 2 lines");
+  expect(view.following).toBeTrue();
+  // Up a little, where one more earlier page is read. They ask for the end before a frame joins it: the window
+  // keeps its end, so the newest turn is not read again.
+  view.scroll.scrollBy(-30); await rest();
+  expect(view.navigate("older")).toBeTrue(); await settle();
+  expect(reads.at(-1)).toBe("one:6");
+  view.scroll.scrollToEnd(); await rest();
+  expect(reading(view)).toContain("✓ read src/file-70.ts · 2 lines");
+  expect(view.following).toBeTrue();
+  expect(reads.filter(cursor => cursor === "one:70")).toHaveLength(1);
+  // The agent wrote another turn while they read above. The read back to their row is of more pages than stay
+  // resident: it gives up the newest ones.
+  view.scroll.scrollBy(-30); await rest();
   count = 71; stamp = "two";
   expect(view.navigate("older")).toBeTrue(); await settle();
   expect(reads.filter(cursor => cursor.startsWith("two:")).length).toBeGreaterThanOrEqual(64);
   // They ask for the end before a frame shows what was read.
   view.scroll.scrollToEnd(); await rest();
   expect(reading(view)).toContain("✓ read src/file-71.ts · 2 lines");
+  expect(view.following).toBeTrue();
+});
+
+test("the end asked for while a recording is reopened at a kept row is where it opens", async () => {
+  const row = recorded();
+  const { read } = recording(() => 9, () => "same");
+  let held: PromiseWithResolvers<void> | undefined;
+  const { view, open, rest } = reader(() => row, async (id, request) => { await held?.promise; return read(id, request); });
+  await open();
+  view.scroll.scrollBy(-30); await rest();
+  view.remember();
+  // Reopened: its first read is held, and what the session holds of the agent is on screen.
+  held = Promise.withResolvers();
+  view.restore(row.key); view.refresh(); reading(view);
+  view.scroll.scrollToEnd();
+  held.resolve(); held = undefined; await rest();
+  expect(reading(view)).toContain("✓ read src/file-9.ts · 2 lines");
   expect(view.following).toBeTrue();
 });
 

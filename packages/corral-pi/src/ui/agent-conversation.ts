@@ -107,7 +107,10 @@ export class AgentConversation {
   private arrived: Arrival | undefined;
   /** A page joined on this side past the resident limit: the far end is given up one frame later. */
   private trimming: Direction | undefined;
-  /** The owner asked for the recording's end while its newest pages were not resident. */
+  /**
+   * The owner asked for the recording's end and no frame has shown it yet. Whatever is being read, waits for a frame
+   * or is joining gives way to it; scrolling up withdraws it.
+   */
   private ending = false;
   private jump: "top" | "end" | undefined;
   private history = new AgentHistory();
@@ -192,7 +195,8 @@ export class AgentConversation {
     const key = this.host.row()?.key;
     if (key === undefined) return;
     this.positions.delete(key);
-    this.positions.set(key, this.reopen ?? this.pending ?? this.position());
+    // The end they asked for and have not been shown yet is the place kept.
+    this.positions.set(key, this.ending ? { top: 0, following: true } : this.reopen ?? this.pending ?? this.position());
     if (this.positions.size > 8) this.positions.delete(this.positions.keys().next().value!);
   }
   restore(key: string): void {
@@ -214,20 +218,31 @@ export class AgentConversation {
     this.failed = false;
     const live = isLive(row.state);
     const following = (this.pending?.following ?? this.following) && !history.newer;
-    if (!history.pages.length) void this.reread("open");
-    else if (this.ending) void this.reread("end");
+    if (this.owed()) void this.reread("end");
+    else if (!history.pages.length) void this.reread("open");
     else if (following && (live || this.wasLive || this.latestAvailable)) void this.reread("follow", this.wasLive && !live);
     else if (this.wasLive && !live) this.latestAvailable = true;
     this.wasLive = live;
   }
 
-  /** End: a recording whose newest pages are not resident is read again at its end. */
+  /**
+   * End: the owner asks for the recording's end. True when resident pages do not reach that end, which is read
+   * first; false when the scroll view's own end is that end, or all there is to show for now.
+   */
   jumpToRecordedEnd(): boolean {
-    if (!(this.history.newer || this.latestAvailable) || this.host.canInteract?.() === false || !this.session()) return false;
-    // A read in flight ends first, and this one follows it. One that waits for a frame is passed over.
-    this.arrived = undefined; this.ending = true;
+    if (this.host.canInteract?.() === false || !this.session()) return false;
+    this.ending = true;
+    // The place kept for the agent, if no frame has taken it yet, gives way too.
+    if (this.pending !== undefined) this.pending = { top: 0, following: true };
+    // The next frame goes there, or shows what is being read first.
+    if (!this.owed()) { this.host.changed?.(); return false; }
+    // A read in flight ends first; this one follows it.
     void this.reread("end");
-    return true;
+    return this.history.pages.length > 0;
+  }
+  /** The end the owner asked for is not among the resident pages, or these are of a recording that has more by now. */
+  private owed(): boolean {
+    return this.ending && (!this.history.pages.length || this.history.newer !== undefined || this.latestAvailable);
   }
 
   /** Reads the page beyond the resident ones on that side; false when there is none or one is being read. */
@@ -273,15 +288,14 @@ export class AgentConversation {
     try {
       const page = await read(row.id, request);
       if (!current()) return;
-      const held = !this.atEnd();
       joined = history.accept(direction, page);
       // The next frame keeps the reader's row against the side that grew. The far end is given up in the frame
       // after, so no frame changes both ends of a message the reader may be in.
-      if (joined) { this.joining = held ? { edge: direction, exact: true } : undefined; this.trimming = direction; this.failed = false; }
+      if (joined) { this.joining = { edge: direction, exact: true }; this.trimming = direction; this.failed = false; }
     } catch { /* The recording changed or could not be read: it is read again below. */ }
     finally { history.busy = false; }
     if (!current()) return;
-    if (this.ending) await this.reread("end");
+    if (this.owed()) await this.reread("end");
     else if (joined) { this.host.rewrapped?.(); this.host.changed?.(); }
     else await this.reread("place");
   }
@@ -333,8 +347,6 @@ export class AgentConversation {
     } catch { /* `next` stays undefined. */ }
     finally { history.busy = false; }
     if (!current()) return;
-    // The owner asked for the end while this was read: the read of the end is the one shown.
-    if (mode !== "end" && this.ending) return this.reread("end");
     // The owner scrolled away from the end they asked for while it was read: nothing of it is shown or owed.
     if (mode === "end" && !this.ending) return;
     // A refresh that failed is owed: a settled agent's last messages are read on a later tick.
@@ -351,20 +363,24 @@ export class AgentConversation {
     const arrived = this.arrived;
     this.arrived = undefined;
     if (!arrived || arrived.from !== this.history) return;
-    const { mode, saved } = arrived;
-    if (mode === "end" && !this.ending) return;
+    const { mode } = arrived, wanted = this.ending;
+    if (mode === "end" && !wanted) return;
     // An automatic refresh never moves a reader who left the end.
-    if (mode === "follow" && !(this.pending?.following ?? this.following)) { if (arrived.settling) this.latestAvailable = true; return; }
+    if (mode === "follow" && !wanted && !(this.pending?.following ?? this.following)) { if (arrived.settling) this.latestAvailable = true; return; }
+    // The end the owner asked for comes before the place kept for them and the row they were on.
+    const saved = wanted ? undefined : arrived.saved;
     // A recording that changed under the reader is shown around their row, unless they are at its end by now.
-    const held = mode === "place" && !this.atEnd();
-    const end = !saved && !held && (mode !== "open" || !this.moved || this.following);
-    // It was read back to the row the reader was on, past the resident limit, so its newest pages were given up,
-    // and the reader is at the end by now: the end is read instead.
-    if (end && arrived.history.newer) { this.ending = true; queueMicrotask(() => { if (this.ending) void this.reread("end"); }); return; }
+    const held = mode === "place" && !wanted && !this.atEnd();
+    const end = wanted || (!saved && !held && (mode !== "open" || !this.moved || this.following));
+    // It was read back to a row, past the resident limit, so its newest pages were given up, and the reader is at
+    // the end or asked for it: the end is read instead. The resident pages are of a recording that has more by now.
+    if (end && arrived.history.newer) {
+      this.ending = true; this.latestAvailable = true;
+      queueMicrotask(() => { if (this.ending) void this.reread("end"); });
+      return;
+    }
     this.history = arrived.history; this.known = arrived.known; this.failed = false; this.latestAvailable = false;
-    this.joining = undefined; this.trimming = undefined;
-    if (mode === "open") this.reopen = undefined;
-    if (mode === "end") this.ending = false;
+    this.joining = undefined; this.trimming = undefined; this.reopen = undefined; this.ending = false;
     if (saved) this.pending = saved;
     else if (held) this.joining = { edge: "older", exact: false };
     else if (end) { this.pending = undefined; this.jump = "end"; this.toward = "older"; this.pushed = false; }
@@ -393,9 +409,13 @@ export class AgentConversation {
     const row = this.host.row(), lines: string[] = [], now = this.host.now();
     const say = (text: string, color: string) => wrapTextWithAnsi(text, Math.max(1, width - 1)).map(line => " " + color + line + RESET);
     this.arrive();
+    // The end the owner asked for is resident: this frame goes there, whatever was joining.
+    if (this.ending && !this.owed()) { this.ending = false; this.joining = undefined; this.pending = undefined; this.jump = "end"; }
     // The resident pages changed since the last frame: the reader's row is taken from that frame and where they
-    // have scrolled to since, before this frame is laid out.
-    const hold = this.joining && this.grip(this.joining.edge, this.joining.exact);
+    // have scrolled to since, before this frame is laid out. A reader at the recording's end stays there whatever
+    // joins above them.
+    const join = this.joining;
+    const hold = join && !(join.edge === "older" && this.atEnd()) ? this.grip(join.edge, join.exact) : undefined;
     this.joining = undefined;
     this.ask = undefined; this.spans = [];
     if (!row) {
@@ -488,11 +508,12 @@ export class AgentConversation {
       this.pending = undefined;
     }
     if (this.trimming) {
-      const edge = this.trimming, held = !this.atEnd();
+      // What is given up is on the other side of the reader from what joined. A reader who came down to the
+      // recording's end keeps that end, and gives up the oldest pages.
+      const at = this.atEnd(), edge = at && this.toward === "newer" ? "newer" : this.trimming;
       this.trimming = undefined;
       if (this.history.trim(edge)) {
-        // What is given up is on the other side of the reader from what joined.
-        if (held) this.joining = { edge: edge === "older" ? "newer" : "older", exact: true };
+        if (!at) this.joining = { edge: edge === "older" ? "newer" : "older", exact: true };
         this.host.rewrapped?.();
         queueMicrotask(() => this.host.changed?.());
       }
