@@ -211,6 +211,10 @@ fn paint(layout: &Layout, scene: &Scene, state: &State, marks: Option<&Marks>) -
             EdgeKind::DeclaredOnly => (ink(Token::Ink4), 1.3, &[px(4.0), px(3.0)]),
             EdgeKind::ReferencedOnly => (now(hue_ink(Hue::Held)), base, &[]),
             EdgeKind::Boundary => (ink(Token::Ink3), base, &[px(5.0), px(3.0)]),
+            EdgeKind::Starts => (now(hue_ink(Hue::Worker)), base, &[]),
+            EdgeKind::Runs => (ink(Token::Ink3), base, &[]),
+            EdgeKind::DependsOn => (ink(Token::Ink3), base, &[px(5.0), px(3.0)]),
+            EdgeKind::Builds => (now(hue_ink(Hue::Held)), base, &[px(4.0), px(3.0)]),
         };
         let stroke = if lit.picked_edge(&edge.from, &edge.to) {
             ink(Token::Focus)
@@ -411,7 +415,11 @@ fn paint_card(
                 .fill();
         }
     }
-    let dashed = card.excluded() || card.kind == Kind::Folder || card.kind == Kind::More;
+    let dashed = card.excluded()
+        || matches!(
+            card.kind,
+            Kind::Folder | Kind::More | Kind::Owner | Kind::Scripts
+        );
     let dash = [px(4.0), px(3.0)];
     p = p
         .stroke_color(ink(if card.excluded() {
@@ -474,7 +482,7 @@ fn paint_card(
             .text_align(CanvasTextAlign::End)
             .fill_text(&tag, r.x + r.w - 13.0, r.y + r.h / 2.0 + 4.0);
     }
-    let name_font = if card.kind == Kind::More {
+    let name_font = if matches!(card.kind, Kind::More | Kind::Scripts) {
         Font::Sub
     } else {
         Font::Name
@@ -511,7 +519,7 @@ fn paint_card(
             r.x + 12.0,
             r.y + 39.0,
         );
-    if matches!(card.kind, Kind::More | Kind::Definition) {
+    if matches!(card.kind, Kind::More | Kind::Definition) || card.kind.runtime() {
         return p;
     }
     p = bar(

@@ -28,6 +28,7 @@ mod session_ops;
 mod sessions;
 mod system;
 mod system_review;
+mod system_runtime;
 mod workspace;
 
 use crate::model::daemon::*;
@@ -138,6 +139,8 @@ fn base(now: u64, date: String, clock: String, time_zone: Option<jiff::tz::TimeZ
         REVIEW_V1,
         TIMELINE_V1,
         corral_protocol::app::SYSTEM_V1,
+        corral_protocol::app::SYSTEM_RUNTIME_V1,
+        corral_protocol::app::SYSTEM_ENTRIES_V1,
         USAGE_V1,
         SETTINGS_V1,
         ASSISTANT_V1,

@@ -183,6 +183,9 @@ pub(super) fn build(feed: &Feed, target: &DetailRef) -> Result<DetailBody, Strin
         DetailRef::SystemMap { project, at } => {
             DetailBody::SystemMap(super::system::detail(project, at.as_ref())?)
         }
+        DetailRef::SystemRuntime { project } => {
+            DetailBody::SystemRuntime(super::system_runtime::detail(project)?)
+        }
         DetailRef::SystemReview { task, at } => {
             // corrald's words, which the Impact view tells apart from a missing task.
             let unsubmitted = || "not_found: task has no submitted worker run".to_owned();

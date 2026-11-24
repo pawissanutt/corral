@@ -4,7 +4,8 @@
 //! every edge readable where a drawing of thirty boxes could not (docs/plans/system-map.md §3.1).
 
 use super::marks::{self, Marks};
-use super::scene::{Card, EdgeKind, Scene};
+use super::runtime::{at, edge_words, entry_word, group};
+use super::scene::{Card, EdgeKind, Kind, Level, Scene};
 use super::words::{activity, busiest, figure, read_shares};
 use super::{Node, Overlay, Pick, State, Window};
 
@@ -27,6 +28,8 @@ pub struct NodeLine {
     pub share: f32,
     pub picked: bool,
     pub opens: bool,
+    /// Whether the row draws the overlay's bar; the Runtime view has none.
+    pub bar: bool,
     /// Untouched by the change a task page's Impact shows.
     pub dim: bool,
 }
@@ -54,7 +57,8 @@ pub fn matches(card: &Card, filter: &str) -> bool {
         Node::Container(p) | Node::Port { path: p, .. } | Node::File(p) => p.clone(),
         Node::Module(m) => format!("{}/{}", m.container, m.path),
         Node::Definition { name, .. } => name.clone(),
-        Node::More => String::new(),
+        Node::Unit(id) => id.path.clone(),
+        Node::More | Node::Scripts => String::new(),
     };
     let hay = format!("{} {}", card.name, path).to_lowercase();
     filter.split_whitespace().all(|word| hay.contains(word))
@@ -103,26 +107,44 @@ pub fn lines(scene: &Scene, state: &State, marks: Option<&Marks>) -> Vec<Line> {
         Some(Pick::Edge(a, b)) => Some((a, b)),
         _ => None,
     };
-    let parts: [(Option<&'static str>, &[usize]); 4] = [
-        (
-            (!scene.top.is_empty()).then_some("Packages that reference this one"),
-            &scene.top,
-        ),
-        (
-            (!scene.top.is_empty() || !scene.bottom.is_empty()).then_some("Modules"),
-            &scene.graph,
-        ),
-        (
-            (!scene.bottom.is_empty()).then_some("Packages this one references"),
-            &scene.bottom,
-        ),
-        (
-            (!scene.graph.is_empty())
-                .then_some(scene.band_title)
-                .flatten(),
-            &scene.band,
-        ),
-    ];
+    let parts: Vec<(Option<&'static str>, Vec<usize>)> = if scene.level == Level::Runtime {
+        // Every card under its kind, connected or not; the edges show under the pick.
+        let mut all: Vec<usize> = (0..scene.cards.len()).collect();
+        all.sort_by(|a, b| {
+            let key = |i: usize| (group(scene.cards[i].kind).0, &scene.cards[i].name);
+            key(*a).cmp(&key(*b))
+        });
+        let mut parts: Vec<(Option<&'static str>, Vec<usize>)> = Vec::new();
+        for i in all {
+            let title = group(scene.cards[i].kind).1;
+            match parts.last_mut() {
+                Some((Some(last), list)) if *last == title => list.push(i),
+                _ => parts.push((Some(title), vec![i])),
+            }
+        }
+        parts
+    } else {
+        vec![
+            (
+                (!scene.top.is_empty()).then_some("Packages that reference this one"),
+                scene.top.clone(),
+            ),
+            (
+                (!scene.top.is_empty() || !scene.bottom.is_empty()).then_some("Modules"),
+                scene.graph.clone(),
+            ),
+            (
+                (!scene.bottom.is_empty()).then_some("Packages this one references"),
+                scene.bottom.clone(),
+            ),
+            (
+                (!scene.graph.is_empty())
+                    .then_some(scene.band_title)
+                    .flatten(),
+                scene.band.clone(),
+            ),
+        ]
+    };
     for (title, part) in parts {
         let cards: Vec<&Card> = part
             .iter()
@@ -152,7 +174,12 @@ pub fn lines(scene: &Scene, state: &State, marks: Option<&Marks>) -> Vec<Line> {
                 }
                 .clamp(0.0, 1.0),
                 picked: picked_node == Some(&card.node),
-                opens: card.node.opens().is_some(),
+                bar: !card.kind.runtime(),
+                opens: if scene.level == Level::Runtime {
+                    card.kind == Kind::Scripts
+                } else {
+                    card.node.opens().is_some()
+                },
                 dim: marks.is_some_and(|marks| marks::of(marks, &card.node).is_none()),
             }));
             if picked {
@@ -164,6 +191,21 @@ pub fn lines(scene: &Scene, state: &State, marks: Option<&Marks>) -> Vec<Line> {
                         name: process.clone(),
                         kind: None,
                         words: format!("spawns · {}", super::plural(*sites, "site", "sites")),
+                        pick: None,
+                        picked: false,
+                    })
+                }));
+                out.extend(card.entries.iter().map(|entry| {
+                    Line::Edge(EdgeLine {
+                        arrow: "▸",
+                        other: Node::More,
+                        name: entry.name.clone(),
+                        kind: None,
+                        words: format!(
+                            "{} · {}",
+                            entry_word(entry.kind),
+                            at(&entry.path, entry.line)
+                        ),
                         pick: None,
                         picked: false,
                     })
@@ -197,6 +239,7 @@ fn edges(scene: &Scene, node: &Node, picked: Option<(&Node, &Node)>) -> Vec<Line
                 EdgeKind::DeclaredOnly => "declared · 0 refs".into(),
                 EdgeKind::ReferencedOnly => format!("{refs} · no dependency match"),
                 EdgeKind::Module | EdgeKind::Boundary => refs,
+                _ => edge_words(e),
             };
             Line::Edge(EdgeLine {
                 arrow,

@@ -4,11 +4,12 @@
 //! a file level its definitions in source order. A level that lists more than stays legible
 //! counts the rest in one card.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use corral_types::{
-    ContainerFact, ContainerKind, DefinitionFact, ModuleId, PackageEdgeKind, ReadStatus,
-    ReferenceBasis, SystemAt, SystemMap, SystemMapRow, SystemNodeStats, WorkspaceStatus,
+    ContainerFact, ContainerKind, DefinitionFact, EntryDetector, EntryPoint, ModuleId,
+    PackageEdgeKind, ReadStatus, ReferenceBasis, RuntimeBasis, RuntimeSite, RuntimeUnit,
+    RuntimeUnitKind, SystemAt, SystemMap, SystemMapRow, SystemNodeStats, WorkspaceStatus,
 };
 
 use super::{Node, base_name};
@@ -20,6 +21,8 @@ pub enum Level {
     Package,
     Module,
     File,
+    /// The Runtime view's one level: units, the packages that start or build them, edges.
+    Runtime,
 }
 
 impl Level {
@@ -37,6 +40,7 @@ impl Level {
             Level::Package => "package",
             Level::Module => "module",
             Level::File => "file",
+            Level::Runtime => "runtime",
         }
     }
 }
@@ -50,11 +54,21 @@ pub enum Kind {
     File,
     Definition,
     More,
+    /// A runtime unit of this kind.
+    Unit(RuntimeUnitKind),
+    /// A package or folder on the Runtime view: what starts or builds units, and where entry
+    /// points are looked for.
+    Owner,
+    /// The npm scripts, folded.
+    Scripts,
 }
 
 impl Kind {
     pub const fn word(self) -> &'static str {
         match self {
+            Kind::Unit(kind) => unit_word(kind),
+            Kind::Owner => "package or folder",
+            Kind::Scripts => "npm scripts, folded",
             Kind::Package => "package",
             Kind::Folder => "folder",
             Kind::Port => "neighbouring package",
@@ -63,6 +77,23 @@ impl Kind {
             Kind::Definition => "definition",
             Kind::More => "not listed",
         }
+    }
+
+    /// Whether the card is on the Runtime view, whose cards carry no overlay bar.
+    pub const fn runtime(self) -> bool {
+        matches!(self, Kind::Unit(_) | Kind::Owner | Kind::Scripts)
+    }
+}
+
+/// A unit kind in a sentence.
+pub const fn unit_word(kind: RuntimeUnitKind) -> &'static str {
+    match kind {
+        RuntimeUnitKind::Binary => "binary",
+        RuntimeUnitKind::Script => "npm script",
+        RuntimeUnitKind::Service => "compose service",
+        RuntimeUnitKind::Image => "image",
+        RuntimeUnitKind::Unit => "systemd unit",
+        RuntimeUnitKind::Job => "CI job",
     }
 }
 
@@ -83,14 +114,24 @@ pub struct Card {
     pub definition: Option<DefinitionFact>,
     /// External processes the container spawns, with their sites, most sites first.
     pub spawns: Vec<(String, u64)>,
-    /// For a port, its references across the boundary.
+    /// For a port, its references across the boundary; for a package on the Runtime view, the
+    /// entry points its units hold.
     pub references: u64,
     /// For the More card: how many and of what.
     pub more: Option<(u64, &'static str)>,
+    /// A runtime unit's declaration.
+    pub unit: Option<RuntimeUnit>,
+    /// The entry points this unit or package holds.
+    pub entries: Vec<EntryPoint>,
+    /// The entry point detectors that ran on a package; an empty set: none applies. Absent
+    /// where corrald did not say.
+    pub detectors: Option<BTreeSet<EntryDetector>>,
+    /// The scripts the folded card stands for.
+    pub folded: Vec<RuntimeUnit>,
 }
 
 impl Card {
-    fn new(node: Node, name: String, kind: Kind) -> Card {
+    pub(super) fn new(node: Node, name: String, kind: Kind) -> Card {
         Card {
             node,
             name,
@@ -104,6 +145,10 @@ impl Card {
             spawns: Vec::new(),
             references: 0,
             more: None,
+            unit: None,
+            entries: Vec::new(),
+            detectors: None,
+            folded: Vec::new(),
         }
     }
 
@@ -125,7 +170,7 @@ impl Card {
 }
 
 /// How an edge was established, which is how it is drawn.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum EdgeKind {
     /// A package edge declared in a manifest and referenced in source.
     Declared,
@@ -137,11 +182,23 @@ pub enum EdgeKind {
     Module,
     /// Module references across the package's boundary, summed per neighbour.
     Boundary,
+    /// A package spawns a process named as a binary of the project.
+    Starts,
+    /// A service, image, systemd unit or CI job runs a binary of the project.
+    Runs,
+    /// A compose service depends on another.
+    DependsOn,
+    /// A service's or image's build context or Dockerfile lies in a package.
+    Builds,
 }
 
 impl EdgeKind {
     pub const fn word(self) -> &'static str {
         match self {
+            EdgeKind::Starts => "starts",
+            EdgeKind::Runs => "runs",
+            EdgeKind::DependsOn => "depends on",
+            EdgeKind::Builds => "builds",
             EdgeKind::Declared => "declared and referenced",
             EdgeKind::DeclaredOnly => "declared, no reference found",
             EdgeKind::ReferencedOnly => "used in code · no dependency match",
@@ -160,6 +217,16 @@ pub struct Edge {
     pub basis: Option<ReferenceBasis>,
     /// The module pairs a boundary edge sums, strongest first.
     pub pairs: Vec<(ModuleId, ModuleId, u64)>,
+    /// A runtime edge's sources: each one's kind, basis and the line establishing it.
+    pub sites: Vec<Site>,
+}
+
+/// Where one runtime edge between two cards is established.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Site {
+    pub kind: EdgeKind,
+    pub basis: RuntimeBasis,
+    pub site: RuntimeSite,
 }
 
 /// A module pair across a boundary, with its references.
@@ -178,6 +245,8 @@ pub struct Scene {
     /// Unconnected cards, packed under the graph.
     pub band: Vec<usize>,
     pub band_title: Option<&'static str>,
+    /// Unconnected cards by kind, each part under its title, after the band.
+    pub groups: Vec<(&'static str, Vec<usize>)>,
     /// Edges the map draws.
     pub edges: Vec<Edge>,
     /// Edges left undrawn to stay legible; the inspector lists them.
@@ -208,6 +277,7 @@ impl Scene {
             .chain(self.graph.iter())
             .chain(self.bottom.iter())
             .chain(self.band.iter())
+            .chain(self.groups.iter().flat_map(|(_, group)| group.iter()))
             .filter_map(|i| self.cards.get(*i))
     }
 }
@@ -229,6 +299,7 @@ pub fn build(map: &SystemMap, at: Option<&SystemAt>) -> Scene {
         bottom: Vec::new(),
         band: Vec::new(),
         band_title: None,
+        groups: Vec::new(),
         edges: Vec::new(),
         undrawn: Vec::new(),
         max_lines: 1,
@@ -256,10 +327,12 @@ fn fallback_name(node: &Node) -> String {
         Node::File(path) => base_name(path).to_owned(),
         Node::Definition { name, .. } => name.clone(),
         Node::More => "more".into(),
+        Node::Unit(id) => id.name.clone(),
+        Node::Scripts => "scripts".into(),
     }
 }
 
-fn container_name(path: &str) -> String {
+pub(super) fn container_name(path: &str) -> String {
     if path.is_empty() {
         "(root)".into()
     } else {
@@ -346,6 +419,7 @@ fn project(scene: &mut Scene, rows: &[SystemMapRow]) {
                 count: edge.references,
                 basis: None,
                 pairs: Vec::new(),
+                sites: Vec::new(),
             }),
             SystemMapRow::Spawn { container, spawn } => {
                 *spawns
@@ -415,6 +489,7 @@ fn package(scene: &mut Scene, rows: &[SystemMapRow], path: &str) {
                         count: reference.count,
                         basis: Some(reference.basis),
                         pairs: Vec::new(),
+                        sites: Vec::new(),
                     });
                 } else if from.container == path {
                     let port = Node::Port {
@@ -457,6 +532,7 @@ fn package(scene: &mut Scene, rows: &[SystemMapRow], path: &str) {
             count,
             basis: None,
             pairs,
+            sites: Vec::new(),
         });
     }
     for (port, refs) in &port_refs {

@@ -24,7 +24,7 @@ use crate::model::system::marks::Marks;
 use crate::model::system::scene::EdgeKind;
 use crate::model::system::shown::{ASK_HEADING, ASK_WORDS, Shown, Status, TITLE, shown};
 use crate::model::system::words::{Swatch, slot_hue};
-use crate::model::system::{Action, Overlay, Pick, State, Window, request};
+use crate::model::system::{Action, Overlay, Pick, State, View, Window, view_request};
 use crate::model::text::span;
 use crate::model::{Form, Hue, Id};
 use crate::screens::activity::subnav;
@@ -126,7 +126,10 @@ fn keep_loaded(app: AppState, data: Memo<Shown>) {
                 .then(|| state.at().cloned())
                 .flatten()
         });
-        app.daemon().then(|| request(&project, at.as_ref()))
+        let target = app
+            .system
+            .with(|state| view_request(state, &project, at.as_ref()));
+        app.daemon().then_some(target)
     });
     effect(move || {
         if let Some(target) = wanted.get() {
@@ -140,11 +143,29 @@ fn page_head(app: AppState, data: Memo<Shown>) -> AnyElement {
         Overlay::ALL.iter().map(|o| (*o, o.label())).collect();
     let windows: Vec<(Window, &'static str)> =
         Window::ALL.iter().map(|w| (*w, w.label())).collect();
+    let views: Vec<(View, &'static str)> = View::ALL.iter().map(|v| (*v, v.label())).collect();
     // Asking for a project, there is no map to re-colour.
     let drawing = computed(move || data.with(|shown| shown.project.is_some()));
+    let structure =
+        computed(move || drawing.get() && app.system.with(|s| s.view == View::Structure));
+    let view_seg = dynamic(move || {
+        let views = views.clone();
+        drawing.get().then(|| {
+            untracked(|| {
+                seg(
+                    app,
+                    &views,
+                    move || app.system.with(|s| s.view),
+                    move |v| app.system_act(Action::View(v)),
+                    "seg-view",
+                )
+            })
+        })
+    })
+    .into_element();
     let overlay = dynamic(move || {
         let overlays = overlays.clone();
-        drawing.get().then(|| {
+        structure.get().then(|| {
             untracked(|| {
                 seg(
                     app,
@@ -158,7 +179,7 @@ fn page_head(app: AppState, data: Memo<Shown>) -> AnyElement {
     })
     .into_element();
     let activity =
-        computed(move || drawing.get() && app.system.with(|s| s.overlay == Overlay::Activity));
+        computed(move || structure.get() && app.system.with(|s| s.overlay == Overlay::Activity));
     let window = dynamic(move || {
         activity.get().then(|| {
             untracked(|| {
@@ -173,7 +194,21 @@ fn page_head(app: AppState, data: Memo<Shown>) -> AnyElement {
         })
     })
     .into_element();
-    head(app, TITLE, None, vec![overlay, window])
+    // The phone's bar already names the page; its switches take the width, one under the
+    // other, rather than squeeze the title.
+    if app.form == Form::Phone {
+        return view()
+            .flex_none()
+            .flex_col()
+            .gap(px(8.0))
+            .px(px(16.0))
+            .py(px(8.0))
+            .child(view_seg)
+            .child(overlay)
+            .child(window)
+            .into_element();
+    }
+    head(app, TITLE, None, vec![view_seg, overlay, window])
 }
 
 /// All projects in scope: the page asks for one.
@@ -461,6 +496,9 @@ fn swatch(app: AppState, swatch: Swatch) -> AnyElement {
         Swatch::Edge(EdgeKind::DeclaredOnly) => ("┄", color(Token::Ink4), true),
         Swatch::Edge(EdgeKind::Boundary) => ("┄", color(Token::Ink3), true),
         Swatch::Edge(EdgeKind::ReferencedOnly) => ("━", hue_ink(Hue::Held), false),
+        Swatch::Edge(EdgeKind::Starts) => ("━", hue_ink(Hue::Worker), false),
+        Swatch::Edge(EdgeKind::DependsOn) => ("┄", color(Token::Ink3), true),
+        Swatch::Edge(EdgeKind::Builds) => ("┄", hue_ink(Hue::Held), true),
         Swatch::Edge(_) => ("━", color(Token::Ink3), false),
         Swatch::Excluded => ("┆", color(Token::Ink4), true),
         Swatch::Folder => ("┆", color(Token::Rule2), true),
@@ -516,15 +554,11 @@ fn legend(app: AppState, data: Memo<Shown>) -> AnyElement {
 }
 
 fn inspector(app: AppState, data: Memo<Shown>) -> AnyElement {
-    let shown = computed(move || data.with(|shown| shown.inspector.clone()));
+    let shown = computed(move || data.with(|shown| (shown.inspector.clone(), shown.hint)));
     dynamic(move || {
-        let inspector = shown.get();
+        let (inspector, hint) = shown.get();
         untracked(|| match inspector {
-            None => quiet(
-                app,
-                "Select a package, module, file or edge for its facts. Select it again to open it; Escape goes up.",
-            )
-            .into_element(),
+            None => quiet(app, hint).into_element(),
             Some(inspector) => inspected(app, inspector),
         })
     })
@@ -562,12 +596,16 @@ fn inspected(app: AppState, inspector: Inspector) -> AnyElement {
                                 row.swatch
                                     .map(|kind| swatch(app, Swatch::Edge(kind)))
                                     .unwrap_or_else(|| view().into_element()),
+                                // The name stays whole; the words after it give way.
+                                view()
+                                    .flex_shrink_0()
+                                    .child(plain(app, row.label).number_of_lines(1u32))
+                                    .into_element(),
                                 view()
                                     .flex_1()
                                     .min_w(px(0.0))
-                                    .child(plain(app, row.label).number_of_lines(1u32))
+                                    .child(quiet(app, row.value).number_of_lines(1u32))
                                     .into_element(),
-                                quiet(app, row.value).into_element(),
                             ],
                         ),
                         None => label_value(app, row.label, value),

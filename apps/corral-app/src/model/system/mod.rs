@@ -4,19 +4,40 @@
 //! trail of levels drilled into, what is picked (a node or an edge), the overlay, the activity
 //! window and the filter. `scene` turns a served level into cards and edges, `layout` places
 //! them for the canvas, `tree` lists them for the phone and the terminal, `inspect` says what
-//! the pick is, and `words` the page's sentences.
+//! the pick is, and `words` the page's sentences. The Runtime view reads the `system_runtime`
+//! detail instead and `runtime` turns it into a scene the same code places, lists and inspects.
 
 pub mod inspect;
 mod layered;
 pub mod layout;
 pub mod marks;
+pub mod runtime;
+mod runtime_inspect;
 pub mod scene;
 pub mod shown;
 pub mod tree;
 pub mod words;
 
 use corral_protocol::detail::DetailRef;
-use corral_types::{ModuleId, SystemAt};
+use corral_types::{ModuleId, RuntimeUnitId, SystemAt};
+
+/// Which map the page draws: what the project is made of, or what it runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum View {
+    #[default]
+    Structure,
+    Runtime,
+}
+
+impl View {
+    pub const ALL: [View; 2] = [Self::Structure, Self::Runtime];
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Structure => "Structure",
+            Self::Runtime => "Runtime",
+        }
+    }
+}
 
 /// What re-colours the same geometry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -34,7 +55,8 @@ impl Overlay {
     pub const ALL: [Overlay; 3] = [Self::Structure, Self::Activity, Self::Coverage];
     pub const fn label(self) -> &'static str {
         match self {
-            Self::Structure => "Structure",
+            // "Structure" names the view this overlay re-colours.
+            Self::Structure => "Size",
             Self::Activity => "Activity",
             Self::Coverage => "Coverage",
         }
@@ -84,6 +106,10 @@ pub enum Node {
     },
     /// What a level does not list, counted.
     More,
+    /// A runtime unit: a binary, script, service, image, systemd unit or CI job.
+    Unit(RuntimeUnitId),
+    /// The project's npm scripts, folded into one card.
+    Scripts,
 }
 
 impl Node {
@@ -97,7 +123,7 @@ impl Node {
                 module: module.clone(),
             }),
             Node::File(path) => Some(SystemAt::File { path: path.clone() }),
-            Node::Definition { .. } | Node::More => None,
+            Node::Definition { .. } | Node::More | Node::Unit(_) | Node::Scripts => None,
         }
     }
 
@@ -123,6 +149,13 @@ impl Node {
             Node::File(path) => format!("node-f-{}", slug(path)),
             Node::Definition { line, .. } => format!("node-d-{line}"),
             Node::More => "node-more".into(),
+            Node::Unit(id) => format!(
+                "node-u-{}-{}-{}",
+                runtime::kind_slug(id.kind),
+                slug(&id.path),
+                slug(&id.name)
+            ),
+            Node::Scripts => "node-scripts".into(),
         }
     }
 }
@@ -146,6 +179,9 @@ pub enum Pick {
 /// The page's state on this device.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct State {
+    pub view: View,
+    /// The Runtime view lists every npm script instead of one folded card.
+    pub scripts: bool,
     /// The project the trail belongs to; another scope starts at its project level.
     pub project: Option<String>,
     /// The levels drilled into, outermost first; empty at the project level.
@@ -170,6 +206,7 @@ pub enum Action {
     Overlay(Overlay),
     Window(Window),
     Filter(String),
+    View(View),
 }
 
 impl State {
@@ -202,6 +239,9 @@ impl State {
                 }
             }
             Action::Open(node) => self.open(&node),
+            // The Runtime view has one level: the trail is the Structure view's.
+            Action::To(_) if self.view == View::Runtime => {}
+            Action::Up if self.view == View::Runtime => self.picked = None,
             Action::To(depth) => {
                 if depth < self.trail.len() {
                     let left = self.trail.get(depth).map(Node::of);
@@ -216,11 +256,25 @@ impl State {
             Action::Overlay(overlay) => self.overlay = overlay,
             Action::Window(window) => self.window = window,
             Action::Filter(text) => self.filter = text,
+            Action::View(view) => {
+                if self.view != view {
+                    self.view = view;
+                    self.picked = None;
+                }
+            }
         }
         *self != before
     }
 
     fn open(&mut self, node: &Node) {
+        if self.view == View::Runtime {
+            // Selecting the folded scripts again unfolds them; a script's inspector folds them.
+            if *node == Node::Scripts {
+                self.scripts = !self.scripts;
+                self.picked = (!self.scripts).then_some(Pick::Node(Node::Scripts));
+            }
+            return;
+        }
         let Some(at) = node.opens() else {
             return;
         };
@@ -238,6 +292,21 @@ pub fn request(project: &str, at: Option<&SystemAt>) -> DetailRef {
     DetailRef::SystemMap {
         project: project.to_owned(),
         at: at.cloned(),
+    }
+}
+
+/// The `system_runtime` detail: the project's units, edges and entry points.
+pub fn runtime_request(project: &str) -> DetailRef {
+    DetailRef::SystemRuntime {
+        project: project.to_owned(),
+    }
+}
+
+/// The detail the page's view reads at the level shown.
+pub fn view_request(state: &State, project: &str, at: Option<&SystemAt>) -> DetailRef {
+    match state.view {
+        View::Structure => request(project, at),
+        View::Runtime => runtime_request(project),
     }
 }
 

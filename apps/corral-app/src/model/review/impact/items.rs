@@ -4,11 +4,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use corral_types::{
-    ChangeKind, ModuleId, PackageEdgeKind, ReadStatus, SystemAt, SystemImpactCategory as Category,
-    SystemProvider, SystemReviewRow as Row,
+    ChangeKind, ModuleId, PackageEdgeKind, ReadStatus, RuntimeEdgeKind, RuntimeSource, RuntimeUnit,
+    RuntimeUnitKind, SystemAt, SystemImpactCategory as Category, SystemProvider,
+    SystemReviewRow as Row,
 };
 
-use crate::model::system::scene::module_name;
+use crate::model::system::runtime::{at, basis_word, entry_word};
+use crate::model::system::scene::{module_name, unit_word};
 use crate::model::system::{Node, count};
 
 /// How an item changed, by shape as well as colour.
@@ -203,11 +205,10 @@ pub(super) const fn category_of(row: &Row) -> Option<Category> {
         Row::TestFile { .. } | Row::TestCandidate { .. } => Category::Tests,
         Row::NotRead { .. } => Category::NotRead,
         Row::RuntimeUnit { .. } | Row::RuntimeEdge { .. } => Category::Runtime,
-        Row::Map { .. }
-        | Row::Container { .. }
-        | Row::Module { .. }
-        | Row::File { .. }
-        | Row::Entry { .. } => return None,
+        Row::Entry { .. } => Category::EntryPoints,
+        Row::Map { .. } | Row::Container { .. } | Row::Module { .. } | Row::File { .. } => {
+            return None;
+        }
     })
 }
 
@@ -479,12 +480,100 @@ fn row_item(cx: &Ctx, n: usize, row: &Row) -> Option<Item> {
             target: cx.file(path),
             ..item(key, Sign::Neutral, path.clone(), String::new())
         },
-        Row::Map { .. }
-        | Row::Container { .. }
-        | Row::Module { .. }
-        | Row::File { .. }
-        | Row::RuntimeUnit { .. }
-        | Row::RuntimeEdge { .. }
-        | Row::Entry { .. } => return None,
+        Row::RuntimeUnit { before, after } => {
+            let unit = after.as_ref().or(before.as_ref())?;
+            Item {
+                sub: Some(format!(
+                    "{} · {}",
+                    unit_word(unit.id.kind),
+                    at(&unit.id.path, unit.line)
+                )),
+                anchor: cx.anchor(&unit.id.path, Some(unit.line), after.is_none()),
+                target: cx.file(&unit.id.path),
+                ..item(
+                    key,
+                    Sign::between(before, after),
+                    unit.id.name.clone(),
+                    unit_change(before.as_ref(), after.as_ref()),
+                )
+            }
+        }
+        Row::RuntimeEdge { before, after } => {
+            let edge = after.as_ref().or(before.as_ref())?;
+            let from = match &edge.from {
+                RuntimeSource::Container { path } => name_or_root(path),
+                RuntimeSource::Unit { id } => id.name.clone(),
+            };
+            let kind = match edge.kind {
+                RuntimeEdgeKind::Starts => "starts",
+                RuntimeEdgeKind::Runs => "runs",
+                RuntimeEdgeKind::DependsOn => "depends on",
+                RuntimeEdgeKind::Builds => "builds",
+            };
+            Item {
+                sub: Some(at(&edge.site.path, edge.site.line)),
+                anchor: cx.anchor(&edge.site.path, Some(edge.site.line), after.is_none()),
+                target: cx.file(&edge.site.path),
+                ..item(
+                    key,
+                    Sign::between(before, after),
+                    format!("{from} {kind} {}", edge.to.name),
+                    basis_word(edge.basis).to_owned(),
+                )
+            }
+        }
+        Row::Entry { change, entry } => {
+            let owner = match &entry.owner {
+                RuntimeSource::Unit { id } => id.name.clone(),
+                RuntimeSource::Container { path } => name_or_root(path),
+            };
+            Item {
+                sub: Some(format!("{} · {owner}", at(&entry.path, entry.line))),
+                anchor: cx.anchor(
+                    &entry.path,
+                    Some(entry.line),
+                    *change == ChangeKind::Removed,
+                ),
+                target: cx.file(&entry.path),
+                ..item(
+                    key,
+                    Sign::of(*change),
+                    entry.name.clone(),
+                    entry_word(entry.kind).to_owned(),
+                )
+            }
+        }
+        Row::Map { .. } | Row::Container { .. } | Row::Module { .. } | Row::File { .. } => {
+            return None;
+        }
     })
+}
+
+/// What changed in a unit kept across the change: its ports, then its command, else where or
+/// how it is declared.
+fn unit_change(before: Option<&RuntimeUnit>, after: Option<&RuntimeUnit>) -> String {
+    let (Some(b), Some(a)) = (before, after) else {
+        return unit_word(
+            after
+                .or(before)
+                .map_or(RuntimeUnitKind::Binary, |u| u.id.kind),
+        )
+        .into();
+    };
+    let list = |ports: &[String]| {
+        if ports.is_empty() {
+            "none".to_owned()
+        } else {
+            ports.join(", ")
+        }
+    };
+    if b.ports != a.ports {
+        format!("ports {} → {}", list(&b.ports), list(&a.ports))
+    } else if b.command != a.command || b.entry_point != a.entry_point {
+        "command changed".into()
+    } else if b.depends_on != a.depends_on {
+        "depends_on changed".into()
+    } else {
+        "declaration changed".into()
+    }
 }

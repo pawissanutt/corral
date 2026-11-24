@@ -46,6 +46,8 @@ fn words(node: &Node) -> String {
         Node::File(path) => base_name(path).to_owned(),
         Node::Definition { name, .. } => name.clone(),
         Node::More => "more".into(),
+        Node::Unit(id) => id.name.clone(),
+        Node::Scripts => "npm scripts".into(),
     }
 }
 

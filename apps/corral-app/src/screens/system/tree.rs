@@ -101,8 +101,9 @@ fn row(app: AppState, index: usize, line: Line, host: Host) -> AnyElement {
             let pick = Pick::Node(node.node.clone());
             let picked = node.picked;
             let label = format!("{}, {}", node.name, node.figure);
+            // A terminal row keeps the name whole on one line; the phone wraps a long one.
             let name = text(node.name.clone())
-                .number_of_lines(1u32)
+                .when(form == Form::Terminal, |t| t.number_of_lines(1u32))
                 .text_color(color(if node.dim { Token::Ink3 } else { Token::Ink }))
                 .font_weight(FontWeight::SEMIBOLD);
             let opens = if node.opens { " ›" } else { "" };
@@ -124,7 +125,11 @@ fn row(app: AppState, index: usize, line: Line, host: Host) -> AnyElement {
                             .min_w(px(0.0))
                             .child(small(
                                 app,
-                                format!(" {}  {}  {tag}", node.figure, bar_cells(node.share)),
+                                if node.bar {
+                                    format!(" {}  {}  {tag}", node.figure, bar_cells(node.share))
+                                } else {
+                                    format!(" {}  {tag}", node.figure)
+                                },
                                 Token::Ink2,
                             ))
                             .into_element(),
@@ -163,7 +168,7 @@ fn row(app: AppState, index: usize, line: Line, host: Host) -> AnyElement {
                                 .gap(px(3.0))
                                 .child(head)
                                 .child(small(app, node.figure, Token::Ink2))
-                                .child(bar)
+                                .children(node.bar.then_some(bar))
                                 .into_element(),
                         ],
                     )
@@ -174,6 +179,7 @@ fn row(app: AppState, index: usize, line: Line, host: Host) -> AnyElement {
             let ink = match edge.kind {
                 Some(EdgeKind::ReferencedOnly) => hue_ink(Hue::Held),
                 Some(EdgeKind::DeclaredOnly) => color(Token::Ink3),
+                Some(EdgeKind::Starts) => hue_ink(Hue::Worker),
                 _ => color(Token::Ink2),
             };
             let label = format!("{} {}: {}", edge.arrow, edge.name, edge.words);
@@ -188,9 +194,9 @@ fn row(app: AppState, index: usize, line: Line, host: Host) -> AnyElement {
                     .flex_shrink_0()
                     .child(text(format!("  {}", edge.arrow)).text_color(color(Token::Ink3)))
                     .into_element(),
+                // The other end's name stays whole; the words after it give way.
                 view()
-                    .flex_1()
-                    .min_w(px(0.0))
+                    .flex_shrink_0()
                     .child(
                         text(edge.name.clone())
                             .number_of_lines(1u32)
@@ -200,12 +206,18 @@ fn row(app: AppState, index: usize, line: Line, host: Host) -> AnyElement {
                             }),
                     )
                     .into_element(),
-                text(edge.words.clone())
-                    .number_of_lines(1u32)
-                    .text_color(ink)
-                    .when(form != Form::Terminal, |t| {
-                        t.font_family(FONT_TEXT).text_size(px(12.0))
-                    })
+                view()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .items_end()
+                    .child(
+                        text(edge.words.clone())
+                            .number_of_lines(1u32)
+                            .text_color(ink)
+                            .when(form != Form::Terminal, |t| {
+                                t.font_family(FONT_TEXT).text_size(px(12.0))
+                            }),
+                    )
                     .into_element(),
             ];
             match edge.pick {

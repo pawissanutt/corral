@@ -46,6 +46,7 @@ impl AppState {
         self.set_scope(Scope::Project(project.clone()));
         self.system.update(|state| {
             state.follow(project.as_str());
+            state.view = crate::model::system::View::Structure;
             state.trail = trail;
             state.filter.clear();
             state.picked = Some(Pick::Node(node));

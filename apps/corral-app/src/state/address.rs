@@ -10,8 +10,9 @@ use nsh_core::prelude::*;
 use nsh_core::url_scheme::HistoryBehavior;
 
 use super::AppState;
-use crate::model::Form;
 use crate::model::address::{Place, Shown, url_path};
+use crate::model::system::{Action, View};
+use crate::model::{Destination, Form};
 
 /// The place the page was opened at, read before the first screen is built so a reload never
 /// shows another one first.
@@ -42,6 +43,7 @@ impl AppState {
         let place = computed(move || {
             let shown = Shown {
                 phone_section: self.phone_section.get(),
+                system_runtime: self.system.with(|s| s.view == View::Runtime),
             };
             self.nav.with(|nav| Place::of(nav, form, shown))
         });
@@ -100,7 +102,16 @@ impl AppState {
     /// Shows the place an address names, as opening it by name does.
     fn open_place(&self, place: Place) {
         match place {
-            Place::Destination(destination) => self.go(destination),
+            Place::Destination(destination) => {
+                if destination == Destination::System {
+                    self.system_act(Action::View(View::Structure));
+                }
+                self.go(destination)
+            }
+            Place::SystemRuntime => {
+                self.system_act(Action::View(View::Runtime));
+                self.go(Destination::System)
+            }
             Place::Project(id) => self.open_project(id),
             place => self.change(|nav| place.open(nav)),
         }

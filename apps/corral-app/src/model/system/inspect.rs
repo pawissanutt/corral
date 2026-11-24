@@ -4,7 +4,7 @@
 
 use corral_types::{ReadStatus, ReferenceBasis, SystemActivity, SystemAt, WorkspaceStatus};
 
-use super::scene::{Card, Edge, EdgeKind, Kind, Scene, kind_word, module_name};
+use super::scene::{Card, Edge, EdgeKind, Kind, Level, Scene, kind_word, module_name};
 use super::{Node, Pick, count, plural};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -55,6 +55,9 @@ pub struct Inspector {
 }
 
 pub fn inspect(scene: &Scene, pick: &Pick, at: Option<&SystemAt>) -> Option<Inspector> {
+    if scene.level == Level::Runtime {
+        return super::runtime_inspect::inspect(scene, pick);
+    }
     match pick {
         Pick::Node(node) => scene.card(node).map(|card| node_inspector(scene, card, at)),
         Pick::Edge(from, to) => scene
@@ -269,6 +272,7 @@ fn edge_value(edge: &Edge) -> String {
             plural(edge.count, "ref", "refs")
         ),
         EdgeKind::Module | EdgeKind::Boundary => count(edge.count),
+        _ => super::runtime::edge_words(edge),
     }
 }
 
@@ -278,7 +282,7 @@ fn edge_inspector(scene: &Scene, edge: &Edge) -> Inspector {
     let dependency = match edge.kind {
         EdgeKind::Declared | EdgeKind::DeclaredOnly => Some("Match found"),
         EdgeKind::ReferencedOnly => Some("No match found by the map"),
-        EdgeKind::Module | EdgeKind::Boundary => None,
+        _ => None,
     };
     let title = match edge.kind {
         EdgeKind::Declared | EdgeKind::ReferencedOnly => format!("{from} uses {to}"),

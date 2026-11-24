@@ -3,13 +3,14 @@
 //! notices, the summary, the legend, the inspector and the provenance line.
 
 use corral_protocol::detail::DetailBody;
-use corral_types::{SystemAt, SystemMap, SystemRow};
+use corral_types::{SystemAt, SystemMap, SystemRow, SystemRuntime};
 
 use super::inspect::{Inspector, inspect};
+use super::runtime;
 use super::scene::{Scene, build, module_name};
 use super::tree::matched;
 use super::words::{Notice, Swatch, legend, notices, provenance, summary};
-use super::{Node, State, base_name, request};
+use super::{Node, State, View, base_name, request, runtime_request};
 use crate::model::Id;
 use crate::model::daemon::{DetailCache, Feed};
 use crate::model::projects::{Scope, known_projects};
@@ -61,7 +62,12 @@ pub struct Shown {
     pub provenance: String,
     /// Said when the level is served with nothing on it.
     pub empty: Option<&'static str>,
+    /// What the inspector says while nothing is picked.
+    pub hint: &'static str,
 }
+
+pub const HINT: &str = "Select a package, module, file or edge for its facts. Select it again to open it; Escape goes up.";
+pub const RUNTIME_HINT: &str = "Select a unit, a package or an edge for where it is declared, its entry points and what starts it.";
 
 /// The served map of one level, if any.
 pub fn map_of<'a>(feed: &'a Feed, project: &str, at: Option<&SystemAt>) -> Option<&'a SystemMap> {
@@ -111,6 +117,7 @@ pub fn shown(state: &State, feed: &Feed, scope: &Scope) -> Shown {
             matched: None,
             provenance: String::new(),
             empty: None,
+            hint: HINT,
         };
     };
     // A trail kept from another project would read a level that project does not have.
@@ -121,6 +128,9 @@ pub fn shown(state: &State, feed: &Feed, scope: &Scope) -> Shown {
     };
     let at = trail.last();
     let row: Option<&SystemRow> = feed.systems.get(project.as_str());
+    if state.view == View::Runtime {
+        return runtime_shown(state, feed, project, row);
+    }
     let status = status_of(feed.detail(&request(&project, at)));
     let map = map_of(feed, &project, at);
     let scene = map.map(|map| build(map, at));
@@ -164,5 +174,48 @@ pub fn shown(state: &State, feed: &Feed, scope: &Scope) -> Shown {
         empty,
         scene,
         project: Some(project),
+        hint: HINT,
+    }
+}
+
+/// The served `system_runtime`, if any.
+pub fn runtime_of<'a>(feed: &'a Feed, project: &str) -> Option<&'a SystemRuntime> {
+    match feed.detail(&runtime_request(project))?.body()? {
+        DetailBody::SystemRuntime(runtime) => Some(runtime),
+        _ => None,
+    }
+}
+
+/// The Runtime view: one level, the units and what starts them.
+fn runtime_shown(state: &State, feed: &Feed, project: String, row: Option<&SystemRow>) -> Shown {
+    let status = status_of(feed.detail(&runtime_request(&project)));
+    let served = runtime_of(feed, &project);
+    let scene = served.map(|runtime| runtime::build(runtime, state.scripts));
+    let empty = match (&scene, served) {
+        (Some(scene), Some(runtime)) if scene.cards.is_empty() && runtime.error.is_none() => {
+            Some(runtime::EMPTY)
+        }
+        _ => None,
+    };
+    Shown {
+        projects: Vec::new(),
+        status,
+        crumbs: vec![project.clone()],
+        notices: runtime::notices(served, row),
+        summary: served.map(runtime::summary).unwrap_or_default(),
+        legend: scene.as_ref().map(runtime::legend).unwrap_or_default(),
+        inspector: scene
+            .as_ref()
+            .zip(state.picked.as_ref())
+            .and_then(|(scene, pick)| inspect(scene, pick, None)),
+        matched: scene
+            .as_ref()
+            .filter(|_| !state.filter.trim().is_empty())
+            .map(|scene| matched(scene, &state.filter)),
+        provenance: runtime::provenance(served, row),
+        empty,
+        scene,
+        project: Some(project),
+        hint: RUNTIME_HINT,
     }
 }

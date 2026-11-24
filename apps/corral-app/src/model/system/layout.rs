@@ -135,7 +135,7 @@ pub fn size(card: &Card, scene: &Scene, measure: Measure) -> (f32, f32) {
         let w = measure(Font::Name, &card.name) + measure(Font::Tag, &tag) + 36.0;
         return (w.ceil(), PORT_HEIGHT);
     }
-    let plain = matches!(card.kind, Kind::More);
+    let plain = matches!(card.kind, Kind::More | Kind::Scripts);
     let t = ((card.lines as f32 + 1.0).ln() / (scene.max_lines as f32 + 1.0).ln()).clamp(0.0, 1.0);
     let package = scene.level == Level::Package;
     let min = if package { 112.0 } else { 128.0 };
@@ -269,24 +269,40 @@ pub fn layout(scene: &Scene, room: f32, measure: Measure) -> Layout {
             });
         }
         width = width.max(g.width + 2.0 * PAD);
-        y += g.height + 50.0;
+        y += g.height;
     }
-    if !scene.band.is_empty() {
-        let band_sizes: Vec<_> = scene.band.iter().map(|c| sizes[*c]).collect();
-        let (pos, w, h) = flow_pack(&band_sizes, inner.max(width - 2.0 * PAD), 14.0);
-        if !graph.is_empty()
-            && let Some(text) = scene.band_title
-        {
+    // The band, then each kind's group: packed rows, each under its caption once anything is
+    // above it; a group says its kind even when it is the first thing drawn.
+    let parts = std::iter::once((scene.band_title, &scene.band, false)).chain(
+        scene
+            .groups
+            .iter()
+            .map(|(title, group)| (Some(*title), group, true)),
+    );
+    let mut above = !graph.is_empty();
+    for (title, part, group) in parts {
+        if part.is_empty() {
+            continue;
+        }
+        let titled = title.filter(|_| above || group);
+        if above {
+            y += 50.0;
+        } else if titled.is_some() {
+            y += 26.0;
+        }
+        let part_sizes: Vec<_> = part.iter().map(|c| sizes[*c]).collect();
+        let (pos, w, h) = flow_pack(&part_sizes, inner.max(width - 2.0 * PAD), 14.0);
+        if let Some(text) = titled {
             out.captions.push(Caption {
                 x: PAD,
-                y: y - 14.0,
+                y: y - if above { 14.0 } else { 10.0 },
                 text,
-                rule: Some(y - 34.0),
+                rule: above.then_some(y - 34.0),
             });
         }
         for (i, rect) in pos.into_iter().enumerate() {
             out.placed.push(Placed {
-                card: scene.band[i],
+                card: part[i],
                 rect: Rect {
                     x: rect.x + PAD,
                     y: rect.y + y,
@@ -295,9 +311,11 @@ pub fn layout(scene: &Scene, room: f32, measure: Measure) -> Layout {
             });
         }
         width = width.max(w + 2.0 * PAD);
-        y += h + PAD;
-    } else if !graph.is_empty() {
-        y -= 50.0 - PAD;
+        y += h;
+        above = true;
+    }
+    if above {
+        y += PAD;
     }
     out.width = width.ceil();
     out.height = y.ceil();

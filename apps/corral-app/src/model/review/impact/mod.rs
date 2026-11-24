@@ -3,7 +3,7 @@
 //! the task's head, drawn by Activity › System's map at the level drilled into (packages, a
 //! package's modules, a module's files, a file's definitions), each node marked with the lines
 //! the change added and removed there and the dependents it holds, the rest dimmed. Under it
-//! the touched modules, then the Model impact list: the eight fixed categories in their order,
+//! the touched modules, then the Model impact list: the ten fixed categories in their order,
 //! each with its items, an explicit "none" or "not provided" when nothing supplies it, and what
 //! was left out of the list. `reach` says where "Open in System" can take an item.
 
@@ -536,12 +536,7 @@ pub fn impact(review: &SystemReview, extension: Option<&str>, more: &BTreeSet<us
     );
 
     let mut sections = Vec::new();
-    // Don't present categories the app doesn't render as wire omissions.
-    for (index, category) in Category::ALL
-        .into_iter()
-        .filter(|category| !matches!(category, Category::Runtime | Category::EntryPoints))
-        .enumerate()
-    {
+    for (index, category) in Category::ALL.into_iter().enumerate() {
         // Continuation pages repeat the summaries; the first is the answer.
         let summary = review.categories.iter().find(|c| c.category == category);
         let provided = summary.is_some_and(|s| s.provided);

@@ -121,6 +121,84 @@ fn unsupplied_category_is_not_zero_and_dependents_survive_a_touched_package() {
     assert_eq!(mark(Node::Container("c".into())), None);
 }
 
+/// Runtime and entry point rows were dropped and both categories hidden, which also shifted
+/// the later sections' places: each lists its rows under its own place in `Category::ALL`, and
+/// an entry point the change removed is anchored at the base.
+#[test]
+fn runtime_and_entry_point_changes_are_listed_in_their_categories() {
+    use corral_types::{
+        EntryKind, EntryPoint, RuntimeSource, RuntimeUnit, RuntimeUnitId, RuntimeUnitKind,
+    };
+    let unit = |ports: &[&str]| RuntimeUnit {
+        id: RuntimeUnitId {
+            kind: RuntimeUnitKind::Service,
+            name: "api".into(),
+            path: "compose.yaml".into(),
+        },
+        line: 12,
+        container: String::new(),
+        command: None,
+        entry_point: None,
+        image: None,
+        build_context: None,
+        dockerfile: None,
+        ports: ports.iter().map(|p| (*p).to_owned()).collect(),
+        depends_on: Vec::new(),
+    };
+    let categories = Category::ALL
+        .into_iter()
+        .map(|category| SystemCategorySummary {
+            category,
+            provided: category != Category::Tests,
+            total: usize::from(matches!(
+                category,
+                Category::Runtime | Category::EntryPoints
+            )),
+        })
+        .collect();
+    let rows = vec![
+        container("a"),
+        Row::RuntimeUnit {
+            before: Some(unit(&["80"])),
+            after: Some(unit(&["8080"])),
+        },
+        Row::Entry {
+            change: ChangeKind::Removed,
+            entry: EntryPoint {
+                kind: EntryKind::Route,
+                name: "GET /tasks".into(),
+                path: "a/src/routes.rs".into(),
+                line: 7,
+                owner: RuntimeSource::Container { path: "a".into() },
+            },
+        },
+    ];
+    let impact = impact(&review(categories, rows), None, &BTreeSet::new());
+    let section = |category: Category| {
+        let index = Category::ALL.iter().position(|c| *c == category);
+        impact.sections.iter().find(|s| Some(s.index) == index)
+    };
+    let runtime = section(Category::Runtime).map(|s| (s.supply, s.items.clone()));
+    let Some((Supply::Rows(1), items)) = runtime else {
+        panic!("runtime section: {runtime:?}");
+    };
+    assert_eq!(
+        (items[0].sign, items[0].right.as_str()),
+        (Sign::Changed, "ports 80 → 8080")
+    );
+    let entries = section(Category::EntryPoints).map(|s| s.items.clone());
+    let anchor = entries
+        .as_ref()
+        .and_then(|items| items.first())
+        .and_then(|item| item.anchor.clone());
+    assert_eq!(anchor.map(|a| (a.base, a.line)), Some((true, Some(7))));
+    assert_eq!(
+        section(Category::Tests).map(|s| s.supply),
+        Some(Supply::NotProvided)
+    );
+    assert_eq!(impact.sections.len(), Category::ALL.len());
+}
+
 /// Before a configured extension's answer reaches the review, its categories wait for it
 /// rather than reading "not provided"; once it answers, a listed category with no rows is none,
 /// and an empty candidate answer still shows beside a built-in changed test file.

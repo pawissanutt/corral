@@ -160,7 +160,11 @@ impl AppState {
         // The address a browser was opened at names the place over the stored destination.
         // A project's address is Home scoped to it; the scope waits for the daemon's store.
         let mut launch_scope = None;
+        let mut launch_system = system::State::default();
         if let Some(place) = address::launched() {
+            if place == crate::model::address::Place::SystemRuntime {
+                launch_system.view = system::View::Runtime;
+            }
             if let crate::model::address::Place::Project(id) = &place {
                 launch_scope = Some(crate::model::projects::Scope::Project(id.clone()));
             }
@@ -215,7 +219,7 @@ impl AppState {
             timeline: signal(timeline::State::default()),
             usage: signal(usage::State::default()),
             artifacts: signal(artifacts::State::default()),
-            system: signal(system::State::default()),
+            system: signal(launch_system),
             impact: signal(review::impact::State::default()),
             agents: source::StateSource::new(
                 data,

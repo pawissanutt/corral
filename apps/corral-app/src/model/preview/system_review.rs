@@ -8,9 +8,9 @@
 use std::collections::BTreeMap;
 
 use corral_types::{
-    ChangeKind, DependentFact, ModuleId, ReadStatus, SystemAt, SystemCategorySummary,
-    SystemImpactCategory as Category, SystemMapRow, SystemReview, SystemReviewRow as Row,
-    SystemStatus,
+    ChangeKind, DependentFact, ModuleId, ReadStatus, RuntimeSource, SystemAt,
+    SystemCategorySummary, SystemImpactCategory as Category, SystemMapRow, SystemReview,
+    SystemReviewRow as Row, SystemRuntimeRow, SystemStatus,
 };
 
 use super::system::detail;
@@ -160,11 +160,50 @@ pub(super) fn review(
             }),
     );
     out.extend(rows);
+    // Runtime and entry points: a unit or entry point of a touched package moved a line.
+    let touched = |container: &str| {
+        out.iter()
+            .any(|row| matches!(row, Row::Container { path, .. } if path == container))
+    };
+    let runtime = super::system_runtime::detail(project)?;
+    for row in &runtime.rows {
+        match row {
+            SystemRuntimeRow::Unit { unit } if touched(&unit.container) => {
+                let mut moved = unit.clone();
+                moved.line += 1;
+                facts.push((
+                    Category::Runtime,
+                    Row::RuntimeUnit {
+                        before: Some(unit.clone()),
+                        after: Some(moved),
+                    },
+                ));
+            }
+            SystemRuntimeRow::Entry { entry } => {
+                let owner = match &entry.owner {
+                    RuntimeSource::Container { path } => path.clone(),
+                    RuntimeSource::Unit { .. } => entry
+                        .path
+                        .split("/src/")
+                        .next()
+                        .unwrap_or_default()
+                        .to_owned(),
+                };
+                if touched(&owner) {
+                    facts.push((
+                        Category::EntryPoints,
+                        Row::Entry {
+                            change: ChangeKind::Added,
+                            entry: entry.clone(),
+                        },
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
     let mut categories = Vec::new();
-    for category in Category::ALL
-        .into_iter()
-        .filter(|c| *c != Category::EntryPoints)
-    {
+    for category in Category::ALL {
         let listed: Vec<Row> = facts
             .iter()
             .filter(|(c, _)| *c == category)

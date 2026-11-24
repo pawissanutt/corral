@@ -10,6 +10,8 @@ use crate::model::{Destination, Form, Id, Live, NavState, Route, SettingsSection
 const TASK: &str = "task";
 const SESSION: &str = "session";
 const ACTIVITY: &str = "activity";
+/// The last segment of Activity › System's Runtime view.
+const RUNTIME: &str = "runtime";
 /// The first segment of the former Project page.
 const PROJECTS: &str = "projects";
 
@@ -18,6 +20,8 @@ const PROJECTS: &str = "projects";
 pub enum Place {
     /// A destination's own screen.
     Destination(Destination),
+    /// Activity › System showing its Runtime view.
+    SystemRuntime,
     /// A Settings section.
     Settings(SettingsSection),
     /// A task's page at one of its tabs.
@@ -34,6 +38,8 @@ pub enum Place {
 pub struct Shown {
     /// The Settings section the phone's stack has open over its Settings list.
     pub phone_section: Option<SettingsSection>,
+    /// Activity › System shows its Runtime view.
+    pub system_runtime: bool,
 }
 
 impl Place {
@@ -52,6 +58,7 @@ impl Place {
                 .phone_section
                 .map_or(Place::Destination(Destination::Settings), Place::Settings),
             Destination::Settings => Place::Settings(nav.settings),
+            Destination::System if shown.system_runtime => Place::SystemRuntime,
             destination => Place::Destination(destination),
         }
     }
@@ -63,6 +70,9 @@ impl Place {
                 format!("{ACTIVITY}/{}", destination.slug())
             }
             Place::Destination(destination) => destination.slug().to_owned(),
+            Place::SystemRuntime => {
+                format!("{ACTIVITY}/{}/{RUNTIME}", Destination::System.slug())
+            }
             Place::Settings(section) => {
                 format!("{}/{}", Destination::Settings.slug(), section.slug())
             }
@@ -90,6 +100,9 @@ impl Place {
             SESSION => return id(rest).map(Place::Session),
             PROJECTS => return id(rest).map(Place::Project),
             ACTIVITY => {
+                if rest.split_once('/') == Some((Destination::System.slug(), RUNTIME)) {
+                    return Some(Place::SystemRuntime);
+                }
                 let page = Destination::from_slug(rest)
                     .filter(|page| page.area() == Area::Activity)
                     .unwrap_or(Destination::Feed);
@@ -116,6 +129,8 @@ impl Place {
     pub fn open(self, nav: &mut NavState) {
         match self {
             Place::Destination(destination) => nav.go(destination),
+            // The view itself is the System page's state, which the caller sets.
+            Place::SystemRuntime => nav.go(Destination::System),
             Place::Settings(section) => nav.go_settings(section),
             Place::Task(id, tab) => {
                 nav.pages.clear();
@@ -183,7 +198,28 @@ mod tests {
 
     const SHOWN: Shown = Shown {
         phone_section: None,
+        system_runtime: false,
     };
+
+    /// The Runtime view had no address of its own: a reload or a link must open it again,
+    /// and only on the System page.
+    #[test]
+    fn the_runtime_view_has_its_own_address() {
+        let runtime = Shown {
+            phone_section: None,
+            system_runtime: true,
+        };
+        let mut nav = NavState::new(Form::Desktop);
+        nav.go(Destination::System);
+        let place = Place::of(&nav, Form::Desktop, runtime);
+        assert_eq!(place.path(), "activity/system/runtime");
+        assert_eq!(Place::parse(&place.path()), Some(Place::SystemRuntime));
+        nav.go(Destination::Usage);
+        assert_eq!(
+            Place::of(&nav, Form::Desktop, runtime),
+            Place::Destination(Destination::Usage)
+        );
+    }
 
     fn reloaded(nav: &NavState, form: Form) -> Place {
         let place = Place::of(nav, form, SHOWN);
@@ -242,6 +278,7 @@ mod tests {
         assert_eq!(list, Place::Destination(Destination::Settings));
         let open = Shown {
             phone_section: Some(SettingsSection::Config),
+            system_runtime: false,
         };
         let section = Place::of(&nav, Form::Phone, open);
         assert_ne!(section.path(), list.path());

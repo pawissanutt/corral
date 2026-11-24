@@ -154,3 +154,111 @@ fn selecting_again_drills_in_and_escape_comes_back_to_it() {
         }]
     );
 }
+
+fn runtime_fixture() -> corral_types::SystemRuntime {
+    use corral_types::{
+        EntryKind, EntryPoint, RuntimeBasis, RuntimeEdge, RuntimeEdgeKind, RuntimeSite,
+        RuntimeSource, RuntimeUnit, RuntimeUnitId, RuntimeUnitKind, SystemRuntimeRow as Row,
+    };
+    let id = |kind, name: &str, path: &str| RuntimeUnitId {
+        kind,
+        name: name.into(),
+        path: path.into(),
+    };
+    let unit = |id: RuntimeUnitId| Row::Unit {
+        unit: RuntimeUnit {
+            id,
+            line: 3,
+            container: "a".into(),
+            command: None,
+            entry_point: None,
+            image: None,
+            build_context: None,
+            dockerfile: None,
+            ports: Vec::new(),
+            depends_on: Vec::new(),
+        },
+    };
+    let bin = id(RuntimeUnitKind::Binary, "tool", "a/src/main.rs");
+    let starts = |line| Row::Edge {
+        edge: RuntimeEdge {
+            kind: RuntimeEdgeKind::Starts,
+            from: RuntimeSource::Container { path: "b".into() },
+            to: bin.clone(),
+            basis: RuntimeBasis::Syntax,
+            site: RuntimeSite {
+                path: "b/src/run.rs".into(),
+                line,
+            },
+        },
+    };
+    let mut rows = vec![
+        unit(bin.clone()),
+        unit(id(RuntimeUnitKind::Job, "ci", ".github/workflows/ci.yml")),
+        starts(10),
+        starts(20),
+        Row::Entry {
+            entry: EntryPoint {
+                kind: EntryKind::Command,
+                name: "serve".into(),
+                path: "a/src/cli.rs".into(),
+                line: 4,
+                owner: RuntimeSource::Unit { id: bin.clone() },
+            },
+        },
+        Row::EntryCoverage {
+            container: "c".into(),
+            detectors: Default::default(),
+        },
+    ];
+    for name in ["dev", "build", "test"] {
+        rows.push(unit(id(RuntimeUnitKind::Script, name, "a/package.json")));
+    }
+    corral_types::SystemRuntime {
+        project: "p".into(),
+        head: Some("abc".into()),
+        status: SystemStatus::Ready,
+        error: None,
+        omitted_rows: 0,
+        rows,
+    }
+}
+
+/// The Runtime view on the map's own code: scripts fold until the fold is selected again, two
+/// sites of one pair are one edge with both lines, an entry point sits under its unit, a
+/// package no detector applies to says so, and the kind groups are placed without overlap.
+#[test]
+fn runtime_folds_scripts_merges_sites_and_places_groups() {
+    let runtime = runtime_fixture();
+    let mut state = State {
+        view: View::Runtime,
+        ..State::default()
+    };
+    let scene = runtime::build(&runtime, state.scripts);
+    let scripts = scene.card(&Node::Scripts).map(|c| c.folded.len());
+    assert_eq!(scripts, Some(3));
+    assert_eq!(scene.edges.len(), 1);
+    assert_eq!(scene.edges[0].sites.len(), 2);
+    let tool = scene.cards.iter().find(|c| c.name == "tool");
+    assert_eq!(tool.map(|c| c.entries.len()), Some(1));
+    let c = scene.card(&Node::Container("c".into()));
+    assert_eq!(c.map(runtime::figure).as_deref(), Some("no detector"));
+    let placed = layout(&scene, 600.0, &estimate);
+    assert_eq!(placed.placed.len(), scene.cards.len());
+    for (i, a) in placed.placed.iter().enumerate() {
+        for b in &placed.placed[i + 1..] {
+            assert!(
+                !a.rect.overlaps(&b.rect),
+                "{:?} overlaps {:?}",
+                a.rect,
+                b.rect
+            );
+        }
+    }
+    state.act(Action::Pick(Pick::Node(Node::Scripts)));
+    state.act(Action::Pick(Pick::Node(Node::Scripts)));
+    assert!(state.scripts && state.trail.is_empty());
+    let unfolded = runtime::build(&runtime, state.scripts);
+    assert!(unfolded.card(&Node::Scripts).is_none());
+    assert_eq!(unfolded.cards.len(), scene.cards.len() + 2);
+}
