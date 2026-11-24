@@ -586,13 +586,15 @@ fn lens_item(cx: &Ctx, key: String, impact: &corral_types::lenses::LensImpact) -
     if !impact.removed.is_empty() {
         right.push(format!("−{}", impact.removed.len()));
     }
-    let sign = if only_removed {
-        Sign::Removed
-    } else if impact.touched.is_empty() && impact.removed.is_empty() {
-        Sign::Added
-    } else {
-        Sign::Changed
-    };
+    // Elements removed do not say the lens went: it is drawn at the base only when the head
+    // has no such lens.
+    let sign =
+        if impact.touched.is_empty() && impact.removed.is_empty() && impact.touched_base.is_empty()
+        {
+            Sign::Added
+        } else {
+            Sign::Changed
+        };
     let listed = |word: &str, names: &[String]| {
         (!names.is_empty()).then(|| format!("{word}: {}", names.join("; ")))
     };
@@ -600,6 +602,7 @@ fn lens_item(cx: &Ctx, key: String, impact: &corral_types::lenses::LensImpact) -
         listed("touched", &impact.touched),
         listed("added", &impact.added),
         listed("removed", &impact.removed),
+        listed("removed with their code edited", &impact.touched_base),
     ]
     .into_iter()
     .flatten()
