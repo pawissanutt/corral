@@ -125,8 +125,11 @@ pub(super) fn panel(
 /// Details shares the dock with the conversation, never taking its place.
 pub(super) fn dock_details(app: AppState, page: Memo<SessionPage>) -> AnyElement {
     let details = details_of(page);
+    // Remount only when Details appears, goes or toggles: a host's stream changes the details
+    // every beat, and remounting then would drop a press and the pane's scroll.
+    let shown = computed(move || details.with(|details| details.as_ref().map(|d| d.shown)));
     dynamic(move || {
-        let shown = details.with(|details| details.as_ref().map(|d| d.shown))?;
+        let shown = shown.get()?;
         Some(untracked(|| {
             view()
                 .when(shown, |pane| pane.flex_1().min_h(px(0.0)))
