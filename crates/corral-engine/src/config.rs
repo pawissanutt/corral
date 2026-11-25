@@ -15,6 +15,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use crate::error::refuse;
 use crate::model::Task;
 
+pub mod automation;
 mod extension;
 mod profile;
 mod project;
@@ -41,6 +42,8 @@ pub struct Config {
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub extensions: BTreeMap<String, Extension>,
     pub routing: Vec<RoutingRule>,
+    #[serde(skip_serializing_if = "automation::Automation::is_empty")]
+    pub automation: automation::Automation,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub pricing: BTreeMap<String, Price>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -60,6 +63,7 @@ impl Default for Config {
             projects: BTreeMap::new(),
             extensions: BTreeMap::new(),
             routing: Vec::new(),
+            automation: automation::Automation::default(),
             pricing: BTreeMap::new(),
             daemon: None,
         }
@@ -186,7 +190,9 @@ impl Config {
     pub fn load(path: &Path) -> Result<Self> {
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("reading configuration {}", path.display()))?;
-        Self::parse(&text).with_context(|| format!("parsing configuration {}", path.display()))
+        Self::parse(&text)
+            .with_context(|| format!("parsing configuration {}", path.display()))?
+            .validate_loaded_automation(path)
     }
 
     pub fn parse(text: &str) -> std::result::Result<Self, ConfigProblem> {
@@ -373,6 +379,7 @@ impl Config {
             }
         }
         extension::validate(self, &mut problems);
+        automation::validate(self, &mut problems);
         for (index, rule) in self.routing.iter().enumerate() {
             self.check_profile(
                 &rule.profile,
