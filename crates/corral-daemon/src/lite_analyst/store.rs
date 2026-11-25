@@ -1,6 +1,7 @@
 //! Separate, private SQLite ledger. No project, worktree, transcript or owner RPC access.
 use super::{
     bootstrap::Enrollment,
+    reports::{self, Offer},
     wire::{self, Binding, Fault, Fence, FenceReason, Result, Start},
 };
 use anyhow::{Context, ensure};
@@ -9,7 +10,7 @@ use serde::Serialize;
 use std::{
     fs::{self, File, OpenOptions},
     os::unix::fs::{MetadataExt, OpenOptionsExt},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 pub(super) struct Store {
@@ -17,6 +18,7 @@ pub(super) struct Store {
     pub(super) link_id: String,
     pub(super) epoch: String,
     pub(super) reconciliation_only: bool,
+    pub(super) reports: PathBuf,
     // Fields drop in declaration order: keep the lock until SQLite closes.
     _lock: StateLock,
 }
@@ -38,7 +40,7 @@ pub(super) struct Snapshot {
     pub(super) seq: u64,
     pub(super) state: String,
     pub(super) reason: Option<String>,
-    pub(super) offer: Option<()>, // Reports arrive with C4.
+    pub(super) offer: Option<Offer>,
     pub(super) acked: bool,
 }
 
@@ -99,8 +101,14 @@ impl Store {
         let db_path = root.join("lite-analyst.sqlite3");
         private_file(&db_path)?;
         let mut db = Connection::open(db_path).context("open fixture ledger")?;
-        db.execute_batch("PRAGMA foreign_keys = ON; PRAGMA synchronous = FULL;")?;
+        db.execute_batch(
+            "PRAGMA foreign_keys = ON; PRAGMA synchronous = FULL; PRAGMA secure_delete = ON;",
+        )?;
         db.execute_batch(SCHEMA)?;
+        db.execute_batch(reports::SCHEMA)?;
+        let reports = root.join("reports");
+        reports::init_directory(&reports)?;
+        reports::collect_reports(&db, &reports)?;
         let (clock, earliest_ms) = load(&db)?;
         let tx = db.transaction_with_behavior(Immediate)?;
         let full: bool = tx.query_row(
@@ -145,6 +153,11 @@ impl Store {
                     WHERE link_id=?1 AND state='stop_requested'",
                     [&e.link_id],
                 )?;
+                tx.execute(
+                    "UPDATE runs SET launch_phase='cleaned'
+                    WHERE link_id=?1 AND state='finished' AND launch_phase='attached'",
+                    [&e.link_id],
+                )?;
                 true
             }
             _ => anyhow::bail!("fixture enrollment refused"),
@@ -161,6 +174,7 @@ impl Store {
             link_id: e.link_id.clone(),
             epoch: e.channel_epoch.clone(),
             reconciliation_only,
+            reports,
             _lock: lock,
         };
         store
@@ -458,9 +472,13 @@ impl Store {
         } else {
             "cancelled"
         };
-        let n = self.db.execute("UPDATE runs SET launch_phase='cleaned',state=?5,seq=seq+1,reason=coalesce(?6,reason)
-            WHERE run_id=?1 AND link_id=?2 AND generation=?3 AND launch_id=?4 AND state='stop_requested'
-            AND launch_phase IN ('submitted','attached')", params![id,self.link_id,generation,launch,state,failure])?;
+        let n = self.db.execute("UPDATE runs SET launch_phase='cleaned',
+            state=CASE WHEN state='finished' THEN state ELSE ?5 END,
+            seq=seq+(state<>'finished'),
+            reason=CASE WHEN state='finished' THEN reason ELSE coalesce(?6,reason) END
+            WHERE run_id=?1 AND link_id=?2 AND generation=?3 AND launch_id=?4
+            AND state IN ('stop_requested','finished') AND launch_phase IN ('submitted','attached')",
+            params![id,self.link_id,generation,launch,state,failure])?;
         if n != 1 {
             return Err(Fault::Stopped);
         }
@@ -496,26 +514,34 @@ pub(super) fn require_link(db: &Connection, link: &str, epoch: &str) -> Result<(
 }
 
 fn snapshot(db: &Connection, link: &str, id: &str) -> Result<Snapshot> {
-    db.query_row(
-        "SELECT generation,seq,state,reason FROM runs WHERE link_id=?1 AND run_id=?2",
-        [link, id],
-        |r| {
-            Ok(Snapshot {
-                run_id: id.to_owned(),
-                generation: r.get(0)?,
-                seq: r.get(1)?,
-                state: r.get(2)?,
-                reason: r.get(3)?,
-                offer: None,
-                acked: false,
-            })
-        },
-    )
-    .optional()?
-    .ok_or(Fault::NotFound)
+    let mut snapshot = db
+        .query_row(
+            "SELECT generation,seq,state,reason FROM runs WHERE link_id=?1 AND run_id=?2",
+            [link, id],
+            |r| {
+                Ok(Snapshot {
+                    run_id: id.to_owned(),
+                    generation: r.get(0)?,
+                    seq: r.get(1)?,
+                    state: r.get(2)?,
+                    reason: r.get(3)?,
+                    offer: None,
+                    acked: false,
+                })
+            },
+        )
+        .optional()?
+        .ok_or(Fault::NotFound)?;
+    if snapshot.state == "finished"
+        && let Some((offer, acked)) = reports::published(db, link, id)?
+    {
+        snapshot.offer = Some(offer);
+        snapshot.acked = acked;
+    }
+    Ok(snapshot)
 }
 
-fn private_directory(root: &Path) -> anyhow::Result<()> {
+pub(super) fn private_directory(root: &Path) -> anyhow::Result<()> {
     let m = fs::symlink_metadata(root).context("inspect private fixture state directory")?;
     ensure!(
         m.is_dir() && m.uid() == rustix::process::geteuid().as_raw() && m.mode() & 0o077 == 0,

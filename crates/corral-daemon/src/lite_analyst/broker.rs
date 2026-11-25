@@ -18,7 +18,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use super::{bootstrap::Enrollment, policy, wire};
+use super::{bootstrap::Enrollment, policy, reports::EvidenceReceipt, wire};
 use io::{Lines, Scope};
 use protocol::{Arm, BindingKind, BindingRecord, Call, Probe};
 
@@ -41,6 +41,11 @@ pub(super) struct Broker {
     next_id: u64,
     startup_step: usize,
     budget: Option<Budget>,
+}
+
+pub(super) struct Invocation {
+    pub(super) payload: Value,
+    pub(super) receipts: Vec<EvidenceReceipt>,
 }
 
 struct Pipes {
@@ -246,7 +251,7 @@ impl Broker {
         args: &Value,
         deadline: Instant,
         pump: &mut dyn FnMut() -> Result<()>,
-    ) -> Result<Value> {
+    ) -> Result<Invocation> {
         // Errors (including timeout, failed pump, or protocol mismatch) close all
         // capabilities. An uncertain send is not permission to try the call again.
         let mut pipes = self.pipes.take().context("fixture broker is closed")?;
@@ -267,7 +272,7 @@ impl Broker {
         tool: &str,
         args: &Value,
         scope: &mut Scope<'_>,
-    ) -> Result<Value> {
+    ) -> Result<Invocation> {
         io::quiet(&pipes.idle())?;
         let call = Call::new(self.allocate_id(), tool, args, false)?;
         let arm = Arm::new(&call)?;
@@ -290,8 +295,15 @@ impl Broker {
         pipes.lines.unbuffered()?;
         let payload = protocol::structured_reply(&call, reply)?;
         budget.record_reply(&payload)?;
+        let mut receipts = vec![EvidenceReceipt::accepted(
+            &arm.invocation_id,
+            &arm.tool,
+            &arm.args_digest,
+            &payload,
+            None,
+        )?];
         if tool != "calculate_metric" || payload["status"] != "pending" {
-            return Ok(payload);
+            return Ok(Invocation { payload, receipts });
         }
 
         // Only a validated pending reply to this immutable, outstanding call
@@ -321,9 +333,16 @@ impl Broker {
             let reply = scope.recv_packet(pipes.host_poll.as_fd(), &idle)?;
             let (_, payload) = poll.reply(&self.binding, &call, reply)?;
             budget.record_reply(&payload)?;
+            receipts.push(EvidenceReceipt::accepted(
+                &poll.invocation_id,
+                &poll.tool,
+                &poll.args_digest,
+                &payload,
+                Some(&arm.invocation_id),
+            )?);
             if payload["status"] != "pending" {
                 policy::validate_reply(tool, &payload)?;
-                return Ok(payload);
+                return Ok(Invocation { payload, receipts });
             }
         }
         anyhow::bail!("fixture metric has no terminal result within authorized polls");

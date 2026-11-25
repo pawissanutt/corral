@@ -6,6 +6,7 @@ mod investigation;
 mod isolation;
 mod policy;
 mod provider;
+mod reports;
 mod store;
 mod turns;
 mod wire;
@@ -278,6 +279,8 @@ impl Session<'_> {
                     FenceReason::Stopped,
                 )?)
             }
+            "fetch_report" => self.store.fetch_report(wire::params(value)?),
+            "ack_report" => self.store.ack_report(wire::params(value)?),
             "fence_session" => {
                 let request: wire::Fence = wire::params(value)?;
                 self.store

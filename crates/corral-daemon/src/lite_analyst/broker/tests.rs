@@ -386,7 +386,13 @@ fn attach_negotiates_evidence_first_and_only_releases_terminal_poll_payload() {
                 &mut pump,
             )
             .unwrap();
-        assert_eq!(result, payload);
+        assert_eq!(result.payload, payload);
+        let receipts = serde_json::to_value(&result.receipts).unwrap();
+        assert_eq!(receipts[0]["tool"], "calculate_metric");
+        assert!(receipts[0]["citation"].is_null());
+        assert_eq!(receipts[2]["tool"], "read_result");
+        assert_eq!(receipts[2]["continuation_of"], receipts[0]["invocation_id"]);
+        assert_eq!(receipts[2]["citation"], payload["citation"]);
         assert!(pump_steps > 2);
         let budget = broker.budget.as_ref().unwrap();
         assert_eq!(budget.calls_left, 5);

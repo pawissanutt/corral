@@ -1,19 +1,21 @@
-# C3 opt-in Corral host QA
+# Opt-in Corral host QA
 
 **Component QA only.** The daemon, Pi/Bun executable and Rust MCP shim are real
 Corral components. The Lite work/broker peer and scripted HTTP responder here
 are synthetic disposable test code; they are not shipped as part of either
-product. A passing receipt is **not** joined E1 proof, a C4 package or report
-import, a Lite approval/revocation test, proof of fresh computation, or permission
-to enable the fixture for other data.
+product. A passing receipt does **not** prove joined E1, first-party Lite report
+import/reopen or approval/revocation, fresh computation, or permission to enable
+for other data.
 
 ## Run
 
 Use Linux x86_64 as a non-root user with user/PID/mount/network namespaces, the
 regular non-setid `/usr/bin/bwrap`, Landlock TCP ABI ≥4, glibc's standard ELF loader,
-`/usr/bin/readelf`, and Python 3.11+ (stdlib only). Prepare the trusted Corral
-binaries first. Example from a checkout with the pinned JS dependencies already
-installed:
+`/usr/bin/readelf`, and Python 3.11+ (stdlib only). Prefer the pinned archive invocation in the
+[C4 package recipe](../lite_analyst_bundle/README.md), which passes the exact raw
+package manifest through to the daemon. For local development, prepare the
+three trusted executables first. Example from a checkout with the pinned JS
+dependencies already installed:
 
 ```sh
 cargo build --locked -p corral-daemon --bins
@@ -69,14 +71,18 @@ private `corral-c3-qa-*` directory is quarantined instead of removed).
   from the actual `5100`, `2800`, captured `2300`, limitations and citations. The
   Pi initiates the private shim's stdio MCP startup before the first POST;
   the mediator relays only pinned JSON-RPC startup frames and verifies the
-  three evidence descriptors independently. The terminal snapshot must be
-  `failed/report_unavailable` with no offer and no fourth turn. The responder
-  checks at each actual POST that the exact body
-  and permit were already durably consumed; after teardown, the three body
-  hashes and 760 µUSD settled/acked charges are checked again.
+  three evidence descriptors independently. The owning fake Lite peer reads
+  a `finished` offer, verifies exact canonical bytes against the live-derived
+  report, rejects a wrong offer or mismatched ack, acks idempotently and can
+  re-fetch the same bytes after ack and post-finish cancel. After teardown the
+  only original is the exact retained Corral report (mode 0400), with its
+  delivery state durable. There is no fourth turn. At each actual POST the
+  exact body and permit must already be durably consumed; after teardown the
+  three body hashes and 760 µUSD settled/acked charges are checked again.
 - **`pending`**: same three POSTs, with a pending metric reply followed by one
   host-only poll at least 1000 ms later. The third POST must contain only the
   terminal metric as the original calculation's result; no model poll/call.
+  Verify finish, delivery and retention as in `happy`.
 - **`forbidden`**: a first provider response attempts host-only `read_result`;
   no broker invocation and no second send. The POST has an invalid model
   response and settles conservatively, without falling back to another route.
@@ -105,8 +111,8 @@ with varying selectors and citations to catch hardcoded handles. It never
 executes a metric, writes an authored note, or imports a report. All checks read
 current component traffic; the packet is not a prerecorded provider transcript.
 The controller verifies final absence of child processes, broker closure, and
-that the fixed listener port can be rebound before disposing of scratch. There
-is no report output file, provider body, credential, or Pi transcript in receipts.
+that the fixed listener port can be rebound before disposing of scratch. Receipts include only report hash/length and custody checks, never report text,
+provider body, credential, or Pi transcript.
 
 ## C4 packaging handoff
 
@@ -118,10 +124,8 @@ under `/fixture/corral/runtime/lib` and `/fixture/corral/runtime/lib64`, at the
 same relative paths as the child loaders expect. The supervisor mounts only
 these two ABI trees and the individual entrypoint read-only; it never mounts
 `/state`, the provider credential, the profile metadata, or the full package
-into either child. The product runner, not this QA lock, verifies the C4 build
-and joint E1 lock. The C3 `finish_draft` path validates canonical bytes in memory;
-C4 replaces the draft acknowledgement with a live generation/stop CAS and
-immutable report publication before acknowledging `finish_report`.
+into either child. The product runner, not this QA lock, independently verifies the full joint E1
+lock. See the [C4 recipe and separate provider handoff](../lite_analyst_bundle/README.md).
 
 ## Script checks
 

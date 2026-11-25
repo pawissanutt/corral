@@ -153,7 +153,9 @@ test("Pi starts via MCP, then executes the pinned four-tool Agent registry and p
       [metric, '{"cell":"feb_net","citation":"cite_net","limitations":"Not cash on hand.","operation_version":"demo_1","result":"res_feb","result_kind":"captured","status":"ok","unit":"units","value_minor":2300}'],
     ]);
     expect(await pi.receive()).toEqual({ type: "turn", body: { ...pinnedTurn, messages } });
-    await step([[finish, '{"status":"ok"}']]);
+    const receipt = { offer: { bytes: 200, corral_instance: "fixture", generation: 1,
+      report_id: "report", run_id: "run", sha256: "a".repeat(64) } };
+    await step([[finish, JSON.stringify(receipt)]]);
     expect(await pi.receive()).toEqual({ type: "done" });
     await pi.expectExit(0); // Leave input open; a second start/retry/turn is not possible.
   });

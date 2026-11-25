@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Opt-in offline C3 QA using real Corral component binaries and a fake Lite peer."""
+"""Opt-in offline QA using real Corral component binaries and a fake Lite peer."""
 import argparse
 import ctypes
 import os
@@ -158,7 +158,10 @@ def main():
     parser.add_argument(OPT_IN, action="store_true")
     for name in ENTRYPOINTS:
         parser.add_argument("--" + name, type=Path, help="path to an already built trusted local " + name + " executable")
-    parser.add_argument("--revision", help="40 lowercase hex digits naming the local build's Corral baseline")
+    parser.add_argument("--bundle", type=Path, help="C4 fixture archive instead of three trusted local executables")
+    parser.add_argument("--archive-sha256", help="independent C4 archive pin")
+    parser.add_argument("--manifest-sha256", help="independent C4 raw manifest pin")
+    parser.add_argument("--revision", help="40 lowercase hex digits naming the Corral build revision")
     parser.add_argument("--packet", type=Path, default=REPO / ".evidence/lite-fixtures/docs/protocol/analyst-february-close-v1.json",
                         help="raw pinned T-2073:3 packet")
     parser.add_argument("--scenario", action="append", choices=SCENARIOS, help="select lanes; default: all")
@@ -171,9 +174,12 @@ def main():
     root = None
     exit_code = 64
     try:
-        need(all(getattr(opts, ep) is not None for ep in ENTRYPOINTS) and opts.revision is not None
-             and re.fullmatch(r"[a-f0-9]{40}", opts.revision) and int(opts.revision, 16) != 0,
-             "trusted_binary_inputs_and_revision_required")
+        local = [getattr(opts, ep) for ep in ENTRYPOINTS]
+        need(opts.revision is not None and re.fullmatch(r"[a-f0-9]{40}", opts.revision) and int(opts.revision, 16) != 0,
+             "exact_corral_revision_required")
+        need((opts.bundle is not None and not any(local) and opts.archive_sha256 and opts.manifest_sha256)
+             or (opts.bundle is None and all(local) and not opts.archive_sha256 and not opts.manifest_sha256),
+             "select_pinned_archive_or_three_trusted_local_binaries")
         selected = opts.scenario or SCENARIOS
         need(len(set(selected)) == len(selected), "duplicate_scenario")
         if platform.system() != "Linux" or platform.machine() != "x86_64" or os.getuid() == 0 or os.geteuid() == 0:

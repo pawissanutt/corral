@@ -153,12 +153,3 @@ fn pi_eof_after_consumption_blocks_provider_and_settles_once_without_replay() {
     ));
     assert!(!peer.readable(Instant::now()).unwrap());
 }
-
-#[test]
-fn report_draft_accepts_only_same_generation_citations_at_utf8_boundaries() {
-    let issued = HashSet::from(["current".to_owned()]);
-    let report = |start, handle| json!({"text":"é!","citations":[{"start_byte":start,"end_byte":2,"handle":handle}]});
-    assert!(finish_draft(report(0, "current"), &issued).is_ok());
-    assert!(finish_draft(report(1, "current"), &issued).is_err());
-    assert!(finish_draft(report(0, "foreign"), &issued).is_err());
-}

@@ -245,9 +245,9 @@ pub(super) struct Arm {
     #[serde(rename = "type")]
     kind: String,
     pub(super) id: u64,
-    tool: String,
-    invocation_id: String,
-    args_digest: String,
+    pub(super) tool: String,
+    pub(super) invocation_id: String,
+    pub(super) args_digest: String,
 }
 
 impl Arm {

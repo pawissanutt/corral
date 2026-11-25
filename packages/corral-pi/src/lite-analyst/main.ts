@@ -83,7 +83,14 @@ async function run(pipe: FixturePipe): Promise<void> {
           requireWire(!signal?.aborted && result.type === "result" && typeof result.content === "string");
           const content = result.content;
           if (name === FINISH) {
-            requireWire(content === '{"status":"ok"}');
+            const receipt = closedObject(parseStrictJson(content), "offer");
+            const offer = closedObject(receipt.offer, "corral_instance", "run_id", "generation", "report_id", "sha256", "bytes");
+            requireWire([offer.corral_instance, offer.run_id, offer.report_id].every(
+              (value) => typeof value === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(value),
+            ) && typeof offer.sha256 === "string" && /^[0-9a-f]{64}$/.test(offer.sha256) &&
+              typeof offer.generation === "number" && Number.isSafeInteger(offer.generation) && offer.generation > 0 &&
+              typeof offer.bytes === "number" && Number.isSafeInteger(offer.bytes) && offer.bytes > 0 && offer.bytes <= 65536 &&
+              canonical(receipt) === content);
             finishAcknowledged = true;
           } else {
             const bytes = Buffer.byteLength(content);

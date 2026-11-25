@@ -6,6 +6,7 @@ use super::{
     isolation::{Payload, Sandbox},
     policy,
     provider::Provider,
+    reports::{Finish, Sealed},
     turns::{Outcome, ReserveTurn},
     wire::{self, Binding, FenceReason, StartBody},
     work::FRAME_TIMEOUT,
@@ -91,7 +92,7 @@ impl Session<'_> {
             .submit_launch(&binding.run_id, binding.generation, now_ms)
             .map_err(|_| anyhow::anyhow!("fixture launch submission refused"))?;
         let mut children = Children::default();
-        let result = self.converse(
+        let _ = self.converse(
             fixture,
             &binding,
             &body,
@@ -111,15 +112,16 @@ impl Session<'_> {
         let reaped = children.stop();
         fence?;
         reaped?;
-        // C4 owns durable publish/fetch/ack. A validated local draft is not
-        // a finished investigation or a report offer; discard it here.
-        let failure = initiated.then_some(if result.is_ok() {
-            "report_unavailable"
-        } else {
-            "unavailable"
-        });
+        // A committed report survives cancellation, peer loss and even failure
+        // to hand its local success receipt back to Pi. Teardown releases only
+        // the process slot; it cannot retract a terminal winner.
         self.store
-            .confirm_teardown(&binding.run_id, binding.generation, &launch_id, failure)
+            .confirm_teardown(
+                &binding.run_id,
+                binding.generation,
+                &launch_id,
+                initiated.then_some("unavailable"),
+            )
             .map_err(|_| anyhow::anyhow!("fixture teardown could not commit"))?;
         self.work.check_live()?;
         self.flush_local_fence()
@@ -133,7 +135,7 @@ impl Session<'_> {
         launch_id: &str,
         deadline: Instant,
         children: &mut Children,
-    ) -> Result<Vec<u8>> {
+    ) -> Result<()> {
         let startup = deadline.min(Instant::now() + STARTUP_TIMEOUT);
         self.pump_run(binding, "admitted")?;
         let (shim, stdio) = Sandbox::spawn(Payload::Shim)?;
@@ -199,7 +201,7 @@ impl Session<'_> {
                 self.clock.now()?,
             )
             .map_err(|_| anyhow::anyhow!("fixture launch attachment refused"))?;
-        let mut citations = HashSet::new();
+        let mut evidence = Vec::new();
         let mut call_ids = HashSet::new();
         for turn in 1..=body.limits.turns {
             let (message, calls) = self.provider_turn(
@@ -241,16 +243,35 @@ impl Session<'_> {
                 policy::validate_args(&name, &args)?;
                 self.pump_run(binding, "working")?;
                 if name == "finish_report" {
-                    broker.check_live()?;
-                    let draft = finish_draft(args, &citations)?;
-                    let mut finishing = || {
-                        self.pump_run(binding, "working")?;
-                        broker.check_live()
-                    };
-                    // Local terminal acknowledgement to Pi only; never enter MCP
-                    // or a subsequent provider body. No report is offered in C3.
+                    let report = Sealed::new(args)
+                        .map_err(|_| anyhow::anyhow!("fixture report arguments refused"))?;
+                    broker.prove_live(deadline, &mut || self.pump_run(binding, "working"))?;
+                    self.pump_run(binding, "working")?;
+                    let offer = self
+                        .store
+                        .finish_report(
+                            Finish {
+                                run_id: &binding.run_id,
+                                generation: binding.generation,
+                                launch_id,
+                                report,
+                                evidence: &evidence,
+                            },
+                            || {
+                                self.work.check_live()?;
+                                broker.check_live()?;
+                                io.check_waiting()?;
+                                self.clock.now()
+                            },
+                        )
+                        .map_err(|_| anyhow::anyhow!("fixture report publication refused"))?;
+                    // Host-local acknowledgement only. Its loss cannot undo the
+                    // committed winner, and no subsequent turn may see it.
+                    let mut finishing = || self.work.check_live();
+                    let deadline = Instant::now() + FRAME_TIMEOUT;
+                    let content = String::from_utf8(wire::canonical(&json!({"offer":offer}))?)?;
                     io.send(
-                        &json!({"type":"result", "content":"{\"status\":\"ok\"}"}),
+                        &json!({"type":"result", "content":content}),
                         deadline,
                         &mut finishing,
                     )?;
@@ -259,16 +280,13 @@ impl Session<'_> {
                             && io.buffer.is_empty(),
                         "fixture Pi did not end after local finish"
                     );
-                    return Ok(draft);
+                    return Ok(());
                 }
                 let result = broker.invoke(&name, &args, deadline, &mut || {
                     self.pump_run(binding, "working")
                 })?;
                 self.pump_run(binding, "working")?;
-                if let Some(handle) = result.get("citation").and_then(Value::as_str) {
-                    citations.insert(handle.to_owned());
-                }
-                let content = String::from_utf8(wire::canonical_signed(&result)?)?;
+                let content = String::from_utf8(wire::canonical_signed(&result.payload)?)?;
                 io.send(
                     &json!({"type":"result", "content":content}),
                     deadline,
@@ -277,6 +295,7 @@ impl Session<'_> {
                         broker.check_live()
                     },
                 )?;
+                evidence.extend(result.receipts);
                 transcript.push(json!({"role":"tool", "tool_call_id":id, "content":content}));
             }
             if turn == body.limits.turns {
@@ -622,45 +641,6 @@ fn plan_calls(message: &Value, seen: &mut HashSet<String>) -> Result<Vec<Call>> 
     }
     seen.extend(out.iter().map(|call| call.id.clone()));
     Ok(out)
-}
-
-fn finish_draft(args: Value, issued: &HashSet<String>) -> Result<Vec<u8>> {
-    #[derive(Deserialize, serde::Serialize, PartialEq, Eq, Ord, PartialOrd)]
-    #[serde(deny_unknown_fields)]
-    struct Citation {
-        start_byte: usize,
-        end_byte: usize,
-        handle: String,
-    }
-    #[derive(Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct Draft {
-        text: String,
-        citations: Vec<Citation>,
-    }
-    let Draft {
-        text,
-        mut citations,
-    } = serde_json::from_value(args)?;
-    for citation in &citations {
-        ensure!(
-            citation.start_byte < citation.end_byte
-                && text.is_char_boundary(citation.start_byte)
-                && text.is_char_boundary(citation.end_byte)
-                && issued.contains(&citation.handle),
-            "fixture report has an unissued citation or invalid span"
-        );
-    }
-    citations.sort_unstable();
-    ensure!(
-        citations.windows(2).all(|w| w[0] != w[1]),
-        "duplicate fixture report citation"
-    );
-    let bytes = wire::canonical(
-        &json!({"v":1, "kind":"investigation_report", "text":text, "citations":citations}),
-    )?;
-    ensure!(bytes.len() <= 65536, "fixture report too large");
-    Ok(bytes)
 }
 
 #[cfg(test)]
