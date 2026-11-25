@@ -1,6 +1,6 @@
 //! Settings › Configuration: the `corral.toml` editor. The page reads the file once it opens,
 //! shows one part at a time (Workspace, Projects, Profiles, Harnesses, Routing, Artifacts,
-//! Extensions, or the whole File as text), and keeps a save bar pinned under it: what is unsaved, Save,
+//! Extensions, Automations, or the whole File as text), and keeps a save bar pinned under it: what is unsaved, Save,
 //! Discard and Read again. A refused save leaves the draft and lists its reasons at the top, each
 //! naming a field a button to it (a syntax error's to File), and on the field itself. Over them
 //! the page says when the file changed elsewhere since it was read (with Read again) and when
@@ -14,6 +14,7 @@ use super::config_fields::{edit, entry, field};
 use super::parts::{cell, frame, space};
 use super::{config_profiles, config_routing};
 
+mod automations;
 mod extensions;
 mod harnesses;
 use crate::model::Form;
@@ -31,7 +32,7 @@ use crate::ui::kit::text::h3;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, MEASURE_FORM, Token, color};
 
-const PARTS: [(Part, &str); 8] = [
+const PARTS: [(Part, &str); 9] = [
     (Part::Workspace, "Workspace"),
     (Part::Projects, "Projects"),
     (Part::Profiles, "Profiles"),
@@ -40,6 +41,7 @@ const PARTS: [(Part, &str); 8] = [
     (Part::Artifacts, "Artifacts"),
     (Part::Extensions, "Extensions"),
     (Part::File, "File"),
+    (Part::Automations, "Automations"),
 ];
 
 /// The save bar's measure: the section's, with the 24 pt the bar and the body each pad their
@@ -245,6 +247,7 @@ fn reason_button(app: AppState, at: usize, path: Option<Path>, line: String) -> 
 fn part(app: AppState, selected: Part, shape: Shape, live: Memo<Live>) -> AnyElement {
     match shape {
         Shape::File => file(app),
+        Shape::Automations => automations::part(app, live),
         Shape::Harnesses(configured) => harnesses::catalog(app, &configured, live),
         Shape::Unparsed(problem) => view()
             .min_w(px(0.0))
@@ -505,6 +508,11 @@ fn save_bar(app: AppState) -> AnyElement {
             let live = Live::of(editor);
             (
                 editor.dirty(),
+                crate::model::settings::automation::save_blocked(
+                    app.automations_available(),
+                    editor.saved.as_deref(),
+                    &editor.draft,
+                ),
                 editor.waiting.is_some(),
                 editor.saved.is_some(),
                 form::status(editor, &live),
@@ -512,7 +520,7 @@ fn save_bar(app: AppState) -> AnyElement {
         })
     });
     dynamic(move || {
-        let (dirty, waiting, loaded, status) = state.get();
+        let (dirty, automation_blocked, waiting, loaded, status) = state.get();
         untracked(move || {
             let wide = app.form == Form::Phone;
             let action = |label: &'static str,
@@ -541,8 +549,8 @@ fn save_bar(app: AppState) -> AnyElement {
                     "Save",
                     ButtonKind::Primary,
                     "btn-config-save",
-                    !dirty || waiting,
-                    |app| app.act(app.settings, |state, _| state.save_config()),
+                    !dirty || waiting || automation_blocked,
+                    |app| app.save_config(),
                 ),
                 action(
                     "Discard",
@@ -559,10 +567,14 @@ fn save_bar(app: AppState) -> AnyElement {
                     |app| app.act(app.settings, |state, _| state.reload_config()),
                 ),
             ];
-            let words = text(status)
-                .test_id("config-status")
-                .number_of_lines(1u32)
-                .text_color(color(if dirty { Token::Ink } else { Token::Ink3 }));
+            let words = text(if automation_blocked {
+                crate::model::settings::automation::UNAVAILABLE.into()
+            } else {
+                status
+            })
+            .test_id("config-status")
+            .number_of_lines(1u32)
+            .text_color(color(if dirty { Token::Ink } else { Token::Ink3 }));
             measured_bar(app, BAR_MEASURE, actions, Some(words.into_element()))
         })
     })

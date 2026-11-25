@@ -67,7 +67,7 @@ pub fn parse(text: &str) -> Result<DocumentMut, String> {
 }
 
 /// The table at `path`, following a rule's index into `[[routing]]` or an inline array.
-fn table<'a>(at: &'a dyn TableLike, path: &[Seg]) -> Option<&'a dyn TableLike> {
+pub(super) fn table<'a>(at: &'a dyn TableLike, path: &[Seg]) -> Option<&'a dyn TableLike> {
     let Some((first, rest)) = path.split_first() else {
         return Some(at);
     };
@@ -94,7 +94,7 @@ fn element(item: &Item, index: usize) -> Option<&dyn TableLike> {
 
 /// The table at `path`, creating missing tables (implicit, so an empty one prints nothing)
 /// when `create`.
-fn table_mut<'a>(
+pub(super) fn table_mut<'a>(
     at: &'a mut dyn TableLike,
     path: &[Seg],
     create: bool,

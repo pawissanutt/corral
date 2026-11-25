@@ -192,6 +192,7 @@ pub(super) fn snapshot(text: &str, base: SettingsSnapshot) -> SettingsSnapshot {
     SettingsSnapshot {
         config,
         extensions,
+        automations: Vec::new(),
         revision: Some(revision(text)),
         built_in_defaults: Some(built_in()),
         project_defaults: Some(project_defaults()),
@@ -409,6 +410,7 @@ fn check(text: &str) -> Result<(), Vec<ConfigProblem>> {
             ));
         }
     }
+    problems.extend(crate::model::settings::automation::preview_problems(&root));
     if problems.is_empty() {
         Ok(())
     } else {
@@ -419,6 +421,99 @@ fn check(text: &str) -> Result<(), Vec<ConfigProblem>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn automation_preview_reopens_saved_and_paused_rules_and_refuses_a_deleted_agent() {
+        use crate::model::Effect;
+        use crate::model::settings::{
+            State,
+            automation::{self, Change},
+            editor::Edit,
+        };
+
+        let original = sample(true);
+        let mut feed = Feed {
+            sample_config: Some(original.clone()),
+            ..Feed::default()
+        };
+        let mut state = State::default();
+        let run = |state: &mut State, feed: &mut Feed, effects: Vec<Effect>| {
+            let [Effect::Config { key, put }] = effects.as_slice() else {
+                panic!("expected one config request");
+            };
+            config(feed, key, put.as_deref());
+            state.settle_config(feed);
+        };
+        let effects = state.open_config();
+        run(&mut state, &mut feed, effects);
+        state.edit_config(Edit::Automation(Change::AddAgent("helper".into())));
+        state.edit_config(Edit::Text(
+            automation::path("agents", "helper", "instructions"),
+            "Inspect the evidence.\nSummarize it.".into(),
+        ));
+        state.edit_config(Edit::Automation(Change::AddRule(
+            "follow-up".into(),
+            "helper".into(),
+        )));
+        state.edit_config(Edit::Automation(Change::Trigger("follow-up".into(), true)));
+        let enabled = automation::path("rules", "follow-up", "enabled");
+        state.edit_config(Edit::Switch(enabled.clone(), Some(true)));
+        let mut older = super::super::feed(1_800_000_000, String::new(), String::new(), None);
+        older.capabilities.clear();
+        assert!(older.ready());
+        assert!(automation::save_blocked(
+            automation::available(&older, false),
+            Some(&original),
+            &state.config.draft
+        ));
+        assert!(automation::save_blocked(
+            automation::available(&feed, false),
+            Some(&original),
+            &state.config.draft
+        ));
+        assert!(!automation::save_blocked(
+            automation::available(&feed, true),
+            Some(&original),
+            &state.config.draft
+        ));
+        let effects = state.save_config();
+        run(&mut state, &mut feed, effects);
+        assert!(!state.config.dirty());
+        assert!(state.config.draft.contains("# read when corrald starts"));
+        assert!(state.config.draft.contains("[extensions.notify]"));
+
+        state = State::default();
+        let effects = state.open_config();
+        run(&mut state, &mut feed, effects);
+        let doc = document::parse(&state.config.draft).unwrap();
+        assert_eq!(
+            document::get(&doc, &enabled).and_then(|item| item.as_bool()),
+            Some(true)
+        );
+        state.edit_config(Edit::Switch(enabled.clone(), Some(false)));
+        let effects = state.save_config();
+        run(&mut state, &mut feed, effects);
+        let paused = feed.sample_config.clone().unwrap();
+        let doc = document::parse(&paused).unwrap();
+        assert_eq!(
+            document::get(&doc, &enabled).and_then(|item| item.as_bool()),
+            Some(false)
+        );
+        assert!(feed.settings.as_ref().unwrap().automations.is_empty());
+
+        state.edit_config(Edit::Automation(Change::Remove("agents", "helper".into())));
+        let effects = state.save_config();
+        run(&mut state, &mut feed, effects);
+        assert!(state.config.dirty());
+        assert!(
+            state
+                .config
+                .reasons_at(&automation::path("rules", "follow-up", "agent"))
+                .next()
+                .is_some()
+        );
+        assert_eq!(feed.sample_config.as_deref(), Some(paused.as_str()));
+    }
 
     #[test]
     fn built_in_routing_target_is_reported_and_accepted_without_a_profile_table() {

@@ -1,6 +1,7 @@
 //! Settings: the workspace configuration and its editor, this daemon, devices and pairing,
 //! push, and this device's connection.
 
+pub mod automation;
 pub mod connect;
 pub mod document;
 pub mod editor;

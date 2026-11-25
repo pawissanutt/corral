@@ -7,11 +7,37 @@ use nsh_core::prelude::*;
 use super::AppState;
 use crate::client::requests::{self, ClientRequest};
 use crate::model::act::Confirming;
-use crate::model::settings::document;
 use crate::model::settings::editor::{Editor, Part};
+use crate::model::settings::{automation, document};
 use crate::model::{Destination, Id, NavState, SettingsSection};
 
 impl AppState {
+    pub fn automation_preview(&self) -> bool {
+        self.fixture()
+    }
+
+    pub fn automations_available(&self) -> bool {
+        self.feed
+            .with(|feed| automation::available(feed, self.automation_preview()))
+    }
+
+    pub fn save_config(&self) {
+        let available = untracked(|| self.automations_available());
+        self.act(self.settings, move |state, _| {
+            if state.config.waiting.is_some() {
+                return Vec::new();
+            }
+            if automation::save_blocked(
+                available,
+                state.config.saved.as_deref(),
+                &state.config.draft,
+            ) {
+                return state.config_unsent(automation::UNAVAILABLE.into());
+            }
+            state.save_config()
+        });
+    }
+
     /// Sends `config.get`, or `config.put` with `put`, under `key`; the sample preview answers
     /// it locally. One that cannot leave settles the editor with why.
     pub(super) fn send_config(&self, key: Id, put: Option<String>) {

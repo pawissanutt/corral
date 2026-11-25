@@ -16,6 +16,7 @@ use crate::model::daemon::Feed;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Kind {
     Text,
+    Multiline,
     Typed(Typed),
     /// On or off; `inherit` adds the choice to leave it unset.
     Switch {
@@ -71,6 +72,7 @@ pub enum Shape {
         empty: Option<&'static str>,
     },
     Harnesses(Vec<String>),
+    Automations,
     File,
     /// The draft is not TOML, so the form cannot read it; the text view can.
     Unparsed(String),
@@ -173,6 +175,9 @@ fn lines(doc: &DocumentMut, path: Path, key: &str, add: &'static str) -> Field {
 
 /// The part's structure from the draft and corrald's project rows.
 pub fn shape(editor: &Editor, feed: &Feed) -> Shape {
+    if editor.part == Part::Automations {
+        return Shape::Automations;
+    }
     if editor.part == Part::File {
         return Shape::File;
     }
@@ -467,6 +472,17 @@ pub fn anchors(doc: &DocumentMut) -> Vec<Path> {
         anchors.extend(RULE_KEYS.iter().map(|key| Path::rule(index, key)));
     }
     anchors.extend(extensions::anchors(doc));
+    for (section, keys) in [
+        ("agents", &super::automation::AGENT_KEYS[..]),
+        ("rules", &super::automation::RULE_KEYS[..]),
+    ] {
+        for id in super::automation::names(doc, section) {
+            anchors.extend(
+                keys.iter()
+                    .map(|key| super::automation::path(section, &id, key)),
+            );
+        }
+    }
     anchors
 }
 
@@ -478,6 +494,9 @@ pub fn locate(path: &Path) -> Option<(Part, Option<String>, Option<&'static str>
         return extensions::locate(&keys);
     }
     match keys.as_slice() {
+        [Seg::Key(root), Seg::Key(section), Seg::Key(id), ..] if root == "automation" => {
+            Some((Part::Automations, Some(format!("{section}: {id}")), None))
+        }
         [Seg::Key(root), Seg::Key(key)] => {
             let part = match root.as_str() {
                 "artifacts" => Part::Artifacts,

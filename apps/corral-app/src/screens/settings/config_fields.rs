@@ -23,6 +23,13 @@ use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
 /// Applies one edit to the draft.
 pub fn edit(app: AppState, edit: Edit) {
+    if matches!(&edit, Edit::Automation(_))
+        || matches!(&edit, Edit::Text(path, _) | Edit::Switch(path, _) if matches!(path.0.first(), Some(Seg::Key(root)) if root == "automation"))
+    {
+        if !untracked(|| app.automations_available()) {
+            return;
+        }
+    }
     app.act(app.settings, move |state, _| state.edit_config(edit));
 }
 
@@ -239,6 +246,33 @@ fn line_path(path: &Path, index: usize) -> Path {
 pub fn field(app: AppState, field: &Field, live: Memo<Live>) -> AnyElement {
     let control = match &field.kind {
         Kind::Text => text_field(app, field, live),
+        Kind::Multiline => {
+            let path = field.path.clone();
+            let read = path.clone();
+            let handle = element_ref();
+            let jump = path.clone();
+            on_jump(app, move |path| *path == jump, || {}, handle);
+            copyable_input(app, Some(handle), move || {
+                live.with(|live| live.draft.text(&read))
+            })
+            .test_id(&id(&path))
+            .label(field.label)
+            .multiline(true)
+            .submit_behavior(SubmitBehavior::Newline)
+            .on_change(move |text: &str| edit(app, Edit::Text(path.clone(), text.to_owned())))
+            .min_w(px(0.0))
+            .min_h(if app.form == Form::Terminal {
+                term::rows(4.0)
+            } else {
+                px(100.0)
+            })
+            .text_color(color(Token::Ink))
+            .bg(AdaptiveColor::TRANSPARENT)
+            .border_1()
+            .border_color(color(Token::Rule2))
+            .focus(|s| s.border_color(color(Token::Focus)))
+            .into_element()
+        }
         Kind::Typed(typed) => typed_field(app, field, *typed, live),
         Kind::Switch { inherit } => switch(app, &field.path, *inherit, live),
         Kind::Lines { count, add } => lines(app, &field.path, field.label, *count, add, live),

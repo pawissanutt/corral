@@ -156,7 +156,7 @@ impl AppState {
         // Save the configuration draft from any of its fields, as the save bar's Save does.
         on_key_with("mod+s", anywhere, move |_| {
             if self.nav.with_untracked(super::config::on_config) {
-                self.act(self.settings, |state, _| state.save_config());
+                self.save_config();
             }
         });
         // On a session page the session's model picker; elsewhere the next profile for Ask.

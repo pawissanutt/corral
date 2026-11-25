@@ -30,12 +30,13 @@ pub enum Part {
     Routing,
     Artifacts,
     Extensions,
+    Automations,
     /// The whole file as text, for anything the form does not cover.
     File,
 }
 
 impl Part {
-    pub const ALL: [Part; 8] = [
+    pub const ALL: [Part; 9] = [
         Part::Workspace,
         Part::Projects,
         Part::Profiles,
@@ -44,6 +45,7 @@ impl Part {
         Part::Artifacts,
         Part::Extensions,
         Part::File,
+        Part::Automations,
     ];
 
     pub const fn label(self) -> &'static str {
@@ -56,6 +58,7 @@ impl Part {
             Part::Artifacts => "Artifacts",
             Part::Extensions => "Extensions",
             Part::File => "File",
+            Part::Automations => "Automations",
         }
     }
 
@@ -116,6 +119,7 @@ pub enum Edit {
     },
     RemoveEntry(Part, String),
     Rules(RuleEdit),
+    Automation(super::automation::Change),
     /// The whole file, from the plain-text view.
     File(String),
 }
@@ -301,6 +305,7 @@ impl Editor {
                 document::edit_rules(&mut doc, edit);
                 self.rule_layout(edit, before, document::rule_count(&doc));
             }
+            Edit::Automation(change) => super::automation::apply(&mut doc, change),
             Edit::File(_) => {}
         }
         self.draft = doc.to_string();
