@@ -70,9 +70,9 @@ fn send(
     let Some((text, giving)) = ready else {
         return;
     };
-    let text = app.expand_pastes(id, &text);
+    let (text, restore) = super::outgoing(app, id, &text, giving);
     if let Some(ask) = ask.filter(|_| !giving) {
-        super::send_ask(app, ask, id, text, policy);
+        super::send_ask(app, ask, id, text, policy, restore);
         return;
     }
     let attachments = if giving {
@@ -88,15 +88,8 @@ fn send(
     };
     let text = super::dock_message(app, id, text, giving);
     let carried = !attachments.is_empty();
-    let sent = app.session_input(
-        Action::Send {
-            session: id.clone(),
-            text,
-            policy,
-            attachments,
-        },
-        ask.is_some(),
-    );
+    let action = super::send_action(id, text, policy, attachments, restore);
+    let sent = app.session_input(action, ask.is_some());
     if sent {
         app.clear_pastes(id);
         if carried {

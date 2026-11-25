@@ -96,6 +96,7 @@ fn ask_holds_its_draft_until_end_is_acknowledged_even_with_a_delayed_row() {
                     text: draft.into(),
                     policy: SendPolicy::Steer,
                     attachments: Vec::new(),
+                    restore: None,
                 },
                 true,
                 chats,

@@ -973,6 +973,11 @@ export class NativePanels implements PanelSurface {
             }
             // Pastes: an image or image file becomes `[Image #n]`, long text folds (composer-attach.ts).
             if (owner.composerPaste.handle(data, this.pasteBase())) return;
+            // The images the draft marks as typed go with what Enter sends; Pi expands the folded pastes after this.
+            if (!this.isShowingAutocomplete()
+                && keys.getKeys("tui.input.submit").concat(keys.getKeys("app.message.followUp")).some(key => matchesKey(data, key))) {
+              owner.stagedImages.claim(this.getText());
+            }
             super.handleInput(data);
           }
           insertTextAtCursor(text: string): void {
@@ -989,9 +994,12 @@ export class NativePanels implements PanelSurface {
             this.hiddenAbove = hidden;
             // The receiver stays at every width (it decides where Enter goes); the input disposition clips first, then the indicator.
             // A draft Pi runs as an owner `!command` names the shell instead, unless a child takes Enter (it gets the text).
-            const columns = owner.terminal?.physical.columns ?? width, target = owner.build?.composerTarget(), stop = piKey("app.interrupt");
-            // Judged on the expanded draft, as Pi's submit sees it: a folded paste that starts with `!` runs in the shell.
-            const shell = owner.build?.target() ? undefined : shellDisposition(this.getExpandedText());
+            // Judged on the expanded draft, as Enter routes it: a folded paste that starts with `!` runs in the shell, and
+            // one that starts with `/` is a command for Pi, never a message for the chosen child.
+            const draft = this.getExpandedText(), command = draft.trimStart().startsWith("/");
+            const columns = owner.terminal?.physical.columns ?? width, stop = piKey("app.interrupt");
+            const target = command ? undefined : owner.build?.composerTarget();
+            const shell = owner.build?.target() ? undefined : shellDisposition(draft);
             const status = owner.activity.indicator(columns, owner.clock.now(), stop ? keyLabel(stop) : undefined);
             return composerTop(composerTitle(columns < COMPACT_COLUMNS ? null : owner.snapshot(), target, shell), width, this.accent,
               hidden ? `↑ ${hidden} more` : "", status, visibleWidth(composerTitle(null, target, shell)));

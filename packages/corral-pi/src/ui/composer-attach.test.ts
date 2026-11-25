@@ -26,6 +26,7 @@ test("a dropped image path becomes an image at the cursor", () => {
   expect(paste(images).handle(PASTE_START + "'" + path + "'" + PASTE_END, base)).toBe(true);
   expect(calls.insert).toEqual(["[Image #1]"]);
   expect(calls.input).toEqual([]);
+  images.claim("look at [Image #1]");
   const taken = images.take("look at [Image #1]");
   expect(taken.images.map(image => image.mimeType)).toEqual(["image/png"]);
 });
@@ -47,7 +48,18 @@ test("a message Pi sends first leaves the images of the draft still being writte
   images.stage(image("first"), "first"); images.stage(image("second"), "second");
   // Held during compaction, the earlier text-only message arrives while the draft marks image 2.
   expect(images.take("held words", "look at [Image #2]")).toMatchObject({ images: [], dropped: 1 });
+  images.claim("look at [Image #2]");
   expect(images.take("look at [Image #2]").images.map(image => image.data)).toEqual(["second"]);
+});
+
+test("an image cleared from the draft is never sent, even when a pasted text names its marker", () => {
+  const images = new StagedImages();
+  images.stage({ type: "image", data: "discarded", mimeType: "image/png" }, "shot");
+  // Ctrl+C cleared `[Image #1]`; the new draft is one folded paste whose text happens to say `[Image #1]`.
+  images.claim("[paste #1 +20 lines]");
+  expect(images.count).toBe(0);
+  const taken = images.take("the syntax is [Image #1] here");
+  expect(taken).toMatchObject({ images: [], text: "the syntax is [Image #1] here", dropped: 1 });
 });
 
 test("images whose markers were cleared do not count toward the per-message limit", () => {
@@ -82,6 +94,7 @@ test("removed markers are not sent and the rest renumber", () => {
   const images = new StagedImages();
   const image = (data: string): ImageContent => ({ type: "image", data, mimeType: "image/png" });
   for (const data of ["first", "second", "third"]) images.stage(image(data), data);
+  images.claim("[Image #3] and [Image #1]");
   const taken = images.take("[Image #3] and [Image #1]");
   expect(taken.images.map(image => image.data)).toEqual(["third", "first"]);
   expect(taken.text).toBe("[Image #1] and [Image #2]");
@@ -95,6 +108,7 @@ test("a queued message pulled back to the draft keeps its images", () => {
   images.stage(image("draft"), "draft");
   const text = images.restage("see [Image #2] then [Image #1]", [image("first"), image("second")]);
   expect(text).toBe("see [Image #2] then [Image #3]");
+  images.claim(`[Image #1] ${text}`);
   const taken = images.take(`[Image #1] ${text}`);
   expect(taken.images.map(image => image.data)).toEqual(["draft", "second", "first"]);
   expect(taken.dropped).toBe(0);

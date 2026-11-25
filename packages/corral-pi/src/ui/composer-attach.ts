@@ -93,11 +93,33 @@ export function readImageFile(path: string): { image: ImageContent; name: string
 /** The images staged for the message being written, by the number of their `[Image #n]` marker. */
 export class StagedImages {
   private readonly staged = new Map<number, { readonly image: ImageContent; readonly name: string }>();
+  /** Images a submitted draft marked as typed (before Pi expands its pastes): only these can be sent. */
+  private readonly claimed = new Set<number>();
+  /** Images released since the last send because no draft marked them any more. */
+  private released = 0;
   private next = 0;
   get count(): number { return this.staged.size; }
+  private marked(source: string): number[] {
+    return [...source.matchAll(IMAGE_MARKER)].map(match => Number(match[1])).filter(n => this.staged.has(n));
+  }
   /** How many staged images `draft` marks: the images the message being written would carry. */
-  markedIn(draft: string): number {
-    return new Set([...draft.matchAll(IMAGE_MARKER)].map(match => Number(match[1])).filter(n => this.staged.has(n))).size;
+  markedIn(draft: string): number { return new Set(this.marked(draft)).size; }
+  /**
+   * Enter or the follow-up key on draft `raw`, as typed: the images it marks go with the message Pi sends, whatever
+   * text a folded paste brings in; any other staged image was cleared from the draft and is released. A `/` command
+   * sends no image.
+   */
+  claim(raw: string): void {
+    if (raw.trimStart().startsWith("/")) return;
+    for (const n of this.marked(raw)) this.claimed.add(n);
+    this.release(raw);
+  }
+  /** Releases the staged images neither `draft` marks nor a submitted draft claimed, so a cleared image holds no memory. */
+  release(draft: string): void {
+    const marked = new Set(this.marked(draft));
+    for (const n of [...this.staged.keys()]) {
+      if (!marked.has(n) && !this.claimed.has(n)) { this.staged.delete(n); this.released += 1; }
+    }
   }
   /** Stages one image and returns its marker; the caller checks `count` against MAX_IMAGES first. */
   stage(image: ImageContent, name: string): string {
@@ -106,25 +128,31 @@ export class StagedImages {
     return `[Image #${this.next}]`;
   }
   /**
-   * The images `text` still marks, in reading order, with its markers renumbered to match; an image whose marker was
-   * deleted is dropped. Everything staged clears.
+   * The claimed images `text` (the submission, its pastes expanded) marks, in reading order, with its markers
+   * renumbered to match; a marker that names no claimed image is text, even one inside a pasted text. An image whose
+   * marker was deleted is dropped. Everything staged clears except what `draft`, the draft still being written, marks.
    */
   take(text: string, draft = ""): { text: string; images: ImageContent[]; dropped: number } {
-    const marked = (source: string) => [...source.matchAll(IMAGE_MARKER)].map(match => Number(match[1])).filter(n => this.staged.has(n));
-    const order = [...new Set(marked(text))];
+    const order = [...new Set(this.marked(text).filter(n => this.claimed.has(n)))];
     const renamed = text.replace(IMAGE_MARKER, (marker, n: string) => {
       const at = order.indexOf(Number(n));
       return at < 0 ? marker : `[Image #${at + 1}]`;
     });
     const images = order.map(n => this.staged.get(n)!.image);
     // An image the draft still being written marks stays staged for it (Pi can send an earlier held message first).
-    const kept = new Set(marked(draft).filter(n => !order.includes(n)));
-    const dropped = this.count - order.length - kept.size;
-    for (const n of [...this.staged.keys()]) if (!kept.has(n)) this.staged.delete(n);
+    const kept = new Set(this.marked(draft).filter(n => !order.includes(n)));
+    let dropped = this.released;
+    this.released = 0;
+    for (const n of [...this.staged.keys()]) {
+      if (kept.has(n)) continue;
+      this.staged.delete(n);
+      if (!order.includes(n)) dropped += 1;
+    }
+    for (const n of [...this.claimed]) if (!this.staged.has(n)) this.claimed.delete(n);
     if (this.staged.size === 0) this.next = 0;
     return { text: renamed, images, dropped };
   }
-  clear(): void { this.staged.clear(); this.next = 0; }
+  clear(): void { this.staged.clear(); this.claimed.clear(); this.released = 0; this.next = 0; }
   /**
    * Stages again the images of a queued message pulled back into the draft. Its text marks them `[Image #1]` to
    * `[Image #k]` in the order they were sent, so each marker is renumbered to its image's new staging number.
@@ -220,7 +248,9 @@ export class ComposerPaste {
     if (!paths) return false;
     const input = this.deps.imageInput();
     if (!input.accepts) { this.deps.notice(`${input.model} does not take images; the file path was inserted instead`, "warning"); return false; }
-    // An image whose marker was deleted or cleared no longer counts; one Pi has yet to send left the draft already.
+    // An image whose marker was deleted or cleared is released and no longer counts; one Pi has yet to send left
+    // the draft already.
+    this.deps.images.release(base.text());
     if (this.deps.images.markedIn(base.text()) + paths.length > MAX_IMAGES) {
       this.deps.notice(`At most ${MAX_IMAGES} images per message; the path was inserted instead`, "warning");
       return false;

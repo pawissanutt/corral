@@ -30,6 +30,9 @@ pub struct Sent {
     /// RFC 3339 time the owner pressed Send, when the clock had ticked.
     pub typed_at: Option<String>,
     pub attachments: Vec<SendAttachment>,
+    /// What a refusal puts back in the draft instead of `text`: the owner's words as typed, their
+    /// folded pastes expanded, without the `[Image #n]` markers of images not staged again.
+    pub restore: Option<String>,
     /// Why it never left this device.
     pub unsent: Option<String>,
     /// Its refusal was told once: the text went back to the draft and a notice said why.

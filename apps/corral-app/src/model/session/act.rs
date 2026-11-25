@@ -77,6 +77,8 @@ pub enum Action {
         text: String,
         policy: SendPolicy,
         attachments: Vec<SendAttachment>,
+        /// What a refusal puts back in the draft instead of `text`, when the composer made it.
+        restore: Option<String>,
     },
     /// The next message goes to this child, or to the session's own agent.
     Receiver {
@@ -266,7 +268,8 @@ impl State {
                 text,
                 policy,
                 attachments,
-            } => self.send(session, text, policy, attachments, feed),
+                restore,
+            } => self.send(session, text, policy, attachments, restore, feed),
             Action::Receiver { session, to } => {
                 self.receiver(&session, to, feed);
                 Vec::new()
@@ -413,6 +416,7 @@ impl State {
         text: String,
         policy: SendPolicy,
         attachments: Vec<SendAttachment>,
+        restore: Option<String>,
         feed: &Feed,
     ) -> Vec<Effect> {
         // Served slash commands also dispatch Send without using the composer's button.
@@ -445,6 +449,7 @@ impl State {
             to: to.clone(),
             typed_at: typed_at.clone(),
             attachments: attachments.clone(),
+            restore: restore.map(|words| words.trim().to_owned()),
             unsent: None,
             told: false,
         });
@@ -493,21 +498,14 @@ impl State {
                 match echo::state(sent, scope.as_str(), feed) {
                     EchoState::Refused(why) => {
                         sent.told = true;
-                        let uploads = sent
-                            .attachments
-                            .iter()
-                            .filter(|item| matches!(item, SendAttachment::Upload { .. }))
-                            .count();
-                        refused.push((sent.text.clone(), uploads, why));
+                        let words = sent.restore.clone().unwrap_or_else(|| sent.text.clone());
+                        refused.push((words, why));
                     }
                     EchoState::Withdrawn => sent.told = true,
                     _ => {}
                 }
             }
-            for (text, uploads, why) in refused {
-                // Its attachments are not staged again, so no `[Image #n]` that named one of its
-                // images may name a later image; one past its uploads is the owner's own text.
-                let text = crate::model::assistant::strip_image_markers(&text, uploads);
+            for (text, why) in refused {
                 ui.draft = if ui.draft.is_empty() {
                     text
                 } else {

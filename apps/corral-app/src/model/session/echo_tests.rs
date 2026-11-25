@@ -76,6 +76,7 @@ fn send(state: &mut State, feed: &Feed, scope: &str, text: &str) -> String {
             text: text.into(),
             policy: SendPolicy::Steer,
             attachments: Vec::new(),
+            restore: None,
         },
         feed,
     );
@@ -119,6 +120,32 @@ fn quick_row(state: AssistantState) -> AssistantRow {
 
 /// The same words served under another id (a message typed in the terminal, an older entry)
 /// must not retire the echo: only the served message carrying the send's own input id does.
+/// A refused send puts back the composer's copy of the owner's words, not the sent text with its
+/// pastes expanded: marker-shaped text inside a paste is never stripped as if it were an image.
+#[test]
+fn a_refused_send_restores_the_words_as_typed() {
+    let mut state = State::default();
+    let feed = Feed::default();
+    let words = "Read this: the syntax is [Image #1] for a picture.";
+    state.act(
+        Action::Send {
+            session: Id::from(SCOPE),
+            text: format!("[Image #1] {words}"),
+            policy: SendPolicy::Steer,
+            attachments: Vec::new(),
+            restore: Some(words.into()),
+        },
+        &feed,
+    );
+    let ui = state
+        .sessions
+        .get_mut(&Id::from(SCOPE))
+        .expect("the send's session");
+    ui.echoes[0].unsent = Some("offline".into());
+    state.settle(&feed);
+    assert_eq!(state.ui(SCOPE).draft, words);
+}
+
 #[test]
 fn an_echo_is_retired_by_its_input_id_never_by_its_text() {
     let mut feed = Feed::default();

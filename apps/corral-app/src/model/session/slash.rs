@@ -136,6 +136,7 @@ fn host_command(cx: &Cx<'_>, command: &SlashCommand, args: Option<&str>) -> Slas
             },
             policy: SendPolicy::Steer,
             attachments: Vec::new(),
+            restore: None,
         }],
     };
     let changing_model = super::picker::changing(cx)

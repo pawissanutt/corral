@@ -90,6 +90,7 @@ fn assistant_composer_waits_for_the_model_reply_before_sending() {
         text: template.into(),
         policy: SendPolicy::Steer,
         attachments: Vec::new(),
+        restore: None,
     };
     let sent = state.act(submit(), &feed);
     let cycled = state.act(

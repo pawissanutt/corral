@@ -252,10 +252,49 @@ fn dock_message(app: AppState, id: &Id, text: String, giving: bool) -> String {
     text
 }
 
+/// What sending `draft` carries: its folded pastes expanded, and what a refusal puts back in the
+/// draft. That copy drops the `[Image #n]` markers of the staged images that go with it (they are
+/// not staged again) before the pastes expand, so marker text inside a paste stays as pasted. A
+/// reason or an answer carries no attachment and keeps the words it sent.
+fn outgoing(app: AppState, id: &Id, draft: &str, giving: bool) -> (String, Option<String>) {
+    let text = app.expand_pastes(id, draft);
+    let restore = (!giving).then(|| {
+        app.expand_pastes(
+            id,
+            &assistant::strip_image_markers(draft, app.staged_images(id)),
+        )
+    });
+    (text, restore)
+}
+
+/// The session send of `text` with its attachments and refusal copy.
+fn send_action(
+    id: &Id,
+    text: String,
+    policy: SendPolicy,
+    attachments: Vec<SendAttachment>,
+    restore: Option<String>,
+) -> SessionAction {
+    SessionAction::Send {
+        session: id.clone(),
+        text,
+        policy,
+        attachments,
+        restore,
+    }
+}
+
 /// Sends Ask's draft to session `id` as `session.send`: the chips' line first, the staged
 /// attachments as its refs (every upload ready), under a new command id the session model
 /// allocates. The draft clears at once; a refusal puts the words back with why.
-fn send_ask(app: AppState, ask: Ask, id: &Id, text: String, policy: SendPolicy) {
+fn send_ask(
+    app: AppState,
+    ask: Ask,
+    id: &Id,
+    text: String,
+    policy: SendPolicy,
+    restore: Option<String>,
+) {
     if ask.built.with_untracked(|c| c.holds_send.is_some()) {
         app.toast("Not sent: an attachment is not ready yet; it is named above the field.");
         return;
@@ -273,15 +312,7 @@ fn send_ask(app: AppState, ask: Ask, id: &Id, text: String, policy: SendPolicy) 
     };
     let (context, project) = untracked(|| (app.composer_record_context(), app.composer_project()));
     let text = assistant::with_context(&text, context.as_ref(), project.as_ref());
-    if app.session_input(
-        SessionAction::Send {
-            session: id.clone(),
-            text,
-            policy,
-            attachments,
-        },
-        true,
-    ) {
+    if app.session_input(send_action(id, text, policy, attachments, restore), true) {
         app.clear_staged(id);
         app.clear_pastes(id);
     }

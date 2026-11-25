@@ -329,6 +329,7 @@ fn a_land_that_needs_a_reason_is_not_sent_without_one() {
         text: text.into(),
         policy: SendPolicy::Steer,
         attachments: Vec::new(),
+        restore: None,
     };
 
     let chose = state.act(
