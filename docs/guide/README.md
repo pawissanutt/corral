@@ -11,6 +11,7 @@ Corral has two engines. The current one is `corral-next` with the Corral app and
 - [Configuration](configuration.md) (covers both engines)
 - [corral-pi](corral-pi.md)
 - [The workspace daemon](daemon.md)
+- [Automating board work (corral-next)](automations.md)
 - [Extensions (corral-next)](extensions.md)
 - [corral-pi guide](pi-native.md)
 - [Native Corral Pi workbench](pi-panels.md)
