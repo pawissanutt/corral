@@ -670,3 +670,36 @@ fn a_file_manager_path_paste_is_an_attachment_not_text() {
     app.wait_for("id:toast").unwrap();
     assert_eq!(app.screen().input_text("id:ask-input").unwrap(), Some(""));
 }
+
+#[test]
+fn desktop_ask_does_not_cover_the_tasks_list() {
+    let mut app = preview(desktop(), &[("corral.destination", "tasks")]);
+    app.wait_for("id:list-tasks").unwrap();
+    app.press_key("/").unwrap();
+    app.wait_for("id:ask-pane").unwrap();
+    let nodes = app.screen().layout_nodes();
+    let bounds = |id| {
+        nodes
+            .iter()
+            .find(|n| n.test_id.as_deref() == Some(id))
+            .unwrap()
+            .bounds
+    };
+    let list = bounds("list-tasks");
+    assert!(list.origin.x + list.size.width <= bounds("ask-pane").origin.x);
+}
+
+#[test]
+fn desktop_ask_does_not_block_page_keys_after_focus_leaves_the_pane() {
+    let mut app = preview(desktop(), &[("corral.destination", "tasks")]);
+    app.press_key("/").unwrap();
+    app.wait_for("id:ask-input").unwrap();
+    app.press_key("tab").unwrap();
+    app.press("id:nav-tasks").unwrap();
+    assert!(selected(&app, "task-T-8"));
+    app.press_key("j").unwrap();
+    assert!(!selected(&app, "task-T-8"));
+    app.press_key("s").unwrap();
+    app.wait_for("id:list-sessions").unwrap();
+    assert_eq!(app.screen().count("id:ask-close").unwrap(), 1);
+}

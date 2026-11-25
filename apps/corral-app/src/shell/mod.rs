@@ -4,6 +4,7 @@
 
 pub mod desktop;
 pub mod lock;
+mod pane;
 pub mod phone;
 pub mod terminal;
 mod terminal_bar;

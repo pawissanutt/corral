@@ -40,6 +40,7 @@ pub mod live;
 pub mod nav;
 /// The one next step of a task or a session.
 pub mod next;
+pub mod pane;
 /// Run, gate, review and land as marks, sentences and a plain phrase.
 pub mod pipeline;
 /// Explicit sample data served through the canonical daemon model.

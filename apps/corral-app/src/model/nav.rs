@@ -568,9 +568,16 @@ impl NavState {
     pub fn newest(&self) -> Option<Overlay> {
         self.overlays.last().copied()
     }
+    /// Docked Ask can share the page's keys as long as it does not have focus.
+    pub fn blocks_page_keys(&self, ask_beside_unfocused: bool) -> bool {
+        self.overlays
+            .iter()
+            .any(|&overlay| overlay != Overlay::Ask || !ask_beside_unfocused)
+    }
+
     /// Handles a place or Ask key unless an overlay is open.
     pub fn press_key(&mut self, key: char) -> bool {
-        if !self.overlays.is_empty() {
+        if self.blocks_page_keys(false) {
             return false;
         }
         if key == '/' {

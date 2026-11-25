@@ -2,7 +2,7 @@
 //! the four places with Activity's pages under it while one shows, then Agents, Go to and
 //! Settings at its foot; folding to a rail of icons by choice or on a narrow window), and the
 //! content container that holds the connection banner and the current page, with the Ask
-//! drawer, the palette, the confirmation and the toast over it. On a touch tablet every shell
+//! pane beside it, and the palette, the confirmation and the toast over both. On a touch tablet every shell
 //! control reaches the touch target ([`control_height`]).
 
 use nsh_core::AccessibilityCurrent;
@@ -21,7 +21,6 @@ use crate::shell::{
 use crate::state::AppState;
 use crate::ui::ask;
 use crate::ui::atoms::{area_spoken, control_height, count, key_hint, nav_row, nav_row_icon};
-use crate::ui::composer::ask_surface;
 use crate::ui::health_line::{HealthLayout, health_line};
 use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::notice;
@@ -718,10 +717,7 @@ fn device_footer(app: AppState, ws: Workspace) -> AnyElement {
         .into_element()
 }
 
-/// The connection banner over the page, then the page, dimmed while the board is stale; over
-/// them the Ask drawer, the palette, the confirmation and the toast, which the contract wants
-/// as the container's last children so they cover the page and nothing else. The page is a
-/// landmark named by its destination (NSH has no main role), beside the sidebar's navigation.
+/// The connection banner, then the page and Ask; overlays cover both panels.
 fn content(app: AppState) -> AnyElement {
     view()
         .flex_1()
@@ -730,8 +726,10 @@ fn content(app: AppState) -> AnyElement {
         .min_h(px(0.0))
         .overflow_hidden()
         .bg(color(Token::Bg))
+        .on_layout(move |frame: &Bounds<Points>| app.pane.set_room(frame.size.width.0))
         .child(notice::connection(app))
-        .child(
+        .child(super::pane::group(
+            app,
             view()
                 .role(AccessibilityRole::Region)
                 .label(move || SharedString::from(app.destination().label()))
@@ -739,9 +737,10 @@ fn content(app: AppState) -> AnyElement {
                 .min_w(px(0.0))
                 .min_h(px(0.0))
                 .style_when(move || stale(app), |s| s.opacity(STALE_OPACITY))
-                .child(screens::content(app)),
-        )
-        .child(ask_surface(app))
+                .child(screens::content(app))
+                .into_element(),
+        ))
+        .child(super::pane::overlay(app))
         .child(palette(app))
         .child(crate::screens::agents::rewind_sheet(app))
         .child(crate::screens::agents::remove_sheet(app))

@@ -11,6 +11,7 @@ mod finder;
 mod keys;
 mod live;
 mod ops;
+mod pane;
 mod preview;
 mod projects;
 mod selection;
@@ -129,6 +130,7 @@ pub struct AppState {
     pub lock: Signal<bool>,
     /// Persisted wide-layout sidebar choice; a narrow window or grid always folds it.
     pub sidebar: Signal<SidebarPref>,
+    pub pane: pane::Pane,
     /// The labels opened over the content from the rail while narrow; never persisted.
     sidebar_peek: Signal<bool>,
     /// On the app's root view: the keyboard focus being anywhere in the app.
@@ -203,6 +205,7 @@ impl AppState {
                 preference(THEME_KEY, ThemeChoice::from_slug).unwrap_or(ThemeChoice::System),
             ),
             sidebar: signal(preference(SIDEBAR_KEY, SidebarPref::from_slug).unwrap_or_default()),
+            pane: pane::Pane::new(),
             switcher: signal(false),
             pins: signal(switcher::load_pins()),
             preview_pins: signal(agents::Pins::default()),

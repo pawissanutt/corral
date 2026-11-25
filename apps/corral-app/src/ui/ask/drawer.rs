@@ -1,4 +1,4 @@
-//! Where Ask opens: the drawer docked on the right over the current screen on desktop, a pane of
+//! Where Ask opens: a pane beside the page or a drawer over it on desktop, a pane of
 //! the frame in a terminal, a sheet riding on the keyboard on a phone. Each is Ask's head over
 //! the session Ask is keyed to (`quick` until its first send is answered, then that chat) in the
 //! session page's compact form (screens §11): the transcript, the dock, the composer and the
@@ -26,8 +26,6 @@ use crate::ui::kit::page_phone::short_window;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_TEXT, Token, color, text_size};
 
-/// The drawer's width (`.drawer`).
-const DRAWER_WIDTH: f32 = 500.0;
 /// The sheet's largest share of the screen (`.asksheet`).
 const SHEET_SHARE: f32 = 0.92;
 /// The key that closes Ask, as the terminal's key line names it.
@@ -272,31 +270,46 @@ fn refused_end(app: AppState, head: Memo<Head>) -> AnyElement {
     .into_element()
 }
 
-/// The desktop drawer: absolute on the right of its parent, 500 pt wide, the page beside it still
-/// visible and usable; the head, then the session.
-pub(crate) fn desktop(app: AppState) -> AnyElement {
+/// Ask beside the desktop page.
+pub(crate) fn side(app: AppState, focus: ElementRef) -> AnyElement {
+    desktop_body(app)
+        .element_ref(&focus)
+        .size_full()
+        .min_w(px(0.0))
+        .min_h(px(0.0))
+        .overflow_hidden()
+        .into_element()
+}
+
+fn desktop_body(app: AppState) -> View {
+    view()
+        .test_id("ask-pane")
+        .role(AccessibilityRole::Region)
+        .label("Ask")
+        .bg(color(Token::Bg))
+        .child(body(app, Compact::Drawer, desktop_head))
+}
+
+/// The narrow desktop fallback: the original drawer over the right of the page.
+pub(crate) fn overlay(app: AppState) -> AnyElement {
     // One short slide from the right edge, eased out; reduced motion skips it.
     let entrance = motion().entering(
         MotionSpec::new(KeyframeTiming::new(200.0).easing(Easing::Bezier(0.16, 1.0, 0.3, 1.0)))
             .values(MotionChannel::TranslateX, [24.0, 0.0])
             .values(MotionChannel::Opacity, [0.5, 1.0]),
     );
-    view()
+    desktop_body(app)
         .absolute()
         .top(px(0.0))
         .right(px(0.0))
         .bottom(px(0.0))
-        .w(px(DRAWER_WIDTH))
+        .w(px(crate::model::pane::PANE_DEFAULT))
         .max_w(relative(1.0))
-        .role(AccessibilityRole::Region)
-        .label("Ask")
-        .bg(color(Token::Bg))
         .border_l(px(1.0))
         .border_l_color(color(Token::Rule2))
         .shadow_2xl()
         .shadow_color(color(Token::Shell))
         .bind_motion(&entrance)
-        .child(body(app, Compact::Drawer, desktop_head))
         .into_element()
 }
 

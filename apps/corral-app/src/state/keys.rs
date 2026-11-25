@@ -16,7 +16,7 @@ use crate::model::list::{self, ListKey};
 use crate::model::projects::WorkspaceMode;
 use crate::model::session::{self, Cx, Facts, Focus, KeyAction};
 use crate::model::{
-    DataState, Destination, Effect, Live, Overlay, commands, home, nav, sessions, tasks, work,
+    DataState, Destination, Effect, Form, Live, Overlay, commands, home, nav, sessions, tasks, work,
 };
 
 /// The Agents switcher's chord on every form (Ctrl+G, ⌘G on a Mac).
@@ -176,9 +176,8 @@ impl AppState {
             return;
         }
         let clear = !untracked(|| self.sheet_open())
-            && self
-                .nav
-                .with_untracked(|nav| nav.newest().is_none() && nav.live().is_none())
+            && self.nav.with_untracked(|nav| nav.live().is_none())
+            && !untracked(|| self.overlay_blocks_page_keys())
             && self.work.with_untracked(|state| state.menu.is_none())
             && self.menus.get_untracked() == 0
             && self.nav.with_untracked(|nav| nav.destination) == Destination::System
@@ -194,7 +193,7 @@ impl AppState {
     /// now; whether it did. Nothing runs while a sheet, an overlay or a menu stands over it.
     fn press_session(&self, key: &str) -> bool {
         if untracked(|| self.sheet_open())
-            || self.nav.with_untracked(|nav| nav.newest().is_some())
+            || untracked(|| self.overlay_blocks_page_keys())
             || self.menus.get_untracked() > 0
         {
             return false;
@@ -230,7 +229,7 @@ impl AppState {
     fn session_moves_now(&self) -> Vec<&'static str> {
         if !self.key_focus.get().takes_list_keys()
             || self.sheet_open()
-            || self.nav.with(|nav| nav.newest().is_some())
+            || self.overlay_blocks_page_keys()
             || self.menus.get() > 0
         {
             return Vec::new();
@@ -293,7 +292,7 @@ impl AppState {
     fn list_keys_now(&self) -> &'static [&'static str] {
         if !self.key_focus.get().takes_list_keys()
             || self.sheet_open()
-            || self.nav.with(|nav| nav.newest().is_some())
+            || self.overlay_blocks_page_keys()
             || self.work.with(|state| state.menu.is_some())
             || self.menus.get() > 0
         {
@@ -344,9 +343,22 @@ impl AppState {
         }
     }
 
+    fn overlay_blocks_page_keys(&self) -> bool {
+        self.nav.with(|nav| {
+            nav.blocks_page_keys(
+                self.form == Form::Desktop
+                    && matches!(
+                        self.pane.placement(),
+                        crate::model::pane::Placement::Beside { .. }
+                    )
+                    && !self.pane.focused.get(),
+            )
+        })
+    }
+
     fn press_key(&self, key: &str) {
         if untracked(|| self.sheet_open())
-            || self.nav.with_untracked(|nav| nav.newest().is_some())
+            || untracked(|| self.overlay_blocks_page_keys())
             || self.work.with_untracked(|state| state.menu.is_some())
             || self.menus.get_untracked() > 0
         {

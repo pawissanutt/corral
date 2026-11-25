@@ -325,10 +325,7 @@ fn attach_field(app: AppState, id: &Id) -> AnyElement {
     field_row(app, id.clone())
 }
 
-/// The surface Ask opens in while `Overlay::Ask` is open: on desktop a drawer docked on the right
-/// of its parent over the current screen; in a terminal a pane beside the page (all of a narrow
-/// grid); on a phone a sheet with the keyboard up. Closing it (its Close, the backdrop, Esc,
-/// back) calls `app.close(Overlay::Ask)` through the model.
+/// Ask in the phone or terminal shell; desktop owns its resizable group.
 pub fn ask_surface(app: AppState) -> AnyElement {
     match app.form {
         Form::Phone => sheet()
@@ -341,19 +338,12 @@ pub fn ask_surface(app: AppState) -> AnyElement {
             // draft's focus.
             .child(dynamic(move || untracked(|| drawer::phone_panel(app))))
             .into_element(),
-        Form::Desktop | Form::Terminal => when(
+        Form::Terminal => when(
             move || app.is_open(Overlay::Ask),
-            move || {
-                untracked(|| {
-                    if app.form == Form::Terminal {
-                        drawer::pane(app)
-                    } else {
-                        drawer::desktop(app)
-                    }
-                })
-            },
+            move || untracked(|| drawer::pane(app)),
         )
         .into_element(),
+        Form::Desktop => view().into_element(),
     }
 }
 
