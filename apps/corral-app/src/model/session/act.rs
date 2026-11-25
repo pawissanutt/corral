@@ -500,6 +500,8 @@ impl State {
                 }
             }
             for (text, why) in refused {
+                // Its attachments are not staged again, so no `[Image #n]` may name a later image.
+                let text = crate::model::assistant::strip_image_markers(&text);
                 ui.draft = if ui.draft.is_empty() {
                     text
                 } else {

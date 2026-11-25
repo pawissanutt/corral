@@ -626,6 +626,7 @@ export class HostSession {
     this.panels = options.ui === "plain" ? undefined : new NativePanels({
       ...ownerDialogs,
       imageInput: () => ({ accepts: this.session.model?.input.includes("image") ?? false, model: this.session.model?.id ?? "The selected model" }),
+      compacting: () => this.session.isCompacting,
       modelFavorites: this.modelFavorites,
       personal: readPersonalPreferences(),
       settings: terminalSettings(options.identity.role, startupRoot, options.client.executable, { modelsPath: this.buildModelsPath }),

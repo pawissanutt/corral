@@ -3,9 +3,9 @@
 // the cursor; the model receives the image itself when the message is sent, the markers renumbered in reading order.
 // Long clipboard text goes through pi-tui's own bracketed-paste fold (`[paste #n …]`), as a terminal paste does.
 // Path detection is ported from oh-my-pi's prompt/custom-editor.ts (same owner).
-import { readFileSync, statSync, unlinkSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
-import { basename, dirname } from "node:path";
+import { readFileSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import { matchesKey, type KeyId } from "@earendil-works/pi-tui";
@@ -27,15 +27,6 @@ const PATH_START = String.raw`(?:\/|~\/|file:\/\/|[A-Za-z]:[\\/])`;
 const ANCHORED = new RegExp(`^${PATH_START}`);
 /** A second path after unescaped whitespace: two dropped files, not one path with a space in its name. */
 const SECOND_PATH = new RegExp(String.raw`(?<!\\)\s${PATH_START}`);
-/** Pi's clipboard image file (interactive-mode handleClipboardPaste: `pi-clipboard-<randomUUID>.<ext>` in the temp dir). */
-const PI_CLIPBOARD = /^pi-clipboard-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(?:png|jpe?g|gif|webp)$/;
-
-/** Removes Pi's clipboard temp file once its image is staged; any other file is the owner's and stays. */
-function removeClipboardFile(path: string): void {
-  if (dirname(path) !== tmpdir() || !PI_CLIPBOARD.test(basename(path))) return;
-  try { unlinkSync(path); } catch { /* Already gone: nothing to remove. */ }
-}
-
 function segments(text: string): string[] | undefined {
   const out: string[] = [];
   let segment = "", quote: string | undefined, escaped = false;
@@ -114,19 +105,19 @@ export class StagedImages {
    * The images `text` still marks, in reading order, with its markers renumbered to match; an image whose marker was
    * deleted is dropped. Everything staged clears.
    */
-  take(text: string): { text: string; images: ImageContent[]; dropped: number } {
-    const order: number[] = [];
-    for (const match of text.matchAll(IMAGE_MARKER)) {
-      const n = Number(match[1]);
-      if (this.staged.has(n) && !order.includes(n)) order.push(n);
-    }
+  take(text: string, draft = ""): { text: string; images: ImageContent[]; dropped: number } {
+    const marked = (source: string) => [...source.matchAll(IMAGE_MARKER)].map(match => Number(match[1])).filter(n => this.staged.has(n));
+    const order = [...new Set(marked(text))];
     const renamed = text.replace(IMAGE_MARKER, (marker, n: string) => {
       const at = order.indexOf(Number(n));
       return at < 0 ? marker : `[Image #${at + 1}]`;
     });
     const images = order.map(n => this.staged.get(n)!.image);
-    const dropped = this.count - order.length;
-    this.clear();
+    // An image the draft still being written marks stays staged for it (Pi can send an earlier held message first).
+    const kept = new Set(marked(draft).filter(n => !order.includes(n)));
+    const dropped = this.count - order.length - kept.size;
+    for (const n of [...this.staged.keys()]) if (!kept.has(n)) this.staged.delete(n);
+    if (this.staged.size === 0) this.next = 0;
     return { text: renamed, images, dropped };
   }
   clear(): void { this.staged.clear(); this.next = 0; }
@@ -204,7 +195,7 @@ export class ComposerPaste {
     const at = this.clipboardAt;
     this.clipboardAt = undefined;
     if (at === undefined || this.now() - at > CLIPBOARD_WINDOW_MS) return false;
-    if (this.attachPaths(text, base, true)) return true;
+    if (this.attachPaths(text, base)) return true;
     if (!isLargePaste(text)) return false;
     base.input(PASTE_START + text + PASTE_END);
     return true;
@@ -217,7 +208,8 @@ export class ComposerPaste {
     base.input(PASTE_START + payload + PASTE_END);
   }
 
-  private attachPaths(text: string, base: PasteBase, clipboard = false): boolean {
+  // Pi's clipboard temp file stays where Pi wrote it, as in stock Pi: a path alone cannot prove which file Pi made.
+  private attachPaths(text: string, base: PasteBase): boolean {
     // A bash command keeps the paths it is given.
     if (base.text().trimStart().startsWith("!")) return false;
     const paths = pastedImagePaths(text);
@@ -235,8 +227,6 @@ export class ComposerPaste {
       loaded.push(read);
     }
     const markers = loaded.map(({ image, name }) => this.deps.images.stage(image, name)).join(" ");
-    // Only Pi's own clipboard paste wrote a temp file for this image; a dropped or typed path is the owner's file.
-    if (clipboard) for (const path of paths) removeClipboardFile(path);
     const { line, col } = base.cursor(), row = base.lines()[line] ?? "";
     const before = row.slice(0, col).at(-1), after = row[col];
     const lead = before !== undefined && /\S/.test(before) ? " " : "", trail = after !== undefined && /\S/.test(after) ? " " : "";

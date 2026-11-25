@@ -30,17 +30,24 @@ test("a dropped image path becomes an image at the cursor", () => {
   expect(taken.images.map(image => image.mimeType)).toEqual(["image/png"]);
 });
 
-test("only Pi's own clipboard paste removes the image file it wrote", () => {
+test("attaching never deletes the file it read, even one named like Pi's clipboard file", () => {
   const path = join(tmpdir(), `pi-clipboard-${crypto.randomUUID()}.png`);
   writeFileSync(path, PNG_1X1);
   try {
     const router = paste(new StagedImages()), { base } = fakeBase("");
-    expect(router.handle(PASTE_START + path + PASTE_END, base)).toBe(true);
-    expect(existsSync(path)).toBe(true);
     router.handle("\x16", base);
     expect(router.inserted(path, base)).toBe(true);
-    expect(existsSync(path)).toBe(false);
+    expect(existsSync(path)).toBe(true);
   } finally { rmSync(path, { force: true }); }
+});
+
+test("a message Pi sends first leaves the images of the draft still being written", () => {
+  const images = new StagedImages();
+  const image = (data: string): ImageContent => ({ type: "image", data, mimeType: "image/png" });
+  images.stage(image("first"), "first"); images.stage(image("second"), "second");
+  // Held during compaction, the earlier text-only message arrives while the draft marks image 2.
+  expect(images.take("held words", "look at [Image #2]")).toMatchObject({ images: [], dropped: 1 });
+  expect(images.take("look at [Image #2]").images.map(image => image.data)).toEqual(["second"]);
 });
 
 test("clipboard text over the fold limit goes through pi-tui's paste fold", () => {

@@ -58,6 +58,8 @@ import { noticeGlyph, toastFrame } from "./toast.ts";
 export interface NativePanelsOptions {
   /** Whether the selected model takes image input; without it images are never staged. */
   readonly imageInput?: () => { readonly accepts: boolean; readonly model: string };
+  /** Whether the session is compacting: Pi then holds a submitted draft as text only, so a draft with images waits. */
+  readonly compacting?: () => boolean;
   readonly planDocument?: () => PlanDocument | undefined;
   readonly openPlanDocument?: () => void;
   readonly build?: BuildUi;
@@ -188,6 +190,8 @@ export class NativePanels implements PanelSurface {
   private nativeKeys: ((id: "app.model.select" | "app.thinking.cycle") => string) | undefined;
   /** The keys of Pi's clipboard paste (app.clipboard.pasteImage), read from the composer's keybindings once it exists. */
   private nativePasteKeys: () => readonly string[] = () => ["ctrl+v"];
+  /** The composer's current draft, once it exists. */
+  private draftText: () => string = () => "";
   /** Images pasted into the draft, sent with the message that marks them. */
   readonly stagedImages = new StagedImages();
   private pasteRouter: ComposerPaste | undefined;
@@ -961,6 +965,11 @@ export class NativePanels implements PanelSurface {
                 && keys.getKeys("tui.input.submit").some(key => matchesKey(data, key))) {
               owner.workbench.setView("conversation"); owner.workbench.focused = false;
             }
+            // Pi holds a draft submitted during compaction as text only and sends it later; its images would be lost.
+            if (owner.options.compacting?.() && owner.stagedImages.count > 0 && new RegExp(IMAGE_MARKER.source).test(this.getText())
+                && keys.getKeys("tui.input.submit").concat(keys.getKeys("app.message.followUp")).some(key => matchesKey(data, key))) {
+              owner.workbench.notice("Images can be sent once compaction finishes; the draft is kept", "warning"); return;
+            }
             // Pastes: an image or image file becomes `[Image #n]`, long text folds (composer-attach.ts).
             if (owner.composerPaste.handle(data, this.pasteBase())) return;
             super.handleInput(data);
@@ -1021,6 +1030,7 @@ export class NativePanels implements PanelSurface {
         owner.updateDensity = () => editor.setPaddingX(editor.inset);
         owner.nativeKeys = id => keys.getKeys(id).map(key => keyLabel(key)).join(", ");
         owner.nativePasteKeys = () => keys.getKeys("app.clipboard.pasteImage");
+        owner.draftText = () => editor.getText();
         owner.editorFocused = () => editor.focused;
         owner.requestRender = force => tui.requestRender(force);
         owner.tui = tui;
@@ -1079,7 +1089,7 @@ export class NativePanels implements PanelSurface {
       if (this.workbench.view !== "conversation") { this.workbench.setView("conversation"); this.workbench.focused = false; this.refresh(); }
       // The owner's staged images go with the message they are marked in (a prompt, a steer or a follow-up).
       if (event.source !== "interactive" || this.stagedImages.count === 0) return { action: "continue" as const };
-      const taken = this.stagedImages.take(event.text);
+      const taken = this.stagedImages.take(event.text, this.draftText());
       if (taken.dropped) {
         const one = taken.dropped === 1;
         this.workbench.notice(`${taken.dropped} ${one ? "image was" : "images were"} not sent: ${one ? "its marker was" : "their markers were"} removed`, "warning");
