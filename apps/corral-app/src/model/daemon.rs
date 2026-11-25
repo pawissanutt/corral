@@ -192,6 +192,8 @@ pub struct Feed {
     /// The sample preview's `corral.toml` text, which its `config.get` and `config.put` read and
     /// replace; corrald's file stays on the daemon host, so its feed never holds one.
     pub sample_config: Option<String>,
+    /// Hosted tool overrides for the explicit fixture, never populated by daemon replies.
+    pub sample_pi_hosted_tools: Option<corral_protocol::config::PiHostedToolsConfig>,
 }
 
 impl Feed {

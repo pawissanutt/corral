@@ -1,3 +1,4 @@
+import type { ChildHostedTools } from "../../roles/common/execution.ts";
 import { randomUUID } from "node:crypto";
 import { join, relative, resolve, sep } from "node:path";
 import type * as Sdk from "@earendil-works/pi-coding-agent";
@@ -31,8 +32,10 @@ export interface FleetOptions {
   readonly approved: readonly string[];
   readonly parent: { provider: string; model: string; effort?: string };
   readonly context: FleetContext;
+  readonly assetRoot?: string;
   readonly agentDir: string;
   readonly localTools: readonly ToolDefinition[];
+  readonly hostedTools?: ChildHostedTools;
   readonly shellRefusal?: (command: string) => string | undefined;
   readonly changed: () => void;
   readonly deliverToParent: (text: string) => void | Promise<void>;

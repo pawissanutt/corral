@@ -11,6 +11,7 @@ pub mod form;
 pub mod harnesses;
 pub mod inherit;
 pub mod live;
+pub mod pi_hosted_tools;
 pub mod pi_startup;
 pub mod profiles;
 pub mod push;

@@ -5285,6 +5285,72 @@
           }
         ]
       },
+      "PiHostedToolsChange": {
+        "additionalProperties": false,
+        "properties": {
+          "image_gen": {
+            "description": "Null removes the override (image generation defaults to disabled).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision": {
+            "type": "string"
+          },
+          "web_search": {
+            "description": "Null restores legacy web search selection.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "revision"
+        ],
+        "type": "object"
+      },
+      "PiHostedToolsConfig": {
+        "properties": {
+          "image_gen": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision": {
+            "type": "string"
+          },
+          "web_search": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "revision"
+        ],
+        "type": "object"
+      },
+      "PiHostedToolsRequest": {
+        "additionalProperties": false,
+        "description": "Read or replace both hosted tool overrides without exposing raw Pi TOML.",
+        "properties": {
+          "change": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PiHostedToolsChange"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
       "PiStartupChange": {
         "additionalProperties": false,
         "properties": {
@@ -11066,6 +11132,49 @@
       "x-notification": false,
       "x-params-schema": {
         "$ref": "#/components/schemas/PiStartupRequest"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "unauthenticated",
+          "message": "unauthenticated"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
+    },
+    {
+      "name": "config.pi_hosted_tools",
+      "params": [
+        {
+          "name": "change",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PiHostedToolsChange"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/PiHostedToolsConfig"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/PiHostedToolsRequest"
       },
       "x-wire-errors": [
         {

@@ -67,6 +67,8 @@ export function buildFixtureInstall(options: FixtureOptions = {}): FixtureInstal
   const dir = mkdtempSync(join(options.parent ?? tmpdir(), "corral-pi-assets-"));
   for (const file of ["package.json", "bun.lock"]) copy(join(PACKAGE_ROOT, file), join(dir, file));
   copy(join(PACKAGE_ROOT, "src"), join(dir, "src"));
+  const base = "assets/families/gpt/base.md";
+  copy(join(PACKAGE_ROOT, base), join(dir, base));
   if (options.isolatePiState) {
     const main = join(dir, "src/host/main.ts");
     const source = readFileSync(main, "utf8");

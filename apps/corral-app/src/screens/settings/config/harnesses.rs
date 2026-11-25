@@ -19,6 +19,7 @@ use crate::ui::kit::text::h3_flush;
 use crate::ui::term;
 use crate::ui::tokens::{Token, color};
 
+mod pi_hosted_tools;
 mod pi_startup;
 
 pub(super) fn catalog(app: AppState, configured: &[String], live: Memo<Live>) -> AnyElement {
@@ -274,6 +275,7 @@ fn selected(app: AppState, item: Entry, facts: Memo<Details>, live: Memo<Live>) 
         ));
         parts.push(space(app, 10.0));
         parts.push(pi_startup::panel(app));
+        parts.push(pi_hosted_tools::panel(app));
         parts.push(space(app, 10.0));
     } else {
         parts.push(command(app, &item, live));

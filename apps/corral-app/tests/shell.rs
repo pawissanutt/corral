@@ -192,6 +192,38 @@ fn phone_settings_open_from_the_gear_and_their_sections_push_their_pages() {
 }
 
 #[test]
+fn pi_hosted_tools_form_saves_and_reopens_both_routes() {
+    let mut app = preview(phone(), &[]);
+    app.press("id:nav-settings").unwrap();
+    app.press("id:settings-config").unwrap();
+    app.press("id:tab-config-3").unwrap();
+    let pi = "id:seg-config-harnesses-pi";
+    app.press(pi).unwrap();
+    for (tool, provider, model) in [
+        ("web-search", "openai-codex", "gpt-6.1-sol"),
+        ("image-gen", "openai", "gpt-image-1"),
+    ] {
+        app.press(&format!("id:btn-pi-hosted-tools-{tool}-route"))
+            .unwrap();
+        app.press(&format!("id:seg-pi-hosted-tools-{tool}-{provider}"))
+            .unwrap();
+        app.type_text(&format!("id:field-pi-hosted-tools-{tool}-model"), model)
+            .unwrap();
+    }
+    app.press("id:btn-pi-hosted-tools-save").unwrap();
+    app.wait_for("text:Hosted tools saved.").unwrap();
+    app.back().unwrap();
+    app.press("id:settings-config").unwrap();
+    app.press("id:tab-config-3").unwrap();
+    app.press(pi).unwrap();
+    for (tool, expected) in [("web-search", "gpt-6.1-sol"), ("image-gen", "gpt-image-1")] {
+        let id = format!("id:field-pi-hosted-tools-{tool}-model");
+        app.wait_for(&id).unwrap();
+        assert_eq!(app.screen().input_text(&id).unwrap(), Some(expected));
+    }
+}
+
+#[test]
 fn phone_profile_edits_survive_returning_to_the_list_and_switching_tabs() {
     let mut app = preview(phone(), &[]);
     app.press("id:nav-settings").unwrap();

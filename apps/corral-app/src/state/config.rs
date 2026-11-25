@@ -38,6 +38,30 @@ impl AppState {
         });
     }
 
+    /// Sends a typed Pi preference operation, or answers it in the explicit fixture.
+    pub fn pi_hosted_tools(
+        &self,
+        request_id: String,
+        request: corral_protocol::config::PiHostedToolsRequest,
+    ) -> bool {
+        if !self.feed.with_untracked(|feed| {
+            feed.ready() && feed.capable(corral_protocol::config::PI_HOSTED_TOOLS_V1)
+        }) {
+            return false;
+        }
+        if self.fixture() {
+            self.feed.update(|feed| {
+                crate::model::preview::pi_hosted_tools(feed, Id::from(request_id), request);
+            });
+            true
+        } else {
+            requests::send(ClientRequest::PiHostedTools {
+                request_id,
+                request,
+            })
+        }
+    }
+
     /// Sends `config.get`, or `config.put` with `put`, under `key`; the sample preview answers
     /// it locally. One that cannot leave settles the editor with why.
     pub(super) fn send_config(&self, key: Id, put: Option<String>) {

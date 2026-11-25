@@ -65,6 +65,7 @@ pub(crate) fn welcome(shared: &Shared, hello: wire::Hello) -> wire::Welcome {
                         | wire::SETTINGS_V1
                         | wire::AUTOMATION_V1
                         | settings::PI_STARTUP_V1
+                        | settings::PI_HOSTED_TOOLS_V1
                         | wire::CLOSED_V1
                         | app::CITATIONS_V1
                         | device::DEVICE_V1
@@ -217,6 +218,13 @@ pub(crate) fn serve(
         settings::PI_STARTUP => {
             answer!(config::pi_startup::handle(shared.root(), decode(params)?).map_err(invalid))
         }
+        settings::PI_HOSTED_TOOLS => answer!({
+            // Serde's error can echo an unexpected field name; keep this API value-free.
+            let request = decode(params).map_err(|_| {
+                Failure::new(ErrorCode::InvalidParams, "invalid Pi hosted tools request")
+            })?;
+            config::pi_hosted_tools::handle(shared.root(), request).map_err(invalid)
+        }),
         pane::PANE_FOCUS => answer!({
             let engine = shared.engine()?;
             let session = pane_session(&engine, &decode(params)?)?;

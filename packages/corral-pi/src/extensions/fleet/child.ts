@@ -13,10 +13,10 @@ import { resourceLoaderOptions, restrictedSettings } from "../../host/restrict.t
 import { closeResidentSession, residentLifecycle } from "../../claude/resident.ts";
 import { classifyBuildWrite } from "../../roles/build/guard.ts";
 import { classifyWriteScope } from "../../roles/assistant/write-scope.ts";
-import { executionRefusal, exploreLoadout } from "../../roles/common/execution.ts";
+import { childToolBindings, executionRefusal, exploreLoadout, type ChildHostedTools } from "../../roles/common/execution.ts";
 import { researchCode } from "../codemode/research.ts";
 import type { HelperEvent } from "../subagent/inspection.ts";
-import { observeHelperEvent } from "../subagent/session.ts";
+import { observeHelperEvent, withChildBaseCalibration } from "../subagent/session.ts";
 import { researchBudget, researchPrompt, researchResult, type ResearchOptions, type ResearchReport } from "../subagent/research.ts";
 import type { FleetContext } from "./runtime.ts";
 import type { ResolvedModel } from "./profiles.ts";
@@ -51,11 +51,13 @@ export interface ChildHandle {
   usage(): ChildUsage;
 }
 export interface SdkRunnerOptions {
+  readonly assetRoot?: string;
   readonly sdk: typeof Sdk;
   readonly models: ModelRuntime;
   readonly context: FleetContext;
   readonly agentDir: string;
   readonly localTools: readonly ToolDefinition[];
+  readonly hostedTools?: ChildHostedTools;
   readonly shellRefusal?: (command: string) => string | undefined;
   /** Bound children intersect their fixed ceiling with the parent's enabled capabilities. */
   readonly parentLoadout?: readonly string[];
@@ -265,13 +267,16 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
     const maxTurns = budget?.maxTurns ?? execution?.maxTurns;
     const communication = agentCommunicationTools(hooks);
     const parent = options.parentLoadout ?? [];
-    const loadout = options.bound
+    const { local: localTools, hosted, loadout: withHosted } = childToolBindings(parent, options.localTools,
+      options.hostedTools?.({ kind, owns: spec.owns }) ?? []);
+    const baseLoadout = options.bound
       ? kind === "slice" ? BASE_TOOLS.filter(name => parent.includes(name))
         : kind === "explore" ? exploreLoadout(parent).filter(name => execution?.research?.profile !== "docs" || ["web_fetch", "web_read", "web_search", "codemode"].includes(name))
         : ["read", "grep", "find", "ls", "bash"].filter(name => parent.includes(name))
-      : kind === "slice" ? [...BASE_TOOLS, ...options.localTools.filter(tool => !DELEGATION[tool.name]).map(tool => tool.name)]
+      : kind === "slice" ? [...BASE_TOOLS, ...localTools.filter(tool => !DELEGATION[tool.name]).map(tool => tool.name)]
         : ["read", "grep", "find", "ls", ...(kind === "review" ? ["bash"] : []),
           ...(kind === "explore" && parent.includes("codemode") ? ["codemode"] : [])];
+    const loadout = withHosted(baseLoadout);
     const allowed = new Set([...loadout, ...(kind === "review" ? ["review_verdict"] : []),
       ...(kind === "slice" ? ["ask_owner"] : []), ...communication.map(tool => tool.name)]);
     const nestedAllowed = new Set(loadout);
@@ -336,10 +341,11 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
         const level = budget?.thinkingLevel ?? thinking(initialModel.effort);
         const extension = (pi: ExtensionAPI) => {
           residentLifecycle(pi);
-          for (const tool of options.localTools) {
+          for (const tool of localTools) {
             if (tool.name !== "codemode" && allowed.has(tool.name) && (!options.bound || (research && !BASE_TOOLS.includes(tool.name)))
               && !["ask_owner", "agent_message", "agent_roster", "review_verdict"].includes(tool.name)) pi.registerTool(tool);
           }
+          for (const tool of hosted) pi.registerTool(tool);
           if (code) pi.registerTool(code.tool);
           for (const tool of communication) pi.registerTool(tool);
           if (kind === "review") pi.registerTool({
@@ -435,8 +441,9 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
         ({ session } = await sdk.createAgentSessionFromServices({ services, sessionManager: sdk.SessionManager.open(file), model,
           tools: [...allowed], thinkingLevel: level, scopedModels: [{ model, thinkingLevel: level }] }));
         const childFallback = childFallbackPolicy(options.fallbackPolicy);
+        const baseStream = withChildBaseCalibration(session.agent.streamFunction, options.assetRoot);
+        session.agent.streamFunction = baseStream;
         if (kind === "explore" || childFallback) {
-          const baseStream = session.agent.streamFunction;
           const initialStream: typeof baseStream | undefined = kind === "explore"
             ? (current, context, streamOptions) => {
                 const tier = current.provider === "openai-codex"

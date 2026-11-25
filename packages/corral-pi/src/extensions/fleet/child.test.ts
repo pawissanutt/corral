@@ -3,13 +3,72 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { AssistantMessage } from "@earendil-works/pi-ai";
-import type * as Sdk from "@earendil-works/pi-coding-agent";
+import { createAssistantMessageEventStream, getCurrentSystemPrompt, getCurrentTools, type Api, type Model, type AssistantMessage } from "@earendil-works/pi-ai";
+import * as Sdk from "@earendil-works/pi-coding-agent";
+import { ImageGeneration } from "../image/tool.ts";
+import { runAuxiliarySession } from "../subagent/session.ts";
+import { PACKAGE_ROOT } from "../../../test/support/fixture-install.ts";
 import type { ExtensionAPI, ModelRuntime, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { parseBuildProfiles } from "../../build/profiles.ts";
 import { createSdkRunner, type ChildHooks, type SdkRunnerOptions } from "./child.ts";
 import { resolveModel } from "./profiles.ts";
+
+test("fleet and auxiliary use only GPT base in the outgoing Pi prompt", async () => {
+  const f = fixture();
+  try {
+    const models = await Sdk.ModelRuntime.create({ authPath: join(f.dir, "auth.json"), modelsPath: null,
+      modelsStorePath: join(f.dir, "models-cache.json"), refreshOnCreate: false });
+    const model: Model<Api> = { provider: "openai-codex", id: "neutral-fixture", api: "openai-codex-responses",
+      name: "Fixture", input: ["text"], baseUrl: "https://unused.invalid", reasoning: false,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 10000, maxTokens: 1000 };
+    const fallback: Model<Api> = { ...model, provider: "anthropic-api", api: "anthropic-messages" };
+    models.getModel = (provider, id) => [model, fallback].find(candidate => candidate.provider === provider && candidate.id === id);
+    models.checkAuth = async () => ({ type: "api_key", source: "fixture" });
+    models.getAuth = async () => ({ auth: { apiKey: "fixture" } });
+    const outgoing: { prompt: string; tools: string[] }[] = [];
+    const sdk: typeof Sdk = { ...Sdk, async createAgentSessionFromServices(options) {
+      const built = await Sdk.createAgentSessionFromServices(options);
+      built.session.agent.streamFunction = (current, context) => {
+        outgoing.push({ prompt: getCurrentSystemPrompt(context.messages), tools: getCurrentTools(context.messages).map(tool => tool.name) });
+        const stream = createAssistantMessageEventStream();
+        const message = { ...answer("Evidence"), model: current.id, api: current.api, provider: current.provider };
+        if (current.provider === model.provider) {
+          const quota = { ...message, content: [], stopReason: "error" as const,
+            providerFailure: { version: 1, scope: "account", category: "subscription_quota", connection: "openai-subscription" } };
+          stream.push({ type: "error", reason: "error", error: quota });
+        } else stream.push({ type: "done", reason: "stop", message });
+        stream.end();
+        return stream;
+      };
+      return built;
+    } };
+    const selection = { provider: model.provider, model: model.id };
+    const shared = { sdk, models, assetRoot: PACKAGE_ROOT, agentDir: f.dir, localTools: [],
+      fallbackPolicy: { children: true, providers: { "openai-codex": ["anthropic-api"] as const } } };
+    const fleet = createSdkRunner({ ...f.options, ...shared }).run(
+      { id: "review", title: "Review", brief: "Review the evidence", owns: [], kind: "review" },
+      { ...selection, profile: "fixture" }, f.hooks, new AbortController().signal);
+    expect((await fleet.done).failed).toBeUndefined();
+    const aux = await runAuxiliarySession({ ...shared, provider: model.provider, cwd: f.dir, parentLoadout: [] },
+      { ...selection, request: "expert", kind: "expert", prompt: "Examine the evidence", maxTurns: 2,
+        sessionFile: join(f.dir, "expert.jsonl"), sessionId: "expert-session" }, new AbortController().signal);
+    expect(aux.text).toBe("Evidence");
+    const asset = (name: string) => readFileSync(join(PACKAGE_ROOT, `assets/families/gpt/${name}.md`), "utf8").trim();
+    expect(outgoing).toHaveLength(4);
+    for (const [i, contract, expectedTool] of [[0, "Your kind is review.", "review_verdict"],
+      [2, "You are a bounded read-only expert", "read"]] as const) {
+      const { prompt, tools } = outgoing[i]!;
+      expect(prompt).toContain(contract);
+      expect(prompt.split(asset("base"))).toHaveLength(2);
+      for (const role of ["build", "assistant"]) expect(prompt).not.toContain(asset(role));
+      expect(tools).toContain(expectedTool);
+      expect(outgoing[i + 1]!.prompt).toContain(contract);
+      expect(outgoing[i + 1]!.prompt).not.toContain(asset("base"));
+      expect(outgoing[i + 1]!.tools).toEqual(tools);
+    }
+  } finally { f.cleanup(); }
+});
 
 type Handler = (event: Record<string, unknown>, context: { abort(): Promise<void> }) => unknown;
 const answer = (text: string): AssistantMessage => ({ role: "assistant", api: "openai-responses", provider: "openai-codex", model: "fixture", timestamp: 1,
@@ -90,9 +149,9 @@ test("a Build Explore profile sends Codex priority and keeps its configured effo
   try {
     f.body(async () => {
       expect(f.level).toBe("low");
-      f.session.agent.streamFunction(codex, {}, {});
+      f.session.agent.streamFunction(codex, { messages: [] }, {});
       expect(f.streamTier).toBe("priority");
-      f.session.agent.streamFunction({ provider: "openai" }, {}, {});
+      f.session.agent.streamFunction({ provider: "openai" }, { messages: [] }, {});
       expect(f.streamTier).toBeUndefined();
     });
     const run = createSdkRunner(f.options).run({ id: "explore", title: "Explore", brief: "Read the code", owns: [], kind: "explore" },
@@ -101,10 +160,52 @@ test("a Build Explore profile sends Codex priority and keeps its configured effo
   } finally { f.cleanup(); }
 });
 
+function childImage(onRequest: () => void) {
+  return new ImageGeneration({ provider: "openai", model: "gpt-image-1" }, {
+    fetch: async () => {
+      onRequest();
+      return Response.json({ data: [{ b64_json: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==" }] });
+    },
+    auth: { provider: "openai-codex", providers: ["openai"], credentials: () => ({
+      read: async () => ({ type: "api_key", key: "sk-fixtureOnly" }), list: async () => [],
+      modify: async () => { throw new Error("unexpected write"); }, delete: async () => {},
+    }) },
+  }, () => {});
+}
+
+test("slice executes the hosted image binding for its owned file, never the inherited image tool", async () => {
+  const f = fixture();
+  let requests = 0;
+  const image = childImage(() => requests++);
+  const signal = new AbortController().signal;
+  try {
+    f.body(async () => {
+      expect(f.tools).not.toContain("web_search");
+      expect(f.registered.has("web_search")).toBe(false);
+      const execute = (path: string) => f.registered.get("image_gen")!.execute("image", { prompt: "fixture", path }, signal, undefined, {} as never);
+      await expect(execute("outside.png")).rejects.toThrow("not owned");
+      expect(requests).toBe(0);
+      expect((await execute("owned.png")).content[1]).toMatchObject({ type: "image", mimeType: "image/png" });
+      expect(readFileSync(join(f.dir, "owned.png")).length).toBeGreaterThan(0);
+    });
+    const run = createSdkRunner({ ...f.options, parentLoadout: ["image_gen"], localTools: [tool("image_gen"), tool("web_search")],
+      hostedTools: ({ kind, owns }) => {
+        expect(kind).toBe("slice");
+        return [image.tool({ root: f.dir, refusal: path => path && owns.includes(path) ? undefined : "not owned" }), tool("web_search")];
+      },
+    }).run({ id: "slice", title: "Slice", brief: "Generate an owned fixture", owns: ["owned.png"] },
+      { profile: "fixture", provider: "openai-codex", model: "fixture" }, f.hooks, signal);
+    expect((await run.done).failed).toBeUndefined();
+    expect(requests).toBe(1);
+  } finally { image.close(); f.cleanup(); }
+});
+
 test("quick research reserves its fourth turn, uses canonical transcript identity and keeps peer messaging", async () => {
   const f = fixture();
   const started = Promise.withResolvers<void>();
   const proceed = Promise.withResolvers<void>();
+  let requests = 0;
+  const image = childImage(() => requests++);
   f.hooks.execution!.research = { effort: "quick", profile: "docs" };
   f.hooks.execution!.serviceTier = "priority";
   f.body(async () => {
@@ -114,6 +215,12 @@ test("quick research reserves its fourth turn, uses canonical transcript identit
     for (let turn = 1; turn <= 4; turn++) {
       await f.emit("turn_start");
       const context = await f.emit("context", { messages: [] });
+      if (turn === 1) {
+        const execute = (input: { prompt: string; path?: string }) => f.registered.get("image_gen")!.execute("preview", input, undefined, undefined, {} as never);
+        await expect(execute({ prompt: "fixture", path: "owned.png" })).rejects.toThrow("read-only preview");
+        expect(requests).toBe(0);
+        expect((await execute({ prompt: "fixture" })).content[1]).toMatchObject({ type: "image" });
+      }
       if (turn < 4) {
         expect(context).toBeUndefined();
         expect(f.active).toEqual([]);
@@ -121,23 +228,25 @@ test("quick research reserves its fourth turn, uses canonical transcript identit
         expect(f.active).toEqual([[]]);
         expect(context).toMatchObject({ messages: [{ role: "user" }] });
         expect(await f.emit("tool_call", { toolName: "web_search", input: {} })).toMatchObject({ block: true });
+        expect(await f.emit("tool_call", { toolName: "image_gen", input: {}, parentToolCallId: "nested" })).toMatchObject({ block: true });
       }
       f.messages.push(answer(turn === 4 ? "Findings with citations" : "Research notes"));
       await f.emit("turn_end");
     }
   });
-  const handle = createSdkRunner({ ...f.options, bound: true, parentLoadout: ["read", "web_search", "bash", "mcp_docs", "task"],
-    localTools: [tool("web_search"), tool("web_fetch"), tool("mcp_docs")] })
+  const handle = createSdkRunner({ ...f.options, bound: true, parentLoadout: ["read", "web_search", "image_gen", "bash", "mcp_docs", "task"],
+    localTools: [tool("web_search"), tool("web_fetch"), tool("mcp_docs")],
+    hostedTools: () => [image.tool({ refusal: () => undefined }), tool("bash")] })
     .run({ id: "research", title: "Research", brief: "Find official docs", owns: [], kind: "explore" },
       { profile: "fixture", provider: "openai-codex", model: "fixture" }, f.hooks, new AbortController().signal);
   try {
     await started.promise;
     await handle.steer("Peer evidence: see the official docs.");
     expect(f.steers).toHaveLength(1);
-    expect(f.tools).toEqual(["web_search", "agent_message", "agent_roster"]);
-    expect([...f.registered.keys()]).toEqual(["web_search", "agent_message", "agent_roster"]);
+    expect(f.tools).toEqual(["web_search", "image_gen", "agent_message", "agent_roster"]);
+    expect([...f.registered.keys()]).toEqual(["web_search", "image_gen", "agent_message", "agent_roster"]);
     expect(f.level).toBe("off");
-    f.session.agent.streamFunction({ provider: "openai-codex" }, {}, {});
+    f.session.agent.streamFunction({ provider: "openai-codex" }, { messages: [] }, {});
     expect(f.streamTier).toBe("priority");
     expect(f.prompt).toContain("at most 4 model turns");
     expect(f.opened).toBe(f.hooks.execution!.sessionFile);
@@ -145,6 +254,7 @@ test("quick research reserves its fourth turn, uses canonical transcript identit
     proceed.resolve();
     expect(await handle.done).toMatchObject({ report: "Findings with citations", turns: 4,
       researchReport: { status: "partial", stopReason: "turn_limit" } });
+    expect(requests).toBe(1);
     expect(handle.usage().turns).toBe(4);
     expect(f.aborted).toBe(false);
   } finally { proceed.resolve(); await handle.done; f.cleanup(); }

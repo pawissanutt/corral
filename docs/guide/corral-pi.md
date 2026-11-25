@@ -127,6 +127,29 @@ The Pi `/settings` page and audible bell are terminal-only. Sign in to a
 provider in a terminal with `corral-pi login --provider <id>`; the owner shell
 `!command` also remains terminal-only.
 
+## Hosted search and image generation
+
+In **Settings → Configuration → Harnesses → Pi → Hosted tools**, choose a route and model for each tool. Changes apply when a workspace host starts or resumes. Switching the chat model does not switch either tool. Settings contain model selectors, not secrets; use `corral-pi login --provider <id>` on the host for the account you selected.
+
+| Route ID | Search model | Image generation |
+|---|---|---|
+| `openai-codex` | ChatGPT subscription; recommended when the selected model supports search | Experimental: choose a **carrier** chat model; the backend selects the image model |
+| `openai` | OpenAI Responses; metered API key | Choose a supported GPT Image model; metered API key |
+| `anthropic` | Claude subscription; WebSearch only | Not offered |
+| `anthropic-api` | Claude Messages server-side search; metered API key | Not offered |
+
+For example, to search using a subscription and generate images using a platform key, set these in the workspace's `.corral-next/pi.toml`:
+
+```toml
+[hosted_tools]
+web_search = "openai-codex/gpt-6.1-sol"
+image_gen = "openai/gpt-image-1"
+```
+
+Neither tool is enabled merely by opening Settings. `"off"` disables that tool; removing `web_search` restores your existing `[web]` behavior (including SearXNG or chat-model-based subscription search), and removing `image_gen` disables image generation. Selecting search alone does not enable `web_fetch`. A hosted search sends the query to the selected provider and returns its answer and source links, not fetched pages. Image generation sends the prompt, not the requested file path. Both can consume provider quota or incur charges. A failed subscription call **never falls back to a paid key**, even if you have one. An account, carrier or image model may lack access; renew an expired subscription login or change routes explicitly in Settings. Token usage, when supplied, is not a quote for hosted tool fees.
+
+Ask a writable session to generate a PNG at a new relative path, for example `art/cover.png` (create `art/` first). It returns a preview and a receipt with the path, byte count and SHA-256 of the full PNG. It does not replace existing files or follow symlinks. Saving currently requires Linux descriptor paths and hard-link support; an unsupported destination is refused, not redirected somewhere else. Read-only roles and children can generate a preview **without a path**, but cannot save. A slice child can save only within its assigned paths. Plan mode blocks image generation altogether. The app shows the recorded preview; terminals without image display can use the receipt to find the PNG. A stopped or failed request may still have consumed provider quota.
+
 ## Providers
 
 Each model is named `<provider>/<model>`. The provider decides how you pay:

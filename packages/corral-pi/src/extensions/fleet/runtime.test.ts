@@ -21,6 +21,7 @@ test("build text deltas do not recompute session usage, while turns and tool eve
   let statsCalls = 0;
   let contextCalls = 0;
   const session = {
+    agent: { streamFunction() { throw new Error("Fixture does not send model requests"); } },
     messages: [],
     subscribe(changed: (event: Sdk.AgentSessionEvent) => void) { observer = changed; return () => { observer = undefined; }; },
     async bindExtensions() {},

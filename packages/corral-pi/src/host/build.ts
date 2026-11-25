@@ -95,7 +95,7 @@ export function buildHostConfig(launch: BuildLaunchOptions, record: BuildSession
     identity: { store: "build", project: record.project ?? "", role: "build" },
     pane: "", cwd: record.worktree, root: record.workspaceRoot ?? record.repoRoot, corral: launch.corral ?? "", assets,
     sessionDir: join(dir, "sessions"), runtimeDir: join(dir, "runtime"), ui: "rich",
-    ...workspaceSettings(record.workspaceRoot ?? record.repoRoot, "build"),
+    ...workspaceSettings(record.workspaceRoot ?? record.repoRoot, "build", undefined, undefined, !!record.workspaceRoot && !record.bare),
     local: { dir, id: record.id, socket: local.socket ?? sessionSocket(dir, process.env), headless: local.headless },
     provider: route.provider, model: route.model,
     effort: route.effort, fallback,

@@ -17,6 +17,10 @@ mod land;
 mod lens_tasks;
 pub mod model;
 #[cfg(unix)]
+pub mod pi_hosted_tools;
+#[cfg(unix)]
+mod pi_preferences;
+#[cfg(unix)]
 pub mod pi_startup;
 mod pipeline;
 mod prompt;

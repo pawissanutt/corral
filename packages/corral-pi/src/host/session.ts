@@ -1,5 +1,6 @@
 // One upstream AgentSessionRuntime, with local session state and engine CLI board access.
 import { existsSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { createCodeCommands } from "./code-commands.ts";
@@ -84,11 +85,14 @@ import type { LoadedModules } from "./modules.ts";
 import { type GuardedFetch, guardedFetch, resourceLoaderOptions, restrictedSettings } from "./restrict.ts";
 import { createModelCatalog } from "./catalog.ts";
 import { installModelSelection } from "./model-selection.ts";
-import { childModels, childProfileProviders, interactiveModels, sessionRoutes, type SessionRoutes } from "./capabilities.ts";
+import { childModels, childProfileProviders, interactiveModels, providerCapabilities, sessionRoutes, type SessionRoutes } from "./capabilities.ts";
 import { observeTerminalInput, type InputObservation } from "./input-observation.ts";
 import { browserSettings, browserTools } from "../extensions/browser/index.ts";
 import { installLocalProvider, LocalModelUnavailable } from "./local-models.ts";
-import { webTools } from "../extensions/web/index.ts";
+import { ImageGeneration } from "../extensions/image/tool.ts";
+import { classifyWriteScope } from "../roles/assistant/write-scope.ts";
+import type { HostedRoute } from "./hosted-settings.ts";
+import { hostedSearchTool, webTools } from "../extensions/web/index.ts";
 import { runSubscriptionSearch } from "../extensions/web/subscription.ts";
 import { streamClaudeSearch } from "../claude/search.ts";
 import { configuredServers, lspToolkit, type LspToolkit } from "../extensions/lsp/index.ts";
@@ -110,6 +114,8 @@ import { runAuxiliarySession } from "../extensions/subagent/session.ts";
 import { FleetRuntime } from "../extensions/fleet/runtime.ts";
 import { fleetTools } from "../extensions/fleet/tools.ts";
 import { boundFleetSettings } from "../extensions/fleet/settings.ts";
+import { imageContext } from "../extensions/image/context.ts";
+import { baseCalibration, calibratedContext } from "../roles/common/family.ts";
 import { executionRefusal, exploreLoadout } from "../roles/common/execution.ts";
 import { workerDoneTool } from "../roles/worker/tools.ts";
 import { readTranscriptPage, type TranscriptRequest, type TranscriptPage } from "./transcript-preview.ts";
@@ -443,6 +449,7 @@ export class HostSession {
   private buildProviders: readonly string[] = [];
   private readonly apiNetworks: GuardedFetch[] = [];
   private searchModels: Models | undefined;
+  private readonly imageGeneration?: ImageGeneration;
   private ledger: TodoLedger | undefined;
   private closing = false;
   private closeResult: Promise<void> | undefined;
@@ -575,6 +582,7 @@ export class HostSession {
       liveInput: event => this.liveEvents.input(event),
     });
     const childPolicy = childFallbackPolicy(options.fallbackPolicy, options.noFallback);
+    const childHosted = (child: { kind: "slice" | "review" | "explore"; owns: readonly string[] }) => this.hostedTools(child);
     const helperModel = options.workerLaunch ?? { provider: this.provider, model: options.model, effort: options.effort };
     this.buildControls = options.build ? createBuildControls({
       sdk: options.sdk, context: options.build,
@@ -585,9 +593,11 @@ export class HostSession {
       approved: () => this.buildProviders,
       parent: { provider: this.provider, model: options.model.startsWith(`${this.provider}/`) ? options.model.slice(this.provider.length + 1) : options.model,
         effort: options.effort },
-      agentDir: options.agentDir, wake: this.inputWake,
-      parentLoadout: options.capabilities?.enabled.includes("codemode") ? ["codemode"] : [],
-      localTools: () => this.localTools.filter(tool => !this.buildControls?.tools.includes(tool)),
+      assetRoot: options.modules.assetRoot, agentDir: options.agentDir, wake: this.inputWake,
+      parentLoadout: [...(options.capabilities?.enabled.includes("codemode") ? ["codemode"] : []),
+        ...Object.entries(options.capabilities?.hosted_tools ?? {}).filter(([, route]) => route && route !== "off").map(([name]) => name)],
+      hostedTools: childHosted,
+      localTools: () => this.childLocalTools().filter(tool => !this.buildControls?.tools.includes(tool)),
       deliverToParent: async text => {
         const result = await this.submitAutomated(text);
         if (result.disposition === "rejected") throw new Error(`Fleet parent delivery rejected: ${result.reason}`);
@@ -721,9 +731,12 @@ export class HostSession {
         entry.type === "custom" && (entry.customType === "corral_code_cell" || entry.customType === CODE_CALL_ENTRY) ? [entry.data] : []),
       notify: (key, text) => this.commandNotice(key, text),
     }) : undefined;
-    const subscriptionSearch = webEnabled && options.capabilities?.web?.search_provider === "subscription";
+    const searchOverride = options.capabilities?.hosted_tools?.web_search;
+    const configuredSearch = searchOverride && searchOverride !== "off" ? searchOverride : undefined;
+    const subscriptionSearch = searchOverride === undefined && webEnabled && options.capabilities?.web?.search_provider === "subscription";
+    const searchSettings = options.capabilities?.web ?? { hosts: [], max_bytes: 32768, timeout_ms: 60000, max_redirects: 0 };
     const auxiliary = { ...auxiliarySettings(options.identity.role, options.capabilities?.enabled ?? [], options.guidance?.settings),
-      ...(subscriptionSearch ? { web_search: { model: null, timeout_secs: (options.capabilities?.web?.timeout_ms ?? 15000) / 1000 } } : {}),
+      ...(subscriptionSearch || configuredSearch ? { web_search: { model: null, timeout_secs: searchSettings.timeout_ms / 1000 } } : {}),
     };
     const record = async (payload: Record<string, unknown>): Promise<Record<string, unknown>> => {
       options.events.emit("auxiliary", payload);
@@ -748,11 +761,12 @@ export class HostSession {
           settings: { maxParallel: settings.maxParallel, profiles: options.childProfiles ?? [] } },
         // A bound worker's launch cwd is authoritative, including reruns and adopted checkouts.
         buildWorktree: options.identity.role === "worker" && !!options.identity.task,
-        agentDir: options.agentDir, bound: true, allowedKinds: settings.allowedKinds,
+        assetRoot: options.modules.assetRoot, agentDir: options.agentDir, bound: true, allowedKinds: settings.allowedKinds,
         maxTurns: settings.maxTurns, timeoutSecs: settings.timeoutSecs,
         ...(auxiliary.explore ? { research: { settings: auxiliary.explore } } : {}),
+        hostedTools: childHosted,
         get parentLoadout() { return host.loadout; },
-        get localTools() { return host.localTools; },
+        get localTools() { return host.childLocalTools(); },
         shellRefusal: options.modules.role.shellRefusal,
         changed: () => this.fleetChanged(), record, retained,
         ...(childPolicy ? { fallbackPolicy: childPolicy } : {}),
@@ -771,22 +785,23 @@ export class HostSession {
         changed: () => this.fleetChanged(),
         sessionId: () => this.sessionId(),
         searchModel: () => {
+          if (configuredSearch) return configuredSearch;
           const model = this.runtime?.session.model;
           return model && ["openai-codex", "anthropic"].includes(model.provider) && this.searchModels?.getModel(model.provider, model.id)
             ? { provider: model.provider, model: model.id } : undefined;
         },
         record,
         retain: retained ? (helper, file, result) => retained.helper(helper, file, result) : undefined,
-        execute: (invocation, signal) => {
+        execute: async (invocation, signal) => {
           if (invocation.kind === "web_search") {
-            if (!this.searchModels || !options.capabilities?.web) throw new Error("subscription search runtime is not ready");
-            return runSubscriptionSearch({ sdk: options.sdk, models: this.searchModels, cwd: options.cwd,
-              settings: options.capabilities.web }, invocation, signal);
+            const models = this.searchModels ?? (configuredSearch ? await this.configuredSearchModels(configuredSearch) : undefined);
+            if (!models) throw new Error("web_search_unavailable: search runtime is not ready");
+            return runSubscriptionSearch({ sdk: options.sdk, models, cwd: options.cwd, settings: searchSettings }, invocation, signal);
           }
           if (!this.auxiliaryModels) throw new Error("auxiliary model runtime is not ready");
           return runAuxiliarySession({ sdk: options.sdk, models: this.auxiliaryModels, provider: helperModel.provider,
-            cwd: options.cwd, agentDir: options.agentDir,
-            parentLoadout: this.loadout, localTools: this.localTools,
+            assetRoot: options.modules.assetRoot, cwd: options.cwd, agentDir: options.agentDir,
+            parentLoadout: this.loadout, localTools: this.childLocalTools(), hostedTools: childHosted,
             ...(childPolicy ? { fallbackPolicy: childPolicy } : {}),
             onFallback: (from, model) => {
               options.events.emit("model_fallback", {
@@ -797,6 +812,9 @@ export class HostSession {
         },
       });
     }
+    const image = options.capabilities?.hosted_tools?.image_gen;
+    if (image && image !== "off") this.imageGeneration = new ImageGeneration(image,
+      { auth: options.modules.auth, fetch: options.apiFetch ?? options.network.fetch }, usage => this.reportUsage(usage));
     const dialogEnabled = options.capabilities?.enabled.includes("ask_user") === true;
     const writeApprovalRole = options.identity.role === "build" || options.identity.role === "assistant";
     const questions = dialogEnabled || writeApprovalRole || options.capabilities?.enabled.includes("bash_rules") ? new PendingQuestions({
@@ -832,10 +850,8 @@ export class HostSession {
         if (!current) throw new Error("LSP runtime unavailable; no effect started");
         return current.execute(...args);
       } })), ...(webEnabled && options.network.web ? webTools(options.network.web,
-        subscriptionSearch ? async (id, query, count, signal) => {
-          if (!this.auxiliary) throw new Error("subscription search is disabled");
-          return (await this.auxiliary.run("web_search", id, JSON.stringify({ query, count }), signal)).text;
-        } : undefined) : []),
+        searchOverride !== undefined ? false : subscriptionSearch ? this.runSearch : undefined) : []),
+      ...this.hostedTools(),
       ...(this.jobs ? jobTools(this.jobs, true, this.commands, this.inputWake).filter(tool => tool.name !== "bash" || role.upstreamTools.includes("bash")) : []),
       ...(this.fleet && auxiliary.explore ? [exploreTool(this.fleet)] : []),
       ...(this.auxiliary && auxiliary.expert ? [expertTool(this.auxiliary)] : []),
@@ -953,6 +969,75 @@ export class HostSession {
     }
   }
 
+  private readonly runSearch = async (id: string, query: string, count: number, signal?: AbortSignal) => {
+    if (!this.auxiliary) throw new Error("web_search_unavailable: search is disabled");
+    return (await this.auxiliary.run("web_search", id, JSON.stringify({ query, count }), signal)).text;
+  };
+
+  private childLocalTools(): readonly ToolDefinition[] {
+    return this.localTools.filter(tool => tool.name !== "image_gen" &&
+      (tool.name !== "web_search" || this.options.capabilities?.hosted_tools?.web_search === undefined));
+  }
+
+  private hostedTools(child?: { kind: "slice" | "review" | "explore"; owns: readonly string[] }): ToolDefinition[] {
+    const search = this.options.capabilities?.hosted_tools?.web_search;
+    const tools: ToolDefinition[] = [];
+    if (search && search !== "off") {
+      const prefix = child ? randomUUID() : "parent";
+      tools.push(hostedSearchTool((id, ...args) => this.runSearch(`${prefix}:${id}`, ...args), `${PROVIDERS[search.provider].label} / ${search.model}`));
+    }
+    const image = this.boundImageTool(child);
+    if (image) tools.push(image);
+    return tools;
+  }
+
+  private boundImageTool(child?: { kind: "slice" | "explore" | "review"; owns: readonly string[] }): ToolDefinition | undefined {
+    const { identity, build, cwd, modules } = this.options;
+    const writable = (!child || child.kind === "slice") && modules.role.upstreamTools.includes("write") &&
+      (identity.role === "assistant" || identity.role === "worker" && !!identity.task ||
+       identity.role === "build" && !!build?.session.worktree && build.session.repository !== false);
+    const root = writable ? build?.session.worktree ?? cwd : undefined;
+    return this.imageGeneration?.tool({ root, refusal: path => {
+      if (this.closing || (this.planMode && this.planMode.phase !== "off")) return "image_generation_unavailable: generation is blocked in this session phase";
+      if (root && path) {
+        if (child && !child.owns.some(owned => owned === "." || path === owned || path.startsWith(`${owned}/`))) return "image_generation_unavailable: path outside child ownership";
+        const decision = classifyWriteScope(path, { cwd: root, root, allowWorktrees: build?.session.trustedCode === true,
+          buildWorktree: identity.role === "worker" || (!!build && !build.session.here) });
+        if (decision.action !== "allow") return "image_generation_unavailable: path outside the permitted write scope";
+      }
+      return undefined;
+    } });
+  }
+
+  /** Build the tool's catalog on first invocation. Never widen a chat or fallback catalog. */
+  private async configuredSearchModels(route: HostedRoute): Promise<Models> {
+    const id = route.provider, { modules, cwd, agentDir, apiFetch, network } = this.options;
+    try {
+      if (!(modules.auth.providers ?? [modules.auth.provider]).includes(id)) throw new Error();
+      const { credentials } = await providerCapabilities(modules.auth, id, [id]);
+      const models = await createModelCatalog(credentials, { providers: [id], modelsPath: null });
+      const send = modules.auth.transport?.(authContext(id)) ?? apiFetch ?? network.fetch;
+      // Native token prices do not include hosted search charges. Keep the total unknown.
+      const report = ({ usd: _tokenEstimate, ...usage }: ModelUsage) => this.reportUsage(usage);
+      if (isApiProvider(id)) this.apiNetworks.push(installApiProvider(models, id, credentials, send, report, network.refuse));
+      else {
+        const guard = guardedFetch(send, network.refuse, id);
+        this.apiNetworks.push(guard);
+        restrictProvider(models, id, guard.fetch as typeof globalThis.fetch, { configDir: join(agentDir, "claude-search"), cwd, searchOnly: true });
+        const provider = models.getProvider(id)!;
+        models.registerNativeProvider({ ...provider, stream: observeUsage(provider.stream.bind(provider), "subscription", report),
+          streamSimple: observeUsage(provider.streamSimple.bind(provider), "subscription", report) });
+      }
+      this.searchModels = models;
+      return models;
+    } catch { throw new Error(`web_search_unavailable: check the selected model and run corral-pi login --provider ${id}; no fallback`); }
+  }
+
+  private calibration(model: { provider: string; id: string }): string | undefined {
+    const overlay = this.roleContext.build?.session.trustedCode === true ? undefined : this.options.modules.role.calibration?.(model.provider, model.id);
+    return [baseCalibration(this.options.modules.assetRoot, model.provider, model.id), overlay].filter(Boolean).join("\n\n") || undefined;
+  }
+
   get loadout(): readonly string[] { return [...this.baseLoadout, ...this.mcp?.names() ?? []]; }
 
   private get initialTools(): readonly string[] {
@@ -1031,7 +1116,7 @@ export class HostSession {
       : childModels(options.identity.role)
         ? providers.filter(id => id === childLaunchProvider || childProviders.includes(id))
         : [route.id];
-    if (options.capabilities?.enabled.includes("web.enabled") && options.capabilities.web?.search_provider === "subscription") {
+    if (options.capabilities?.hosted_tools?.web_search === undefined && options.capabilities?.enabled.includes("web.enabled") && options.capabilities.web?.search_provider === "subscription") {
       // Search follows the parent's own model, so it needs only the providers the parent may select.
       const searchProviders = (interactive ? providers : [route.id]).filter((id): id is ProviderId => id === "openai-codex" || id === "anthropic");
       const search = await createModelCatalog(credentials, { providers: searchProviders });
@@ -1081,10 +1166,13 @@ export class HostSession {
           : hasProviderFallbacks(options.fallbackPolicy)
             ? current => providerFallbackCandidates(current, options.fallbackPolicy)
             : undefined;
+      const agent = session.agent;
+      const original = agent.streamFunction;
+      const projected: typeof original = (m, c, o) => original(m, imageContext(c, m), o);
+      agent.streamFunction = projected;
       if (parentFallback) {
-        const agent = session.agent;
-        const original = agent.streamFunction;
-        const fallback = withSubscriptionFallback(original, parentFallback, async (candidate, signal) => {
+        const calibrated: typeof original = (m, c, o) => projected(m, calibratedContext(c, host.calibration(m)), o);
+        const fallback = withSubscriptionFallback(calibrated, parentFallback, async (candidate, signal) => {
           const model = models.getModel(candidate.provider, candidate.model);
           if (!model) return undefined;
           try {
@@ -1095,7 +1183,7 @@ export class HostSession {
             if (session.model !== model) return undefined;
             throw error;
           }
-          return { model, stream: original, reasoning: session.thinkingLevel === "off" ? undefined : session.thinkingLevel };
+          return { model, stream: calibrated, reasoning: session.thinkingLevel === "off" ? undefined : session.thinkingLevel };
         }, (candidate, previous) => {
           const from = `${previous.provider}/${previous.id}`, model = `${candidate.provider}/${candidate.model}`;
           const text = `Quota exhausted on ${from}; continuing on ${model}`;
@@ -1103,7 +1191,7 @@ export class HostSession {
           options.events.emit("model_fallback", { from, model, text });
         });
         agent.streamFunction = (current, context, streamOptions) => streamOptions?.sessionId === session.sessionId
-          ? fallback(current, context, streamOptions) : original(current, context, streamOptions);
+          ? fallback(current, context, streamOptions) : projected(current, context, streamOptions);
       }
       result.session.setActiveToolsByName([...host.initialTools]);
       host.watch(result.session);
@@ -1182,10 +1270,9 @@ export class HostSession {
       if (messages) return { messages };
     });
     // Follows the session's current model, so a mid-session model switch changes the overlay too.
-    const calibration = this.options.modules.role.calibration;
-    if (calibration && this.roleContext.build?.session.trustedCode !== true) pi.on("before_agent_start", event => {
+    pi.on("before_agent_start", event => {
       const model = this.runtime?.session.model;
-      const text = model ? calibration(model.provider, model.id) : undefined;
+      const text = model ? this.calibration(model) : undefined;
       if (text) event.systemPromptOptions.sections.model_calibration = text;
       else delete event.systemPromptOptions.sections.model_calibration;
     });
@@ -1873,6 +1960,7 @@ export class HostSession {
     closeResidentSession(this.sessionId());
     if (this.open) this.stopCause ??= "host";
     this.closing = true;
+    this.imageGeneration?.close();
     this.dialogs.close();
     clearTimeout(this.remoteJobSample);
     this.remoteChanges.close();

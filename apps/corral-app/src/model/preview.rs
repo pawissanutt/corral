@@ -45,12 +45,14 @@ use corral_types::{Actor, Event, EventKind};
 use jiff::Timestamp;
 use serde_json::Value;
 
+mod pi_hosted_tools;
 pub use config::config;
 pub use controls::control;
 pub use details::{detail, failure};
 pub use effects::{effect, operation};
 pub use engine::act;
 pub use pi::{Host, tick};
+pub use pi_hosted_tools::pi_hosted_tools;
 
 pub fn feed(now: u64, date: String, clock: String, time_zone: Option<jiff::tz::TimeZone>) -> Feed {
     let mut feed = base(now, date, clock, time_zone);
@@ -145,6 +147,7 @@ fn base(now: u64, date: String, clock: String, time_zone: Option<jiff::tz::TimeZ
         corral_protocol::app::SYSTEM_ENTRIES_V1,
         corral_protocol::app::SYSTEM_LENSES_V1,
         USAGE_V1,
+        corral_protocol::config::PI_HOSTED_TOOLS_V1,
         SETTINGS_V1,
         ASSISTANT_V1,
         CLOSED_V1,

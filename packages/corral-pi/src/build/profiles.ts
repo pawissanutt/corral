@@ -1,11 +1,13 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { readPiSettings } from "../host/pi-settings-file.ts";
 import { TOML } from "bun";
 import { isProviderId } from "../auth/providers.ts";
 import { RemovedModelOption } from "../host/config.ts";
 import type { BuildProfile } from "./types.ts";
 
 export function readWorkspaceToml(root: string, file: "pi.toml" | "corral.toml"): Record<string, unknown> {
+  if (file === "pi.toml") return readPiSettings(root);
   try { return TOML.parse(readFileSync(join(root, ".corral-next", file), "utf8")) as Record<string, unknown>; }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};

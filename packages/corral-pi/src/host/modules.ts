@@ -126,6 +126,7 @@ function checkAuth(value: unknown, module: string, provider: ProviderId): AuthMo
 }
 
 export interface LoadedModules {
+  readonly assetRoot?: string;
   readonly role: RoleModule;
   readonly auth: AuthModule;
 }
@@ -149,11 +150,13 @@ export async function loadModules(
   const bundle = compiledBundle();
   if (bundle?.roles) {
     return {
+      assetRoot,
       role: checkRole(bundle.roles[role](assetRoot), paths.role, role),
       auth: checkAuth(bundle.auth, paths.auth, provider),
     };
   }
   return {
+    assetRoot,
     role: checkRole(await importDefault(assetRoot, paths.role), paths.role, role),
     auth: checkAuth(await importDefault(assetRoot, paths.auth), paths.auth, provider),
   };

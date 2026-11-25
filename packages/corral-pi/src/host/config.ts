@@ -1,9 +1,9 @@
 // Flag-based launches read ordinary workspace settings.
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { basename, dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { TOML } from "bun";
+import { readPiSettings } from "./pi-settings-file.ts";
 import { z } from "zod";
 
 import type { AwsBinding } from "../auth/aws.ts";
@@ -15,12 +15,14 @@ import { WebSettingsSchema } from "../extensions/web/settings.ts";
 import { McpSettingsSchema } from "./mcp-settings.ts";
 import { JobSettingsSchema } from "../extensions/jobs/settings.ts";
 import { LlamaCppSettingsSchema, type LlamaCppSettings } from "../auth/local.ts";
+import { parseHostedTools, type HostedSettings } from "./hosted-settings.ts";
 import { parseFallbackSettings, type FallbackSettings } from "./fallback-settings.ts";
 import type { SummaryProfile } from "./summary.ts";
 
 export type UiMode = "rich" | "plain";
 
 export interface HostCapabilities extends CapabilitySet {
+  readonly hosted_tools?: HostedSettings;
   readonly llama_cpp?: LlamaCppSettings;
 }
 
@@ -155,14 +157,8 @@ const ExploreConfigSchema = z.strictObject({
   model: z.string().max(256).refine(selector => qualifiedModel(selector) !== undefined, "expected a known <provider>/<model>"),
 }).optional();
 
-function readPiSettings(root: string): Json {
-  const settingsPath = join(root, ".corral-next", "pi.toml");
-  try { return TOML.parse(readFileSync(settingsPath, "utf8")) as Json; }
-  catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-  return {};
-}
-
-export function workspaceSettings(root: string, role: keyof typeof ABILITIES, run?: string, raw = readPiSettings(root)) {
+export function workspaceSettings(root: string, role: keyof typeof ABILITIES, run?: string, raw = readPiSettings(root), workspaceBound = false) {
+  const hosted = workspaceBound ? parseHostedTools(raw.hosted_tools) : undefined;
   const enabled = [...ABILITIES[role]];
   if (role === "worker" && run) enabled.push("checkpoints");
   if (raw.bash_rules !== undefined) enabled.push("bash_rules");
@@ -196,7 +192,7 @@ export function workspaceSettings(root: string, role: keyof typeof ABILITIES, ru
     },
   };
   const capabilities: HostCapabilities = {
-    catalog: 10, enabled, ...(web ? { web } : {}), ...(mcp ? { mcp } : {}), ...(local ? { llama_cpp: local } : {}),
+    catalog: 10, enabled, ...(hosted ? { hosted_tools: hosted } : {}), ...(web ? { web } : {}), ...(mcp ? { mcp } : {}), ...(local ? { llama_cpp: local } : {}),
   };
   return { capabilities, guidance, todo: enabled.includes("todo"), fallbackPolicy };
 }
@@ -257,7 +253,7 @@ export function parseRunFlags(command: "run" | "chat", argv: readonly string[], 
     freshSession: values.new === true || env.CORRAL_FRESH === "1",
     ...(values.plan ? { planMode: true } : {}),
     ...(values["prompt-file"] ? { promptFile: resolve(cwd, values["prompt-file"]) } : {}),
-    ...workspaceSettings(root, role, run, settings),
+    ...workspaceSettings(root, role, run, settings, Boolean(env.CORRAL_NEXT_ROOT) || !values.dir),
     ...(values.dir ? modelSettings(values) : { ...modelSettings(values, "startup"), startupModel: startupModelSetting(settings) }),
   };
 }

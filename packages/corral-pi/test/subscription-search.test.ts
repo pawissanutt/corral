@@ -8,6 +8,7 @@ import * as sdk from "@earendil-works/pi-coding-agent";
 import type { CredentialStore } from "@earendil-works/pi-ai";
 import type { Fetch } from "../src/auth/types.ts";
 import { overrideSdk } from "../src/claude/sdk.ts";
+import { installApiProvider } from "../src/host/api-providers.ts";
 import { observeUsage } from "../src/host/model-usage.ts";
 import { createModelCatalog } from "../src/host/catalog.ts";
 import { HostSession, authContext, restrictProvider } from "../src/host/session.ts";
@@ -62,24 +63,28 @@ function codexReply(search = true, inputDetails: Record<string, number> = { cach
   ];
   return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), { headers: { "content-type": "text/event-stream" } });
 }
-async function fixture(provider: "openai-codex" | "anthropic", send: Fetch) {
+async function fixture(provider: "openai-codex" | "anthropic" | "openai" | "anthropic-api", send: Fetch) {
   const cwd = temp();
   const credentials: CredentialStore = provider === "openai-codex" ? fixtureAuth.credentials(authContext()) : {
-    read: async (id) => id === "anthropic" ? { type: "oauth", access: "sk-ant-oat01-SYNTHETIC", refresh: "r", expires: Date.now() + 3600000 } : undefined,
-    list: async () => [{ providerId: "anthropic", type: "oauth" }],
+    read: async (id) => id !== provider ? undefined : id !== "anthropic" ? { type: "api_key", key: "sk-SYNTHETIC-ONLY" } : { type: "oauth", access: "sk-ant-oat01-SYNTHETIC", refresh: "r", expires: Date.now() + 3600000 },
+    list: async () => [{ providerId: provider, type: provider === "anthropic" ? "oauth" : "api_key" }],
     modify: async () => { throw new Error("read-only fixture"); }, delete: async () => {},
   };
   const models = await createModelCatalog(credentials, { providers: [provider], modelsPath: null });
-  const network = guardedFetch(send, undefined, provider);
-  restrictProvider(models, provider, network.fetch as typeof fetch, {
-    configDir: join(cwd, "claude"), cwd, executable: () => "/fixture/claude", searchOnly: true,
-    env: { PATH: "/bin", ANTHROPIC_API_KEY: "paid-key", CLAUDE_CODE_OAUTH_TOKEN: "foreign-token" },
-  });
   const usage: ModelUsage[] = [];
-  const restricted = models.getProvider(provider)!;
-  models.registerNativeProvider({ ...restricted, streamSimple: observeUsage(restricted.streamSimple.bind(restricted), "subscription", row => usage.push(row)) });
+  if (provider === "openai" || provider === "anthropic-api") {
+    installApiProvider(models, provider, credentials, send, row => usage.push(row));
+  } else {
+    const network = guardedFetch(send, undefined, provider);
+    restrictProvider(models, provider, network.fetch as typeof fetch, {
+      configDir: join(cwd, "claude"), cwd, executable: () => "/fixture/claude", searchOnly: true,
+      env: { PATH: "/bin", ANTHROPIC_API_KEY: "paid-key", CLAUDE_CODE_OAUTH_TOKEN: "foreign-token" },
+    });
+    const restricted = models.getProvider(provider)!;
+    models.registerNativeProvider({ ...restricted, streamSimple: observeUsage(restricted.streamSimple.bind(restricted), "subscription", row => usage.push(row)) });
+  }
   const refs: Record<string, unknown>[] = [];
-  let binding = { provider, model: provider === "openai-codex" ? "gpt-6.1-sol" : "claude-sonnet-5-5" };
+  let binding = { provider, model: provider === "openai-codex" ? "gpt-6.1-sol" : provider === "openai" ? "gpt-5.4" : provider === "anthropic-api" ? "claude-sonnet-4-6" : "claude-sonnet-5-5" };
   const runtime = new AuxiliaryRuntime({ provider, model: binding.model,
     settings: { web_search: { model: null, timeout_secs: 5 } }, sessionId: () => "parent",
     searchModel: () => binding,
@@ -140,8 +145,9 @@ test("a completion without search evidence is refused, while its usage remains a
 
 test("provider errors do not retry or fall back to another transport", async () => {
   let calls = 0;
-  const fx = await fixture("openai-codex", async () => { calls++; return Response.json({ error: { message: "quota exceeded" } }, { status: 429 }); });
-  await expect(fx.run("quota")).rejects.toThrow();
+  const fx = await fixture("openai-codex", async () => { calls++; return Response.json({ error: { message: "quota exceeded sk-SYNTHETIC-RAW-BODY" } }, { status: 429 }); });
+  await expect(fx.run("quota")).rejects.toThrow("verified hosted search");
+  expect(JSON.stringify(fx.transcript())).not.toContain("sk-SYNTHETIC-RAW-BODY");
   expect(calls).toBe(1);
   expect(fx.refs.at(-1)?.outcome).toBe("uncertain");
   expect(fx.usage).toHaveLength(0);
@@ -222,7 +228,7 @@ test("Claude terminal failures retain reported usage instead of becoming zero-to
       errors: ["search turn limit sk-SYNTHETIC-SECRET"], usage: { input_tokens: 30, output_tokens: 5 } };
   });
   const fx = await fixture("anthropic", async () => { throw new Error("unexpected HTTP"); });
-  await expect(fx.run("turn-limit")).rejects.toThrow("search turn limit");
+  await expect(fx.run("turn-limit")).rejects.toThrow("verified hosted search");
   const assistant = fx.transcript().map((entry) => record(entry.message)).find((m) => m.role === "assistant");
   expect(record(assistant?.usage)).toMatchObject({ input: 30, output: 5, totalTokens: 35 });
   expect(JSON.stringify(assistant)).not.toContain("sk-SYNTHETIC-SECRET");
@@ -319,3 +325,53 @@ test("bounded JSON remains valid UTF-8 and policy accepts only explicit supporte
   evidence.observe("openai-codex", { type: "response.output_item.done", item: { type: "web_search_call", status: "failed" } });
   expect(evidence.searched).toBeFalse();
 });
+
+test("OpenAI API sends forced Responses search with only the metered credential", async () => {
+  const fx = await fixture("openai", async (url, init) => {
+    expect(String(url)).toBe("https://api.openai.com/v1/responses");
+    expect(new Headers(init?.headers).get("authorization")).toBe("Bearer sk-SYNTHETIC-ONLY");
+    expect(body(init)).toMatchObject({ tools: [{ type: "web_search", search_context_size: "medium" }],
+      tool_choice: { type: "web_search" }, include: ["web_search_call.action.sources"] });
+    return codexReply();
+  });
+  expect(JSON.parse((await fx.run("paid-openai")).text)).toMatchObject({ provider: "openai", results: [{ url: "https://docs.example.org/guide" }] });
+  expect(fx.usage).toHaveLength(1);
+  expect(fx.usage[0]).toMatchObject({ billing: "api" });
+});
+
+function anthropicApiReply(mode: "ok" | "empty" | "error" | "unpaired") {
+  const start = (index: number, content_block: unknown) => ({ type: "content_block_start", index, content_block });
+  const stop = (index: number) => ({ type: "content_block_stop", index });
+  const events = [
+    { type: "message_start", message: { id: "msg", model: "claude-sonnet-4-6", content: [], usage: { input_tokens: 12, output_tokens: 0 } } },
+    start(0, { type: "server_tool_use", name: "web_search", id: "srvtoolu_test", input: {} }), stop(0),
+    start(1, { type: "web_search_tool_result", tool_use_id: mode === "unpaired" ? "other" : "srvtoolu_test",
+      content: mode === "error" ? { type: "web_search_tool_result_error", error_code: "unavailable" }
+        : mode === "empty" ? [] : [{ type: "web_search_result", title: "Rust", url: "https://www.rust-lang.org/" }] }), stop(1),
+    start(2, { type: "text", text: "SYNTHETIC-PROVIDER-CONTENT" }), stop(2),
+    { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 5 } }, { type: "message_stop" },
+  ];
+  return new Response(events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(""),
+    { headers: { "content-type": "text/event-stream" } });
+}
+
+for (const mode of ["ok", "empty", "error", "unpaired"] as const) {
+  test(`Claude API requires a completed, paired server result (${mode})`, async () => {
+    const fx = await fixture("anthropic-api", async (url, init) => {
+      expect(String(url)).toBe("https://api.anthropic.com/v1/messages?beta=true");
+      expect(new Headers(init?.headers).get("x-api-key")).toBe("sk-SYNTHETIC-ONLY");
+      expect(new Headers(init?.headers).has("authorization")).toBeFalse();
+      expect(body(init)).toMatchObject({ tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 1 }],
+        tool_choice: { type: "tool", name: "web_search" } });
+      return anthropicApiReply(mode);
+    });
+    if (mode === "ok" || mode === "empty") {
+      expect(JSON.parse((await fx.run(mode)).text).results).toEqual(mode === "empty" ? [] : [{ title: "Rust", url: "https://www.rust-lang.org/" }]);
+    } else {
+      await expect(fx.run(mode)).rejects.toThrow("verified hosted search");
+      expect(JSON.stringify(fx.transcript())).not.toContain("SYNTHETIC-PROVIDER-CONTENT");
+    }
+    expect(fx.usage).toHaveLength(1);
+    expect(fx.usage[0]).toMatchObject({ billing: "api", input: 12, output: 5 });
+  });
+}

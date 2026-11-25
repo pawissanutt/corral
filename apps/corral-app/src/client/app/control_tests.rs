@@ -2,6 +2,27 @@ use super::*;
 use crate::model::agents::{self, Control};
 use crate::model::hue::Hue;
 
+/// The native and paired drivers consult `handles` before delivering an operation reply.
+/// A missing route leaves an enrolled device stuck on Reading even though corrald answered.
+#[test]
+fn pi_hosted_tools_routes_preference_replies_to_the_waiting_form() {
+    for method in [PI_HOSTED_TOOLS, PI_STARTUP] {
+        assert!(handles(&Event::Reply {
+            method,
+            tag: Some("settings-read".into()),
+            params: json!({"change": null}),
+            outcome: Ok(json!({"revision": "r1"})),
+            error_data: None,
+        }));
+    }
+    let mut feed = crate::model::preview::feed(0, String::new(), String::new(), None);
+    let unavailable = crate::model::settings::pi_hosted_tools::unavailable;
+    assert!(unavailable(&feed).is_none());
+    feed.capabilities.remove(wire::config::PI_HOSTED_TOOLS_V1);
+    assert!(unavailable(&feed).is_some());
+    assert!(unavailable(&Feed::default()).is_some());
+}
+
 /// corrald refuses Pause for a session without a pi host; the session shows the refusal with
 /// corrald's reason, and it is not taken for a connection problem.
 #[test]

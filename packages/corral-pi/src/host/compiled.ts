@@ -3,6 +3,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import assistantContract from "../../assets/assistant-contract.md" with { type: "text" };
+import gptBase from "../../assets/families/gpt/base.md" with { type: "text" };
 import gptAssistant from "../../assets/families/gpt/assistant.md" with { type: "text" };
 import buildContract from "../../assets/build-contract.md" with { type: "text" };
 import gptBuild from "../../assets/families/gpt/build.md" with { type: "text" };
@@ -19,6 +20,7 @@ import { piDocs } from "./pi-docs-macro.ts" with { type: "macro" };
 
 export const INSTALL_FILES: Readonly<Record<string, string>> = {
   "assets/assistant-contract.md": assistantContract,
+  "assets/families/gpt/base.md": gptBase,
   "assets/families/gpt/assistant.md": gptAssistant,
   "assets/build-contract.md": buildContract,
   "assets/families/gpt/build.md": gptBuild,

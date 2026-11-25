@@ -128,6 +128,15 @@ impl AppState {
                 request_id,
                 request,
             } => self.operation(feed, request_id, CONFIG_PUT, value(request)),
+            ClientRequest::PiHostedTools {
+                request_id,
+                request,
+            } => self.operation(
+                feed,
+                request_id,
+                corral_protocol::config::PI_HOSTED_TOOLS,
+                value(request),
+            ),
             ClientRequest::PiStartup {
                 request_id,
                 request,

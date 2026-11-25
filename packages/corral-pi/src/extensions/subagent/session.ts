@@ -2,13 +2,16 @@
 // ModelRuntime, but never its extension set, Corral client, hooks or session identity.
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import { imageContext } from "../image/context.ts";
+import { baseCalibration, calibratedContext } from "../../roles/common/family.ts";
 import type * as Sdk from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ModelRuntime, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { childFallbackPolicy, type FallbackSettings } from "../../host/fallback-settings.ts";
 import { installChildFallback } from "../../host/model-selection.ts";
 import { resourceLoaderOptions, restrictedSettings } from "../../host/restrict.ts";
 import { closeResidentSession, residentLifecycle } from "../../claude/resident.ts";
-import { executionRefusal, exploreLoadout } from "../../roles/common/execution.ts";
+import { childToolBindings, executionRefusal, exploreLoadout, type ChildHostedTools } from "../../roles/common/execution.ts";
 import { researchCode } from "../codemode/research.ts";
 import type { AuxiliaryResult, Invocation } from "./runtime.ts";
 import { HELPER_TEXT_LIMIT, type HelperEvent } from "./inspection.ts";
@@ -129,7 +132,14 @@ function projectHelperEvent(event: Sdk.AgentSessionEvent, emit: (event: HelperEv
   }
 }
 
+/** Decorate the final model attempt, not session state: fallback reuses the original context. */
+export function withChildBaseCalibration(stream: StreamFn, assetRoot?: string): StreamFn {
+  return (model, context, options) => stream(model,
+    calibratedContext(imageContext(context, model), baseCalibration(assetRoot, model.provider, model.id)), options);
+}
+
 export interface AuxiliarySessionOptions {
+  readonly assetRoot?: string;
   readonly sdk: typeof Sdk;
   readonly models: ModelRuntime;
   readonly provider: string;
@@ -137,6 +147,7 @@ export interface AuxiliarySessionOptions {
   readonly agentDir: string;
   readonly parentLoadout: readonly string[];
   readonly localTools: readonly ToolDefinition[];
+  readonly hostedTools?: ChildHostedTools;
   readonly fallbackPolicy?: FallbackSettings;
   readonly onFallback?: (from: string, to: string) => void;
 }
@@ -156,7 +167,10 @@ export async function runAuxiliarySession(options: AuxiliarySessionOptions, invo
   }
   const model = options.models.getModel(options.provider, invocation.model);
   if (!model) throw new Error(`model_unavailable: ${options.provider}/${invocation.model}`);
-  const loadout = invocation.kind === "explore" ? exploreLoadout(options.parentLoadout) : expertLoadout(options.localTools);
+  const { local: localTools, hosted, loadout: withHosted } = childToolBindings(options.parentLoadout, options.localTools,
+    options.hostedTools?.({ kind: "explore", owns: [] }) ?? []);
+  const baseLoadout = invocation.kind === "explore" ? exploreLoadout(options.parentLoadout) : expertLoadout(localTools);
+  const loadout = withHosted(baseLoadout);
   const allowed = new Set(loadout);
   const code = invocation.kind === "explore" && allowed.has("codemode") ? researchCode(allowed) : undefined;
   let turns = 0;
@@ -167,7 +181,8 @@ export async function runAuxiliarySession(options: AuxiliarySessionOptions, invo
     ? researchBudget(invocation.research ?? {}, invocation.maxTurns).thinkingLevel : "off";
   const extension = (pi: ExtensionAPI) => {
     residentLifecycle(pi);
-    for (const tool of options.localTools.filter((tool) => allowed.has(tool.name) && tool.name !== "codemode")) pi.registerTool(tool);
+    for (const tool of localTools.filter((tool) => allowed.has(tool.name) && tool.name !== "codemode")) pi.registerTool(tool);
+    for (const tool of hosted) pi.registerTool(tool);
     if (code) pi.registerTool(code.tool);
     pi.on("tool_call", (event) => {
       const reason = executionRefusal(event.toolName, event.parentToolCallId !== undefined, allowed);
@@ -218,8 +233,9 @@ export async function runAuxiliarySession(options: AuxiliarySessionOptions, invo
   const { session } = await sdk.createAgentSessionFromServices({ services, sessionManager: manager, model,
     tools: loadout, scopedModels: [{ model, thinkingLevel }], thinkingLevel });
   const childFallback = childFallbackPolicy(options.fallbackPolicy);
+  const baseStream = withChildBaseCalibration(session.agent.streamFunction, options.assetRoot);
+  session.agent.streamFunction = baseStream;
   if (invocation.serviceTier || childFallback) {
-    const baseStream = session.agent.streamFunction;
     const initialStream = invocation.serviceTier
       ? (current: Parameters<typeof baseStream>[0], context: Parameters<typeof baseStream>[1], streamOptions: Parameters<typeof baseStream>[2]) =>
           baseStream(current, context, { ...streamOptions, serviceTier: invocation.serviceTier })

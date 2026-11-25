@@ -123,6 +123,21 @@ test("Build launch and child profiles use provider-qualified models and preserve
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("hosted routes are explicit per tool and never inherited from a bare checkout", () => {
+  const raw = { hosted_tools: { web_search: "anthropic/claude-4", image_gen: "openai/gpt-image-1" } };
+  for (const role of ["build", "worker", "assistant", "reviewer"] as const) {
+    expect(workspaceSettings("/unused", role, undefined, raw, true).capabilities.hosted_tools).toEqual({
+      web_search: { provider: "anthropic", model: "claude-4" }, image_gen: { provider: "openai", model: "gpt-image-1" },
+    });
+    expect(workspaceSettings("/unused", role, undefined, raw).capabilities.hosted_tools).toBeUndefined();
+  }
+  const image = (value: string) => workspaceSettings("/unused", "worker", undefined, { hosted_tools: { image_gen: value } }, true);
+  expect(image("off").capabilities.hosted_tools).toEqual({ image_gen: "off" });
+  for (const invalid of ["anthropic/claude", "openai/sk-example", "openai/https://example", "openai/image\n", "openai/"]) {
+    expect(() => image(invalid)).toThrow("invalid hosted_tools.image_gen selector");
+  }
+});
+
 test("workspace [fallback] settings validate providers and children opt-in", () => {
   expect(parseFallbackSettings(undefined)).toEqual({ children: false, providers: {} });
   expect(parseFallbackSettings({

@@ -94,6 +94,10 @@ pub enum ClientRequest {
         request_id: String,
         request: ConfigDocument,
     },
+    PiHostedTools {
+        request_id: String,
+        request: corral_protocol::config::PiHostedToolsRequest,
+    },
     PiStartup {
         request_id: String,
         request: corral_protocol::config::PiStartupRequest,

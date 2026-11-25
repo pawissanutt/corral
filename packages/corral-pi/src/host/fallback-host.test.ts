@@ -12,6 +12,7 @@ import fixtureAuth from "../../test/fixtures/auth/index.ts";
 import { fakeCodexTransport, requestBody } from "../../test/fixtures/auth/fake-transport.ts";
 import { writeFakeEngine } from "../../test/support/fake-engine.ts";
 import { buildFixtureInstall } from "../../test/support/fixture-install.ts";
+import { baseCalibration } from "../roles/common/family.ts";
 import { parseRunFlags } from "./config.ts";
 import { restorableFallbacks, type FallbackSettings } from "./fallback-settings.ts";
 import { restoreModelChoice } from "./lifecycle.ts";
@@ -113,6 +114,8 @@ test("worker quota skips unusable entries, selects the next model and answers wi
     f.api.script([{ text: "Metered reply" }, { text: "Still on fallback" }]);
     await session.prompt("Continue after quota");
     expect(session.getLastAssistantText()).toBe("Metered reply");
+    const base = baseCalibration(undefined, "openai", "gpt-5.4")!;
+    expect(JSON.stringify(f.apiBodies[0]).split(base)).toHaveLength(2);
     expect(session.sessionFile).toBe(transcript);
     expect(f.api.prompts).toEqual(["Continue after quota"]);
     expect(host.state().model).toBe("openai/gpt-5.4");
