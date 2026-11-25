@@ -115,7 +115,7 @@ pub(super) fn from_line(feed: &Feed, line: SessionLine, env: Env) -> SessionRow 
         .filter(|branch| !branch.is_empty());
     SessionRow {
         shown_id: cx.shown_id(),
-        role: role_word(&cx.role),
+        role: role_word(cx.role),
         title: if line.name.is_empty() {
             "untitled".into()
         } else {

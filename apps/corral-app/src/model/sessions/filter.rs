@@ -13,42 +13,6 @@ enum Term {
 
 pub(super) struct Query(Vec<Term>);
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::model::{
-        Form, Id, agents::source_tests::agent, daemon::Feed, health::daemon_env, sessions::row,
-    };
-    use corral_types::{Role, SessionStatus};
-
-    #[test]
-    fn free_words_search_across_fields_and_qualifiers_narrow_exact_ids() {
-        let id = Id::from("T-1_R1");
-        let mut feed = Feed::default();
-        let mut worker = agent("T-1", "R1", Role::Worker);
-        worker.status = SessionStatus::Blocked {
-            excerpt: "Overwrite?".into(),
-        };
-        feed.agents.insert(id.clone(), worker);
-        let mut row = row(&feed, &id, daemon_env(&feed, Form::Desktop)).unwrap();
-        row.title = "Ship docs".into();
-        row.line.project = Some("site".into());
-        row.model_id = Some("provider/Model-X".into());
-        row.branch = Some("topic/help".into());
-        row.doing = "Overwrite?".into();
-        let query = Query::parse(
-            "T-1_R1 SHIP site Model-X help Overwrite MODE:WORKER state:blocked project:SITE model:PROVIDER/ task:T-1 is:pinned",
-        );
-        assert!(query.without_mode(&row, || true));
-        assert!(!query.without_mode(&row, || false));
-        assert!(query.mode("worker"));
-        assert!(!query.mode("reviewer"));
-        for term in ["project:sit", "task:T-", "state:idle", "model:", "missing"] {
-            assert!(!Query::parse(term).without_mode(&row, || true), "{term}");
-        }
-    }
-}
-
 impl Query {
     pub(super) fn parse(input: &str) -> Self {
         Self(
@@ -131,5 +95,41 @@ impl Query {
 
     pub(super) fn has_mode(&self) -> bool {
         self.0.iter().any(|term| matches!(term, Term::Mode(_)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{
+        Form, Id, agents::source_tests::agent, daemon::Feed, health::daemon_env, sessions::row,
+    };
+    use corral_types::{Role, SessionStatus};
+
+    #[test]
+    fn free_words_search_across_fields_and_qualifiers_narrow_exact_ids() {
+        let id = Id::from("T-1_R1");
+        let mut feed = Feed::default();
+        let mut worker = agent("T-1", "R1", Role::Worker);
+        worker.status = SessionStatus::Blocked {
+            excerpt: "Overwrite?".into(),
+        };
+        feed.agents.insert(id.clone(), worker);
+        let mut row = row(&feed, &id, daemon_env(&feed, Form::Desktop)).unwrap();
+        row.title = "Ship docs".into();
+        row.line.project = Some("site".into());
+        row.model_id = Some("provider/Model-X".into());
+        row.branch = Some("topic/help".into());
+        row.doing = "Overwrite?".into();
+        let query = Query::parse(
+            "T-1_R1 SHIP site Model-X help Overwrite MODE:WORKER state:blocked project:SITE model:PROVIDER/ task:T-1 is:pinned",
+        );
+        assert!(query.without_mode(&row, || true));
+        assert!(!query.without_mode(&row, || false));
+        assert!(query.mode("worker"));
+        assert!(!query.mode("reviewer"));
+        for term in ["project:sit", "task:T-", "state:idle", "model:", "missing"] {
+            assert!(!Query::parse(term).without_mode(&row, || true), "{term}");
+        }
     }
 }
