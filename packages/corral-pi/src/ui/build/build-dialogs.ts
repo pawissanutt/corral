@@ -148,7 +148,7 @@ export function previewLines(plan: BoardPlan, preview: BoardPreview, width: numb
   const tier = width >= PREVIEW_FULL ? "full" : width >= PREVIEW_MED ? "med" : "min";
   const gap = "  ", task = 6;
   const starts = (depends: readonly string[]) => depends.length ? `after ${depends.map(id).join(", ")}` : "no dependencies";
-  const kind = (value: BoardPlan["tasks"][number]) => plainLabel(value.kind ?? "");
+  const kind = (value: BoardPlan["tasks"][number]) => value.kind == null ? "unset" : boardLabel(value.kind, true);
   const taskId = (value: BoardPlan["tasks"][number]) => PANEL_TEXT + BOLD + cell(id(value.key), task) + NORMAL;
   let layout: (value: BoardPlan["tasks"][number]) => string;
   let header: string | undefined;
@@ -172,7 +172,7 @@ export function previewLines(plan: BoardPlan, preview: BoardPreview, width: numb
   const lines = plan.tasks.flatMap(value => {
     const key = id(value.key);
     // The title row's key column is compact; the details must carry any key it clips.
-    const identity = [visibleWidth(key) > task ? key : undefined, project(value), starts(value.depends)].filter(Boolean).join(" · ");
+    const identity = [visibleWidth(key) > task ? key : undefined, project(value), `kind: ${kind(value)}`, starts(value.depends)].filter(Boolean).join(" · ");
     return [layout(value),
       ...wrapMetadata(identity, width - 2).map(line => PANEL_MUTED + "  " + line),
       ...wrapMetadata(metadata(value), width - 2).map(line => PANEL_TEXT + "  " + line)];

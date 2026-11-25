@@ -256,7 +256,7 @@ test("owner-confirmed board_plan keeps agent metadata from the previews to CLI c
   const label = 'tags: ["bug","BUG","--API, old","Needs  Design","Needs\\u00a0Design"]';
   const { controls, calls } = fixture(root, undefined, true, false, async (argv, { input }) => {
     expect(argv[3]).toBe("board-plan");
-    expect(JSON.parse(input!)).toMatchObject({ title: "Plan", project: "app", tasks: [{ key: "slice", project: "app", ...metadata }] });
+    expect(JSON.parse(input!)).toMatchObject({ title: "Plan", project: "app", tasks: [{ key: "slice", project: "app", kind: "ui", ...metadata }] });
     if (argv[4] === "check") return { code: 0, stderr: "", stdout: "null" };
     expect(argv[4]).toBe("file");
     expect(argv).not.toContain("--start");
@@ -267,12 +267,13 @@ test("owner-confirmed board_plan keeps agent metadata from the previews to CLI c
     const board = controls.board!;
     const tool = controls.tools.find(tool => tool.name === "board_plan")!;
     const args = validateToolArguments(tool, { type: "toolCall", id: "plan", name: tool.name, arguments: {
-      title: "Plan", why: "", tasks: [{ key: "slice", title: "Slice", body: "", depends: [], ...metadata, tags: [...metadata.tags, "bug"] }],
+      title: "Plan", why: "", tasks: [{ key: "slice", title: "Slice", body: "", depends: [], kind: "ui", ...metadata, tags: [...metadata.tags, "bug"] }],
     } });
     expect((await tool.execute("plan", args, undefined, undefined, {} as never)).isError).not.toBe(true);
     expect(await board.preview(board.proposed()!)).toMatchObject({ tasks: [{ id: "slice", ...metadata }] });
     expect(boardPart(board).proposed?.tasks[0]).toMatchObject(metadata);
     const card = cardDetail(dialogs.entries().find(entry => entry.card.kind === "board_plan")!.card);
+    expect(card.body).toContain('kind: "ui"');
     expect(card.body).toContain(`"slice": size: s · difficulty: hard · ${label}`);
     expect(card.body_more).toBeFalse();
     expect(calls.map(argv => argv.slice(3))).toEqual([["board-plan", "check"]]);
@@ -292,6 +293,20 @@ test("owner-confirmed board_plan keeps agent metadata from the previews to CLI c
       details: { filed: [{ id: "T-002", title: "Slice", depends: [], ...metadata }], started: false } }]);
     expect(entries[0]!.content).toContain(label);
   } finally { dialogs.close(); await controls.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test("board_plan rejects silent kind omission even with a ui tag", async () => {
+  const root = mkdtempSync(join(tmpdir(), "board-kind-"));
+  const { controls, calls } = fixture(root, undefined, true);
+  try {
+    const tool = controls.tools.find(tool => tool.name === "board_plan")!;
+    const plan = { title: "Plan", why: "", tasks: [{ key: "ui", title: "Make session Details summary-first", body: "", depends: [], tags: ["ui"] }] };
+    const result = await tool.execute("plan", plan, undefined, undefined, {} as never);
+    expect(result.isError).toBeTrue();
+    expect(JSON.stringify(result.content)).toContain("explicit routing kind");
+    expect(controls.board!.proposed()).toBeUndefined();
+    expect(calls).toHaveLength(0);
+  } finally { await controls.close(); rmSync(root, { recursive: true, force: true }); }
 });
 
 test("Iterate answered remotely posts its terminal conversation outcome once", async () => {

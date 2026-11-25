@@ -346,13 +346,16 @@ export function boardPlanTool(propose: (plan: BoardPlan) => Promise<void>, avail
     description: "Propose a bounded plan of at most 20 follow-on tasks for the owner to confirm. "
       + "Each task may set its own configured project or inherit the plan project (by default, the session project). "
       + "Give each task a unique key, a concrete title and body, and dependencies naming local keys across projects or existing T-<n> tasks. "
+      + "Classify each task by its primary deliverable using the workspace's kinds: set kind to a nonempty kind or null for an intentional unset, including owner overrides. "
+      + "Use kind: ui for UI-led app layouts, charts, controls, navigation or panels, including mixed work primarily delivering an app experience; a backend service change may use the workspace's backend kind or be intentionally unset. "
+      + "Kind affects worker routing; tags are board labels, not classification. Size and difficulty are independent. Title matching is only a fallback, not a substitute for kind. "
       + "The owner confirms the whole plan once. Wait for that plan to resolve before proposing another.",
     parameters: Type.Object({
       title: Type.String({ minLength: 1 }), project: Type.Optional(Type.String()), why: Type.String(),
       tasks: Type.Array(Type.Object({
         key: Type.String({ minLength: 1 }), title: Type.String({ minLength: 1 }),
         project: Type.Optional(Type.String({ minLength: 1, description: "Configured task project; defaults to the plan project." })),
-        kind: Type.Optional(Type.String()), profile: Type.Optional(Type.String()),
+        kind: Type.Union([Type.String({ minLength: 1 }), Type.Null()], { description: "Required routing-kind decision: a workspace kind, or null for intentionally unset. A ui tag is not a kind." }), profile: Type.Optional(Type.String()),
         size: Type.Optional(StringEnum(TASK_SIZES, { description: "Estimate work scope, from xs (smallest) to xl (largest). Omit if unknown." })),
         difficulty: Type.Optional(StringEnum(TASK_DIFFICULTIES, { description: "Estimate uncertainty or technical complexity, independently of scope and priority. Omit if unknown." })),
         tags: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { description: "Relevant built-in or existing custom labels. Exact, case-sensitive, no surrounding whitespace or control characters." })),
@@ -363,6 +366,11 @@ export function boardPlanTool(propose: (plan: BoardPlan) => Promise<void>, avail
       const unavailable = available();
       if (unavailable) return { content: [{ type: "text", text: unavailable }], details: {}, isError: true };
       try {
+        for (const task of plan.tasks) {
+          if (task.kind !== null && (typeof task.kind !== "string" || !task.kind.trim())) {
+            throw new Error(`Task ${task.key} needs an explicit routing kind or null for intentionally unset; tags do not classify it.`);
+          }
+        }
         await propose(plan);
         return { content: [{ type: "text", text: "The owner will confirm this board plan before any task is filed or queued." }], details: {} };
       } catch (error) {

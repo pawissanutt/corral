@@ -14,12 +14,12 @@ const deadline = 20_000;
 const followOns = {
   title: "Corral and Lite follow-ons", why: "One approval for the connected work.",
   tasks: [
-    ...Array.from({ length: 4 }, (_, i) => ({ key: `corral-${i}`, title: `Corral ${i}`, body: `Corral brief ${i}`, depends: i === 0 ? ["lite-0"] : [] })),
-    ...Array.from({ length: 6 }, (_, i) => ({ key: `lite-${i}`, project: "mitimind-lite", title: `Lite ${i}`, body: `Lite brief ${i}`,
+    ...Array.from({ length: 4 }, (_, i) => ({ key: `corral-${i}`, kind: null, title: `Corral ${i}`, body: `Corral brief ${i}`, depends: i === 0 ? ["lite-0"] : [] })),
+    ...Array.from({ length: 6 }, (_, i) => ({ key: `lite-${i}`, kind: null, project: "mitimind-lite", title: `Lite ${i}`, body: `Lite brief ${i}`,
       depends: i === 0 ? ["T-001"] : i === 1 ? ["corral-0"] : [] })),
   ],
 };
-const singleTask = { key: "single", title: "Single-project child", body: "Single-project brief", depends: [] };
+const singleTask = { key: "single", kind: null, title: "Single-project child", body: "Single-project brief", depends: [] };
 const boardCall = (callId: string, args: Record<string, unknown>) => ({ callId, name: "board_plan", arguments: args });
 const steps: FakeStep[] = [
   { toolCalls: [{ callId: "owner-choice", name: "ask_user", arguments: { questions: [

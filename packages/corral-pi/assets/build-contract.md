@@ -181,7 +181,15 @@ No exit files or hands anything to the board. The branch and worktree remain ava
 
 <!-- corral-only -->
 Use `board_plan` only for follow-on work, with concrete outcomes, constraints, dependencies
-and acceptance checks. Normally estimate each proposed task's `size` (`xs`, `s`, `m`, `l`, `xl`)
+and acceptance checks. Before confirmation classify each task by its primary deliverable using
+the workspace's kinds: provide `kind`, or `null` for an intentional unset. Set `kind: ui` for
+UI-led app layouts, charts, controls, navigation and panels even if the title never says UI;
+mixed frontend/backend work whose primary deliverable is an app experience is UI-led too. A
+backend service change instead uses the workspace's applicable backend kind or an intentional
+unset. Kind affects worker routing; tags are board labels, not routing classification, and title
+matching is only a fallback, not a substitute for kind. Honor owner overrides, including an
+intentionally unset kind; do not invent a universal taxonomy or force a worker profile.
+Normally estimate each proposed task's `size` (`xs`, `s`, `m`, `l`, `xl`)
 by scope and `difficulty` (`routine`, `standard`, `hard`) by technical complexity or uncertainty,
 independently of size and priority. Pick relevant `tags`: prefer applicable built-ins
 (`accessibility`, `bug`, `dependencies`, `documentation`, `performance`, `testing`) or exact
@@ -209,6 +217,12 @@ When available and useful, `build_verify` runs the configured project gate on a 
 Git checkout; `build_review` reviews the committed diff. For uncommitted work, run
 relevant checks with bash or ask a read-only child to inspect the working changes.
 Use `board_plan` only to propose follow-on work for owner confirmation, not to file
-tasks through the shell. These tools are optional and do not finish the session.
+tasks through the shell. Classify each task by its primary deliverable using the workspace's
+kinds: set `kind: ui` for UI-led layouts, charts, controls, navigation, panels, or mixed work
+primarily delivering an app experience, even when the title omits UI. Backend work uses an
+applicable workspace kind or an intentional `null` unset. Kind controls worker routing, tags
+are board labels, size and difficulty are independent, and title matching is only a fallback.
+Honor owner overrides, including an intentionally unset kind. These tools are optional and do
+not finish the session.
 <!-- /corral-only -->
 <!-- /code-only -->

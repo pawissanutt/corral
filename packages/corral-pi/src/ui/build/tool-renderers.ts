@@ -131,7 +131,7 @@ function pendingPlan(cards: BuildCardSource | undefined, plan: BoardPlan): Board
 
 function planTaskLines(task: BoardTaskPlan, width: number): string[] {
   const name = `${boardLabel(task.key)}${task.project ? ` → ${boardLabel(task.project)}` : ""}: ${plainLabel(task.title)}`;
-  const detail = [task.kind && `kind: ${plainLabel(task.kind)}`, task.profile && `profile: ${plainLabel(task.profile)}`].filter(Boolean).join(" · ");
+  const detail = [`kind: ${task.kind == null ? "unset" : plainLabel(task.kind)}`, task.profile && `profile: ${plainLabel(task.profile)}`].filter(Boolean).join(" · ");
   return [
     ...cardWrap(name, PANEL_TEXT, width),
     ...cardWrap(task.depends.length ? `after ${task.depends.map(dep => boardLabel(dep)).join(", ")}` : "no dependencies", PANEL_MUTED, width),

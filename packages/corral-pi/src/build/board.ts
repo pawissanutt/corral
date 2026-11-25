@@ -137,6 +137,7 @@ export function boardLabel(value: string, quoted = false): string {
 /** The complete decision-critical text must fit the remote card before optional titles or briefs. */
 export function planIdentityLines(plan: BoardPlan): string[] {
   return plan.tasks.map(task => `${boardLabel(task.key, true)} → ${boardLabel(task.project ?? plan.project ?? "", true)}`
+    + ` · kind: ${task.kind == null ? "unset" : boardLabel(task.kind, true)}`
     + (task.depends.length ? ` · after ${task.depends.map(dep => boardLabel(dep, true)).join(", ")}` : " · no dependencies"));
 }
 

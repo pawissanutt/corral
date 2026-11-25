@@ -478,7 +478,7 @@ export interface BoardTaskPlan extends BoardTaskMetadata {
   readonly title: string;
   /** Defaults to the plan's project; materialized in an accepted proposal. */
   readonly project?: string;
-  readonly kind?: string;
+  readonly kind?: string | null;
   readonly profile?: string;
   readonly depends: readonly string[];
   readonly body: string;
