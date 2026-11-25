@@ -1,11 +1,14 @@
 //! Home (`model::home`): what waits on the owner, what is working and what just finished,
-//! tasks and sessions alike. On the desktop and a terminal wide enough it is a dashboard
-//! (`dash`): tiles, the Needs you cards with one open to decide in (`cards`) and the panels of
+//! tasks and sessions alike. On the desktop and web it is the owner's board (`board`, with
+//! Customize in `board_edit`): the same widgets, arranged and kept on this device. A terminal
+//! wide enough draws the fixed dashboard (`dash`): tiles, the Needs you cards with one open to decide in (`cards`) and the panels of
 //! what Corral is doing (`panels`), with Ask's composer docked under it. A narrower terminal
 //! falls back to the three sections as one list with each row's next step (`list`); the phone
 //! keeps that list and answers small things in place (`phone`). In a workspace with no projects
 //! Home is the assistant's landing (`screens::landing`, which the router shows in its place).
 
+mod board;
+mod board_edit;
 mod cards;
 mod dash;
 mod list;
@@ -44,7 +47,9 @@ pub fn screen(app: AppState) -> AnyElement {
     dynamic(move || {
         let wide = wide.get();
         untracked(move || {
-            if wide {
+            if app.form == Form::Desktop {
+                board::page(app, scope)
+            } else if wide {
                 dash::dashboard(app, scope)
             } else {
                 list::screen(app, scope)

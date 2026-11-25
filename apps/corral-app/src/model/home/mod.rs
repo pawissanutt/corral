@@ -8,6 +8,7 @@
 //! works as lanes and panels for the rest. On a phone and a narrow terminal it is the three
 //! sections as one list ([`sections`]).
 
+pub mod board;
 mod cards;
 mod dash;
 mod digest;

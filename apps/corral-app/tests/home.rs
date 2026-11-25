@@ -24,16 +24,23 @@ fn desktop() -> EngineConfig {
 
 /// Starts the app on Home and chooses the sample preview from the palette.
 fn preview(config: EngineConfig) -> Headless {
+    preview_kept(config, device())
+}
+
+/// This device's storage, opening on Home.
+fn device() -> std::sync::Arc<MemoryStorage> {
+    MemoryStorage::new([("corral.destination".to_owned(), "home".to_owned())])
+}
+
+/// [`preview`] with this device's storage in `storage`.
+fn preview_kept(config: EngineConfig, storage: std::sync::Arc<MemoryStorage>) -> Headless {
     let opener = if config.environment.idiom == Idiom::Phone {
         "id:btn-search"
     } else {
         "id:palette-open"
     };
     let mut config = config;
-    config.storage = Some(MemoryStorage::new([(
-        "corral.destination".to_owned(),
-        "home".to_owned(),
-    )]));
+    config.storage = Some(storage);
     let mut app = Headless::start(config).unwrap();
     app.wait_for("id:nav-settings").unwrap();
     app.press(opener).unwrap();
@@ -122,4 +129,84 @@ fn the_phone_answers_a_reply_in_homes_list() {
     )
     .unwrap();
     assert_eq!(app.screen().count("id:task-page").unwrap(), 0);
+}
+
+fn bounds(app: &Headless, id: &str) -> nsh_core::geometry::Bounds<Points> {
+    app.screen()
+        .layout_nodes()
+        .into_iter()
+        .find(|node| node.test_id.as_deref() == Some(id))
+        .unwrap_or_else(|| panic!("{id} is on the screen"))
+        .bounds
+}
+
+/// The board's widgets in the order they show.
+fn widgets(app: &Headless) -> Vec<String> {
+    app.screen()
+        .layout_nodes()
+        .iter()
+        .filter_map(|node| node.test_id.as_deref())
+        .filter_map(|id| id.strip_prefix("board-"))
+        .filter(|id| {
+            !["edit-", "grip-", "resize-", "tray", "empty"]
+                .iter()
+                .any(|part| id.starts_with(part))
+        })
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Customize arranges the desktop board by dragging and by its buttons, and keeps the
+/// arrangement in this device's storage: a widget dragged onto another's left half lands
+/// before it, a dragged edge widens it a column, and a removed widget comes back from the tray.
+#[test]
+fn customize_arranges_the_board_and_keeps_it_on_this_device() {
+    let storage = device();
+    let mut app = preview_kept(desktop(), storage.clone());
+    app.wait_for("id:board-stat-needs").unwrap();
+    assert_eq!(
+        widgets(&app).first().map(String::as_str),
+        Some("stat-needs")
+    );
+    app.press("id:btn-board-edit").unwrap();
+    app.wait_for("id:board-tray").unwrap();
+
+    let grip = bounds(&app, "board-grip-stat-cost").center();
+    let target = bounds(&app, "board-stat-needs");
+    let to_x = target.origin.x.0 + target.size.width.0 * 0.25;
+    let to_y = target.origin.y.0 + target.size.height.0 * 0.5;
+    app.drag(
+        "id:board-grip-stat-cost",
+        nsh_core::geometry::point(Points(to_x - grip.x.0), Points(to_y - grip.y.0)),
+    )
+    .unwrap();
+    assert_eq!(&widgets(&app)[..2], ["stat-cost", "stat-needs"]);
+
+    let cell = bounds(&app, "board-stat-cost").size.width.0;
+    app.drag(
+        "id:board-resize-stat-cost",
+        nsh_core::geometry::point(Points(cell * 0.5 + 4.0), Points(0.0)),
+    )
+    .unwrap();
+    let kept = storage
+        .entries()
+        .get("corral.home.board")
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        kept.starts_with("v1 stat-cost:3 stat-needs:2"),
+        "kept on this device: {kept}"
+    );
+
+    app.press("id:btn-board-remove-burnup").unwrap();
+    app.wait_for_gone("id:board-burnup", Duration::from_secs(5))
+        .unwrap();
+    app.press("id:btn-board-add-burnup").unwrap();
+    app.wait_for("id:board-burnup").unwrap();
+    assert_eq!(widgets(&app).last().map(String::as_str), Some("burnup"));
+
+    app.press("id:btn-board-done").unwrap();
+    app.wait_for_gone("id:board-tray", Duration::from_secs(5))
+        .unwrap();
+    assert_eq!(app.screen().count("id:board-edit-burnup").unwrap(), 0);
 }

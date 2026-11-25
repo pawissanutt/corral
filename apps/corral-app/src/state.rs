@@ -5,6 +5,7 @@
 
 mod address;
 mod attach;
+mod board;
 mod commands;
 mod config;
 mod devices;
@@ -133,6 +134,8 @@ pub struct AppState {
     /// Persisted wide-layout sidebar choice; a narrow window or grid always folds it.
     pub sidebar: Signal<SidebarPref>,
     pub pane: pane::Pane,
+    /// Home's board on this device and whether Customize is on.
+    pub board: board::HomeBoard,
     /// The labels opened over the content from the rail while narrow; never persisted.
     sidebar_peek: Signal<bool>,
     /// On the app's root view: the keyboard focus being anywhere in the app.
@@ -208,6 +211,7 @@ impl AppState {
             ),
             sidebar: signal(preference(SIDEBAR_KEY, SidebarPref::from_slug).unwrap_or_default()),
             pane: pane::Pane::new(),
+            board: board::HomeBoard::new(),
             switcher: signal(false),
             pins: signal(switcher::load_pins()),
             preview_pins: signal(agents::Pins::default()),

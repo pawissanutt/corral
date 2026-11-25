@@ -170,6 +170,8 @@ pub(super) fn panel(
 pub(super) fn surface(test_id: &str) -> View {
     view()
         .test_id(test_id)
+        // On the board a panel fills its row's height, so a row's widgets end level.
+        .flex_grow(1.0)
         .min_w(px(0.0))
         .bg(color(Token::Surface))
         .border_1()

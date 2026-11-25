@@ -1,4 +1,4 @@
-//! Home on a wide screen: a dashboard, not a second Tasks list. A row of six numbers, then two
+//! Home on a wide terminal (the desktop draws the owner's board, `board`): a dashboard, not a second Tasks list. A row of six numbers, then two
 //! halves: what waits on the owner as cards on the left, what Corral is doing on the right.
 //! Ask's composer is docked under it. The halves sit side by side while both keep their least
 //! width, else one above the other; on the right Working spans the half and the other panels
@@ -156,6 +156,15 @@ fn tiles(app: AppState, scope: Memo<Scope>) -> AnyElement {
 
 /// One number with its label and the line under it; Usage draws its tiles with it too.
 pub(crate) fn tile(app: AppState, tile: Tile) -> AnyElement {
+    tile_frame(app, tile, false)
+}
+
+/// A number as a board widget: it fills the columns and the row height it is given.
+pub(super) fn filled_tile(app: AppState, tile: Tile) -> AnyElement {
+    tile_frame(app, tile, true)
+}
+
+fn tile_frame(app: AppState, tile: Tile, fill: bool) -> AnyElement {
     let form = app.form;
     let spoken = format!(
         "{}: {}, {}. {}",
@@ -193,8 +202,7 @@ pub(crate) fn tile(app: AppState, tile: Tile) -> AnyElement {
                     .child(sub),
             ),
         Form::Desktop | Form::Phone => view()
-            .w(px(TILE))
-            .max_w(px(TILE_MOST))
+            .when(!fill, |frame| frame.w(px(TILE)).max_w(px(TILE_MOST)))
             .gap(px(1.0))
             .px(px(12.0))
             .pt(px(9.0))
