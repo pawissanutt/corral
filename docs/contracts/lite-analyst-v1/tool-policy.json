@@ -1,0 +1,509 @@
+{
+  "v": 1,
+  "kind": "lite_analyst_tools",
+  "mcp_version": "2025-06-18",
+  "model_tools": [
+    {
+      "name": "search_materials",
+      "description": "Search only the approved material projection.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "query",
+          "limit"
+        ],
+        "properties": {
+          "query": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 8
+          }
+        }
+      }
+    },
+    {
+      "name": "read_evidence",
+      "description": "Read an approved slice and obtain its citation.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "source",
+          "start_byte",
+          "max_bytes"
+        ],
+        "properties": {
+          "source": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,64}$"
+          },
+          "start_byte": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 32767
+          },
+          "max_bytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4096
+          }
+        }
+      }
+    },
+    {
+      "name": "calculate_metric",
+      "description": "Request an approved predefined calculation.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "metric",
+          "inputs"
+        ],
+        "properties": {
+          "metric": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,64}$"
+          },
+          "inputs": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 8,
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,64}$"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "finish_report",
+      "description": "Finish with a plain-text report and citations to exact claim spans.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "text",
+          "citations"
+        ],
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 65536
+          },
+          "citations": {
+            "type": "array",
+            "minItems": 0,
+            "maxItems": 64,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "start_byte",
+                "end_byte",
+                "handle"
+              ],
+              "properties": {
+                "start_byte": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 65535
+                },
+                "end_byte": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 65536
+                },
+                "handle": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "host_only_tools": [
+    {
+      "name": "read_result",
+      "description": "Read the result of an existing approved computation.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "result"
+        ],
+        "properties": {
+          "result": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,64}$"
+          }
+        }
+      }
+    }
+  ],
+  "mcp_reply_schemas": {
+    "search_materials": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "hits"
+          ],
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "ok"
+            },
+            "hits": {
+              "type": "array",
+              "minItems": 0,
+              "maxItems": 8,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "source",
+                  "label"
+                ],
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                  },
+                  "label": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "code"
+          ],
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "error"
+            },
+            "code": {
+              "type": "string",
+              "enum": [
+                "refused",
+                "invalid",
+                "stale_scope",
+                "stopped",
+                "conflict",
+                "unavailable",
+                "budget_exceeded"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "read_evidence": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "source",
+            "source_version",
+            "start_byte",
+            "text",
+            "citation"
+          ],
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "ok"
+            },
+            "source": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,64}$"
+            },
+            "source_version": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,64}$"
+            },
+            "start_byte": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 32767
+            },
+            "text": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "citation": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,64}$"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "code"
+          ],
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "error"
+            },
+            "code": {
+              "type": "string",
+              "enum": [
+                "refused",
+                "invalid",
+                "stale_scope",
+                "stopped",
+                "conflict",
+                "unavailable",
+                "budget_exceeded"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "calculate_metric": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "value_minor",
+            "unit",
+            "limitations",
+            "result",
+            "operation_version",
+            "cell",
+            "result_kind",
+            "citation"
+          ],
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "ok"
+            },
+            "value_minor": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            "unit": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 16
+            },
+            "limitations": {
+              "type": "string",
+              "minLength": 0,
+              "maxLength": 1024
+            },
+            "result": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,64}$"
+            },
+            "operation_version": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,64}$"
+            },
+            "cell": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,64}$"
+            },
+            "result_kind": {
+              "type": "string",
+              "enum": [
+                "computed",
+                "captured"
+              ]
+            },
+            "citation": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,64}$"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "result"
+          ],
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "pending"
+            },
+            "result": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,64}$"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "code"
+          ],
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "error"
+            },
+            "code": {
+              "type": "string",
+              "enum": [
+                "refused",
+                "invalid",
+                "stale_scope",
+                "stopped",
+                "conflict",
+                "unavailable",
+                "budget_exceeded"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "read_result": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "value_minor",
+            "unit",
+            "limitations",
+            "result",
+            "operation_version",
+            "cell",
+            "result_kind",
+            "citation"
+          ],
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "ok"
+            },
+            "value_minor": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            "unit": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 16
+            },
+            "limitations": {
+              "type": "string",
+              "minLength": 0,
+              "maxLength": 1024
+            },
+            "result": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,64}$"
+            },
+            "operation_version": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,64}$"
+            },
+            "cell": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,64}$"
+            },
+            "result_kind": {
+              "type": "string",
+              "enum": [
+                "computed",
+                "captured"
+              ]
+            },
+            "citation": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,64}$"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "result"
+          ],
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "pending"
+            },
+            "result": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,64}$"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "code"
+          ],
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "error"
+            },
+            "code": {
+              "type": "string",
+              "enum": [
+                "refused",
+                "invalid",
+                "stale_scope",
+                "stopped",
+                "conflict",
+                "unavailable",
+                "budget_exceeded"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}
