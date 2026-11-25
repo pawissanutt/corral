@@ -131,14 +131,14 @@ fn file(app: AppState, row: &SideFile) -> AnyElement {
     let mut content = vec![
         mono(app, row.mark)
             .flex_shrink_0()
-            .text_color(hue_words(app.form, row.mark_hue))
+            .text_color(tinted(app, row.mark_hue))
             .into_element(),
     ];
     content.extend(row.outside.then(|| {
         mono(app, "!")
             .font_weight(FontWeight::BOLD)
             .flex_shrink_0()
-            .text_color(hue_ink(Hue::Held))
+            .text_color(tinted(app, Hue::Held))
             .into_element()
     }));
     content.push(
