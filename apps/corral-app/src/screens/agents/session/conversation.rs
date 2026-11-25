@@ -131,19 +131,26 @@ pub(super) fn page(
             }))
         })
     });
-    let said = computed(move || {
+    let reader = transcript::Reader::new(app);
+    let base = computed(move || {
         tab.steady
             .with(|t| t.as_ref().and_then(of).map(|c| c.transcript.clone()))
     });
+    let said = reader.bind(base);
+    let end_reader = reader.clone();
     let end = tab.part(|t| of(t).and_then(|c| c.end.clone()));
     let end = dynamic(move || {
+        let scope = said.with(|p| p.as_ref().map(|p| p.scope.clone()))?;
+        if end_reader.status(&scope).0 {
+            return None;
+        }
         end.get()
             .flatten()
             .map(|end| untracked(|| end_line(app, end)))
     });
     let body = view()
         .gap(px(if form == Form::Terminal { 0.0 } else { 10.0 }))
-        .child(transcript::transcript(app, said))
+        .child(transcript::transcript(app, &reader, said))
         .child(end);
     // Keep the measured transcript wrapper directly in the scroll-content column:
     // its layout then includes the top padding and the phone header (including More).
@@ -155,9 +162,13 @@ pub(super) fn page(
     let body = column
         .gap(px(if phone { 10.0 } else { 0.0 }))
         .children(phone_head)
-        .child(transcript::content_origin(scope, view().child(body)));
+        .child(transcript::content_origin(
+            reader.geometry(&scope),
+            view().child(body),
+        ));
     let surface = transcript::follow(
         app,
+        reader,
         scroll()
             .test_id("session-conversation")
             .flex_1()

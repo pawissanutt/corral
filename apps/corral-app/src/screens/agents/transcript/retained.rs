@@ -1,4 +1,5 @@
 use super::*;
+use crate::model::session::Action;
 use crate::model::session::Echo;
 use std::collections::HashMap;
 
@@ -74,7 +75,11 @@ fn bind<T: Clone + PartialEq + 'static, E: IntoElements>(
     })
 }
 
-pub(super) fn render(app: AppState, shown: Memo<Option<Transcript>>) -> AnyElement {
+pub(super) fn render(
+    app: AppState,
+    reader: &Reader,
+    shown: Memo<Option<Transcript>>,
+) -> AnyElement {
     provide_styles(app);
     let terminal = app.form == Form::Terminal;
     let sides = if app.form == Form::Phone { 16.0 } else { 24.0 };
@@ -91,11 +96,20 @@ pub(super) fn render(app: AppState, shown: Memo<Option<Transcript>>) -> AnyEleme
             })
         },
     );
+    let paging_reader = reader.clone();
     let older = bind(
         shown,
-        |p| (p.older.clone(), p.paging),
-        move |(action, paging)| {
-            let button = pager(app, &action, "Show earlier messages", "btn-older", paging)?;
+        |p| (p.older.clone(), p.older_cursor.clone(), p.paging),
+        move |(action, cursor, paging)| {
+            let action = action?;
+            let reader = paging_reader.clone();
+            let button = pager(
+                app,
+                move || reader.older(cursor.clone(), action.clone()),
+                "Show earlier messages",
+                "btn-older",
+                paging,
+            );
             Some(if terminal {
                 view().flex_row().child(button).into_element()
             } else {
@@ -152,12 +166,40 @@ pub(super) fn render(app: AppState, shown: Memo<Option<Transcript>>) -> AnyEleme
             })
         },
     );
+    let paging_reader = reader.clone();
+    let newer_button = computed(move || {
+        let (scope, fallback, paging) = shown.with(|p| {
+            let p = p.as_ref()?;
+            Some((p.scope.clone(), p.newer.clone(), p.paging))
+        })?;
+        let (_, newer, loading) = paging_reader.status(&scope);
+        (newer || fallback.is_some()).then_some((scope, fallback, loading || paging))
+    });
+    let paging_reader = reader.clone();
+    let newer = dynamic(move || {
+        let (scope, fallback, loading) = newer_button.get()?;
+        let reader = paging_reader.clone();
+        let button = pager(
+            app,
+            move || reader.newer(&scope, fallback.clone()),
+            "Show newer messages",
+            "btn-newer",
+            loading,
+        );
+        Some(if terminal {
+            view().flex_row().child(button).into_element()
+        } else {
+            edge(button).into_element()
+        })
+    });
+    let geometry = reader.clone();
     let listing = computed(move || shown.with(|p| p.as_ref().map_or_else(Vec::new, rows)));
     let messages = each(
         listing,
         |row| row.key.clone(),
         move |row, i| {
             let (scope, body) = row.with_untracked(|r| (r.key.0.clone(), r.body.clone()));
+            let scope = geometry.geometry(&scope);
             let block = match body {
                 Body::Echo(_) => dynamic(move || {
                     row.with(|r| match &r.body {
@@ -191,6 +233,7 @@ pub(super) fn render(app: AppState, shown: Memo<Option<Transcript>>) -> AnyEleme
         .child(fill)
         .child(messages)
         .child(after)
+        .child(newer)
         .child(note);
     if terminal {
         column.into_element()

@@ -175,7 +175,12 @@ pub(super) fn recorded_view(
         let at = jiff::Timestamp::from_millisecond(i64::try_from(ms).ok()?).ok()?;
         clock(Some(&at.to_string()), cx.feed)
     };
-    for (at, bubble) in bubbles::child_bubbles(cx.id, cx.feed, at_clock) {
+    let child = if cx.detached {
+        Vec::new()
+    } else {
+        bubbles::child_bubbles(cx.id, cx.feed, at_clock)
+    };
+    for (at, bubble) in child {
         let place = at.and_then(|at| {
             timed
                 .iter()

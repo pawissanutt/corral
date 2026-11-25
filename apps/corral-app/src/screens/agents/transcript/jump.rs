@@ -24,10 +24,11 @@ use crate::state::AppState;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_TEXT, Token, color};
 
-use super::super::run;
+use super::Reader;
 use super::anchors;
 use super::older::{Earlier, Reach};
 use super::watch;
+use crate::model::daemon::ReaderStep;
 
 /// How close to the end still counts as at the end.
 const END_SLACK: f32 = 24.0;
@@ -203,8 +204,9 @@ fn queue_end(place: Rc<RefCell<Place>>, scroller: ElementRef) {
 /// page's jump request (End, Ctrl+End, the catalog's Jump to latest), tracked: each change does
 /// what pressing the control does. Where the reader is, is saved when the view shows another
 /// scope and when it goes.
-pub fn follow(
+pub(crate) fn follow(
     app: AppState,
+    reader: Reader,
     surface: Scroll,
     content: AnyElement,
     following: impl Fn() -> Option<Following> + 'static,
@@ -213,9 +215,9 @@ pub fn follow(
     jump: impl Fn() -> u32 + 'static,
 ) -> AnyElement {
     let form = app.form;
-    let scroller = element_ref();
-    // This view's hold on its reader, apart from another view of the same scope.
-    let holder = anchors::view(scroller);
+    let scroller = reader.scroller;
+    let holder = reader.holder;
+    let geometry = move |scope: &Id| format!("reader:{holder}:{scope}");
     // Draws the jump control; `Place::at_end` says the same for the cleanup.
     let at_end = signal(true);
     // What the control counts: rows that arrived below since the reader left the end.
@@ -230,36 +232,71 @@ pub fn follow(
     let count = computed(move || shown.with(|now| now.as_ref().map_or(0, |now| now.rows)));
     let scope_of = computed(move || shown.with(|now| now.as_ref().map(|now| now.scope.clone())));
     let first = computed(move || earlier.with(|now| now.as_ref()?.first.clone()));
-    let latest = computed(move || {
+    let identity_reader = reader.clone();
+    let identity = computed(move || {
         scope_of
             .get()
-            .is_some_and(|id| watch::needs_latest(app, &id))
+            .and_then(|id| identity_reader.identity_key(&id))
     });
-    // Back to the end; past the history cap that reads the latest messages first.
+    let status_reader = reader.clone();
+    let status = computed(move || {
+        scope_of
+            .get()
+            .map_or((false, false, false), |id| status_reader.status(&id))
+    });
+    let latest = computed(move || {
+        status.get().0
+            || scope_of
+                .get()
+                .is_some_and(|id| watch::needs_latest(app, &id))
+    });
+    let waiting = signal(false);
+    let latest_reader = reader.clone();
     let to_latest = move || {
-        if latest.get_untracked()
-            && let Some(id) = scope_of.get_untracked()
-        {
-            untracked(|| watch::latest(app, &id));
+        if !latest.get_untracked() {
+            return true;
         }
+        if !status.get_untracked().2 {
+            waiting.set(true);
+            if let Some(id) = scope_of.get_untracked()
+                && !latest_reader.step(&id, ReaderStep::Latest)
+            {
+                untracked(|| watch::latest(app, &id));
+            }
+        }
+        false
     };
     {
         let place = place.clone();
         let reach = reach.clone();
+        let known_identity = RefCell::new(identity.get_untracked());
         effect(move || {
+            let next_identity = identity.get();
+            let same_identity = *known_identity.borrow() == next_identity;
+            known_identity.replace(next_identity);
             let Some(id) = scope_of.get() else {
+                waiting.set(false);
+                if let Some((old, reading)) = place.borrow_mut().leave() {
+                    anchors::forget_geometry(&geometry(&old));
+                    untracked(|| save(app, old, reading));
+                }
                 return;
             };
-            if place.borrow().scope.as_ref() == Some(&id) {
+            if same_identity && place.borrow().scope.as_ref() == Some(&id) {
                 return;
             }
             let left = place.borrow_mut().leave();
             if let Some((old, reading)) = left {
-                anchors::release(old.as_str(), holder);
-                untracked(|| save(app, old, reading));
+                if old != id {
+                    anchors::forget_geometry(&geometry(&old));
+                    untracked(|| save(app, old, reading));
+                } else {
+                    anchors::release(&geometry(&old), holder);
+                }
             }
             let resume = shown.with_untracked(|now| now.as_ref().map(|now| now.resume.clone()));
             reach.borrow_mut().reset();
+            waiting.set(false);
             arrived.set(0);
             let mut known = place.borrow_mut();
             known.scope = Some(id.clone());
@@ -275,17 +312,43 @@ pub fn follow(
                     drop(known);
                     arrived.set(count.get_untracked().saturating_sub(rows));
                     at_end.set(false);
-                    anchors::restore(id.as_str(), holder, key, offset as f32);
+                    anchors::restore(&geometry(&id), holder, key, offset as f32);
                 }
                 _ => {
                     known.at_end = true;
                     known.left_at = None;
                     drop(known);
-                    anchors::release(id.as_str(), holder);
+                    anchors::release(&geometry(&id), holder);
                     at_end.set(true);
                     queue_end(place.clone(), scroller);
                 }
             }
+        });
+    }
+    // A manual Older press also pauses a short transcript that cannot scroll yet.
+    {
+        let place = place.clone();
+        let back = reader.back;
+        let seen = stored(back.get_untracked());
+        effect(move || {
+            let request = back.get();
+            if seen.replace(request) == request {
+                return;
+            }
+            let mut known = place.borrow_mut();
+            if !known.at_end {
+                return;
+            }
+            let offset = known.offset.unwrap_or(0.0);
+            if let Some(scope) = &known.scope {
+                let key = geometry(scope);
+                anchors::scrolled(&key, holder, offset);
+                known.top = anchors::at(&key, offset);
+            }
+            known.at_end = false;
+            known.left_at = Some(count.get_untracked());
+            drop(known);
+            at_end.set(false);
         });
     }
     // Tell the local client as soon as the reader leaves the tail, even before they
@@ -296,18 +359,18 @@ pub fn follow(
         let held_scope = held_scope.clone();
         effect(move || {
             let scope = scope_of.get();
-            let reading = scope.clone().filter(|_| !at_end.get());
+            let reading = scope.clone().filter(|_| !status.get().0 && !at_end.get());
             if *held_scope.borrow() == reading {
                 return;
             }
             if let Some(id) = held_scope.take() {
-                driver.transcript_reading(&id, false);
+                driver.transcript_reading(&id, holder, false);
                 if scope.as_ref() == Some(&id) && at_end.get_untracked() {
                     driver.transcript_tail(&id);
                 }
             }
             if let Some(id) = reading
-                && driver.transcript_reading(&id, true)
+                && driver.transcript_reading(&id, holder, true)
             {
                 held_scope.replace(Some(id));
             }
@@ -315,11 +378,11 @@ pub fn follow(
     }
     cleanup(move || {
         if let Some(id) = held_scope.take() {
-            driver.transcript_reading(&id, false);
+            driver.transcript_reading(&id, holder, false);
         }
     });
     kept(place.clone(), move |scope, reading| {
-        anchors::release(scope.as_str(), holder);
+        anchors::forget_geometry(&geometry(&scope));
         save(app, scope, reading)
     });
     // Back to the end: the reader is held no more.
@@ -327,15 +390,24 @@ pub fn follow(
         let place = place.clone();
         move || {
             if let Some(id) = &place.borrow().scope {
-                anchors::release(id.as_str(), holder);
+                anchors::release(&geometry(id), holder);
             }
         }
     };
     {
         let place = place.clone();
+        let was_detached = RefCell::new(false);
         effect(move || {
             let now = count.get();
+            let detached = status.get().0;
+            let switched = was_detached.replace(detached) != detached;
             let top = scope_of.get().zip(first.get());
+            if detached {
+                let mut known = place.borrow_mut();
+                known.at_end = false;
+                drop(known);
+                at_end.set(false);
+            }
             let tail = shown.with(|view| view.as_ref().and_then(|view| view.tail.clone()));
             let shown = place
                 .borrow_mut()
@@ -345,9 +417,14 @@ pub fn follow(
                 Shown::End => {}
                 Shown::Up { held, arrived: n } => {
                     if let Some((scope, key, offset)) = held {
-                        anchors::hold(scope.as_str(), holder, key, offset);
+                        anchors::hold(&geometry(&scope), holder, key, offset);
                     }
-                    arrived.set(n);
+                    if detached || switched {
+                        place.borrow_mut().left_at = Some(now);
+                        arrived.set(0);
+                    } else {
+                        arrived.set(n);
+                    }
                 }
             }
         });
@@ -355,33 +432,49 @@ pub fn follow(
     {
         let place = place.clone();
         let reach = reach.clone();
+        let reader = reader.clone();
         effect(move || {
-            let asked = earlier.with(|now| {
-                let end = place.borrow().at_end;
-                reach.borrow_mut().changed(now.as_ref(), end)
+            let wanted = earlier.with(|now| {
+                reach
+                    .borrow_mut()
+                    .changed(now.as_ref(), place.borrow().at_end)
+                    .map(|action| (now.as_ref().and_then(|p| p.cursor.clone()), action))
             });
-            if let Some(older) = asked {
-                untracked(|| run(app, older));
+            if let Some((cursor, action)) = wanted {
+                untracked(|| reader.older(cursor, action));
+            }
+        });
+    }
+    let join = {
+        let place = place.clone();
+        move || {
+            release();
+            let mut known = place.borrow_mut();
+            known.at_end = true;
+            known.left_at = None;
+            drop(known);
+            at_end.set(true);
+            queue_end(place.clone(), scroller);
+        }
+    };
+    {
+        let join = join.clone();
+        effect(move || {
+            if waiting.get() && !latest.get() {
+                waiting.set(false);
+                join();
             }
         });
     }
     let asked = computed(jump);
     let answered = stored(asked.get_untracked());
     {
-        let place = place.clone();
-        let release = release.clone();
+        let join = join.clone();
+        let to_latest = to_latest.clone();
         effect(move || {
             let now = asked.get();
-            if answered.replace(now) != now {
-                to_latest();
-                release();
-                {
-                    let mut known = place.borrow_mut();
-                    known.at_end = true;
-                    known.left_at = None;
-                }
-                at_end.set(true);
-                after_answer(move || scroller.scroll_to_end(true));
+            if answered.replace(now) != now && to_latest() {
+                join();
             }
         });
     }
@@ -404,19 +497,32 @@ pub fn follow(
             .on_scroll(move |event: &ScrollEvent| {
                 let offset = event.offset.y.0;
                 let below = event.content_size.height.0 - offset - event.size.height.0;
-                let (end, flipped, scope, moved) = {
+                let (detached, newer, loading) = status.get_untracked();
+                let restored = scrolled
+                    .borrow()
+                    .scope
+                    .as_ref()
+                    .is_some_and(|id| anchors::restored(&geometry(id), holder, offset));
+                let (end, flipped, scope, motion) = {
                     let mut known = scrolled.borrow_mut();
                     let previous = known.offset.replace(offset);
-                    let moved = previous.is_some_and(|was| (was - offset).abs() > 0.5);
+                    let motion = if restored {
+                        0.0
+                    } else {
+                        previous.map_or(0.0, |was| offset - was)
+                    };
+                    let moved = motion.abs() > 0.5;
                     // An unchanged offset can now be far above the end because the reply
                     // grew underneath it. Only a real move away pauses an end follower.
-                    let end = below <= END_SLACK || (known.at_end && !moved && previous.is_some());
+                    let end = !detached
+                        && ((below <= END_SLACK && (known.at_end || motion > 0.5))
+                            || (known.at_end && !moved && previous.is_some()));
                     if let Some(at) = known
                         .scope
                         .as_ref()
-                        .map(|id| anchors::at(id.as_str(), offset))
+                        .and_then(|id| anchors::at(&geometry(id), offset))
                     {
-                        known.top = at;
+                        known.top = Some(at);
                     }
                     let flipped = end != known.at_end;
                     if flipped {
@@ -425,26 +531,42 @@ pub fn follow(
                         }
                         known.at_end = end;
                     }
-                    (end, flipped, known.scope.clone(), moved)
+                    (end, flipped, known.scope.clone(), motion)
                 };
                 if let Some(scope) = &scope {
+                    let key = geometry(scope);
+                    reader.scrolled(offset);
                     if end {
-                        anchors::release(scope.as_str(), holder);
-                    } else if moved {
-                        anchors::scrolled(scope.as_str(), holder, offset);
+                        anchors::release(&key, holder);
+                    } else if motion.abs() > 0.5 {
+                        anchors::scrolled(&key, holder, offset);
                     }
                 }
                 if flipped {
                     arrived.set(0);
                     at_end.set(end);
                 }
-                let older = earlier.with_untracked(|now| {
-                    reach
-                        .borrow_mut()
-                        .scrolled(now.as_ref(), offset, event.size.height.0, end)
-                });
-                if let Some(older) = older {
-                    run(app, older);
+                let height = event.size.height.0;
+                if motion < -0.5 {
+                    earlier.with_untracked(|now| {
+                        let older = reach
+                            .borrow_mut()
+                            .scrolled(now.as_ref(), offset, height, end);
+                        if let Some(action) = older {
+                            reader.older(now.as_ref().and_then(|p| p.cursor.clone()), action);
+                        }
+                    });
+                } else if motion > 0.5 {
+                    if offset > height {
+                        reach.borrow_mut().reset();
+                    }
+                    if newer
+                        && !loading
+                        && below <= height
+                        && let Some(scope) = scope
+                    {
+                        reader.newer(&scope, None);
+                    }
                 }
             });
     let control = dynamic(move || {
@@ -459,23 +581,17 @@ pub fn follow(
         } else {
             words.font_family(FONT_TEXT).text_size(px(12.0))
         };
-        let pressed = place.clone();
-        let release = release.clone();
+        let join = join.clone();
+        let to_latest = to_latest.clone();
         let control = view()
             .test_id("btn-jump-latest")
             .role(AccessibilityRole::Button)
             .label(label)
             .cursor_pointer()
             .on_press(move || {
-                to_latest();
-                release();
-                {
-                    let mut known = pressed.borrow_mut();
-                    known.at_end = true;
-                    known.left_at = None;
+                if to_latest() {
+                    join();
                 }
-                at_end.set(true);
-                scroller.scroll_to_end(true);
             })
             .child(words);
         let control = if form == Form::Terminal {

@@ -60,7 +60,7 @@ pub use items::{
     Thinking,
 };
 pub use live::{ItemFetch, LiveMessage, LiveSession, LiveTool, LiveToolState, TurnEnd};
-pub use replay::{fetches, size, transcript};
+pub use replay::{anchor, fetches, reader_transcript, size, transcript, window_fetches};
 pub use seams::TranscriptSeams;
 pub(crate) use seams::preserve_anchors;
 pub use tool::{ToolState, ToolView};

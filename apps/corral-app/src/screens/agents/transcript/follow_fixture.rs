@@ -52,7 +52,8 @@ fn FollowFixture() -> impl IntoElement {
         page.live = vec![message_at("live", true, words.trim_end())];
         Some(page)
     });
-    let content = transcript(app, shown);
+    let reader = Reader::new(app);
+    let content = transcript(app, &reader, shown);
     view()
         .w(px(400.0))
         .h(px(240.0))
@@ -64,6 +65,7 @@ fn FollowFixture() -> impl IntoElement {
         )
         .child(jump::follow(
             app,
+            reader,
             scroll().test_id("transcript").flex_1().min_h(px(0.0)),
             content,
             move || shown.with(|t| t.as_ref().map(Transcript::following)),

@@ -72,7 +72,7 @@ fn StreamingFixture() -> impl IntoElement {
             "advance",
             move || step.update(|n| *n += 1),
         ))
-        .child(transcript(app, shown))
+        .child(transcript(app, &Reader::new(app), shown))
 }
 
 #[test]

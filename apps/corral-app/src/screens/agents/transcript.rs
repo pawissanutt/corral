@@ -30,7 +30,9 @@ mod older;
 mod older_tests;
 mod parts;
 mod prose;
+mod reader;
 mod retained;
+pub(crate) use reader::Reader;
 #[cfg(test)]
 mod retained_tests;
 mod rows;
@@ -41,13 +43,12 @@ use nsh_core::prelude::*;
 
 pub(crate) use anchors::content_origin;
 pub(super) use build_cards::gate_log;
-pub use jump::follow;
+pub(crate) use jump::follow;
 pub use older::Earlier;
 pub use watch::watch;
 
 use crate::model::Form;
 use crate::model::hue::Hue;
-use crate::model::session::Action;
 use crate::model::session::transcript::{
     Fill, Line, LineClass, Message, MessageItem, MessageKind, Note, QuestionCard, Transcript,
 };
@@ -111,13 +112,12 @@ pub fn line(app: AppState, rich: &Rich, size: f32, base: Token) -> AnyElement {
 /// scroll and to try a failed page again.
 fn pager(
     app: AppState,
-    action: &Option<Action>,
+    press: impl Fn() + 'static,
     label: &str,
     test_id: &str,
     paging: bool,
-) -> Option<AnyElement> {
-    let action = action.clone()?;
-    Some(button_with(
+) -> AnyElement {
+    button_with(
         app,
         if paging { "Loading…" } else { label },
         ButtonKind::Quiet,
@@ -126,8 +126,8 @@ fn pager(
             ..ButtonOptions::default()
         },
         test_id,
-        move || run(app, action.clone()),
-    ))
+        press,
+    )
 }
 
 /// What stands in for the messages while there are none to show: the loading state (announced
@@ -248,8 +248,12 @@ struct Spot<'a> {
 /// messages, every message of the page in order (or why there are none), this device's sends
 /// the page does not hold yet, the live turn and the quiet rows after it, then the note. Desktop centres it at the mockup's measure; the phone uses
 /// the full width with 16 pt sides.
-pub fn transcript(app: AppState, shown: Memo<Option<Transcript>>) -> AnyElement {
-    retained::render(app, shown)
+pub(crate) fn transcript(
+    app: AppState,
+    reader: &Reader,
+    shown: Memo<Option<Transcript>>,
+) -> AnyElement {
+    retained::render(app, reader, shown)
 }
 
 /// One item of a message, numbered `n` across the page, drawn at `spot` when it is keyed.

@@ -39,6 +39,8 @@ pub(super) struct Cx<'a> {
     pub ui: &'a Ui,
     pub feed: &'a daemon::Feed,
     pub journal: &'a Journal,
+    suffix: Option<&'a (String, usize)>,
+    detached: bool,
 }
 
 impl Cx<'_> {
@@ -343,7 +345,7 @@ fn owner_items(
     (lead, tag)
 }
 
-fn anchor(message: &SessionMessage) -> String {
+pub fn anchor(message: &SessionMessage) -> String {
     if message.id.is_empty() {
         format!(
             "{}|{}",
@@ -436,7 +438,7 @@ fn message(
     let mut keys = Vec::new();
     let mut facts = None;
     let mut notice = false;
-    let count = resolved.len();
+    let count = resolved.len() + omitted(cx.suffix, message);
     for (n, (item, rest)) in resolved.into_iter().enumerate() {
         let key = item_key(&anchor, count - n);
         match item {
@@ -660,7 +662,22 @@ pub(super) fn millis(at: Option<&str>) -> Option<u64> {
 /// Fetch complete content for words and special cards, and for rows already open when a page
 /// adds or changes their continuation. A paired call and result can need separate fetches.
 pub fn fetches(feed: &daemon::Feed, id: &Id, ui: &Ui) -> Vec<String> {
-    let Some(page) = page(feed.detail(&DetailRef::Session { id: id.to_string() })) else {
+    window_fetches(
+        feed,
+        feed.detail(&DetailRef::Session { id: id.to_string() }),
+        ui,
+    )
+}
+
+fn omitted(suffix: Option<&(String, usize)>, message: &SessionMessage) -> usize {
+    suffix
+        .filter(|(id, _)| *id == message.id)
+        .map_or(0, |(_, count)| *count)
+}
+
+pub fn window_fetches(feed: &daemon::Feed, cache: Option<&DetailCache>, ui: &Ui) -> Vec<String> {
+    let suffix = cache.and_then(|cache| cache.transcript_seams.suffix.as_ref());
+    let Some(page) = page(cache) else {
         return Vec::new();
     };
     let mut fetches = Vec::new();
@@ -674,7 +691,7 @@ pub fn fetches(feed: &daemon::Feed, id: &Id, ui: &Ui) -> Vec<String> {
         }
         let anchor = anchor(message);
         let items = resolve(&message.items, feed);
-        let count = items.len();
+        let count = items.len() + omitted(suffix, message);
         for (n, (item, rest)) in items.into_iter().enumerate() {
             let Rest::Missing { token, .. } = rest else {
                 continue;
@@ -723,6 +740,8 @@ pub(super) fn recorded_layout(
         ui: &Ui::EMPTY,
         feed,
         journal: &journal,
+        suffix: cache.transcript_seams.suffix.as_ref(),
+        detached: false,
     };
     let (messages, ends, _) = recorded_view(&body.messages, Some(cache), cx, keep_cut);
     RecordedLayout {
@@ -738,6 +757,20 @@ pub fn transcript(
     cache: Option<&DetailCache>,
     feed: &daemon::Feed,
 ) -> Transcript {
+    replay(id, ui, cache, feed, false)
+}
+
+pub fn reader_transcript(id: &Id, ui: &Ui, cache: &DetailCache, feed: &daemon::Feed) -> Transcript {
+    replay(id, ui, Some(cache), feed, true)
+}
+
+fn replay(
+    id: &Id,
+    ui: &Ui,
+    cache: Option<&DetailCache>,
+    feed: &daemon::Feed,
+    detached: bool,
+) -> Transcript {
     let body = page(cache);
     let recorded: &[SessionMessage] = body.map_or(&[], |page| page.messages.as_slice());
     let journal = Journal::of(id, recorded, feed);
@@ -746,13 +779,15 @@ pub fn transcript(
         ui,
         feed,
         journal: &journal,
+        suffix: cache.and_then(|cache| cache.transcript_seams.suffix.as_ref()),
+        detached,
     };
     let loading = cache.is_none_or(|cache| cache.loading);
     let fill = match body {
         Some(page)
             if page.messages.is_empty()
                 && page.older.is_none()
-                && !feed.live.contains_key(id.as_str()) =>
+                && (detached || !feed.live.contains_key(id.as_str())) =>
         {
             Fill::Empty {
                 heading: "No transcript yet",
@@ -788,7 +823,7 @@ pub fn transcript(
     let (messages, message_ends, first) = recorded_view(recorded, cache, cx, |_, _| true);
     // Older pages prepend; the live turn always follows the newest recorded messages.
     let (live, after) = match feed.live.get(id.as_str()) {
-        Some(turn) if body.is_some() => overlay::overlay(turn, recorded, cx),
+        Some(turn) if body.is_some() && !detached => overlay::overlay(turn, recorded, cx),
         _ => (Vec::new(), Vec::new()),
     };
     // Past the history cap the loaded pages no longer join the newest one: only the latest
@@ -798,7 +833,11 @@ pub fn transcript(
         .is_some_and(|error| error.code == "history_changed");
     let older_cursor = cache.and_then(older_token).filter(|_| !capped);
     Transcript {
-        echoes: echo::shown(id, ui, body, feed),
+        echoes: if detached {
+            Vec::new()
+        } else {
+            echo::shown(id, ui, body, feed)
+        },
         messages,
         message_ends,
         first,

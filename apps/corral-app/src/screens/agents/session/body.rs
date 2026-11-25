@@ -183,23 +183,26 @@ pub(super) fn main(app: AppState, page: Memo<SessionPage>) -> AnyElement {
 /// the owner scrolled up (then a control counts what arrived and returns to the end); before
 /// the first row, who receives the message.
 pub(super) fn chat(app: AppState, page: Memo<SessionPage>) -> AnyElement {
-    let said = computed(move || {
+    let reader = transcript::Reader::new(app);
+    let base = computed(move || {
         page.with(|p| match &p.body {
             Body::Chat(chat) => Some(chat.transcript.clone()),
             _ => None,
         })
     });
+    let said = reader.bind(base);
     let empty = computed(move || {
         page.with(|p| match &p.body {
             Body::Chat(chat) => Some(chat.empty.clone()),
             _ => None,
         })
     });
+    let rendered = reader.clone();
     let shown = dynamic(move || {
         let empty = empty.get()?;
         Some(untracked(|| match empty {
             Some(empty) => chat_empty(app, &empty),
-            None => transcript::transcript(app, said),
+            None => transcript::transcript(app, &rendered, said),
         }))
     });
     let content = if app.form == Form::Terminal {
@@ -209,6 +212,7 @@ pub(super) fn chat(app: AppState, page: Memo<SessionPage>) -> AnyElement {
     };
     transcript::follow(
         app,
+        reader,
         scroll()
             .test_id("session-transcript")
             .flex_1()
