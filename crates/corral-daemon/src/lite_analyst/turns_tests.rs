@@ -496,9 +496,13 @@ fn fresh_enrollment_does_not_reset_store_day_budget() {
         .db
         .execute("UPDATE links SET retired=1 WHERE link_id='link_A'", [])
         .unwrap();
+    // A fork between FD creation and close-on-exec can temporarily keep this
+    // open file description alive. Model the inherited reference without a race.
+    let inherited_lock = store.duplicate_lock().unwrap();
     drop(store);
     let horizon = DEADLINE + CUTOFF_MS;
     let mut store = open(root.path(), "link_B", "epoch_B", None, horizon);
+    drop(inherited_lock);
     attach(
         &store,
         "new_link_run",

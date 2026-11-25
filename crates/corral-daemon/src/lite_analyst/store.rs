@@ -17,7 +17,18 @@ pub(super) struct Store {
     pub(super) link_id: String,
     pub(super) epoch: String,
     pub(super) reconciliation_only: bool,
-    _lock: File,
+    // Fields drop in declaration order: keep the lock until SQLite closes.
+    _lock: StateLock,
+}
+
+struct StateLock(File);
+
+impl Drop for StateLock {
+    fn drop(&mut self) {
+        // Closing alone does not release flock while a forked process still holds
+        // the open file description, even if its descriptor is close-on-exec.
+        let _ = self.0.unlock();
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize)]
@@ -63,6 +74,11 @@ CREATE INDEX IF NOT EXISTS runs_slots ON runs(launch_phase);
 ";
 
 impl Store {
+    #[cfg(test)]
+    pub(super) fn duplicate_lock(&self) -> std::io::Result<File> {
+        self._lock.0.try_clone()
+    }
+
     // Call only after mutual link_ready AND a common hello, before acknowledging hello.
     #[cfg(test)]
     pub(super) fn enroll(root: &Path, e: &Enrollment, now_ms: u64) -> anyhow::Result<Self> {
@@ -79,6 +95,7 @@ impl Store {
         private_directory(root)?;
         let lock = private_file(&root.join("lite-analyst.lock"))?;
         lock.try_lock().context("fixture state already owned")?;
+        let lock = StateLock(lock);
         let db_path = root.join("lite-analyst.sqlite3");
         private_file(&db_path)?;
         let mut db = Connection::open(db_path).context("open fixture ledger")?;
