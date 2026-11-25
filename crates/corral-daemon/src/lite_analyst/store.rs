@@ -405,7 +405,6 @@ impl Store {
 
     // C3 must retain this launch identity BEFORE crossing the OS boundary, serialize
     // submission with stop, and wait for verified process/registry attachment before work.
-    #[allow(dead_code, reason = "C3 owns real child submission")]
     pub(super) fn submit_launch(&self, id: &str, generation: u64, now_ms: u64) -> Result<String> {
         require_link(&self.db, &self.link_id, &self.epoch)?;
         if self.reconciliation_only {
@@ -424,7 +423,6 @@ impl Store {
         Ok(launch_id)
     }
 
-    #[allow(dead_code, reason = "C3 owns verified child attachment")]
     pub(super) fn attach_launch(
         &self,
         id: &str,
@@ -448,11 +446,21 @@ impl Store {
         Ok(())
     }
 
-    #[allow(dead_code, reason = "C3 supplies explicit verified process teardown")]
-    pub(super) fn confirm_teardown(&self, id: &str, generation: u64, launch: &str) -> Result<()> {
-        let n = self.db.execute("UPDATE runs SET launch_phase='cleaned',state='cancelled',seq=seq+1
+    pub(super) fn confirm_teardown(
+        &self,
+        id: &str,
+        generation: u64,
+        launch: &str,
+        failure: Option<&'static str>,
+    ) -> Result<()> {
+        let state = if failure.is_some() {
+            "failed"
+        } else {
+            "cancelled"
+        };
+        let n = self.db.execute("UPDATE runs SET launch_phase='cleaned',state=?5,seq=seq+1,reason=coalesce(?6,reason)
             WHERE run_id=?1 AND link_id=?2 AND generation=?3 AND launch_id=?4 AND state='stop_requested'
-            AND launch_phase IN ('submitted','attached')", params![id,self.link_id,generation,launch])?;
+            AND launch_phase IN ('submitted','attached')", params![id,self.link_id,generation,launch,state,failure])?;
         if n != 1 {
             return Err(Fault::Stopped);
         }

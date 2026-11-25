@@ -1,13 +1,18 @@
 //! Opt-in, fixture-only daemon entry point. Does not enter the workspace/owner daemon.
 mod bootstrap;
+mod broker;
 mod clock;
+mod investigation;
+mod isolation;
+mod policy;
+mod provider;
 mod store;
 mod turns;
 mod wire;
 mod work;
 
 use anyhow::ensure;
-use bootstrap::Bootstrap;
+use bootstrap::{Bootstrap, Enrollment, Resources};
 use clock::Clock;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
@@ -39,7 +44,16 @@ pub unsafe fn run_fixture(enabled: bool) -> anyhow::Result<()> {
         .map_err(|_| anyhow::anyhow!("public Lite fixture stopped or unavailable"))
 }
 
+pub fn run_shim() -> anyhow::Result<()> {
+    broker::shim_main()
+        .map_err(|_| anyhow::anyhow!("public Lite fixture shim stopped or unavailable"))
+}
+
 fn serve(mut bootstrap: Bootstrap) -> anyhow::Result<()> {
+    isolation::protect_supervisor()?;
+    provider::restrict_egress()?;
+    policy::prompt()?;
+    policy::model_descriptors()?;
     let e = &bootstrap.enrollment;
     let work = Work::new(bootstrap.work, bootstrap.lifetime)?
         .with_broker(bootstrap.resources.broker_handle()?);
@@ -77,6 +91,10 @@ fn serve(mut bootstrap: Bootstrap) -> anyhow::Result<()> {
             clock,
             pending_bind: None,
             pending_fence: None,
+            fixture: Some(Fixture {
+                enrollment: e,
+                resources: &bootstrap.resources,
+            }),
         })
         .run()
         {
@@ -93,19 +111,30 @@ fn serve(mut bootstrap: Bootstrap) -> anyhow::Result<()> {
 // One serialized supervisor gate. Bounded reverse calls pump incoming requests before
 // returning their matched reply, so cancel/fence can win while a permit/binding is in flight.
 #[derive(Debug, PartialEq, Eq)]
-#[allow(dead_code, reason = "C3 classifies provider handoff before settlement")]
 enum SendAdmission<T> {
     Refused(Fault),
     ConsumedWithoutHandoff,
     HandedOff(T),
 }
 
+#[derive(Clone, Copy)]
+struct Fixture<'a> {
+    enrollment: &'a Enrollment,
+    resources: &'a Resources,
+}
+
+struct PendingStart {
+    id: String,
+    body: wire::StartBody,
+}
+
 struct Session<'a> {
     store: &'a mut Store,
     work: &'a Work,
     clock: Clock,
-    pending_bind: Option<String>,
+    pending_bind: Option<PendingStart>,
     pending_fence: Option<Fence>,
+    fixture: Option<Fixture<'a>>,
 }
 
 impl Session<'_> {
@@ -113,8 +142,13 @@ impl Session<'_> {
         self.replay_settlements()?;
         loop {
             self.drain_control()?;
-            if let Some(id) = self.pending_bind.take() {
-                self.bind_at_lite(&id)?;
+            if let Some(start) = self.pending_bind.take() {
+                if let Some(binding) = self.bind_at_lite(&start.id)? {
+                    let fixture = self
+                        .fixture
+                        .ok_or_else(|| anyhow::anyhow!("fixture launch unavailable"))?;
+                    self.investigate(fixture, binding, start.body)?;
+                }
                 continue;
             }
             if self
@@ -220,11 +254,15 @@ impl Session<'_> {
         }
         match op {
             "start_investigation" => {
+                let request: wire::Start = wire::params(value)?;
                 let start = self
                     .store
-                    .start_with(&wire::params(value)?, bounds, || self.work.check_live())?;
+                    .start_with(&request, bounds, || self.work.check_live())?;
                 if start.fresh {
-                    self.pending_bind = Some(start.snapshot.run_id.clone());
+                    self.pending_bind = Some(PendingStart {
+                        id: start.snapshot.run_id.clone(),
+                        body: request.body()?,
+                    });
                 }
                 as_value(start.snapshot)
             }
@@ -251,6 +289,22 @@ impl Session<'_> {
     }
 
     fn call<T: DeserializeOwned>(
+        &mut self,
+        op: &str,
+        params: &impl Serialize,
+        deadline: Instant,
+    ) -> anyhow::Result<wire::Result<T>> {
+        let result = self.call_inner(op, params, deadline);
+        if result
+            .as_ref()
+            .is_err_and(|e| !e.is::<work::LifetimeEnded>())
+        {
+            self.work.poison();
+        }
+        result
+    }
+
+    fn call_inner<T: DeserializeOwned>(
         &mut self,
         op: &str,
         params: &impl Serialize,
@@ -287,11 +341,11 @@ impl Session<'_> {
         }
     }
 
-    fn bind_at_lite(&mut self, id: &str) -> anyhow::Result<()> {
+    fn bind_at_lite(&mut self, id: &str) -> anyhow::Result<Option<wire::Binding>> {
         self.drain_control()?;
         let binding = match self.store.binding(id) {
             Ok(b) => b,
-            Err(Fault::Stopped) => return Ok(()),
+            Err(Fault::Stopped) => return Ok(None),
             Err(_) => anyhow::bail!("fixture binding unavailable"),
         };
         let result =
@@ -299,7 +353,7 @@ impl Session<'_> {
         // A stop might have been handled in call(); a positive reply must not revive it.
         if matches!(result, Ok(wire::Bound { bound: true })) {
             match self.store.bind(id, binding.generation, self.clock.now()?) {
-                Ok(()) => return Ok(()),
+                Ok(()) => return Ok(Some(binding)),
                 Err(Fault::Stopped) => {
                     // Lite installed its binding but local stop/expiry won before we
                     // could record bound_epoch; there is no stored binding to notify.
@@ -322,7 +376,7 @@ impl Session<'_> {
                         generation: binding.generation,
                         reason,
                     })?;
-                    return Ok(());
+                    return Ok(None);
                 }
                 Err(_) => anyhow::bail!("fixture binding could not commit"),
             }
@@ -332,12 +386,11 @@ impl Session<'_> {
             Err(Fault::StaleScope) => FenceReason::StaleScope,
             _ => FenceReason::Stopped,
         };
-        self.stop_local(id, binding.generation, reason)
+        self.stop_local(id, binding.generation, reason)?;
+        Ok(None)
     }
 
-    // Handles and exact body remain host-only. C3 invokes these methods from this
-    // gate after installing the pinned registry and retained generation's process.
-    #[allow(dead_code, reason = "C3 supplies finalized provider requests")]
+    // Handles and the exact finalized body remain supervisor-only.
     fn reserve_turn(
         &mut self,
         run: &str,
@@ -409,7 +462,6 @@ impl Session<'_> {
         }
     }
 
-    #[allow(dead_code, reason = "C3 owns one-shot provider transport")]
     fn send_once<T>(
         &mut self,
         lease: &PermitLease,
@@ -442,7 +494,6 @@ impl Session<'_> {
         Ok(SendAdmission::HandedOff(send(body)))
     }
 
-    #[allow(dead_code, reason = "C3 supplies trusted scripted transport outcomes")]
     fn settle_turn(&mut self, request: &ReserveTurn, outcome: Outcome) -> anyhow::Result<()> {
         let sealed = self
             .store
@@ -453,14 +504,13 @@ impl Session<'_> {
 
     fn record_settlement(&mut self, settlement: &SettleTurn) -> anyhow::Result<()> {
         self.drain_control()?;
-        let result = self.call("settle_turn", settlement, Instant::now() + FRAME_TIMEOUT)?;
-        if let Ok(receipt) = result {
-            let (earliest, latest) = self.clock.times()?;
-            self.store
-                .observe_settlement_at(settlement, &receipt, earliest, latest)
-                .map_err(|_| anyhow::anyhow!("fixture settlement receipt did not match"))?;
-        }
-        Ok(())
+        let receipt = self
+            .call("settle_turn", settlement, Instant::now() + FRAME_TIMEOUT)?
+            .map_err(|_| anyhow::anyhow!("fixture settlement was refused"))?;
+        let (earliest, latest) = self.clock.times()?;
+        self.store
+            .observe_settlement_at(settlement, &receipt, earliest, latest)
+            .map_err(|_| anyhow::anyhow!("fixture settlement receipt did not match"))
     }
 }
 

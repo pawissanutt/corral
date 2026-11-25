@@ -46,6 +46,7 @@ fn new_session<'a>(store: &'a mut Store, work: &'a Work) -> Session<'a> {
         clock: Clock::new().unwrap(),
         pending_bind: None,
         pending_fence: None,
+        fixture: None,
     }
 }
 
@@ -131,7 +132,7 @@ fn dropped_start_reply_reopen_keeps_one_intent_and_rejects_conflict() {
     assert!(committed.is_ok());
     drop(peer);
     assert!(work.respond(id, committed, deadline()).is_err());
-    let id = session.pending_bind.take().unwrap();
+    let id = session.pending_bind.take().unwrap().id;
     assert_eq!(session.store.read(&id).unwrap().state, "admitted");
     // Simulate crash without clean wind-down, then a trusted launcher re-exec.
     drop(store);
@@ -202,10 +203,10 @@ fn launch_fence_holds_slot_until_verified_cleanup_and_hides_foreign_runs() {
     store.maintenance(wall).unwrap();
     assert!(matches!(store.start(&start("b"), wall), Err(Fault::Busy)));
     assert_eq!(
-        store.confirm_teardown(&id, 1, "foreign_launch"),
+        store.confirm_teardown(&id, 1, "foreign_launch", None),
         Err(Fault::Stopped)
     );
-    store.confirm_teardown(&id, 1, &launch).unwrap();
+    store.confirm_teardown(&id, 1, &launch, None).unwrap();
     let terminal = store.stop(&id, 1, FenceReason::Stopped).unwrap();
     assert_eq!((terminal.seq, terminal.state.as_str()), (3, "cancelled"));
     drop(store);

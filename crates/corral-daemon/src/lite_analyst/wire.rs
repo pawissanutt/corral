@@ -73,36 +73,42 @@ pub(super) fn fresh_id() -> anyhow::Result<String> {
 
 // Deserialize without serde_json::Value's last-wins object semantics. Never include peer
 // input in diagnostics. Standard serde_json recursion limits apply before typed decoding.
-struct Strict(Value);
-impl<'de> Deserialize<'de> for Strict {
+struct Strict<const SIGNED: bool>(Value);
+impl<'de, const SIGNED: bool> Deserialize<'de> for Strict<SIGNED> {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
-        struct StrictVisitor;
-        impl<'de> Visitor<'de> for StrictVisitor {
-            type Value = Strict;
+        struct StrictVisitor<const SIGNED: bool>;
+        impl<'de, const SIGNED: bool> Visitor<'de> for StrictVisitor<SIGNED> {
+            type Value = Strict<SIGNED>;
             fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 f.write_str("strict fixture JSON")
             }
-            fn visit_bool<E: de::Error>(self, v: bool) -> std::result::Result<Strict, E> {
+            fn visit_bool<E: de::Error>(self, v: bool) -> std::result::Result<Self::Value, E> {
                 Ok(Strict(v.into()))
             }
-            fn visit_u64<E: de::Error>(self, v: u64) -> std::result::Result<Strict, E> {
+            fn visit_u64<E: de::Error>(self, v: u64) -> std::result::Result<Self::Value, E> {
                 if v > MAX_SAFE {
                     return Err(E::custom("integer exceeds safe range"));
                 }
                 Ok(Strict(v.into()))
             }
-            fn visit_str<E: de::Error>(self, v: &str) -> std::result::Result<Strict, E> {
+            fn visit_i64<E: de::Error>(self, v: i64) -> std::result::Result<Self::Value, E> {
+                if !SIGNED || v.unsigned_abs() > MAX_SAFE {
+                    return Err(E::custom("signed integer outside fixture domain"));
+                }
                 Ok(Strict(v.into()))
             }
-            fn visit_unit<E: de::Error>(self) -> std::result::Result<Strict, E> {
+            fn visit_str<E: de::Error>(self, v: &str) -> std::result::Result<Self::Value, E> {
+                Ok(Strict(v.into()))
+            }
+            fn visit_unit<E: de::Error>(self) -> std::result::Result<Self::Value, E> {
                 Ok(Strict(Value::Null))
             }
             fn visit_seq<A: SeqAccess<'de>>(
                 self,
                 mut seq: A,
-            ) -> std::result::Result<Strict, A::Error> {
+            ) -> std::result::Result<Self::Value, A::Error> {
                 let mut values = Vec::new();
-                while let Some(Strict(v)) = seq.next_element()? {
+                while let Some(Strict::<SIGNED>(v)) = seq.next_element()? {
                     values.push(v);
                 }
                 Ok(Strict(values.into()))
@@ -110,9 +116,9 @@ impl<'de> Deserialize<'de> for Strict {
             fn visit_map<A: MapAccess<'de>>(
                 self,
                 mut map: A,
-            ) -> std::result::Result<Strict, A::Error> {
+            ) -> std::result::Result<Self::Value, A::Error> {
                 let mut out = Map::new();
-                while let Some((k, Strict(v))) = map.next_entry()? {
+                while let Some((k, Strict::<SIGNED>(v))) = map.next_entry()? {
                     if out.insert(k, v).is_some() {
                         return Err(de::Error::custom("duplicate key"));
                     }
@@ -120,19 +126,36 @@ impl<'de> Deserialize<'de> for Strict {
                 Ok(Strict(out.into()))
             }
         }
-        d.deserialize_any(StrictVisitor)
+        d.deserialize_any(StrictVisitor::<SIGNED>)
     }
 }
 
 pub(super) fn decode<T: DeserializeOwned>(bytes: &[u8]) -> anyhow::Result<T> {
-    let Strict(value) =
+    decode_domain::<T, false>(bytes)
+}
+
+// MCP metric values and the pinned schema may contain signed safe integers.
+pub(super) fn decode_signed<T: DeserializeOwned>(bytes: &[u8]) -> anyhow::Result<T> {
+    decode_domain::<T, true>(bytes)
+}
+
+fn decode_domain<T: DeserializeOwned, const SIGNED: bool>(bytes: &[u8]) -> anyhow::Result<T> {
+    let Strict::<SIGNED>(value) =
         serde_json::from_slice(bytes).map_err(|_| anyhow::anyhow!("invalid fixture JSON"))?;
     serde_json::from_value(value).map_err(|_| anyhow::anyhow!("invalid fixture message"))
 }
 
-// JCS for the fixture's restricted domain (no floats or signed integers in these DTOs).
 pub(super) fn canonical(value: &impl Serialize) -> anyhow::Result<Vec<u8>> {
-    fn append(out: &mut Vec<u8>, value: &Value) -> anyhow::Result<()> {
+    canonical_domain(value, false)
+}
+
+pub(super) fn canonical_signed(value: &impl Serialize) -> anyhow::Result<Vec<u8>> {
+    canonical_domain(value, true)
+}
+
+// JCS for the fixture's restricted integer domain (no floating point).
+fn canonical_domain(value: &impl Serialize, signed: bool) -> anyhow::Result<Vec<u8>> {
+    fn append(out: &mut Vec<u8>, value: &Value, signed: bool) -> anyhow::Result<()> {
         match value {
             Value::Object(map) => {
                 let mut fields: Vec<_> = map.iter().collect();
@@ -144,7 +167,7 @@ pub(super) fn canonical(value: &impl Serialize) -> anyhow::Result<Vec<u8>> {
                     }
                     serde_json::to_writer(&mut *out, key)?;
                     out.push(b':');
-                    append(out, value)?;
+                    append(out, value, signed)?;
                 }
                 out.push(b'}');
             }
@@ -154,13 +177,15 @@ pub(super) fn canonical(value: &impl Serialize) -> anyhow::Result<Vec<u8>> {
                     if i != 0 {
                         out.push(b',');
                     }
-                    append(out, value)?;
+                    append(out, value, signed)?;
                 }
                 out.push(b']');
             }
             v => {
                 ensure!(
-                    !v.is_number() || v.as_u64().is_some_and(|n| n <= MAX_SAFE),
+                    !v.is_number()
+                        || v.as_u64().is_some_and(|n| n <= MAX_SAFE)
+                        || (signed && v.as_i64().is_some_and(|n| n.unsigned_abs() <= MAX_SAFE)),
                     "invalid canonical integer"
                 );
                 serde_json::to_writer(out, v)?;
@@ -169,7 +194,7 @@ pub(super) fn canonical(value: &impl Serialize) -> anyhow::Result<Vec<u8>> {
         Ok(())
     }
     let mut out = Vec::new();
-    append(&mut out, &serde_json::to_value(value)?)?;
+    append(&mut out, &serde_json::to_value(value)?, signed)?;
     Ok(out)
 }
 

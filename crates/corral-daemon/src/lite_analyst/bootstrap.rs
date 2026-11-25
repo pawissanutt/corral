@@ -85,8 +85,8 @@ impl Enrollment {
 
 pub(super) struct Resources {
     broker: OwnedFd,
-    // Never a DTO, environment variable, or log field. C2 has no route that uses it.
-    _credential: Vec<u8>,
+    // Never a DTO, environment variable, or log field.
+    credential: Vec<u8>,
     pending_ready: Option<PendingReady>,
     deadline: Instant,
 }
@@ -100,6 +100,14 @@ struct PendingReady {
 impl Resources {
     pub(super) fn deadline(&self) -> Instant {
         self.deadline
+    }
+
+    pub(super) fn broker(&self) -> &OwnedFd {
+        &self.broker
+    }
+
+    pub(super) fn credential(&self) -> &[u8] {
+        &self.credential
     }
 
     pub(super) fn broker_handle(&self) -> Result<OwnedFd> {
@@ -206,7 +214,7 @@ impl Bootstrap {
             lifetime,
             resources: Resources {
                 broker,
-                _credential: credential,
+                credential,
                 pending_ready: Some(pending_ready),
                 deadline,
             },

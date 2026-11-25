@@ -30,7 +30,7 @@ install:
     #!/usr/bin/env bash
     set -euo pipefail
     cargo install --path crates/corral-next --locked
-    cargo install --path crates/corral-daemon --locked
+    cargo install --path crates/corral-daemon --locked --bin corrald-next
     # A running daemon keeps the executable it started with. The session hosts it started run
     # on through the restart (`KillMode=process` in its service).
     if systemctl --user is-active --quiet {{ quote(unit) }}; then

@@ -213,7 +213,7 @@ native linker toolchain. The checkout builds the new engine's CLI and daemon:
 
 ```sh
 cargo install --path crates/corral-next --locked
-cargo install --path crates/corral-daemon --locked    # installs corrald-next
+cargo install --path crates/corral-daemon --locked --bin corrald-next
 ```
 
 With [`just`](https://just.systems) installed, the checkout's `justfile` wraps the routine

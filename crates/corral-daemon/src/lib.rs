@@ -27,7 +27,7 @@ pub mod client;
 mod lite_analyst;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[doc(hidden)]
-pub use lite_analyst::run_fixture;
+pub use lite_analyst::{run_fixture, run_shim};
 
 use std::{
     fs::{self, File, OpenOptions, TryLockError},

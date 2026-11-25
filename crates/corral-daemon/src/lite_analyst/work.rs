@@ -8,6 +8,7 @@ use rustix::{
 };
 use serde::Serialize;
 use std::{
+    cell::Cell,
     io::IoSliceMut,
     os::{fd::OwnedFd, unix::net::UnixStream},
     time::{Duration, Instant},
@@ -28,6 +29,8 @@ pub(super) struct Work {
     socket: UnixStream,
     lifetime: OwnedFd,
     broker: Option<OwnedFd>,
+    attaching: Cell<bool>,
+    poisoned: Cell<bool>,
 }
 
 impl Work {
@@ -39,6 +42,8 @@ impl Work {
             socket,
             lifetime,
             broker: None,
+            attaching: Cell::new(false),
+            poisoned: Cell::new(false),
         })
     }
 
@@ -51,14 +56,41 @@ impl Work {
         self.poll(PollFlags::RDHUP, Instant::now()).map(|_| ())
     }
 
+    /// While attaching, the broker adapter reads the sole expected bootstrap
+    /// packet itself. Continue to watch for hangup on that descriptor.
+    pub(super) fn during_broker_attach<T>(
+        &self,
+        attach: impl FnOnce() -> anyhow::Result<T>,
+    ) -> anyhow::Result<T> {
+        ensure!(
+            !self.attaching.replace(true),
+            "nested fixture broker attach"
+        );
+        let result = attach();
+        self.attaching.set(false);
+        let value = result?;
+        self.check_live()?;
+        Ok(value)
+    }
+
+    pub(super) fn poison(&self) {
+        self.poisoned.set(true);
+    }
+
     fn poll(&self, interest: PollFlags, deadline: Instant) -> anyhow::Result<PollFlags> {
+        ensure!(!self.poisoned.get(), "fixture work correlation lost");
+        let broker_interest = if self.attaching.get() {
+            PollFlags::RDHUP
+        } else {
+            PollFlags::IN | PollFlags::RDHUP
+        };
         loop {
             let mut fds = [
                 PollFd::new(&self.lifetime, PollFlags::IN),
                 PollFd::new(&self.socket, interest),
                 PollFd::new(
                     self.broker.as_ref().unwrap_or(&self.lifetime),
-                    PollFlags::IN | PollFlags::RDHUP,
+                    broker_interest,
                 ),
             ];
             let len = if self.broker.is_some() { 3 } else { 2 };

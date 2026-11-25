@@ -199,7 +199,7 @@ fn ready_writes_once_then_closes_and_keeps_broker_fenced() {
     check_pipe(&ready, OFlags::WRONLY).unwrap();
     let mut resources = Resources {
         broker,
-        _credential: vec![],
+        credential: vec![],
         deadline: Instant::now() + BOOTSTRAP_TIMEOUT,
         pending_ready: Some(PendingReady {
             pipe: ready,

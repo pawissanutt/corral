@@ -1,0 +1,126 @@
+# C3 opt-in Corral host QA
+
+**Component QA only.** The daemon, Pi/Bun executable and Rust MCP shim are real
+Corral components. The Lite work/broker peer and scripted HTTP responder here
+are synthetic disposable test code; they are not shipped as part of either
+product. A passing receipt is **not** joined E1 proof, a C4 package or report
+import, a Lite approval/revocation test, proof of fresh computation, or permission
+to enable the fixture for other data.
+
+## Run
+
+Use Linux x86_64 as a non-root user with user/PID/mount/network namespaces, the
+regular non-setid `/usr/bin/bwrap`, Landlock TCP ABI ≥4, glibc's standard ELF loader,
+`/usr/bin/readelf`, and Python 3.11+ (stdlib only). Prepare the trusted Corral
+binaries first. Example from a checkout with the pinned JS dependencies already
+installed:
+
+```sh
+cargo build --locked -p corral-daemon --bins
+pi_build=$(mktemp -d /tmp/corral-c3-pi.XXXXXXXX)
+bun build packages/corral-pi/src/lite-analyst/main.ts --compile \
+  --no-compile-autoload-dotenv --no-compile-autoload-bunfig \
+  --no-compile-autoload-tsconfig --no-compile-autoload-package-json \
+  --outfile="$pi_build/corral-pi-lite-analyst"
+
+python3 -B scripts/qa/lite_analyst_host/run.py --enable-public-fixture-e2e \
+  --daemon target/debug/corrald-next \
+  --pi "$pi_build/corral-pi-lite-analyst" \
+  --shim target/debug/corral-lite-mcp-shim \
+  --revision "$(git rev-parse HEAD)"
+```
+
+The default packet is `.evidence/lite-fixtures/docs/protocol/analyst-february-close-v1.json`.
+If it is not present, pass `--packet` with the exact bytes of
+`docs/protocol/analyst-february-close-v1.json` from T-2073:3. The runner checks the
+packet, prompt, tool policy and [C1 launcher profile](../../../docs/contracts/lite-analyst-launcher-v1/README.md)
+against independent raw SHA-256 pins. It hashes the local binaries and runtime
+closure into a QA-only manifest/lock and mounts the staged bytes read-only. The
+revision is caller-declared baseline metadata, not proof of a clean build or
+substitute for the executable digests. There is no build, install, vault, Git
+operation, external HTTP, owner service or repository mount at launch.
+
+`--scenario NAME` is repeatable; omit it for all six. The only output is a
+sanitized JSON receipt. Exit 0 means the selected component lanes passed with
+teardown; 64 means disabled/invalid inputs, 69 means isolation unavailable, 70
+means a fixture check failed, and 74 means teardown was not confirmed (the
+private `corral-c3-qa-*` directory is quarantined instead of removed).
+
+## What is measured
+
+- Every run uses a new private, non-repo `/scratch`, `/state`, loopback-only
+  network and PID namespace. The disposable outer controller shares the outer
+  runtime mount with Corral so it can bind the fixed loopback HTTP port and
+  stage the C1 work/broker descriptors; this **is not** the separate Lite
+  product sandbox. The actual inner child mounts are inspected during the first
+  POST, including distinct PID/mount/net namespaces, only the corresponding
+  executable and read-only `/lib`/`/lib64` closure, private `/scratch`, `/dev`,
+  `/proc`, capability/seccomp metadata, environment, argv and FD roles. The
+  semantic tool gate and `/proc` measurements do not inject arbitrary code into
+  Pi to test each syscall. No outer owner canary, state, vault or QA scripts
+  may reach the children. Daemon diagnostics must be empty or the fixed error.
+- **`happy`**: the HTTP peer checks the exact system and approved question,
+  ordered registry and prior call IDs, arguments and structured results. It
+  asks for search, then reads the live source handle and calculates using the
+  visible metric selector, then derives `finish_report` text and UTF-8 spans
+  from the actual `5100`, `2800`, captured `2300`, limitations and citations. The
+  terminal snapshot must be `failed/report_unavailable` with no offer and no
+  fourth turn. The responder checks at each actual POST that the exact body
+  and permit were already durably consumed; after teardown, the three body
+  hashes and 760 µUSD settled/acked charges are checked again.
+- **`pending`**: same three POSTs, with a pending metric reply followed by one
+  host-only poll at least 1000 ms later. The third POST must contain only the
+  terminal metric as the original calculation's result; no model poll/call.
+- **`forbidden`**: a first provider response attempts host-only `read_result`;
+  no broker invocation and no second send. The POST has an invalid model
+  response and settles conservatively, without falling back to another route.
+- **`registry`**: the fake peer adds `mitimind_read_note` to the evidence
+  registry during negotiation. No reserve, provider request or broker effect.
+- **`reconnect`**: the first real POST gets an SSE response missing terminal
+  data, leaving a consumed indeterminate turn. At the first sealed settlement
+  the fake peer drops the ACK and closes its exclusive socket endpoints. After
+  confirmed old daemon/worker teardown, the controller re-execs the daemon with
+  new endpoints and epoch and the same state/pins. The exact durable settlement
+  is replayed and acknowledged once with no new provider send or bind. Exact
+  start retry returns the same run, changed bytes conflict, and a new start is
+  refused.
+- **`crash`**: at the first fully received and durably consumed POST, a
+  barrier withholds all response bytes. The controller SIGKILLs the retained
+  daemon while both workers are active, proves the old processes/endpoints
+  are gone, and only then re-execs at a new epoch. Recovery settles the
+  unresolved consumed step at the full synthetic hold; no provider POST or
+  broker action is replayed. This is a real process crash, not a power-loss test.
+
+The fake broker releases only a synthetic captured February projection/cell,
+with varying selectors and citations to catch hardcoded handles. It never
+executes a metric, writes an authored note, or imports a report. All checks read
+current component traffic; the packet is not a prerecorded provider transcript.
+The controller verifies final absence of child processes, broker closure, and
+that the fixed listener port can be rebound before disposing of scratch. There
+is no report output file, provider body, credential, or Pi transcript in receipts.
+
+## C4 packaging handoff
+
+The C1 daemon owns the child launch. Within its outer sandbox it expects the
+verified rootless `/usr/bin/bwrap`, a private `/tmp` for nested setup, and
+`/fixture/corral/bin/{corral-pi-lite-analyst,corral-lite-mcp-shim}` as exact
+entrypoints (no arguments). Stage the measured ELF runtime dependency closure
+under `/fixture/corral/runtime/lib` and `/fixture/corral/runtime/lib64`, at the
+same relative paths as the child loaders expect. The supervisor mounts only
+these two ABI trees and the individual entrypoint read-only; it never mounts
+`/state`, the provider credential, the profile metadata, or the full package
+into either child. The product runner, not this QA lock, verifies the C4 build
+and joint E1 lock. The C3 `finish_draft` path validates canonical bytes in memory;
+C4 replaces the draft acknowledgement with a live generation/stop CAS and
+immutable report publication before acknowledging `finish_report`.
+
+## Script checks
+
+To run just the QA script unit tests (no Corral executables, HTTP or Bubblewrap):
+
+```sh
+python3 -B -m unittest discover -v -s scripts/qa/lite_analyst_host
+```
+
+For that command, set `CORRAL_QA_PACKET` if the pinned packet is not in the default
+location. These tests do not count as C3 runtime evidence.
