@@ -73,7 +73,11 @@ fn coverage_is_stated_overall_and_per_group_with_the_reason_the_rest_is_missing(
     );
     let page = page(&state, &feed);
     let gaps = page.gaps.as_ref().unwrap();
-    assert!(gaps.reasons[0].contains("1 of 3 runs"), "{}", gaps.reasons[0]);
+    assert!(
+        gaps.reasons[0].contains("1 of 3 runs"),
+        "{}",
+        gaps.reasons[0]
+    );
     assert!(gaps.reasons[0].contains("reported usage on their start day"));
     assert!(gaps.reasons.iter().any(|reason| reason.contains("no cost")));
     let total = page.total.as_ref().unwrap();

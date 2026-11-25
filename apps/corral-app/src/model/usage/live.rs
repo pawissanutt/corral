@@ -158,6 +158,26 @@ fn figure_of(evidence: Evidence, sum: u64) -> String {
     }
 }
 
+/// A token count in full, as its evidence allows: [`UNKNOWN`] with none, `≥` before a lower
+/// bound. The day readout's exact figure, where the table keeps [`figure_of`]'s glance.
+fn exact_of(evidence: Evidence, sum: u64) -> String {
+    match evidence {
+        Evidence::Missing | Evidence::Unknown => UNKNOWN.to_owned(),
+        Evidence::Partial(_) => format!("≥{}", count(sum)),
+        Evidence::All => count(sum),
+    }
+}
+
+/// Input and output together in full, for the day readout: complete only when both are.
+fn exact_used(total: &UsageTotal) -> String {
+    let none = |evidence| matches!(evidence, Evidence::Missing | Evidence::Unknown);
+    match (input_evidence(total), output_evidence(total)) {
+        (input, output) if none(input) && none(output) => UNKNOWN.to_owned(),
+        (Evidence::All, Evidence::All) => count(total.input + total.output),
+        _ => format!("≥{}", count(total.input + total.output)),
+    }
+}
+
 /// Input and output together, for the day strip: complete only when both are.
 fn used_words(total: &UsageTotal) -> String {
     let sum = total.input + total.output;
@@ -577,9 +597,9 @@ fn day_strip(days: Days, series: &UsageSeries) -> DayStrip {
                 format!(
                     "{}: {} tokens · {} in · {} out · {}",
                     short_day(*day),
-                    used_words(total),
-                    figure_of(input_evidence(total), total.input),
-                    figure_of(output_evidence(total), total.output),
+                    exact_used(total),
+                    exact_of(input_evidence(total), total.input),
+                    exact_of(output_evidence(total), total.output),
                     plural(total.requests, "request", "requests")
                 )
             };

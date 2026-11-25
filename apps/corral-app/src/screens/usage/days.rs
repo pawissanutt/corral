@@ -109,7 +109,7 @@ fn geometry(bars: &[DayBar], peak: u64, room: f32, height: f32) -> Geometry {
         .max()
         .unwrap_or(0) as f32
         * AXIS_ADVANCE;
-    Geometry {
+    let mut g = Geometry {
         left,
         right,
         base,
@@ -119,7 +119,27 @@ fn geometry(bars: &[DayBar], peak: u64, room: f32, height: f32) -> Geometry {
         ticks: labelled(bars.len(), right - left, tick_width + TICK_GAP),
         lines,
         tick_width,
+    };
+    g.ticks = spaced(&g);
+    g
+}
+
+/// The thinned ticks whose labels, once kept inside the plot by [`label_x`], still stand a
+/// label and a gap apart: `labelled` spaces the slots' centres, but an edge label moved inward
+/// can close on its neighbour. Counted back from the newest, which always keeps its label.
+fn spaced(g: &Geometry) -> Vec<usize> {
+    let need = g.tick_width + TICK_GAP;
+    let mut kept: Vec<usize> = Vec::with_capacity(g.ticks.len());
+    for &index in g.ticks.iter().rev() {
+        let clear = kept
+            .last()
+            .is_none_or(|&after| label_x(g, after) - label_x(g, index) >= need);
+        if clear {
+            kept.push(index);
+        }
     }
+    kept.reverse();
+    kept
 }
 
 fn rect(x: f32, y: f32, w: f32, h: f32) -> Bounds<Points> {
@@ -412,5 +432,25 @@ mod tests {
         let bars = [day(10), day(1_800_000)];
         let narrow = geometry(&bars, 1_800_000, 40.0, HEIGHT);
         assert!(label_x(&narrow, 1).is_finite());
+    }
+
+    #[test]
+    fn edge_labels_moved_inward_do_not_close_on_their_neighbour() {
+        // The captured phone's 354 pt chart, a 3M scale and 46 days ending 25 Nov: the newest
+        // label moves in from the edge and met 18 Nov's before thinning saw final positions.
+        let bars: Vec<DayBar> = (0..46)
+            .map(|at| DayBar {
+                fraction: 0.0,
+                tokens: if at == 45 { 2_800_000 } else { 0 },
+                tick: "25 Nov".into(),
+                hint: String::new(),
+            })
+            .collect();
+        let g = geometry(&bars, 2_800_000, 354.0, PHONE_HEIGHT);
+        assert_eq!(g.ticks.last(), Some(&45));
+        for pair in g.ticks.windows(2) {
+            let apart = label_x(&g, pair[1]) - label_x(&g, pair[0]);
+            assert!(apart >= g.tick_width + TICK_GAP, "{pair:?} {apart}");
+        }
     }
 }
