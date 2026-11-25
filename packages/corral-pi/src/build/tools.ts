@@ -341,7 +341,9 @@ export function createBuildEvidence(options: { context: BuildContext; git: Run; 
 }
 
 function requireRoutingKinds(input: unknown): void {
-  if (!input || typeof input !== "object" || !Array.isArray((input as { tasks?: unknown }).tasks)) return;
+  if (!input || typeof input !== "object" || !Array.isArray((input as { tasks?: unknown }).tasks)) {
+    throw new Error("Board plan tasks must be an array with an explicit routing-kind decision for each task.");
+  }
   for (const task of (input as { tasks: unknown[] }).tasks) {
     if (!task || typeof task !== "object") continue; // The schema reports malformed tasks.
     const { key, kind } = task as { key?: unknown; kind?: unknown };
