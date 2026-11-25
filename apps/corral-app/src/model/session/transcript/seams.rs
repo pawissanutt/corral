@@ -19,6 +19,11 @@ pub struct TranscriptSeams {
     /// Newer items of the last resident record that were paged out. Include these in
     /// end-relative item keys so evicting a fragment doesn't rename a visible item.
     pub suffix: Option<(String, usize)>,
+    /// Empty branch scans skipped on the way to this window. Count the work, not
+    /// empty payloads, when bounding a later re-seek.
+    pub skipped: usize,
+    /// Consecutive empty cursors consumed at the shared older edge (no payload).
+    pub empty_cursors: BTreeSet<String>,
     // A moved physical cut inside a displayed block must not split the reader's item anchor
     // from its bubble. The oldest cut (which protects a future prepend) is never suppressed.
     joins: BTreeSet<String>,
@@ -353,6 +358,8 @@ pub(crate) fn preserve_anchors(
                 starts,
                 joins: BTreeSet::new(),
                 suffix: replacement.transcript_seams.suffix.take(),
+                skipped: replacement.transcript_seams.skipped,
+                empty_cursors: Default::default(),
                 tools,
             };
             let interior: BTreeSet<_> = held_layout

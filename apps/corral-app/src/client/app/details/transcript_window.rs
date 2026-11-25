@@ -36,6 +36,7 @@ struct Read {
 }
 struct Seek {
     remaining: usize,
+    skipped: usize,
     path: Vec<Bookmark>,
     pages: Vec<DetailReply>,
     matched: bool,
@@ -522,7 +523,9 @@ impl AppState {
                 return fail(self, &read);
             }
             read.seek = Some(Seek {
-                remaining: path.len().saturating_sub(1) + held.pages.len() + LIMIT,
+                skipped: 0,
+                remaining: (path.len().saturating_sub(1) + held.pages.len() + LIMIT)
+                    .saturating_add(held.transcript_seams.skipped),
                 path: vec![],
                 pages: vec![],
                 matched: false,
@@ -560,6 +563,8 @@ impl AppState {
             }
             // An empty transport page adds no rows. Move the boundary without evicting any.
             let mut replacement = held;
+            replacement.transcript_seams.skipped =
+                replacement.transcript_seams.skipped.saturating_add(1);
             if let Some(DetailBody::Session(p)) = &mut replacement.merged {
                 p.older = next.clone();
             }
@@ -581,11 +586,16 @@ impl AppState {
             if seek.path.iter().any(|b| b.cursor == read.cursor) {
                 return fail(self, &read);
             }
-            seek.path.push(Bookmark {
-                cursor: read.cursor.clone(),
-                suffix: None,
-            });
-            seek.pages.push(page);
+            let prior_pages = seek.pages.len();
+            super::details::transcript::retain_page(&mut seek.pages, page);
+            if seek.pages.len() > prior_pages {
+                seek.path.push(Bookmark {
+                    cursor: read.cursor.clone(),
+                    suffix: None,
+                });
+            } else {
+                seek.skipped += 1;
+            }
             while seek.pages.len() > limit || payload(&seek.pages) > MAX_DETAIL_BYTES {
                 let index = seek.path.len() - seek.pages.len();
                 let (left, right) = seek.path.split_at_mut(index + 1);
@@ -594,6 +604,7 @@ impl AppState {
             let Some(mut replacement) = assemble(target.clone(), seek.pages.clone()) else {
                 return fail(self, &read);
             };
+            replacement.transcript_seams.skipped = seek.skipped;
             if feed.with_untracked(|f| {
                 compatible_anchor(f, &held, &mut replacement, read.intent.anchor.as_deref())
             }) {
@@ -638,9 +649,10 @@ impl AppState {
         let (base, mut path) = if let Some(seek) = read.seek.take() {
             // This fresh window has already passed the cross-snapshot anchor check.
             // The retried directional step is relative to it, not to the stale pages.
-            let Some(base) = assemble(target.clone(), seek.pages) else {
+            let Some(mut base) = assemble(target.clone(), seek.pages) else {
                 return fail(self, &read);
             };
+            base.transcript_seams.skipped = seek.skipped;
             (base, seek.path)
         } else {
             (held, path)
@@ -648,7 +660,14 @@ impl AppState {
         let mut pages = base.pages.clone();
         let newer = matches!(read.intent.step, ReaderStep::Newer);
         if newer {
-            path.pop();
+            // This bookmark may skip empty branch scans. Remember the request for
+            // the adjacent resident page, not the raw replay cursor before the gap.
+            let mut page = page;
+            if let Some(bookmark) = path.pop()
+                && let Some(DetailBody::Session(part)) = page.body.as_mut()
+            {
+                part.older = bookmark.cursor;
+            }
             pages.insert(0, page);
         } else {
             pages.push(page);
@@ -669,6 +688,7 @@ impl AppState {
             return fail(self, &read);
         };
         replacement.transcript_seams.suffix = path.last().and_then(|b| b.suffix.clone());
+        replacement.transcript_seams.skipped = base.transcript_seams.skipped;
         // In a short viewport the row at its top can be on the very page
         // Show newer intentionally removes. In that case clamp to the first
         // surviving shared row instead of reporting that the branch changed.

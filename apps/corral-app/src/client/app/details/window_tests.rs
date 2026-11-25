@@ -185,6 +185,65 @@ fn detached_reader_slides_three_pages_across_seven_and_latest_cancels_a_pending_
 }
 
 #[test]
+fn empty_branch_pages_advance_without_evicting_the_only_visible_anchor() {
+    let runtime = nsh_core::element::Runtime::default();
+    let _entered = runtime.enter();
+    let (mut app, feed) = fixture();
+    let target = target("B-1");
+    // The daemon scanned two batches of off-branch records between 7 and 4.
+    for (cursor, next) in [("6", "5"), ("5", "4")] {
+        let get = app.reader_step(feed, older(cursor, Some("7")));
+        reply(
+            &mut app,
+            feed,
+            get,
+            Some(cursor),
+            page("v1", &[], Some(next)),
+        );
+    }
+    for (id, held, next) in [
+        ("4", "7", "3"),
+        ("3", "4", "2"),
+        ("2", "3", "1"),
+        ("1", "2", ""),
+    ] {
+        let get = app.reader_step(feed, older(id, Some(held)));
+        reply(
+            &mut app,
+            feed,
+            get,
+            Some(id),
+            page(
+                "v1",
+                &[(id, &["saved"])],
+                (!next.is_empty()).then_some(next),
+            ),
+        );
+    }
+    assert_rows(&shown(feed).cache, &["1", "2", "3"]);
+    let get = app.reader_step(feed, intent(ReaderStep::Newer, Some("3")));
+    reply(
+        &mut app,
+        feed,
+        get,
+        Some("4"),
+        page("v1", &[("4", &["saved"])], Some("3")),
+    );
+    let get = app.reader_step(feed, intent(ReaderStep::Newer, Some("4")));
+    reply(
+        &mut app,
+        feed,
+        get,
+        None,
+        page("v1", &[("7", &["newest"])], Some("6")),
+    );
+    feed.with_untracked(|f| {
+        assert!(f.transcript_windows.is_empty());
+        assert_rows(f.detail(&target).unwrap(), &["3", "4", "7"]);
+    });
+}
+
+#[test]
 fn newer_reseek_keeps_the_source_it_finds_on_the_oldest_staged_page() {
     let runtime = nsh_core::element::Runtime::default();
     let _entered = runtime.enter();

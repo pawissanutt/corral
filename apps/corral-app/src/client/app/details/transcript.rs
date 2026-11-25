@@ -16,6 +16,19 @@ pub(in crate::client::app) fn session(page: &DetailReply) -> Option<&SessionPage
     }
 }
 
+/// A branch scan can advance without returning any messages. Keep its opaque
+/// continuation on the previous payload page, not an empty slot in the reader's
+/// window. An empty head is retained for its session metadata and etag.
+pub(in crate::client::app) fn retain_page(pages: &mut Vec<DetailReply>, page: DetailReply) {
+    if let Some(empty) = session(&page).filter(|p| p.messages.is_empty())
+        && let Some(DetailBody::Session(edge)) = pages.last_mut().and_then(|p| p.body.as_mut())
+    {
+        edge.older.clone_from(&empty.older);
+    } else {
+        pages.push(page);
+    }
+}
+
 /// Pages arrive newest first, each in chronological order. The older page may end with
 /// the beginning of a record whose remainder is at the start of the newer page.
 pub(in crate::client::app) fn prepend(newer: &mut SessionPage, mut older: SessionPage) {
@@ -176,7 +189,18 @@ impl AppState {
         if changed {
             return self.transcript_conflict(feed, key, id, request.target);
         }
-        if next.is_some() && next == request.page {
+        if next.is_some()
+            && (next == request.page
+                || (walking
+                    && current.messages.is_empty()
+                    && feed.with_untracked(|f| {
+                        next.as_ref().is_some_and(|n| {
+                            f.details
+                                .get(key)
+                                .is_some_and(|c| c.transcript_seams.empty_cursors.contains(n))
+                        })
+                    })))
+        {
             return self.invalid_transcript(
                 feed,
                 key,
@@ -370,6 +394,13 @@ impl AppState {
         pages: Vec<DetailReply>,
         publication: Publication,
     ) {
+        let response = pages.last().map(value);
+        let scanned = pages.len();
+        let mut resident = Vec::with_capacity(scanned);
+        for page in pages {
+            retain_page(&mut resident, page);
+        }
+        let pages = resident;
         let Some(mut newest) = pages.first().and_then(session).cloned() else {
             self.invalid_transcript(feed, key, id, "Missing transcript page.".into());
             return;
@@ -406,6 +437,7 @@ impl AppState {
             stale: false,
             error: None,
         };
+        replacement.transcript_seams.skipped = scanned - replacement.pages.len();
         if matches!(publication, Publication::Replace { preserve: true, .. })
             && feed.with_untracked(|feed| {
                 feed.details
@@ -434,15 +466,26 @@ impl AppState {
         let reread = self.detail_reread.remove(key);
         feed.update(|feed| {
             feed.settle_session(target, reread);
-            let response = replacement.pages.last().map(value);
             if let Some(cache) = feed.details.get_mut(key) {
                 if matches!(publication, Publication::Prepend) {
                     if let (Some(DetailBody::Session(held)), Some(DetailBody::Session(older))) =
                         (&mut cache.merged, replacement.merged)
                     {
+                        if older.messages.is_empty() {
+                            cache
+                                .transcript_seams
+                                .empty_cursors
+                                .extend(held.older.clone());
+                        } else {
+                            cache.transcript_seams.empty_cursors.clear();
+                        }
                         prepend(held, older);
                     }
-                    cache.pages.extend(replacement.pages);
+                    let before = cache.pages.len();
+                    for page in replacement.pages {
+                        retain_page(&mut cache.pages, page);
+                    }
+                    cache.transcript_seams.skipped += before + scanned - cache.pages.len();
                     cache.loading = false;
                     cache.stale = false;
                     cache.error = None;
