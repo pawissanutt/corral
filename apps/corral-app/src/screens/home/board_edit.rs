@@ -19,6 +19,12 @@ use crate::ui::tokens::{FONT_TEXT, Token, color};
 use super::board::{Cells, GAP};
 use super::parts::{surface, words};
 
+/// The name row's height, the right edge's width and a head button's side, in points: at the
+/// least board that resizes by dragging, a two-column number keeps its five buttons on a line.
+const HEAD: f32 = 28.0;
+const EDGE: f32 = 14.0;
+const TOOL: f32 = 22.0;
+
 /// The widget being moved and where it would drop now.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) struct Moving {
@@ -134,17 +140,23 @@ pub(super) fn handles(
     cells: Cells,
 ) -> AnyElement {
     let follows = computed(move || spans_follow(width.get()));
-    let head = view()
+    // The name and grip take a row of their own, so a two-column number keeps its name and a
+    // target to drag by; the buttons sit under it, clear of the right edge.
+    let name = view()
         .flex_row()
-        .items_center()
-        .gap(px(2.0))
-        .h(px(30.0))
-        .pl(px(4.0))
-        .pr(px(4.0))
+        .h(px(HEAD))
+        .px(px(4.0))
         .bg(color(Token::Surface2))
         .border_b_1()
         .border_color(color(Token::Rule2))
-        .child(grip(app, widget, moving, cells))
+        .child(grip(app, widget, moving, cells));
+    let tools = view()
+        .flex_row()
+        .items_center()
+        .gap(px(2.0))
+        .pl(px(4.0))
+        .pr(px(EDGE + 2.0))
+        .py(px(2.0))
         .child(tool("←", "Move earlier", "earlier", widget, move || {
             app.board.change(|b| b.step(widget, -1));
         }))
@@ -173,7 +185,8 @@ pub(super) fn handles(
         .border_dashed()
         .border_color(color(Token::Focus))
         .bg(color(Token::Surface))
-        .child(head)
+        .child(name)
+        .child(tools)
         // Only where a span shows as itself does the edge follow the pointer; narrower, the
         // buttons still resize.
         .child(dynamic(move || {
@@ -301,10 +314,10 @@ fn edge(app: AppState, widget: Widget, item: ReadSignal<Item>, width: Signal<f32
     view()
         .test_id(&format!("board-resize-{}", widget.slug()))
         .absolute()
-        .top(px(30.0))
+        .top(px(HEAD))
         .bottom(px(0.0))
         .right(px(0.0))
-        .w(px(14.0))
+        .w(px(EDGE))
         .items_center()
         .justify_center()
         .cursor(Cursor::ColResize)
@@ -348,8 +361,8 @@ fn tool(
         .accessible(true)
         .cursor_pointer()
         .flex_shrink_0()
-        .w(px(24.0))
-        .h(px(24.0))
+        .w(px(TOOL))
+        .h(px(TOOL))
         .rounded(px(5.0))
         .items_center()
         .justify_center()

@@ -244,6 +244,27 @@ fn customize_arranges_the_board_and_keeps_it_on_this_device() {
     );
 }
 
+/// Just above the width where numbers keep their two columns, Customize hid every number's
+/// name behind its buttons: the name and grip keep a row, and the buttons stay clear of the edge.
+#[test]
+fn a_narrow_board_keeps_each_numbers_name_and_buttons_in_customize() {
+    let mut config = desktop();
+    config.viewport = Size::new(Points(1200.0), Points(900.0));
+    let mut app = preview(config);
+    app.press("id:btn-board-edit").unwrap();
+    app.wait_for("id:board-tray").unwrap();
+    let board = bounds(&app, "home-dashboard").size.width.0;
+    assert!((960.0..1000.0).contains(&(board - 12.0)), "board {board}");
+    let grip = bounds(&app, "board-grip-stat-needs");
+    assert!(grip.size.width.0 >= 100.0, "grip {:?}", grip.size);
+    let remove = bounds(&app, "btn-board-remove-stat-needs");
+    let edge = bounds(&app, "board-resize-stat-needs");
+    assert!(
+        remove.origin.x.0 + remove.size.width.0 <= edge.origin.x.0,
+        "Remove {remove:?} under the edge {edge:?}"
+    );
+}
+
 /// A board kept on this device is the one Home opens with, and with Needs you off the board the
 /// keys no longer open its hidden cards.
 #[test]
