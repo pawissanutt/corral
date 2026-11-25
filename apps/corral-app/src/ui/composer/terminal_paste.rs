@@ -271,7 +271,15 @@ pub(super) fn bind(
                 let source = app.source_revision.get_untracked();
                 if let Some(copy) = cache.take(source) {
                     match copy {
-                        Ok(text) => insert(app, &session, entry, selection, before, range, &text),
+                        Ok(text) => insert(
+                            app,
+                            &session,
+                            entry,
+                            selection,
+                            before,
+                            range,
+                            &app.fold_paste(&session, &text),
+                        ),
                         Err(_) => app.toast("Clipboard paste is too large."),
                     }
                     return;
@@ -295,9 +303,30 @@ pub(super) fn bind(
                     }
                     match result {
                         Ok(Ok(Some(paste))) if !paste.text.is_empty() => {
-                            insert(app, &session, entry, selection, before, range, &paste.text);
+                            insert(
+                                app,
+                                &session,
+                                entry,
+                                selection,
+                                before,
+                                range,
+                                &app.fold_paste(&session, &paste.text),
+                            );
                         }
-                        Ok(Ok(Some(paste))) => stage_paste(app, &session, attach, &paste),
+                        Ok(Ok(Some(paste))) => {
+                            let markers = stage_paste(app, &session, attach, &paste);
+                            if !markers.is_empty() {
+                                insert(
+                                    app,
+                                    &session,
+                                    entry,
+                                    selection,
+                                    before,
+                                    range,
+                                    &markers.join(" "),
+                                );
+                            }
+                        }
                         Ok(Err(ReadError::TooLarge)) => app.toast("Clipboard paste is too large."),
                         Ok(Err(ReadError::Timeout)) => app.toast("Clipboard read timed out."),
                         Ok(Ok(None)) | Err(_) => {}

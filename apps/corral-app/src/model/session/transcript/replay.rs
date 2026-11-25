@@ -560,7 +560,10 @@ fn message(
             return shown;
         }
         if let Some((from, body)) = said.and_then(bubbles::peer_message) {
-            let lead = vec![span(from.to_owned()).bold(), span(" → parent").dim()];
+            let lead = vec![
+                span(from.to_owned()).bold(),
+                span(format!(" → {}", bubbles::peer_recipient(cx.id))).dim(),
+            ];
             let mut shown = bubbles::bubble(
                 message.id.clone(),
                 bubbles::head(lead, at.as_deref()),

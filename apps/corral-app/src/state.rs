@@ -106,6 +106,8 @@ pub struct AppState {
     /// What is staged for each session's next message, shared by Ask and the session page like
     /// the draft. In memory only; it outlives a closed Ask so a picker answering late still lands.
     pub ask_staged: Signal<BTreeMap<Id, Vec<assistant::Staged>>>,
+    /// Long pasted texts each session's draft folds into "[paste #k …]" markers, in memory only; expanded when the message is sent.
+    pub ask_pastes: Signal<BTreeMap<Id, Vec<String>>>,
     /// The inline link or path field open in a session composer's foot, if any.
     pub ask_field: Signal<Option<(Id, assistant::AttachField)>>,
     /// The open field's text; never persisted, never logged.
@@ -301,6 +303,7 @@ impl AppState {
             inspector: signal(true),
             project_context_removed: signal(None),
             ask_staged: signal(BTreeMap::new()),
+            ask_pastes: signal(BTreeMap::new()),
             ask_field: signal(None),
             ask_field_text: signal(String::new()),
             ask_field_error: signal(None),
@@ -598,6 +601,7 @@ impl AppState {
                 self.unattach(None, &upload);
             }
             self.ask_staged.set(BTreeMap::new());
+            self.ask_pastes.set(BTreeMap::new());
             self.ask_context.set(None);
             self.project_context_removed.set(None);
             self.change(|nav| {

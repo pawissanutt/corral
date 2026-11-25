@@ -8,7 +8,7 @@
 //! Each session keeps its own staged items, so what is staged on one session page never goes
 //! with another session's message.
 
-use corral_protocol::attachment::ATTACHMENTS_PER_MESSAGE;
+use corral_protocol::attachment::{ATTACHMENTS_PER_MESSAGE, AttachmentKind};
 use nsh_core::file_dialog::FileFilter;
 use nsh_core::image::ImageData;
 use nsh_core::picker::{FilePickRequest, PickRequest, PickedFile};
@@ -19,6 +19,16 @@ use crate::client::requests;
 use crate::model::assistant::{self, AttachField, PickKind, Staged};
 use crate::model::daemon::Link;
 use crate::model::{Form, Id};
+
+fn is_image(item: &Staged) -> bool {
+    matches!(
+        item,
+        Staged::Upload {
+            kind: AttachmentKind::Image,
+            ..
+        }
+    )
+}
 
 /// Saved images are scaled to fit this edge and kept in a format every browser and server
 /// takes (HEIC and TIFF become JPEG).
@@ -115,10 +125,11 @@ impl AppState {
     /// is, any other pasted file as a text file, and each file copied in a file manager is read
     /// from its path on this device as a typed one is. Refused visibly when corrald cannot take an
     /// upload now.
-    pub fn paste(&self, session: &Id, paste: &PasteEvent) {
+    pub fn paste(&self, session: &Id, paste: &PasteEvent) -> Vec<String> {
+        let before = self.staged_images(session);
         if let Some(refusal) = self.upload_refusal(session) {
             self.toast(refusal);
-            return;
+            return Vec::new();
         }
         let (images, others): (Vec<_>, Vec<_>) = paste
             .files
@@ -156,6 +167,48 @@ impl AppState {
             }
         }
         self.toast_refusals(refusals);
+        (before + 1..=self.staged_images(session))
+            .map(assistant::image_marker)
+            .collect()
+    }
+
+    fn staged_images(&self, session: &Id) -> usize {
+        self.ask_staged.with_untracked(|staged| {
+            staged
+                .get(session)
+                .into_iter()
+                .flatten()
+                .filter(|item| is_image(item))
+                .count()
+        })
+    }
+
+    pub fn fold_paste(&self, session: &Id, text: &str) -> String {
+        if !assistant::is_long_paste(text) {
+            return text.to_owned();
+        }
+        let mut k = 0;
+        self.ask_pastes.update(|pastes| {
+            let pastes = pastes.entry(session.clone()).or_default();
+            pastes.push(text.to_owned());
+            k = pastes.len();
+        });
+        assistant::paste_marker(k, text)
+    }
+
+    pub fn expand_pastes(&self, session: &Id, text: &str) -> String {
+        self.ask_pastes.with_untracked(|pastes| {
+            pastes.get(session).map_or_else(
+                || text.to_owned(),
+                |pastes| assistant::expand_pastes(text, pastes),
+            )
+        })
+    }
+
+    pub fn clear_pastes(&self, session: &Id) {
+        self.ask_pastes.update(|pastes| {
+            pastes.remove(session);
+        });
     }
 
     fn toast_refusals(&self, refusals: Vec<String>) {
@@ -206,17 +259,31 @@ impl AppState {
     /// is named; an upload's bytes and its unattached server copy are discarded.
     pub(crate) fn unattach(&self, session: Option<&Id>, key: &Id) {
         let mut removed = Vec::new();
+        let mut images = Vec::new();
         self.ask_staged.update(|staged| {
             for (owner, items) in staged.iter_mut() {
                 if session.is_some_and(|session| session != owner) {
                     continue;
                 }
                 if let Some(at) = items.iter().position(|item| item.key() == key.as_str()) {
+                    if is_image(&items[at]) {
+                        images.push((
+                            owner.clone(),
+                            1 + items[..at].iter().filter(|item| is_image(item)).count(),
+                        ));
+                    }
                     removed.push(items.remove(at));
                 }
             }
             staged.retain(|_, items| !items.is_empty());
         });
+        for (owner, k) in images {
+            let draft = self.draft_of(&owner);
+            let next = assistant::drop_image_marker(&draft, k);
+            if next != draft {
+                self.set_draft(owner, next);
+            }
+        }
         if self.fixture() {
             return;
         }

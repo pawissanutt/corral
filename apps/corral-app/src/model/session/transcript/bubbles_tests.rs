@@ -236,3 +236,12 @@ fn an_answer_from_its_card_is_not_sent_automatically() {
     ));
     assert_eq!(message.tag, None);
 }
+
+#[test]
+fn a_parent_message_in_a_child_conversation_names_the_child() {
+    use super::bubbles::peer_recipient;
+    use crate::model::Id;
+
+    assert_eq!(peer_recipient(&Id::from("B-test/child/worker")), "worker");
+    assert_eq!(peer_recipient(&Id::from("B-test")), "parent");
+}

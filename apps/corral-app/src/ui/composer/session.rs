@@ -60,20 +60,17 @@ fn send(
 ) {
     let ready = composer.with_untracked(|composer| {
         let composer = composer.as_ref()?;
-        let button = [Some(&composer.send), composer.queue.as_ref()]
-            .into_iter()
-            .flatten()
+        let button = std::iter::once(&composer.send)
+            .chain(composer.queue.as_ref())
             .find(|button| button.policy == policy)?;
         let giving = matches!(composer.mode, SendMode::Reason | SendMode::Answer);
-        button
-            .unavailable
-            .is_none()
+        (button.unavailable.is_none() && (giving || !composer.draft.trim().is_empty()))
             .then(|| (composer.draft.clone(), giving))
     });
-    let Some((text, giving)) = ready.filter(|(text, giving)| *giving || !text.trim().is_empty())
-    else {
+    let Some((text, giving)) = ready else {
         return;
     };
+    let text = app.expand_pastes(id, &text);
     if let Some(ask) = ask.filter(|_| !giving) {
         super::send_ask(app, ask, id, text, policy);
         return;
@@ -100,8 +97,11 @@ fn send(
         },
         ask.is_some(),
     );
-    if carried && sent {
-        app.clear_staged(id);
+    if sent {
+        app.clear_pastes(id);
+        if carried {
+            app.clear_staged(id);
+        }
     }
 }
 

@@ -2,7 +2,8 @@
 //! staged attachments with the File control, the images and files pasted into its field and the
 //! line saying why Send waits on them, which Ask offers always and a session page while its host
 //! takes attachments; and what Ask adds: the removable context and project chips and the surface
-//! Ask opens in. Pasted text goes into the field as it was copied. Ask's draft is its session's
+//! Ask opens in. Long pastes fold to `[paste #k …]` until send. A pasted image
+//! leaves an `[Image #n]` marker at the caret. Ask's draft is its session's
 //! own (`draft` keeps it on this device), so the session page shows the same words. A message
 //! goes out as `session.send`, Ask's chips' ids as its first line and the session's staged
 //! attachments as its refs.
@@ -187,8 +188,9 @@ fn attaches(paste: &PasteEvent) -> bool {
     paths || (!paste.files.is_empty() && paste.text.trim().is_empty())
 }
 
-/// A paste into session `id`'s composer, whose field inserts nothing itself (`entry`): text goes
-/// in exactly as it was copied; images and files are staged for the message, refused visibly
+/// A paste into session `id`'s composer, whose field inserts nothing itself (`entry`): long text folds
+/// to a `[paste #k …]` marker expanded on send; images leave an `[Image #n]` marker at the
+/// caret. Images and files are staged for the message, refused visibly
 /// where the session takes no attachments now, where a copied file's text (its path) goes in
 /// instead. The terminal leaves bracketed text paste to the field.
 fn paste(app: AppState, id: &Id, attach: Attach, entry: ElementRef, paste: &PasteEvent) {
@@ -201,16 +203,22 @@ fn paste(app: AppState, id: &Id, attach: Attach, entry: ElementRef, paste: &Past
     };
     if !attaches(paste) || (!attach.offered.get_untracked() && text.is_some()) {
         if let Some(text) = text {
-            entry.insert_text(text);
+            entry.insert_text(app.fold_paste(id, &text));
         }
         return;
     }
-    stage_paste(app, id, attach, paste);
+    let markers = stage_paste(app, id, attach, paste);
+    if !markers.is_empty() {
+        entry.insert_text(markers.join(" "));
+    }
 }
 
-fn stage_paste(app: AppState, id: &Id, attach: Attach, paste: &PasteEvent) {
+fn stage_paste(app: AppState, id: &Id, attach: Attach, paste: &PasteEvent) -> Vec<String> {
     match attach.refusal.get_untracked() {
-        Some(why) => app.toast(format!("Not attached: {why}.")),
+        Some(why) => {
+            app.toast(format!("Not attached: {why}."));
+            Vec::new()
+        }
         None => app.paste(id, paste),
     }
 }
@@ -275,6 +283,7 @@ fn send_ask(app: AppState, ask: Ask, id: &Id, text: String, policy: SendPolicy) 
         true,
     ) {
         app.clear_staged(id);
+        app.clear_pastes(id);
     }
 }
 

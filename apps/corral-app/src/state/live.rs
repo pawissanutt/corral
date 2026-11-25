@@ -71,6 +71,17 @@ impl AppState {
         });
     }
 
+    pub(crate) fn draft_of(&self, session: &Id) -> String {
+        self.session
+            .with_untracked(|state| state.ui(session.as_str()).draft.clone())
+    }
+
+    pub(crate) fn set_draft(&self, session: Id, text: String) {
+        self.reduce(self.session, move |state, feed, _, _| {
+            state.act(crate::model::session::Action::Draft { session, text }, feed)
+        });
+    }
+
     /// Tracked: why an input or a slash command cannot run during a thread handoff.
     pub fn session_input_block(&self, session: &Id, ask: bool) -> Option<&'static str> {
         self.feed.with(|feed| {

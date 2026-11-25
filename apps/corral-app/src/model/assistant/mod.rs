@@ -8,6 +8,7 @@ mod ask;
 mod attach;
 mod live;
 mod live_act;
+mod markers;
 mod project;
 mod views;
 
@@ -16,6 +17,7 @@ pub use ask::*;
 pub use attach::*;
 pub use live::*;
 pub use live_act::*;
+pub use markers::*;
 pub use project::*;
 pub use views::*;
 

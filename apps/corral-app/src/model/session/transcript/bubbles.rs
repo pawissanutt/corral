@@ -415,7 +415,7 @@ pub(super) fn child_report(text: &str) -> Option<ChildReport> {
     })
 }
 
-/// A message a child sent its parent, as the fleet frames it (`frame` in
+/// An incoming peer message as the fleet frames it (`frame` in
 /// `extensions/fleet/runtime.ts`): the sender, then the words.
 pub(super) fn peer_message(text: &str) -> Option<(&str, &str)> {
     let rest = text.strip_prefix("[Peer message #")?;
@@ -611,6 +611,10 @@ fn prose(text: &str) -> MessageItem {
 /// The child a child conversation's scope names (`<session>/child/<child>`), with its parent.
 pub(super) fn child_scope(id: &Id) -> Option<(&str, &str)> {
     id.as_str().split_once("/child/")
+}
+
+pub(super) fn peer_recipient(id: &Id) -> &str {
+    child_scope(id).map_or("parent", |(_, child)| child)
 }
 
 /// The note on a child's brief: what it owns and what it may not do.
