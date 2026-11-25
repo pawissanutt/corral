@@ -89,6 +89,7 @@ fn send(
             }
         }
     };
+    let text = super::dock_message(app, id, text, giving);
     let carried = !attachments.is_empty();
     let sent = app.session_input(
         Action::Send {

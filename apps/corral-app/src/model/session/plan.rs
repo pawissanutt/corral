@@ -31,12 +31,15 @@ pub struct PlanUi {
     pub step: Option<String>,
     /// The Plan ledger sheet is open.
     pub ledger: bool,
+    /// The ledger occupies the main page when opened from the side pane.
+    pub in_page: bool,
 }
 
 impl PlanUi {
     pub const EMPTY: Self = Self {
         step: None,
         ledger: false,
+        in_page: false,
     };
 }
 
@@ -45,6 +48,10 @@ impl PlanUi {
 pub enum PlanAction {
     /// Open the Plan ledger sheet, at a step when one is named.
     Open {
+        session: Id,
+        step: Option<String>,
+    },
+    OpenPage {
         session: Id,
         step: Option<String>,
     },
@@ -435,7 +442,7 @@ pub fn ledger(cx: &Cx<'_>) -> Option<Ledger> {
             .then(|| "No earlier plans kept by the host.".into()),
         history,
         reread: (unavailable.is_none() && !cache.is_some_and(|cache| cache.loading))
-            .then(|| Action::Refresh(target)),
+            .then_some(Action::Refresh(target)),
         read,
         unavailable,
         close: Action::Sidebar(SidebarAction::Plan(PlanAction::Close(cx.id.clone()))),
@@ -458,10 +465,12 @@ fn reread(feed: &Feed, session: &Id) -> Effect {
 }
 
 pub(super) fn act(state: &mut State, action: PlanAction, feed: &Feed) -> Vec<Effect> {
+    let in_page = matches!(action, PlanAction::OpenPage { .. });
     match action {
-        PlanAction::Open { session, step } => {
+        PlanAction::Open { session, step } | PlanAction::OpenPage { session, step } => {
             let plan = &mut state.ui_mut(&session).sidebar.plan;
             plan.ledger = true;
+            plan.in_page = in_page;
             if step.is_some() {
                 plan.step = step;
             }
@@ -477,10 +486,43 @@ pub(super) fn act(state: &mut State, action: PlanAction, feed: &Feed) -> Vec<Eff
             }
         }
         PlanAction::Close(session) => {
-            state.ui_mut(&session).sidebar.plan.ledger = false;
+            let plan = &mut state.ui_mut(&session).sidebar.plan;
+            plan.ledger = false;
+            plan.in_page = false;
             Vec::new()
         }
     }
+}
+
+#[test]
+fn docked_plan_step_opens_with_selection_in_page_not_as_a_sheet() {
+    let mut state = State::default();
+    let feed = Feed::default();
+    let session = Id::new("B-1");
+    act(
+        &mut state,
+        PlanAction::OpenPage {
+            session: session.clone(),
+            step: Some("S1".into()),
+        },
+        &feed,
+    );
+    let plan = &state.ui(&session).sidebar.plan;
+    assert!(plan.ledger && plan.in_page);
+    assert_eq!(plan.step.as_deref(), Some("S1"));
+    act(&mut state, PlanAction::Close(session.clone()), &feed);
+    let plan = &state.ui(&session).sidebar.plan;
+    assert!(!plan.ledger && !plan.in_page);
+    act(
+        &mut state,
+        PlanAction::Open {
+            session: session.clone(),
+            step: None,
+        },
+        &feed,
+    );
+    let plan = &state.ui(&session).sidebar.plan;
+    assert!(plan.ledger && !plan.in_page);
 }
 
 /// `Plan ledger` and `Reread plan` among the Inspect rows, while the host serves a plan.

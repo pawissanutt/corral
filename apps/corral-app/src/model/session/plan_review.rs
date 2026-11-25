@@ -146,6 +146,17 @@ pub fn compact(feed: &Feed, state: &State, id: &Id, env: Env) -> SessionPage {
     page
 }
 
+impl SessionPage {
+    pub fn docked(feed: &Feed, state: &State, id: &Id, env: Env, panel: &super::Panel) -> Self {
+        let mut page = compact(feed, state, id, env);
+        let facts = super::Facts::of(feed, id);
+        let cx = Cx::new(feed, state.ui(id), id, env, &facts);
+        page.details = crate::model::dock::details(&cx, panel);
+        page.fetches.extend(super::sidebar::fetches(&cx, panel));
+        page
+    }
+}
+
 /// The plan review the owner opened, as the host's state briefs it.
 fn opened<'a>(cx: &Cx<'a>) -> Option<&'a CardBrief> {
     cx.state?

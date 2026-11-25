@@ -9,7 +9,9 @@ pub(crate) mod models;
 mod share;
 mod unconnected;
 
-pub(crate) use attach::{chip_row, controls as attach_controls, field_row, plus, tray};
+pub(crate) use attach::{
+    chip_row, controls as attach_controls, dock_context, field_row, plus, tray,
+};
 
 use nsh_core::prelude::*;
 

@@ -720,3 +720,65 @@ fn build_opened_beside_stays_visible_after_navigation() {
     app.wait_for("id:conversation-beside").unwrap();
     app.wait_for("id:dock-transcript").unwrap();
 }
+
+#[test]
+fn docked_plan_and_file_open_in_page_without_replacing_the_pane() {
+    let mut app = preview(desktop(), &[]);
+    app.press("id:nav-sessions").unwrap();
+    app.press("id:agent-B-k3x9").unwrap();
+    app.press("id:list-sessions >> id:more-B-k3x9").unwrap();
+    app.wait_for("id:btn-open-beside").unwrap();
+    app.press("id:btn-open-beside").unwrap();
+    app.wait_for("id:dock-details-toggle").unwrap();
+    app.press("id:nav-tasks").unwrap();
+    app.press("id:dock-details-toggle").unwrap();
+    app.press("id:dock-pane >> id:details-changes").unwrap();
+    app.press("id:dock-pane >> id:details-agents").unwrap();
+    app.press("id:dock-pane >> id:side-step-0").unwrap();
+    app.wait_for("id:ledger").unwrap();
+    app.wait_for("id:dock-transcript").unwrap();
+    app.press("id:dock-pane >> id:details-changes").unwrap();
+    app.wait_for("id:dock-pane >> id:side-file-0").unwrap();
+    app.press("id:dock-pane >> id:side-file-0").unwrap();
+    app.wait_for("id:session-changes").unwrap();
+    app.wait_for("id:changes-file").unwrap();
+    assert_eq!(app.screen().count("id:ledger").unwrap(), 0);
+    app.wait_for("id:dock-tab-B-k3x9").unwrap();
+    app.wait_for("id:dock-transcript").unwrap();
+}
+
+#[test]
+fn dock_context_is_sent_by_the_pane_but_not_shared_with_ask() {
+    let mut app = preview(desktop(), &[]);
+    app.press("id:nav-sessions").unwrap();
+    app.press("id:agent-B-k3x9").unwrap();
+    app.press("id:agent-B-k3x9").unwrap();
+    app.wait_for("id:btn-dock-side").unwrap();
+    app.press("id:btn-dock-side").unwrap();
+    app.wait_for("id:btn-dock-attach-page").unwrap();
+    app.press("id:btn-dock-attach-page").unwrap();
+    app.wait_for("id:btn-dock-remove-context").unwrap();
+    app.press("id:nav-tasks").unwrap();
+    app.wait_for("id:btn-dock-remove-context").unwrap();
+    app.type_text("id:dock-pane >> id:field-message", "Review this context.")
+        .unwrap();
+    app.press("id:dock-pane >> id:btn-send").unwrap();
+    let page = nsh_app_corral::model::Live::Session(nsh_app_corral::model::Id::new("B-k3x9"));
+    let text = nsh_app_corral::model::assistant::with_context(
+        "Review this context.",
+        Some(&page.context(None)),
+        None,
+    );
+    let context = text.lines().next().unwrap();
+    app.wait_for(&format!("text:/^{context}/")).unwrap();
+    app.press("id:nav-home").unwrap();
+    app.wait_for("id:home-composer >> id:ask-input").unwrap();
+    app.wait_for("id:dock-pane >> id:btn-dock-remove-context")
+        .unwrap();
+    assert_eq!(
+        app.screen()
+            .count("id:home-composer >> id:btn-unchip")
+            .unwrap(),
+        0
+    );
+}

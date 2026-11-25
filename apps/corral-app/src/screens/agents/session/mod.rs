@@ -123,6 +123,8 @@ pub fn page(app: AppState, id: Id) -> AnyElement {
             shown.as_ref() == Some(&p.id) && matches!(p.body, Body::Chat(_) | Body::Log(_))
         })
     });
+    let plan_id = id.clone();
+    let ledger_open = computed(move || plan::in_page(app, &plan_id));
     let talk = view()
         .flex_1()
         .min_w(px(0.0))
@@ -181,11 +183,16 @@ pub fn page(app: AppState, id: Id) -> AnyElement {
         })
         .child(header::head(app, page, wide))
         .child(banner(app, page))
+        .child(when(move || ledger_open.get(), {
+            let id = id.clone();
+            move || plan::page(app, id.clone())
+        }))
         .child(
             view()
                 .flex_1()
                 .min_h(px(0.0))
                 .flex_row()
+                .style_when(move || ledger_open.get(), |s| s.hidden())
                 .child(talk)
                 .child(dynamic(move || match panel.get() {
                     Panel::Closed => None,
@@ -303,6 +310,9 @@ pub fn compact(app: AppState, id: Id, page: Memo<SessionPage>, form: Compact) ->
             .min_h(px(0.0))
             .flex_col()
             .child(banner(app, page))
+            .when(form == Compact::Dock, |pane| {
+                pane.child(sidebar::dock_details(app, page))
+            })
             .child(
                 view()
                     .test_id(if ask {
@@ -403,8 +413,12 @@ pub fn ask_view(app: AppState, id: Id) -> Memo<SessionPage> {
     computed(move || {
         let env = app.env();
         app.feed.with(|feed| {
-            app.session
-                .with(|state| session::compact(feed, state, &id, env))
+            app.session.with(|state| match app.dock_panel() {
+                Some(panel) => {
+                    panel.with(|panel| SessionPage::docked(feed, state, &id, env, panel))
+                }
+                None => session::compact(feed, state, &id, env),
+            })
         })
     })
 }

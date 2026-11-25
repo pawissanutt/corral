@@ -93,6 +93,7 @@ pub struct AppState {
     pub refusal: Signal<Option<RefusalSheet>>,
     /// The real context "Ask about this" attached to the composer; cleared when Ask closes.
     pub ask_context: Signal<Option<ContextRef>>,
+    dock_ui: dock::DockUi,
     /// The one project scope per daemon store, persisted as `corral.scope`.
     pub scopes: Signal<crate::model::projects::Scopes>,
     /// A scope asked for before the daemon named its store.
@@ -290,6 +291,7 @@ impl AppState {
             confirm: signal(None),
             refusal: signal(None),
             ask_context: signal(None),
+            dock_ui: dock::DockUi::new(),
             scopes: signal(projects::load_scopes()),
             scope_pending: signal(launch_scope),
             inspector: signal(true),

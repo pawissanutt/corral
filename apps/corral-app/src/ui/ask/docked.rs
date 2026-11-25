@@ -70,6 +70,7 @@ pub(super) fn pane(app: AppState) -> AnyElement {
 }
 
 fn session(app: AppState, id: Id) -> AnyElement {
+    let app = app.for_dock();
     let page = ask_view(app, id.clone());
     let open = id.clone();
     let close = id.clone();

@@ -233,7 +233,7 @@ pub(super) fn head(app: AppState, page: Memo<SessionPage>, wide: Memo<bool>) -> 
         .border_color(color(Token::Rule))
         .flex_row()
         .items_center()
-        .gap(px(12.0))
+        .gap(px(8.0))
         .h(px(46.0))
         .px(px(18.0))
         .child(when(
@@ -295,10 +295,15 @@ pub(super) fn head(app: AppState, page: Memo<SessionPage>, wide: Memo<bool>) -> 
         .child(crate::shell::agents_trigger(app, "agents-open-head"))
         .child(views(app, page, wide))
         .child(details_button(app, page))
-        .child(crate::ui::kit::button::button(
+        .child(button_with(
             app,
             crate::model::dock::DOCK_SIDE,
             ButtonKind::Quiet,
+            ButtonOptions {
+                icon: Some(Icon::Split),
+                icon_only: true,
+                ..ButtonOptions::default()
+            },
             "btn-dock-side",
             move || app.dock_session(&page.with_untracked(|p| p.id.clone())),
         ))
@@ -404,7 +409,10 @@ fn facts(app: AppState, page: Memo<SessionPage>, header: Memo<Header>) -> AnyEle
     let session = untracked(|| page.with(|p| p.id.clone()));
     view()
         .flex_row()
-        .flex_shrink_0()
+        .when(form == Form::Terminal, |row| row.flex_shrink_0())
+        .when(form == Form::Desktop, |row| {
+            row.flex_shrink(1.0).min_w(px(0.0))
+        })
         .items_center()
         .gap(px(if form == Form::Terminal { 8.0 } else { 10.0 }))
         .child(needs_you(app, page, false))

@@ -157,6 +157,38 @@ fn step_row(app: AppState, step: &StepRow) -> AnyElement {
         .into_element()
 }
 
+pub(super) fn in_page(app: AppState, id: &Id) -> bool {
+    app.session
+        .with(|state| state.ui(id.as_str()).sidebar.plan.in_page)
+}
+
+/// The ledger opened by a link in the pane, in the main page instead of a window-wide sheet.
+pub(super) fn page(app: AppState, id: Id) -> AnyElement {
+    let close = id.clone();
+    let shown = computed(move || with_cx(app, &id, ledger));
+    view()
+        .test_id("ledger")
+        .flex_1()
+        .min_h(px(0.0))
+        .p(px(14.0))
+        .child(button(
+            app,
+            crate::model::dock::CLOSE_PLAN,
+            ButtonKind::Quiet,
+            "ledger-done",
+            move || {
+                run(
+                    app,
+                    Action::Sidebar(SidebarAction::Plan(PlanAction::Close(close.clone()))),
+                );
+            },
+        ))
+        .child(scroll().flex_1().min_h(px(0.0)).child(dynamic(move || {
+            shown.get().map(|ledger| untracked(|| body(app, &ledger)))
+        })))
+        .into_element()
+}
+
 /// The Plan ledger sheet of session `id`, open while its model says so.
 pub(super) fn sheet(app: AppState, id: Id) -> AnyElement {
     let opened = id.clone();
@@ -164,8 +196,10 @@ pub(super) fn sheet(app: AppState, id: Id) -> AnyElement {
     overlay::modal(
         app,
         move || {
-            app.session
-                .with(|state| state.ui(opened.as_str()).sidebar.plan.ledger)
+            app.session.with(|state| {
+                let plan = &state.ui(opened.as_str()).sidebar.plan;
+                plan.ledger && !plan.in_page
+            })
         },
         move || {
             run(

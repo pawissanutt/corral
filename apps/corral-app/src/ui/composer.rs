@@ -132,9 +132,10 @@ impl Attach {
         let built = computed(move || {
             let text = composer.with(|c| c.as_ref().map(|c| c.draft.clone()).unwrap_or_default());
             let staged = app.staged(&session);
+            let context = app.dock_panel().and_then(|_| app.dock_context(&session));
             let mut built = app
                 .feed
-                .with(|feed| assistant::composer(feed, &text, &staged, None, None));
+                .with(|feed| assistant::composer(feed, &text, &staged, context.as_ref(), None));
             if let Some(why) = refusal.get() {
                 for button in &mut built.attachments {
                     button.enabled = false;
@@ -233,6 +234,16 @@ fn page_refs(app: AppState, id: &Id, attach: Attach) -> Result<Vec<SendAttachmen
         .with_untracked(|feed| assistant::send_refs(&staged, feed))
 }
 
+fn dock_message(app: AppState, id: &Id, text: String, giving: bool) -> String {
+    if !giving
+        && app.dock_panel().is_some()
+        && let Some(context) = untracked(|| app.dock_context(id))
+    {
+        return assistant::with_context(&text, Some(&context), None);
+    }
+    text
+}
+
 /// Sends Ask's draft to session `id` as `session.send`: the chips' line first, the staged
 /// attachments as its refs (every upload ready), under a new command id the session model
 /// allocates. The draft clears at once; a refusal puts the words back with why.
@@ -286,6 +297,12 @@ fn above(app: AppState, id: &Id, ask: Option<Ask>, attach: Attach) -> AnyElement
     };
     if ask.is_some() {
         return draw();
+    }
+    if app.dock_panel().is_some() {
+        return view()
+            .child(crate::ui::ask::dock_context(app, id.clone(), attach.built))
+            .child(draw())
+            .into_element();
     }
     let shown = computed(move || {
         attach

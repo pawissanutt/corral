@@ -122,6 +122,42 @@ pub(super) fn panel(
     }
 }
 
+/// Details shares the dock with the conversation, never taking its place.
+pub(super) fn dock_details(app: AppState, page: Memo<SessionPage>) -> AnyElement {
+    let details = details_of(page);
+    dynamic(move || {
+        let shown = details.with(|details| details.as_ref().map(|d| d.shown))?;
+        Some(untracked(|| {
+            view()
+                .when(shown, |pane| pane.flex_1().min_h(px(0.0)))
+                .child(button(
+                    app,
+                    crate::model::dock::DETAILS,
+                    ButtonKind::Quiet,
+                    "dock-details-toggle",
+                    move || {
+                        run(
+                            app,
+                            crate::model::session::Action::Sidebar(
+                                crate::model::session::SidebarAction::Toggle,
+                            ),
+                        );
+                    },
+                ))
+                .when(shown, |pane| {
+                    pane.child(
+                        scroll()
+                            .flex_1()
+                            .min_h(px(0.0))
+                            .child(sections(app, details)),
+                    )
+                })
+                .into_element()
+        }))
+    })
+    .into_element()
+}
+
 /// The phone's sheet: Details over the page while it is open.
 pub(super) fn sheet(app: AppState, page: Memo<SessionPage>) -> AnyElement {
     let details = details_of(page);

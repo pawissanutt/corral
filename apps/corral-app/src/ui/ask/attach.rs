@@ -15,7 +15,7 @@ use crate::ui::atoms::control_height;
 use crate::ui::composer::copyable_input;
 use crate::ui::composer::state_mark;
 use crate::ui::icons::{Icon, icon};
-use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
+use crate::ui::kit::button::{ButtonKind, ButtonOptions, button, button_with};
 use crate::ui::kit::hint::hinted;
 use crate::ui::kit::marks::hue_ink;
 use crate::ui::term;
@@ -61,9 +61,60 @@ pub(crate) fn chip_row(app: AppState, built: Memo<Composer>) -> AnyElement {
     })
 }
 
+pub(crate) fn dock_context(app: AppState, session: Id, built: Memo<Composer>) -> AnyElement {
+    let chip = computed(move || built.with(|c| c.chip.clone()));
+    let available = computed(move || app.current_page_context().is_some());
+    let owner = session.clone();
+    view()
+        .child(when(
+            move || available.get(),
+            move || {
+                let session = owner.clone();
+                button(
+                    app,
+                    crate::model::dock::ATTACH_PAGE,
+                    ButtonKind::Quiet,
+                    "btn-dock-attach-page",
+                    move || {
+                        if let Some(context) = untracked(|| app.current_page_context()) {
+                            app.set_dock_context(&session, Some(context));
+                        }
+                    },
+                )
+            },
+        ))
+        .child(dynamic(move || {
+            let session = session.clone();
+            chip.get().map(|chip| {
+                untracked(|| {
+                    context_chip_with(
+                        app,
+                        &chip,
+                        Icon::Plans,
+                        "btn-dock-remove-context",
+                        move || app.set_dock_context(&session, None),
+                    )
+                })
+            })
+        }))
+        .into_element()
+}
+
 fn context_chip(app: AppState, context: &ContextChip, glyph: Icon, remove_id: &str) -> AnyElement {
-    let form = app.form;
     let remove = context.remove.action.clone();
+    context_chip_with(app, context, glyph, remove_id, move || {
+        act(app, remove.clone())
+    })
+}
+
+fn context_chip_with(
+    app: AppState,
+    context: &ContextChip,
+    glyph: Icon,
+    remove_id: &str,
+    remove: impl Fn() + 'static,
+) -> AnyElement {
+    let form = app.form;
     let remove_label = context.remove.label;
     let kind = text(context.kind.clone())
         .number_of_lines(1u32)
@@ -94,7 +145,7 @@ fn context_chip(app: AppState, context: &ContextChip, glyph: Icon, remove_id: &s
                 ButtonKind::Quiet,
                 ButtonOptions::default(),
                 remove_id,
-                move || act(app, remove.clone()),
+                remove,
             ))
             .child(note)
             .into_element();
@@ -126,7 +177,7 @@ fn context_chip(app: AppState, context: &ContextChip, glyph: Icon, remove_id: &s
                     app,
                     remove_id.into(),
                     remove_label.into(),
-                    move || act(app, remove.clone()),
+                    remove,
                 )),
         )
         .child(note)

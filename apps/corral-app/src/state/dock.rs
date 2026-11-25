@@ -6,7 +6,128 @@ use super::{AppState, switcher::pin_key};
 use crate::model::agents::switcher::StoreAgents;
 use crate::model::{DataState, Id, Overlay, dock, work::Press};
 
+use std::collections::BTreeMap;
+
+use corral_protocol::assistant::ContextRef;
+
+use crate::model::Destination;
+use crate::model::session::{Action, Panel, PlanAction, SidebarAction};
+
+type Contexts = BTreeMap<((bool, String), Id), ContextRef>;
+
+#[derive(Clone, Copy)]
+pub(super) struct DockUi {
+    contexts: Signal<Contexts>,
+    panel: Option<Signal<Panel>>,
+}
+
+impl DockUi {
+    pub(super) fn new() -> Self {
+        Self {
+            contexts: signal(BTreeMap::new()),
+            panel: None,
+        }
+    }
+}
+
 impl AppState {
+    /// A mounted pane's copy; never installed in the root AppState or saved.
+    pub fn for_dock(mut self) -> Self {
+        self.dock_ui.panel = Some(signal(Panel::default()));
+        self
+    }
+
+    pub fn dock_panel(&self) -> Option<Signal<Panel>> {
+        self.dock_ui.panel
+    }
+
+    pub fn session_press(&self, action: Action) {
+        if let Some(panel) = self.dock_panel() {
+            match action {
+                Action::Sidebar(SidebarAction::Toggle) => {
+                    panel.update(|panel| panel.open = Some(!panel.shown()));
+                    return;
+                }
+                Action::Sidebar(SidebarAction::Fold(section)) => {
+                    panel.update(|panel| {
+                        if !panel.folded.remove(&section) {
+                            panel.folded.insert(section);
+                        }
+                    });
+                    return;
+                }
+                _ => {}
+            }
+            if let Some(page) = dock::page_for(&action) {
+                self.open_live(page);
+            }
+        }
+        if let Some(crate::model::Live::Session(id)) = dock::page_for(&action)
+            && !matches!(action, Action::Sidebar(SidebarAction::Plan(_)))
+            && self
+                .session
+                .with_untracked(|state| state.ui(&id).sidebar.plan.in_page)
+        {
+            self.session_input(
+                Action::Sidebar(SidebarAction::Plan(PlanAction::Close(id))),
+                false,
+            );
+        }
+        self.session_input(action, false);
+    }
+
+    pub fn current_page_context(&self) -> Option<ContextRef> {
+        let live = self.live_page();
+        let artifact = (live.is_none() && self.destination() == Destination::Artifacts)
+            .then(|| {
+                self.artifacts.with(|state| {
+                    let reference = state
+                        .full
+                        .clone()
+                        .or_else(|| state.selected.clone())
+                        .or_else(|| {
+                            self.feed.with(|feed| {
+                                crate::model::artifacts::page(state, feed, self.form)
+                                    .results
+                                    .selected
+                            })
+                        });
+                    reference.map(|reference| (reference, state.section.clone()))
+                })
+            })
+            .flatten();
+        self.session.with(|session| {
+            dock::page_context(
+                live,
+                session,
+                artifact
+                    .as_ref()
+                    .map(|(id, section)| (id.as_str(), section.as_deref())),
+            )
+        })
+    }
+
+    pub fn dock_context(&self, id: &Id) -> Option<ContextRef> {
+        let source = self.dock_source()?;
+        self.dock_ui
+            .contexts
+            .with(|all| all.get(&(source, id.clone())).cloned())
+    }
+
+    pub fn set_dock_context(&self, id: &Id, context: Option<ContextRef>) {
+        let Some(source) = untracked(|| self.dock_source()) else {
+            return;
+        };
+        let key = (source, id.clone());
+        self.dock_ui.contexts.update(|all| {
+            if let Some(context) = context {
+                all.insert(key, context);
+            } else {
+                all.remove(&key);
+            }
+        });
+    }
+
     fn with_dock<T>(&self, read: impl FnOnce(Option<&StoreAgents>) -> T) -> T {
         let preview = self.data.get() == DataState::Fixture;
         let key = self.feed.with(|feed| pin_key(feed, preview));
@@ -84,10 +205,12 @@ impl AppState {
     }
 
     pub fn undock(&self, id: &Id) {
-        self.change_dock(|saved| {
+        if self.change_dock(|saved| {
             saved.undock(id.as_str());
             Ok(())
-        });
+        }) {
+            self.set_dock_context(id, None);
+        }
     }
 
     pub fn press_work(&self, press: Press) {
