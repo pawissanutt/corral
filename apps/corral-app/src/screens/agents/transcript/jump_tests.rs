@@ -1,3 +1,6 @@
+#[path = "follow_fixture.rs"]
+mod follow_fixture;
+
 use std::cell::RefCell;
 use std::rc::Rc;
 
