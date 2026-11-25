@@ -50,7 +50,7 @@ fn detected_top_level_commands_agree_with_candidate_help() {
         .map(|entry| entry.name.as_str())
         .collect();
     // Hidden commands are still callable and have real source anchors.
-    for hidden in ["pi-startup", "pipeline"] {
+    for hidden in ["board-plan", "pi-startup", "pipeline"] {
         assert!(detected.remove(hidden), "missing hidden command {hidden}");
     }
     println!("help (source-declared): {listed:?}\ndetected (non-hidden):   {detected:?}");
