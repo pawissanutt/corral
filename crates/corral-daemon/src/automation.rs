@@ -197,6 +197,30 @@ pub(crate) fn fence(state_dir: &Path) -> Result<Fence> {
         "automation lock is not a regular file"
     );
     lock.lock()?;
+    // A submitter can disappear while the host is awaiting preflight. Fence
+    // acquisition precedes every config save: revoke unconsumed grants before
+    // admitting a new scheduler pass or allowing the saved policy to change.
+    for entry in fs::read_dir(&dir)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        if name
+            .to_str()
+            .and_then(|s| s.strip_prefix(".admit-"))
+            .is_some_and(|nonce| {
+                nonce.len() == 32
+                    && nonce
+                        .bytes()
+                        .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+            })
+        {
+            match fs::remove_file(entry.path()) {
+                Ok(()) => (),
+                // The host won the one-shot admission race, before this save.
+                Err(error) if error.kind() == io::ErrorKind::NotFound => (),
+                Err(error) => return Err(error).context("revoke abandoned automation admission"),
+            }
+        }
+    }
     File::open(state_dir)?.sync_all()?;
     Ok(Fence { dir, _lock: lock })
 }
@@ -207,7 +231,7 @@ fn pass(
     store: &Store,
     config: &Config,
     manifest: Option<&activation::Manifest>,
-    now: Timestamp,
+    clock: impl Fn() -> Timestamp,
     send: &mut impl FnMut(&str, &str, Option<&str>, &str, &str) -> Delivery,
 ) -> Result<bool> {
     let rules = &config.automation.rules;
@@ -234,7 +258,6 @@ fn pass(
     } else {
         store.latest_seq()?
     };
-    let minute = now.as_second().div_euclid(60);
     for (id, rule) in rules {
         ensure!(safe_id(id), "invalid automation rule ID: {id:?}");
         let effective = effective(config, id)?;
@@ -263,9 +286,10 @@ fn pass(
             record.generation = generation;
             record.cursor =
                 activation.map_or(head, |activation| activation.cursor.max(record.cursor));
-            record.minute = record
-                .minute
-                .max(activation.map_or(minute, |activation| activation.minute));
+            record.minute = record.minute.max(activation.map_or_else(
+                || clock().as_second().div_euclid(60),
+                |activation| activation.minute,
+            ));
             save(dir, &path, &record)?;
             if activation.is_none() {
                 continue;
@@ -276,32 +300,34 @@ fn pass(
         }
         let before = record.health.clone();
         let skipped_before = record.skipped;
-        let mut fire = |record: &mut Record, key: String, input: String| -> Result<()> {
-            record.minute = record.minute.max(minute);
-            record.attempt_minute = Some(minute);
-            record.claim = Some(key.clone());
-            record.health.last_at = Some(now.to_string());
-            record.health.outcome = Some("delivery unknown".into());
-            record.health.error = Some("delivery unknown".into());
-            save(dir, &path, record)?;
-            let input_id = format!("{:x}", Sha256::digest(format!("{id}/{key}")));
-            let delivery = send(
-                id,
-                &record.effective,
-                record.health.chat.as_deref(),
-                &input_id,
-                &input,
-            );
-            record.health.outcome = Some(clip(&delivery.outcome, 1024).into());
-            record.health.error = delivery
-                .error
-                .as_deref()
-                .map(|error| clip(error, 4096).into());
-            if let Some(chat) = delivery.chat {
-                record.health.chat = Some(clip(&chat, 1024).into());
-            }
-            save(dir, &path, record)
-        };
+        let mut fire =
+            |record: &mut Record, key: String, input: String, now: Timestamp| -> Result<()> {
+                let minute = now.as_second().div_euclid(60);
+                record.minute = record.minute.max(minute);
+                record.attempt_minute = Some(minute);
+                record.claim = Some(key.clone());
+                record.health.last_at = Some(now.to_string());
+                record.health.outcome = Some("delivery unknown".into());
+                record.health.error = Some("delivery unknown".into());
+                save(dir, &path, record)?;
+                let input_id = format!("{:x}", Sha256::digest(format!("{id}/{key}")));
+                let delivery = send(
+                    id,
+                    &record.effective,
+                    record.health.chat.as_deref(),
+                    &input_id,
+                    &input,
+                );
+                record.health.outcome = Some(clip(&delivery.outcome, 1024).into());
+                record.health.error = delivery
+                    .error
+                    .as_deref()
+                    .map(|error| clip(error, 4096).into());
+                if let Some(chat) = delivery.chat {
+                    record.health.chat = Some(clip(&chat, 1024).into());
+                }
+                save(dir, &path, record)
+            };
         if rule.event.as_deref() == Some("blocked") && record.cursor < head {
             for event in store.event_page(
                 None,
@@ -315,6 +341,8 @@ fn pass(
                     continue;
                 }
                 let key = format!("event:{}", event.seq);
+                let now = clock();
+                let minute = now.as_second().div_euclid(60);
                 if record
                     .attempt_minute
                     .is_some_and(|attempt| minute <= attempt)
@@ -323,17 +351,19 @@ fn pass(
                     record.last_skip = Some(key);
                     record.skipped = record.skipped.saturating_add(1);
                 } else {
-                    fire(&mut record, key, event_input(id, &event))?;
+                    fire(&mut record, key, event_input(id, &event), now)?;
                 }
             }
             save(dir, &path, &record)?;
-        } else if let Some(expression) = &rule.cron
-            && minute > record.minute
-            && matches_minute(expression, minute)?
-        {
-            fire(&mut record, format!("cron:{minute}"), json!({
-                "type": "automation_trigger_data", "rule": id, "trigger": "cron", "utc_minute": minute,
-            }).to_string())?;
+        } else if let Some(expression) = &rule.cron {
+            // Earlier admissions can block long enough to cross a UTC minute.
+            let now = clock();
+            let minute = now.as_second().div_euclid(60);
+            if minute > record.minute && matches_minute(expression, minute)? {
+                fire(&mut record, format!("cron:{minute}"), json!({
+                    "type": "automation_trigger_data", "rule": id, "trigger": "cron", "utc_minute": minute,
+                }).to_string(), now)?;
+            }
         }
         changed |= record.health != before || record.skipped != skipped_before;
     }

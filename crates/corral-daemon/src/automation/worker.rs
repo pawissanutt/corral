@@ -40,7 +40,7 @@ pub(crate) fn start(shared: &Arc<Shared>) {
                         &store,
                         &config,
                         manifest.as_ref(),
-                        Timestamp::now(),
+                        Timestamp::now,
                         &mut |rule, policy, prior, id, text| {
                             if shared.lock().stop {
                                 return Delivery {

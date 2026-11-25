@@ -45,7 +45,7 @@ impl Fixture {
             &self.store,
             &self.config,
             None,
-            Timestamp::from_second(minute * 60).unwrap(),
+            || Timestamp::from_second(minute * 60).unwrap(),
             &mut send,
         )
         .unwrap()
@@ -180,6 +180,35 @@ fn cron_misses_downtime_and_rebaselines_on_changes() {
 }
 
 #[test]
+fn slow_delivery_does_not_claim_an_expired_cron_minute_for_the_next_rule() {
+    let mut f = Fixture::new(Some("1 * * * *"));
+    f.config
+        .automation
+        .rules
+        .insert("earlier".into(), f.config.automation.rules["rule"].clone());
+    f.tick(0, forbidden);
+    let seconds = std::cell::Cell::new(60);
+    pass(
+        &fence(f.dir.path()).unwrap(),
+        &f.store,
+        &f.config,
+        None,
+        || Timestamp::from_second(seconds.get()).unwrap(),
+        &mut |id, _, _, _, _| {
+            assert_eq!(id, "earlier");
+            seconds.set(120);
+            Delivery {
+                outcome: "sent".into(),
+                chat: None,
+                error: None,
+            }
+        },
+    )
+    .unwrap();
+    assert!(f.record().claim.is_none());
+}
+
+#[test]
 fn event_pages_advance_in_sequence_order() {
     let f = Fixture::new(None);
     assert!(!f.tick(0, forbidden));
@@ -238,7 +267,7 @@ fn save_activation_and_rapid_pause_preserve_only_post_save_events() {
             &f.store,
             &f.config,
             Some(&manifest),
-            now,
+            || now,
             &mut collect
         )
         .unwrap()
@@ -258,7 +287,7 @@ fn save_activation_and_rapid_pause_preserve_only_post_save_events() {
             &f.store,
             &f.config,
             Some(&manifest),
-            now,
+            || now,
             &mut collect
         )
         .unwrap()
