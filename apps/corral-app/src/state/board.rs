@@ -3,7 +3,7 @@
 
 use nsh_core::prelude::*;
 
-use crate::model::home::board::{Board, KEY};
+use crate::model::home::board::{Board, KEY, Widget};
 
 use super::{preference, remember};
 
@@ -45,6 +45,12 @@ impl HomeBoard {
     /// Back to the default arrangement.
     pub fn reset(self) {
         self.change(|board| *board = Board::default());
+    }
+
+    /// Tracked: whether the Needs you cards are on the board and not under Customize's veil, so
+    /// Home's list keys may walk and open them.
+    pub fn cards_take_keys(self) -> bool {
+        !self.editing.get() && self.board.with(|b| b.has(Widget::NeedsYou))
     }
 
     pub fn set_editing(self, on: bool) {

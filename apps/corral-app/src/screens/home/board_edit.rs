@@ -10,7 +10,7 @@ use nsh_core::prelude::*;
 
 use crate::model::home::board::COLUMNS;
 use crate::model::home::board::{
-    self, Drop, Frame, Item, Widget, dragged_span, drop_at, shown_span,
+    self, Drop, Frame, Item, Widget, dragged_span, drop_at, spans_follow,
 };
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, button};
@@ -133,6 +133,7 @@ pub(super) fn handles(
     moving: Signal<Option<Moving>>,
     cells: Cells,
 ) -> AnyElement {
+    let follows = computed(move || spans_follow(width.get()));
     let head = view()
         .flex_row()
         .items_center()
@@ -173,7 +174,13 @@ pub(super) fn handles(
         .border_color(color(Token::Focus))
         .bg(color(Token::Bg).opacity(0.55))
         .child(head)
-        .child(edge(app, widget, item, width))
+        // Only where a span shows as itself does the edge follow the pointer; narrower, the
+        // buttons still resize.
+        .child(dynamic(move || {
+            follows
+                .get()
+                .then(|| untracked(|| edge(app, widget, item, width)))
+        }))
         .into_element()
 }
 
@@ -261,11 +268,27 @@ fn measure(app: AppState, cells: Cells, into: Rc<RefCell<Vec<(Widget, Frame)>>>)
     });
 }
 
-/// The right edge, dragged to resize a column at a time.
+/// The right edge, dragged to resize a column at a time. Offered only where every span shows as
+/// itself ([`spans_follow`]), so a column is a twelfth of the grid.
 fn edge(app: AppState, widget: Widget, item: ReadSignal<Item>, width: Signal<f32>) -> AnyElement {
-    // The span the drag began at and one of its columns, in points.
-    let start: Rc<Cell<(u8, f32)>> = Rc::new(Cell::new((0, 0.0)));
+    // The span the drag began at and one of its columns, in points; none while no drag is on.
+    let start: Rc<Cell<Option<(u8, f32)>>> = Rc::new(Cell::new(None));
     let began = start.clone();
+    let moved = start.clone();
+    let ended = start.clone();
+    let cut = start.clone();
+    // Removed mid-drag (Done, leaving Home, a narrower window): the span shown is kept, as a
+    // release would keep it.
+    cleanup(move || {
+        if start.take().is_some() {
+            app.board.save();
+        }
+    });
+    let finish = move |at: &Rc<Cell<Option<(u8, f32)>>>| {
+        if at.take().is_some() {
+            app.board.save();
+        }
+    };
     view()
         .test_id(&format!("board-resize-{}", widget.slug()))
         .absolute()
@@ -287,19 +310,17 @@ fn edge(app: AppState, widget: Widget, item: ReadSignal<Item>, width: Signal<f32
         .claim_touches(TouchClaim::on_start().ask(|request: &ClaimRequest| request.claim()))
         .keep_touches(true)
         .on_responder_grant(move |_: &ResponderEvent| {
-            let span = item.get_untracked().span;
-            let grid = width.get_untracked();
-            let shown = shown_span(span, grid);
-            let column = grid * f32::from(shown) / f32::from(COLUMNS) / f32::from(span.max(1));
-            began.set((span, column));
+            let column = width.get_untracked() / f32::from(COLUMNS);
+            began.set(Some((item.get_untracked().span, column)));
         })
         .on_responder_move(move |e: &ResponderEvent| {
-            let (from, column) = start.get();
-            let span = dragged_span(widget, from, e.gesture.delta.x.0, column);
-            app.board.shape(|b| b.resize(widget, span));
+            if let Some((from, column)) = moved.get() {
+                let span = dragged_span(widget, from, e.gesture.delta.x.0, column);
+                app.board.shape(|b| b.resize(widget, span));
+            }
         })
-        .on_responder_release(move |_: &ResponderEvent| app.board.save())
-        .on_responder_terminate(move |_: &ResponderEvent| app.board.save())
+        .on_responder_release(move |_: &ResponderEvent| finish(&ended))
+        .on_responder_terminate(move |_: &ResponderEvent| finish(&cut))
         .into_element()
 }
 

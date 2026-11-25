@@ -24,7 +24,7 @@ fn desktop() -> EngineConfig {
 
 /// Starts the app on Home and chooses the sample preview from the palette.
 fn preview(config: EngineConfig) -> Headless {
-    preview_kept(config, device())
+    preview_kept(config, device(), "id:list-home")
 }
 
 /// This device's storage, opening on Home.
@@ -32,8 +32,12 @@ fn device() -> std::sync::Arc<MemoryStorage> {
     MemoryStorage::new([("corral.destination".to_owned(), "home".to_owned())])
 }
 
-/// [`preview`] with this device's storage in `storage`.
-fn preview_kept(config: EngineConfig, storage: std::sync::Arc<MemoryStorage>) -> Headless {
+/// [`preview`] with this device's storage in `storage`, ready once `ready` shows.
+fn preview_kept(
+    config: EngineConfig,
+    storage: std::sync::Arc<MemoryStorage>,
+    ready: &str,
+) -> Headless {
     let opener = if config.environment.idiom == Idiom::Phone {
         "id:btn-search"
     } else {
@@ -49,7 +53,7 @@ fn preview_kept(config: EngineConfig, storage: std::sync::Arc<MemoryStorage>) ->
     app.press("text:Data: fixture").unwrap();
     app.wait_for_gone("id:palette-input", Duration::from_secs(5))
         .unwrap();
-    app.wait_for("id:list-home").unwrap();
+    app.wait_for(ready).unwrap();
     app
 }
 
@@ -162,7 +166,7 @@ fn widgets(app: &Headless) -> Vec<String> {
 #[test]
 fn customize_arranges_the_board_and_keeps_it_on_this_device() {
     let storage = device();
-    let mut app = preview_kept(desktop(), storage.clone());
+    let mut app = preview_kept(desktop(), storage.clone(), "id:list-home");
     app.wait_for("id:board-stat-needs").unwrap();
     assert_eq!(
         widgets(&app).first().map(String::as_str),
@@ -209,4 +213,43 @@ fn customize_arranges_the_board_and_keeps_it_on_this_device() {
     app.wait_for_gone("id:board-tray", Duration::from_secs(5))
         .unwrap();
     assert_eq!(app.screen().count("id:board-edit-burnup").unwrap(), 0);
+
+    // Customize does not outlive Home: back from another page, the board is plain.
+    app.press("id:btn-board-edit").unwrap();
+    app.wait_for("id:board-tray").unwrap();
+    app.press("id:nav-tasks").unwrap();
+    app.wait_for("id:list-tasks").unwrap();
+    app.press("id:nav-home").unwrap();
+    app.wait_for("id:board-stat-cost").unwrap();
+    assert_eq!(app.screen().count("id:board-tray").unwrap(), 0);
+}
+
+/// A board kept on this device is the one Home opens with, and with Needs you off the board the
+/// keys no longer open its hidden cards.
+#[test]
+fn a_kept_board_opens_and_hidden_cards_take_no_keys() {
+    let storage = MemoryStorage::new([
+        ("corral.destination".to_owned(), "home".to_owned()),
+        (
+            "corral.home.board".to_owned(),
+            "v1 stat-cost:3 working:12".to_owned(),
+        ),
+    ]);
+    let mut app = preview_kept(desktop(), storage, "id:panel-working");
+    assert_eq!(widgets(&app), ["stat-cost", "working"]);
+    app.press_key("j").unwrap();
+    app.press_key("enter").unwrap();
+    let opened = app.wait_until(
+        "a hidden card opens",
+        Duration::from_millis(500),
+        |screen| {
+            screen.count("id:task-page").unwrap_or(0)
+                + screen.count("id:session-transcript").unwrap_or(0)
+                > 0
+        },
+    );
+    assert!(
+        opened.is_err(),
+        "Enter opened a card that is not on the board"
+    );
 }

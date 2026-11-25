@@ -285,10 +285,16 @@ impl Board {
 /// The spans the narrower and wider buttons step through.
 const STEPS: [u8; 7] = [2, 3, 4, 6, 8, 9, 12];
 
+/// Whether a board `width` points wide shows every widget at its own span, so a dragged edge
+/// follows the pointer; narrower, spans are widened and the edge is not offered.
+pub fn spans_follow(width: f32) -> bool {
+    width >= 960.0
+}
+
 /// The columns a widget takes on a board `width` points wide: its span when the grid has room
 /// for twelve columns, doubled on a medium window, the whole row on a narrow one.
 pub fn shown_span(span: u8, width: f32) -> u8 {
-    if width >= 960.0 {
+    if spans_follow(width) {
         span
     } else if width >= 600.0 {
         span.saturating_mul(2).min(COLUMNS)

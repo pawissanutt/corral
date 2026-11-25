@@ -99,6 +99,12 @@ fn customize(app: AppState, editing: bool) -> AnyElement {
 fn grid(app: AppState, scope: Memo<Scope>) -> AnyElement {
     let width = signal(0.0_f32);
     let moving: Signal<Option<Moving>> = signal(None);
+    // Done removes the grips, mid-drag too: nothing stays lifted or marked.
+    effect(move || {
+        if !app.board.editing.get() && untracked(|| moving.with(Option::is_some)) {
+            moving.set(None);
+        }
+    });
     let cells: Cells = Rc::new(RefCell::new(HashMap::new()));
     let items = computed(move || app.board.board.with(|b| b.items.clone()));
     let none = computed(move || items.with(Vec::is_empty) && !app.board.editing.get());

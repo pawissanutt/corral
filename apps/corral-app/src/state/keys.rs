@@ -310,6 +310,15 @@ impl AppState {
         {
             return &[];
         }
+        // The desktop board's keys walk the Needs you cards: none while they are off the board
+        // or under Customize's veil.
+        if destination == Destination::Home
+            && self.form == crate::model::Form::Desktop
+            && self.nav.with(|nav| nav.live().is_none())
+            && !self.board.cards_take_keys()
+        {
+            return &[];
+        }
         match self.data.get() {
             DataState::Daemon | DataState::Fixture => {
                 let keys = self
