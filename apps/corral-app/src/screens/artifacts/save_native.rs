@@ -1,8 +1,10 @@
 //! A native download: the platform's save dialog where it has one, else the Downloads folder.
 //! It never replaces a file: what stands at the chosen name (whether the dialog showed it or it
-//! appeared during the download) is kept and the file takes the first free numbered name. Bytes go to a private temporary file in the destination's
+//! appeared during the download) is kept and the file takes the first free numbered name. Bytes
+//! go to a private temporary file in the destination's
 //! folder, which only a verified, complete read renames into place; dropped, it is deleted.
 use std::{
+    ffi::{OsStr, OsString},
     io::Write as _,
     path::{Path, PathBuf},
 };
@@ -41,7 +43,8 @@ fn boxed(save: NativeSave) -> SaveOutput {
 pub(super) struct NativeSave {
     file: NamedTempFile,
     folder: PathBuf,
-    name: String,
+    /// As the platform names it: a chosen name that is not UTF-8 is kept as it is.
+    name: OsString,
 }
 
 impl NativeSave {
@@ -53,16 +56,16 @@ impl NativeSave {
             .to_owned();
         let name = path
             .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
+            .map(OsStr::to_owned)
             .ok_or("The chosen path has no file name.")?;
         Self::open(folder, name)
     }
 
     fn downloads(name: &str) -> Result<Self, String> {
-        Self::open(downloads_folder()?, name.to_owned())
+        Self::open(downloads_folder()?, name.into())
     }
 
-    fn open(folder: PathBuf, name: String) -> Result<Self, String> {
+    fn open(folder: PathBuf, name: OsString) -> Result<Self, String> {
         let file = tempfile::Builder::new()
             .prefix(".corral-download-")
             .tempfile_in(&folder)
@@ -84,7 +87,7 @@ impl NativeSave {
                     return Ok(format!(
                         "to {}, since {} already exists and was kept",
                         path.display(),
-                        self.name
+                        self.name.to_string_lossy()
                     ));
                 }
                 Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -102,7 +105,7 @@ impl NativeSave {
         Err(format!(
             "{} already holds {NUMBERED} files named like {}.",
             self.folder.display(),
-            self.name
+            self.name.to_string_lossy()
         ))
     }
 }
@@ -130,14 +133,20 @@ impl SaveSink for NativeSave {
 }
 
 /// `name`, or for `at` above zero `name (at)` before its extension.
-fn numbered(name: &str, at: u32) -> String {
+fn numbered(name: &OsStr, at: u32) -> OsString {
     if at == 0 {
         return name.to_owned();
     }
-    match name.rsplit_once('.').filter(|(stem, _)| !stem.is_empty()) {
+    let Some(name) = name.to_str() else {
+        let mut name = name.to_owned();
+        name.push(format!(" ({at})"));
+        return name;
+    };
+    let named = match name.rsplit_once('.').filter(|(stem, _)| !stem.is_empty()) {
         Some((stem, extension)) => format!("{stem} ({at}).{extension}"),
         None => format!("{name} ({at})"),
-    }
+    };
+    named.into()
 }
 
 /// The owner's Downloads folder: `XDG_DOWNLOAD_DIR`, else `Downloads` in their home, else home.

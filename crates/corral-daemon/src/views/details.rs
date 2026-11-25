@@ -632,11 +632,13 @@ mod tests {
             "read {read} bytes"
         );
         let mut got = Vec::new();
+        let mut encodings = Vec::new();
         let mut next = Some(first);
         while let Some(reply) = next.take() {
             let Some(DetailBody::Artifact(part)) = reply.body else {
                 panic!("expected an artifact page");
             };
+            encodings.push(part.encoding);
             match part.encoding {
                 ArtifactEncoding::Text => got.extend(part.content.into_bytes()),
                 _ => got.extend(STANDARD.decode(part.content).unwrap()),
@@ -644,5 +646,14 @@ mod tests {
             next = reply.next.map(|token| page(Some(token)).0);
         }
         assert_eq!(got, blob);
+        // The head was classified as text; only the page holding the stray byte travels as bytes.
+        assert_eq!(encodings.first(), Some(&ArtifactEncoding::Text));
+        assert_eq!(
+            encodings
+                .iter()
+                .filter(|encoding| **encoding == ArtifactEncoding::Base64)
+                .count(),
+            1
+        );
     }
 }

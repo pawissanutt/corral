@@ -206,6 +206,11 @@ impl AppState {
             Ok((bytes, more)) => save.request.output.append(&bytes).await.map(|()| more),
             Err(problem) => Err(problem),
         };
+        // A Cancel or a left finder while the page was written ends the download here: the
+        // transfer is dropped, and its sink with what it held, before anything is committed.
+        if save.percent() != Some(old_percent) {
+            return vec![];
+        }
         match more {
             Ok(true) => {
                 let percent = save.progress();
