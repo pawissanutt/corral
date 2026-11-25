@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EventLog } from "../src/bridge/events.ts";
@@ -31,7 +31,7 @@ test("only the accepted automation input gains the live policy, without persisti
     const sessionManager = sdk.SessionManager.create(cwd, join(cwd, "sessions"));
     host = await HostSession.create({
       sdk, modules, identity, events, network, cwd, agentDir: join(cwd, "agent"), model: "gpt-6.1-sol",
-      sessionManager, automation: ["triage", instruction],
+      sessionManager, automationRoot: cwd, automation: ["triage", instruction],
       client: new CorralClient({ corral: writeFakeEngine(cwd).path, root: cwd, cwd, identity }),
     });
     const agent = host.session.agent;
@@ -43,7 +43,36 @@ test("only the accepted automation input gains the live policy, without persisti
     await host.startLocal();
     await attachHeadless(host, events, () => undefined);
     const trigger = { text: "/plan event data", origin: "auto" as const, busyPolicy: "steer" as const };
-    expect(await host.submitAutomation(trigger, "auto-1")).toMatchObject({ disposition: "started" });
+    const permits = join(cwd, ".corral-next", "automation");
+    mkdirSync(permits, { recursive: true });
+    const issue = (nonce: string) => {
+      const path = join(permits, `.admit-${nonce}`);
+      writeFileSync(path, "", { flag: "wx" });
+      return path;
+    };
+    const expired = "1".repeat(32);
+    const revoked = issue(expired);
+    const reached = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+    // Hold after Pi's initial admission checks and async run preparation, immediately before the actual start.
+    const session = host.session as unknown as { _prepareRun(...args: unknown[]): Promise<unknown> };
+    const prepare = session._prepareRun;
+    session._prepareRun = async (...args) => {
+      const messages = await prepare.apply(session, args);
+      reached.resolve();
+      await release.promise;
+      return messages;
+    };
+    const late = host.submitAutomation(trigger, "auto-expired", expired);
+    await reached.promise;
+    unlinkSync(revoked); // daemon timeout or the next workspace fence revokes the outstanding grant
+    release.resolve();
+    expect(await late).toEqual({ disposition: "rejected", reason: "automation_permit_missing" });
+    expect(requests).toHaveLength(0);
+    session._prepareRun = prepare;
+    const nonce = "2".repeat(32);
+    const permit = issue(nonce);
+    expect(await host.submitAutomation(trigger, "auto-1", nonce)).toMatchObject({ disposition: "started" });
+    expect(existsSync(permit)).toBe(false);
     await host.session.waitForIdle();
     expect(await host.submitOpened({ ...trigger, text: "Ordinary auto notice" })).toMatchObject({ disposition: "started" });
     await host.session.waitForIdle();
@@ -52,7 +81,7 @@ test("only the accepted automation input gains the live policy, without persisti
     expect(requests[1]).not.toContain(instruction);
     expect(JSON.stringify(sessionManager.getEntries())).not.toContain(instruction);
     expect(host.retireAutomation()).toEqual({ retired: true });
-    expect(await host.submitAutomation(trigger, "auto-2")).toEqual({ disposition: "rejected", reason: "retired" });
+    expect(await host.submitAutomation(trigger, "auto-2", nonce)).toEqual({ disposition: "rejected", reason: "retired" });
   } finally {
     await host?.close();
     await host?.drained();

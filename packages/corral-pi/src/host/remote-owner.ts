@@ -35,9 +35,9 @@ export class RemoteOwner {
       : this.host.submitOpened(input, answers));
   }
 
-  startAutomation(input: SessionInput, requestId: string): Promise<SubmitResult> {
+  startAutomation(input: SessionInput, requestId: string, nonce: unknown): Promise<SubmitResult> {
     return this.order(async () => this.paused ? { disposition: "rejected", reason: "paused" }
-      : this.host.submitAutomation(input, requestId));
+      : this.host.submitAutomation(input, requestId, nonce));
   }
 
   retireAutomation(): Promise<{ retired: boolean; reason?: string }> {

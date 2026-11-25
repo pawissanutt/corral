@@ -17,7 +17,7 @@ export interface BridgeHandlers {
   hello(): Record<string, unknown>;
   state(): Record<string, unknown>;
   submit(input: SessionInput, requestId: string): Promise<SubmitResult>;
-  submitAutomation?(input: SessionInput, requestId: string): Promise<SubmitResult>;
+  submitAutomation?(input: SessionInput, requestId: string, nonce: unknown): Promise<SubmitResult>;
   retireAutomation?(): Promise<{ retired: boolean; reason?: string }>;
   answer(input: AnswerInput): Promise<Record<string, unknown>>;
   pause(): Promise<Record<string, unknown>>;
@@ -148,7 +148,7 @@ export async function startBridge(options: BridgeServerOptions): Promise<BridgeS
     const identity = { request_id: frame.id, input: input.inputId ?? frame.id };
     const request = { ...identity, origin: input.origin, busy_policy: input.busyPolicy };
     const outcome = automation
-      ? host.submitAutomation?.(input, frame.id) ?? Promise.resolve<SubmitResult>({ disposition: "rejected", reason: "unbound_automation" })
+      ? host.submitAutomation?.(input, frame.id, frame.args.nonce) ?? Promise.resolve<SubmitResult>({ disposition: "rejected", reason: "unbound_automation" })
       : host.submit(input, frame.id);
     if (automation) {
       // Unlike an ordinary submission, a firing must report a definite admission, not park or poll.
@@ -182,7 +182,7 @@ export async function startBridge(options: BridgeServerOptions): Promise<BridgeS
       case "hello": return host.hello();
       case "get_state": return host.state();
       case "submit_input": return submit(host, frame);
-      case "submit_automation": return submit(host, frame, true);
+      case "submit_automation_v2": return submit(host, frame, true);
       case "retire_automation": return host.retireAutomation?.() ?? { retired: false, reason: "unbound_automation" };
       case "answer": return host.answer(parseAnswer(frame.args));
       case "pause": return host.pause();

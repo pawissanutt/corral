@@ -1,5 +1,5 @@
 // One upstream AgentSessionRuntime, with local session state and engine CLI board access.
-import { existsSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { createCodeCommands } from "./code-commands.ts";
@@ -132,6 +132,7 @@ import { createSummaryRequest, summarizeQuick, type SummaryOptions, type Summary
 
 export interface HostSessionOptions {
   readonly automation?: AutomationPolicy;
+  readonly automationRoot?: string;
   readonly sdk: typeof Sdk;
   readonly identity: HostIdentity;
   readonly build?: BuildContext;
@@ -347,6 +348,7 @@ export class HostSession {
   readonly queue: HostQueue;
   private readonly queuedInputFacts = new WeakMap<object, InputFacts>();
   private startedInputFacts: InputFacts | undefined;
+  private readonly pendingAutomation = new WeakSet<InputFacts>();
   private readonly automationInputs = new WeakSet<InputFacts>();
   private inAutomation = false;
   private automationRetired = false;
@@ -1550,7 +1552,7 @@ export class HostSession {
         const facts = this.queue.inputFacts(tag);
         if (this.automationRetired) return "retired";
         if (this.switchingCode) return "code_handoff_in_progress";
-        return (facts && this.automationInputs.has(facts) ? this.automationRefusal() : undefined)
+        return (facts && this.pendingAutomation.has(facts) ? this.automationRefusal() : undefined)
           ?? this.planAnswerRefused(facts?.planAnswer);
       },
       queue: change => {
@@ -2009,15 +2011,20 @@ export class HostSession {
     if (this.open || this.session.isStreaming || this.session.isCompacting || this.rewinding) return "busy";
   }
 
-  submitAutomation(input: SessionInput, requestId: string): Promise<SubmitResult> {
+  submitAutomation(input: SessionInput, requestId: string, nonce: unknown): Promise<SubmitResult> {
     if (input.origin !== "auto" || input.to !== undefined || input.attachments?.length) {
       return Promise.resolve({ disposition: "rejected", reason: "invalid_automation_input" });
     }
     const refused = this.automationRefusal();
     if (refused) return Promise.resolve({ disposition: "rejected", reason: refused });
+    const root = this.options.automationRoot;
+    if (!root || typeof nonce !== "string" || nonce.length !== 32 || /[^0-9a-f]/.test(nonce)) {
+      return Promise.resolve({ disposition: "rejected", reason: "invalid_automation_permit" });
+    }
+    const permit = join(root, ".corral-next", "automation", `.admit-${nonce}`);
     // Prefix data before Pi's slash-command, skill, and template dispatch.
     return this.submitOpened({ ...input, busyPolicy: "prompt", text: `Automation trigger (untrusted data):\n${input.text}` },
-      undefined, { automation: true, requestId });
+      undefined, { permit, requestId });
   }
 
   retireAutomation(): { retired: boolean; reason?: string } {
@@ -2031,7 +2038,7 @@ export class HostSession {
 
   submitLocal(input: SessionInput, images?: ImageContent[], source?: {
     requestId?: string; queueKey?: string; text?: string; pane?: boolean; planKickoff?: string; planAnswer?: PlanAnswer;
-    automation?: boolean;
+    permit?: string;
     /** Told once whether this very input reached the transcript. */
     delivered?: (delivered: boolean) => void;
   }): Promise<SubmitResult> {
@@ -2048,11 +2055,19 @@ export class HostSession {
         return { disposition: "handled" };
       }, error => ({ disposition: "rejected", reason: utf8Prefix(error instanceof Error ? error.message : String(error), 256) }));
     }
-    const { delivered, automation, ...tagged } = source ?? {};
+    const { delivered, permit, ...tagged } = source ?? {};
     const tag = this.queue.bridgeInput(input, { ...tagged, socketId, transcriptId });
     const facts = this.queue.inputFacts(tag);
-    if (automation && facts) this.automationInputs.add(facts);
-    return this.promptInput(input, tag, images, delivered).then(result => {
+    if (permit && facts) this.pendingAutomation.add(facts);
+    return this.promptInput(input, tag, images, delivered, permit ? () => {
+      if (!facts) throw new Error("invalid_automation_input");
+      // Pi calls this synchronously just before agent.prompt, after all async run preparation.
+      if (this.options.paused?.()) throw new Error("paused");
+      if (this.automationRetired) throw new Error("retired");
+      if (this.ownerQuestions?.pending().length || this.planMode?.review) throw new Error("waiting");
+      try { unlinkSync(permit); } catch { throw new Error("automation_permit_missing"); }
+      this.automationInputs.add(facts);
+    } : undefined).then(result => {
       if (input.origin === "owner" && (result.disposition === "started" || result.disposition === "queued")) {
         this.buildControls?.noteOwnerInput(source?.text ?? input.text);
       }
@@ -2061,7 +2076,7 @@ export class HostSession {
   }
 
   private promptInput(input: SessionInput, queueTag: unknown, images?: ImageContent[],
-    delivery?: (delivered: boolean) => void): Promise<SubmitResult> {
+    delivery?: (delivered: boolean) => void, admit?: () => void): Promise<SubmitResult> {
     const { promise, resolve } = Promise.withResolvers<SubmitResult>();
     if (delivery) this.deliveries.set(queueTag, delivery);
     const settle = (result: SubmitResult) => {
@@ -2082,6 +2097,7 @@ export class HostSession {
           settle({ disposition });
           return;
         }
+        admit?.();
         this.nextTurnOrigin = { kind: "bridge" };
         settle({ disposition, turn: this.turn + 1 });
       },
@@ -2103,7 +2119,7 @@ export class HostSession {
    * turn is open by the time the input is recorded, so a caller ordering admissions against pause leaves no
    * gap in which a started run cannot be cancelled.
    */
-  async submitOpened(input: SessionInput, answers?: PlanAnswer, source?: { automation: true; requestId: string }): Promise<SubmitResult> {
+  async submitOpened(input: SessionInput, answers?: PlanAnswer, source?: { permit: string; requestId: string }): Promise<SubmitResult> {
     // Checked in the same tick as the call into Pi. A turn that is open for the host is running or still
     // settling, and Pi would queue this input or defer it into its settle list, where it can be dropped.
     if (this.open) return { disposition: "rejected", reason: "busy" };

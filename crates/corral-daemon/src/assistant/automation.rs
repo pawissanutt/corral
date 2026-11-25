@@ -233,6 +233,42 @@ fn retire(shared: &Shared, chat: &mut Chat, active: Option<SessionRef>) -> Resul
     Ok(())
 }
 
+/// A single-use grant owned by this fenced RPC. The host can consume it first.
+struct Permit(std::path::PathBuf);
+
+impl Permit {
+    fn issue(shared: &Shared) -> Result<(Self, String)> {
+        use std::{fmt::Write as _, os::unix::fs::OpenOptionsExt as _};
+
+        let mut bytes = [0u8; 16];
+        getrandom::fill(&mut bytes).context("generate automation admission nonce")?;
+        let mut nonce = String::with_capacity(32);
+        for byte in bytes {
+            write!(nonce, "{byte:02x}")?;
+        }
+        let dir = shared.root().join(crate::STATE_DIR).join("automation");
+        ensure!(
+            std::fs::symlink_metadata(&dir)?.is_dir(),
+            "invalid automation state directory"
+        );
+        let path = dir.join(format!(".admit-{nonce}"));
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)
+            .context("create exclusive automation admission permit")?;
+        Ok((Self(path), nonce))
+    }
+}
+
+impl Drop for Permit {
+    fn drop(&mut self) {
+        // A failed unlink is independently retried on the next fence acquisition.
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 /// The scheduler holds its workspace fence through this admission.
 pub(crate) fn deliver(
     shared: &Shared,
@@ -305,9 +341,20 @@ pub(crate) fn deliver(
         Some(session) => session,
         None => chat.start(shared, &config)?,
     };
-    let reply: SubmitReply = Client::for_session(&session)?.request("submit_automation", json!({
+    let client = Client::for_session(&session)?;
+    let (permit, nonce) = Permit::issue(shared)?;
+    let result = client.request("submit_automation_v2", json!({
+        "nonce": nonce,
         "origin": corral_types::Origin::Auto, "busy_policy": "steer", "input_id": input_id, "text": text,
-    })).map_err(|error| if error.is::<pi::PiRefusal>() {error} else {error.context(Unknown)})?;
+    }));
+    drop(permit);
+    let reply: SubmitReply = result.map_err(|error| {
+        if error.is::<pi::PiRefusal>() {
+            error
+        } else {
+            error.context(Unknown)
+        }
+    })?;
     if reply.disposition == Disposition::Rejected {
         if let Some(skip) = host_skip(reply.reason.as_deref()) {
             return Err(skip.into());

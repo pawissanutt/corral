@@ -14,7 +14,7 @@ export const INPUT_REPLY_MS = 30_000;
 export const EVENT_PAGE_BYTES = FRAME_MAX_BYTES - 4 * 1024;
 
 export const COMMANDS = [
-  "hello", "get_state", "submit_input", "submit_automation", "retire_automation", "cancel", "events_since", "live_since", "shutdown", "queue_state", "queue_withdraw",
+  "hello", "get_state", "submit_input", "submit_automation_v2", "retire_automation", "cancel", "events_since", "live_since", "shutdown", "queue_state", "queue_withdraw",
   "set_model", "answer", "pause", "resume", "rewind",
 ] as const;
 export type Command = typeof COMMANDS[number];

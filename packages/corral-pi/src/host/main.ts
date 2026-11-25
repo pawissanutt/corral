@@ -231,7 +231,7 @@ async function runSession(config: HostConfig, overrides: HostOverrides, events: 
       }
     } : undefined;
   host = await HostSession.create({
-    ...(overrides.automation ? { automation: overrides.automation } : {}),
+    ...(overrides.automation ? { automation: overrides.automation, automationRoot: config.root } : {}),
     sdk, identity: config.identity, cwd: config.cwd, agentDir, model, provider, ...(aws ? { aws } : {}),
     ...(workerLaunch ? { workerLaunch } : {}),
     routes, fallback: config.fallback,
@@ -302,7 +302,7 @@ async function runSession(config: HostConfig, overrides: HostOverrides, events: 
       state: () => session.controlState(owner.paused),
       submit: (input, requestId) => owner.submit(input, undefined, requestId),
       ...(overrides.automation ? {
-        submitAutomation: (input, requestId) => owner.startAutomation(input, requestId),
+        submitAutomation: (input, requestId, nonce) => owner.startAutomation(input, requestId, nonce),
         retireAutomation: () => owner.retireAutomation(),
       } : {}),
       answer: input => owner.answer(input),
