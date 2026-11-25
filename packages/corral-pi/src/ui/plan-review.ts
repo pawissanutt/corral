@@ -1,14 +1,11 @@
-// The terminal's plan review: the submitted plan in the pager, with the owner's choices as its keys. The app
-// answers the same submission through its card; whichever answers first closes the other.
+// The terminal's plan review: the submitted plan in its reading view (plan-view.ts), which returns the owner's
+// choice. An execute choice starts the plan on the model the review named. Keep planning decides nothing here: the
+// owner's next message is the feedback, as any message of theirs is while a review is open, so the headings they
+// marked go to the composer and the review stays open until that message is sent. The app answers the same
+// submission through its card; whichever answers first closes the other.
 import type { ExtensionAPI, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
-import type { PlanChoice, PlanMode } from "../host/plan-mode.ts";
-import { openPager, type PagerAction, type PagerLine } from "./pager.ts";
-
-const CHOICES: Readonly<Record<string, PlanChoice>> = { e: "execute", c: "execute_clean", s: "execute_compact" };
-const ACTIONS: readonly PagerAction[] = [
-  { key: "e", label: "execute" }, { key: "c", label: "clean context" }, { key: "s", label: "compacted" },
-  { key: "m", label: "model" }, { key: "k", label: "keep planning" },
-];
+import type { PlanMode } from "../host/plan-mode.ts";
+import { openPlanView, type PlanViewResult } from "./plan-view.ts";
 
 export interface PlanReviewOptions {
   model(): string | undefined;
@@ -57,24 +54,24 @@ export class PlanReviewUi {
     });
   }
 
+  /** Read the approved document without reopening its choices. */
+  async showApproved(): Promise<void> {
+    const approved = this.plan.approved;
+    if (this.ui && approved) await openPlanView(this.ui, { ...approved, model: undefined, text: this.plan.approvedText(), readonly: true });
+  }
+
   /** Open the review of the pending submission; false when there is none or no terminal to draw it in. */
   async show(): Promise<boolean> {
     const ui = this.ui, id = this.plan.review;
     if (!ui || id === undefined) return false;
     if (this.shown) return true;
     const { title, revision } = this.plan.record;
-    const text = this.plan.reviewText();
-    const lines: (string | PagerLine)[] = text === undefined
-      ? ["The submitted plan's copy is missing or was changed. Choose keep planning and have it submitted again."]
-      : text.split("\n").map(line => /^#{1,6}\s/.test(line) ? { text: line, heading: true } : line);
-    // The model that will execute the plan has a line of its own: the frame's title is cut at a long plan title.
+    // The model that will execute the plan is named in the view: an execute choice approves a run on that model.
     const model = this.options.model();
-    const facts = `revision ${revision} · ${model ?? "no model"}`;
     const control = new AbortController(), open = this.shown = { id, model, control };
-    let key: string | undefined;
+    let result: PlanViewResult | undefined;
     try {
-      key = await openPager(ui, { title: `Plan review · ${title ?? "Plan"}`,
-        lines: [facts, "", ...lines], wrap: true, actions: ACTIONS }, control.signal);
+      result = await openPlanView(ui, { title: title ?? "Plan", revision, model, text: this.plan.reviewText(), previous: this.plan.previousText() }, control.signal);
     } finally {
       if (this.shown === open) this.shown = undefined;
     }
@@ -86,40 +83,28 @@ export class PlanReviewUi {
     }
     // An execute key approves a run on the model the review named. If the model was changed from elsewhere, the
     // review closed for it or the key came first: either way it is shown again, and nothing is approved yet.
-    if (now === id && this.options.model() !== model && (control.signal.aborted || Object.hasOwn(CHOICES, key ?? ""))) {
-      return this.show();
-    }
-    if (key === undefined || now !== id) return true;
-    if (key === "m") {
+    const executes = result !== undefined && "choice" in result && result.choice !== "revise";
+    if (now === id && this.options.model() !== model && (control.signal.aborted || executes)) return this.show();
+    if (result === undefined || now !== id) return true;
+    if ("model" in result) {
       if (this.options.selectModel?.()) this.selecting = id;
       else this.options.notice("Change the model with /model, then reopen the review with /plan.");
       return true;
     }
-    let feedback: string | undefined;
-    if (key === "k") {
-      feedback = await ui.input("What should change in the plan?", "Feedback for the agent; leave empty to type it as a message");
-      // Esc on the feedback returns to the review rather than deciding anything.
-      if (feedback === undefined) return this.show();
-    }
-    const choice = key === "k" ? "revise" : CHOICES[key];
-    if (!choice) return true;
-    // Typed feedback that was not delivered stays the owner's: it joins whatever the composer already holds.
-    const keep = (why: string) => {
-      const typed = feedback?.trim();
-      if (typed) {
+    if (result.choice === "revise") {
+      // Each marked heading is quoted on a line of its own, after whatever the composer already holds.
+      const marks = result.quotes.map(heading => `> ${heading}\n\n`).join("");
+      if (marks) {
         const draft = ui.getEditorText();
-        ui.setEditorText(draft.trim() ? `${draft}\n\n${typed}` : typed);
+        // The draft stays as it was typed; the quotes follow it after one blank line.
+        ui.setEditorText(draft + (!draft || draft.endsWith("\n\n") ? "" : draft.endsWith("\n") ? "\n" : "\n\n") + marks);
       }
-      this.options.notice(`${why}${typed ? ". Your feedback is in the composer." : ""}`);
-    };
-    if (this.plan.review !== id) {
-      // The review was answered elsewhere while the feedback was being typed.
-      if (feedback?.trim()) keep("This review was answered from another device");
+      this.options.notice("Write what should change and send it: the plan stays under review until you do · /plan reopens it");
       return true;
     }
     // A choice the session cannot carry out now leaves the review pending; /plan reopens it.
-    try { await this.plan.choose(choice, feedback); }
-    catch (error) { keep(error instanceof Error ? error.message : String(error)); }
+    try { await this.plan.choose(result.choice); }
+    catch (error) { this.options.notice(error instanceof Error ? error.message : String(error)); }
     return true;
   }
 }

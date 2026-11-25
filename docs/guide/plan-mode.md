@@ -36,15 +36,38 @@ leaves from any phase. You cannot enter or leave while a turn is running: stop t
 
 When the agent submits, the review opens in the terminal once its turn ends, and the same
 review appears in the app. The first answer wins. The review has no time limit and survives
-a restart; reopen it in the terminal with `/plan`.
+a restart; reopen it in the terminal with `/plan` or the waiting document row in F10 Plan.
 
 | Choice | Terminal key | What happens |
 |---|---|---|
-| Execute | `e` | Runs the plan with the planning conversation still in context |
-| Execute with clean context | `c` | Clears the conversation; the agent starts from the plan alone |
-| Execute with compacted context | `s` | Summarises the planning discussion, then runs the plan |
-| Keep planning | `k` | Returns to planning with your feedback |
+| Execute | `1`, then Enter | Runs the plan with the planning conversation still in context |
+| Execute with clean context | `2`, then Enter | Clears the conversation; the agent starts from the plan alone |
+| Execute with compacted context | `3`, then Enter | Summarises the planning discussion, then runs the plan |
+| Keep planning | `4`, then Enter | Closes the review for you to write your feedback in the composer; the plan stays under review until you send it |
 | Not now | `Esc` | Closes the review and leaves it pending |
+
+In the terminal the plan is drawn as Chat draws Markdown, with its sections listed beside it when
+the terminal is wide enough. A digit only selects a choice and Enter carries it out, so no single
+key approves a plan; a click on a choice only selects it as well. On a short or narrow terminal the
+choices show as their digits with short labels (`Execute`, `Clean`, `Compacted`, `Keep planning`),
+wrapped over as many rows as they need. A terminal too small to show the whole model name above
+the choices reads `widen the terminal to execute`, and the execute choices do nothing until it does.
+
+| Key | In the terminal review |
+|---|---|
+| ↑ / ↓, j / k, PgUp / PgDn, Space, Home / End, g / G, the wheel | Scroll the plan |
+| `[` / `]` | The previous or next section; a click on a section in the outline goes to it |
+| `c` | Mark or unmark the section you are reading for feedback |
+| `d` | Show what changed since the submission before (from the second submission on), and back |
+| `m` | Change the model that would execute |
+| Esc, q | Close the review and leave it pending |
+
+From the second submission on, the first row counts the sections that changed, are new or were
+removed since the one before, and the outline marks changed and added sections `~` and `+`. `d` shows only those:
+a changed section as its removed and added lines, a new section whole, a removed one by name.
+
+**Keep planning** puts the headings you marked into the composer as quoted lines, after anything
+you had already typed there. Write what should change under them and send it.
 
 To run the plan on a different model, change the model first (`m` in the terminal review, or
 the model picker in the app) and then pick any of the execute choices. The change takes

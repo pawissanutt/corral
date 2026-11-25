@@ -2,7 +2,7 @@
 // document, and the owner's review choice starts execution. The phase is read from the transcript, so a
 // restart restores it and a rewind undoes it. Nothing here changes the system prompt or the tool list.
 import { createHash, randomBytes } from "node:crypto";
-import { lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -32,7 +32,7 @@ export type PlanRecord = z.infer<typeof Saved>;
 export type PlanPhase = PlanRecord["phase"];
 export type PlanChoice = "execute" | "execute_clean" | "execute_compact" | "revise";
 /** A plan whose kickoff reached the transcript. */
-export interface ApprovedPlan { readonly title: string; readonly revision: number; readonly path: string }
+export interface ApprovedPlan { readonly title: string; readonly revision: number; readonly path: string; readonly digest?: string }
 type NoteKind = "contract" | "left" | "pointer";
 
 export interface PlanEntry {
@@ -100,6 +100,32 @@ const WITHDRAWN = "its review is no longer open";
 const ANSWERING = "This review is already being answered; wait for it";
 
 const sha = (text: string): string => createHash("sha256").update(text).digest("hex");
+/** A submission's write-once copy and the digest of its text. */
+interface SavedCopy { readonly path: string; readonly digest: string }
+/**
+ * A submission's copy as it is on disk: an ordinary file no larger than a plan whose text has `digest`. A link is not followed and a special file is not waited on; undefined for anything else.
+ */
+function readCopy(path: string, digest: string): string | undefined {
+  let fd: number | undefined;
+  try {
+    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const stat = fstatSync(fd);
+    if (!stat.isFile() || stat.size > PLAN_MAX_BYTES) return undefined;
+    const buffer = Buffer.allocUnsafe(stat.size);
+    let done = 0;
+    while (done < buffer.length) {
+      const count = readSync(fd, buffer, done, buffer.length - done, done);
+      if (!count) break;
+      done += count;
+    }
+    const body = buffer.toString("utf8", 0, done);
+    return sha(body) === digest ? body : undefined;
+  } catch {
+    return undefined;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
 const heading = (text: string): string | undefined => /^[ \t]*#[ \t]+(.+?)[ \t]*$/m.exec(text)?.[1]?.trim() || undefined;
 const slug = (title: string): string => title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48) || "plan";
 // A rewind rolls the revision back, so the submission's own id is what makes a card and its copy unique.
@@ -122,7 +148,8 @@ function taggedFor(entry: PlanEntry, field: typeof PLAN_KICKOFF | typeof PLAN_FE
   return typeof card === "string" ? card : undefined;
 }
 
-interface Scan { record: PlanRecord; approved?: ApprovedPlan; due: readonly NoteKind[] }
+/** `previous`: the submission that the one under review replaced on this branch. */
+interface Scan { record: PlanRecord; approved?: ApprovedPlan; previous?: SavedCopy; due: readonly NoteKind[] }
 
 /**
  * The phase and what the model has not yet been told about it, read from the branch alone. A review ends as
@@ -132,6 +159,7 @@ interface Scan { record: PlanRecord; approved?: ApprovedPlan; due: readonly Note
 function scan(entries: readonly PlanEntry[]): Scan {
   let record = OFF, announced = false, told = false;
   let approved: ApprovedPlan | undefined;
+  let shown: SavedCopy | undefined, previous: SavedCopy | undefined;
   let due: Exclude<NoteKind, "contract"> | undefined;
   for (const entry of entries) {
     if (entry.type === "custom" && entry.customType === PLAN_ENTRY) {
@@ -142,6 +170,12 @@ function scan(entries: readonly PlanEntry[]): Scan {
       if (next.phase === "off") announced = told = false;
       record = next;
       approved = undefined;
+      // A review compares against the submission it replaces on this branch, never a sibling a rewind left behind.
+      if (next.phase === "off") shown = previous = undefined;
+      else if (next.phase === "review") {
+        previous = shown;
+        shown = next.path && next.digest ? { path: next.path, digest: next.digest } : undefined;
+      }
     } else if (entry.type === "compaction") {
       // A summary is not the contract, and a later one can lose an approved plan's text.
       announced = false;
@@ -153,9 +187,10 @@ function scan(entries: readonly PlanEntry[]): Scan {
         else if (kind === due) due = undefined;
       }
     } else if (record.phase === "review" && record.path && taggedFor(entry, PLAN_KICKOFF) === cardId(record)) {
-      approved = { title: record.title ?? "Plan", revision: record.revision, path: record.path };
+      approved = { title: record.title ?? "Plan", revision: record.revision, path: record.path, ...(record.digest ? { digest: record.digest } : {}) };
       record = { version: 1, phase: "off", revision: record.revision, at: record.at };
       announced = told = false;
+      shown = previous = undefined;
       due = undefined;
     } else if (record.phase === "review" && taggedFor(entry, PLAN_FEEDBACK) === cardId(record)) {
       // The owner's own message is feedback: planning resumes with it, and the review returns without it.
@@ -163,7 +198,7 @@ function scan(entries: readonly PlanEntry[]): Scan {
     }
   }
   // The read-only rules hold in review too, so a turn there needs the contract as much as a planning one.
-  if (record.phase !== "off") return { record, due: announced ? [] : ["contract"] };
+  if (record.phase !== "off") return { record, ...(record.phase === "review" && previous ? { previous } : {}), due: announced ? [] : ["contract"] };
   return { record, ...(approved ? { approved } : {}), due: due ? [due] : [] };
 }
 
@@ -196,6 +231,13 @@ export class PlanMode {
   get phase(): PlanPhase { return this.record.phase; }
   /** The plan whose kickoff started the work now under way, until plan mode is entered again. */
   get approved(): ApprovedPlan | undefined { return this.read().approved; }
+  /** Read the submitted copy that the owner approved, not the editable draft. */
+  approvedText(): string | undefined {
+    const approved = this.approved;
+    if (!approved) return undefined;
+    // A copy that cannot be checked against what was approved is not shown as it.
+    return approved.digest ? readCopy(approved.path, approved.digest) : undefined;
+  }
   /** The id of the open review card, which names one submission. */
   get review(): string | undefined {
     const record = this.record;
@@ -217,8 +259,11 @@ export class PlanMode {
     this.announce();
   }
 
-  /** What a view shows of the mode: a rewind can replace one pending review with another in the same phase. */
-  private get shown(): string { return `${this.phase} ${this.review ?? ""}`; }
+  /** A rewind can replace a pending review or approved copy without changing the phase. */
+  private get shown(): string {
+    const { record, approved } = this.read();
+    return `${record.phase} ${record.phase === "review" ? cardId(record) : approved?.path ?? ""}`;
+  }
 
   private announce(): void {
     this.seen = this.shown;
@@ -377,12 +422,7 @@ export class PlanMode {
   /** A submission's copy as it is on disk now, or undefined when it is missing or no longer matches its digest. */
   private copy(record: PlanRecord): string | undefined {
     if (record.phase !== "review" || !record.path || !record.digest) return undefined;
-    try {
-      const body = readFileSync(record.path, "utf8");
-      return sha(body) === record.digest ? body : undefined;
-    } catch {
-      return undefined;
-    }
+    return readCopy(record.path, record.digest);
   }
 
   /** The text of the submission under review, for showing; execution reads the copy again. */
@@ -393,6 +433,15 @@ export class PlanMode {
       this.submitted = body === undefined ? undefined : { card, body };
     }
     return this.submitted?.body;
+  }
+
+  /**
+   * The submission before the one under review, as it was submitted: what a review compares against. Undefined
+   * for a first submission, or when that copy is gone.
+   */
+  previousText(): string | undefined {
+    const { record, previous } = this.read();
+    return record.phase === "review" && previous ? readCopy(previous.path, previous.digest) : undefined;
   }
 
   /** The review card while a submission awaits the owner. Its id names the submission, so an older answer is missing. */
