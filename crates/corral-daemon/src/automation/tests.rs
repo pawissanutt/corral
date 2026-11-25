@@ -41,9 +41,10 @@ impl Fixture {
         mut send: impl FnMut(&str, &str, Option<&str>, &str, &str) -> Delivery,
     ) -> bool {
         pass(
-            self.dir.path(),
+            &fence(self.dir.path()).unwrap(),
             &self.store,
             &self.config,
+            None,
             Timestamp::from_second(minute * 60).unwrap(),
             &mut send,
         )
@@ -51,7 +52,7 @@ impl Fixture {
     }
 
     fn record(&self) -> Record {
-        read(&self.dir.path().join("automation/rule.json"))
+        record(&self.dir.path().join("automation/rule.json"))
             .unwrap()
             .unwrap()
     }
@@ -87,7 +88,8 @@ fn claim_precedes_delivery_and_restart_never_retries() {
     let seq = f.event(EventKind::Blocked);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         f.tick(1, |rule, profile, prior, _, text| {
-            assert_eq!((rule, profile, prior), ("rule", "pi", None));
+            assert_eq!((rule, prior), ("rule", None));
+            assert_eq!(profile, effective(&f.config, "rule").unwrap());
             assert_eq!(f.record().claim, Some(format!("event:{seq}")));
             assert_eq!(f.record().cursor, seq);
             assert!(!text.contains("private policy"));
@@ -126,7 +128,13 @@ fn failed_attempt_and_skips_survive_rollback() {
     assert_eq!(r.claim, Some(format!("event:{first}")));
     assert_eq!(r.last_skip, Some(format!("event:{second}")));
     f.event(EventKind::Blocked);
-    assert!(!f.tick(4, forbidden));
+    assert!(f.tick(4, forbidden));
+    let status = health(f.dir.path(), &f.config).unwrap();
+    assert_eq!(
+        status["rule"].outcome.as_deref(),
+        Some("failed · 2 rate-limited matches")
+    );
+    assert_eq!(status["rule"].error.as_deref(), Some("offline"));
     let r = f.record();
     assert_eq!(r.skipped, 2);
     assert_eq!(r.health.error.as_deref(), Some("offline"));
@@ -198,4 +206,79 @@ fn event_pages_advance_in_sequence_order() {
         chat: None
     }));
     assert_eq!(f.record().health.outcome.as_deref(), Some("skipped"));
+}
+
+#[test]
+fn save_activation_and_rapid_pause_preserve_only_post_save_events() {
+    let mut f = Fixture::new(None);
+    let before = f.event(EventKind::Blocked);
+    let now = Timestamp::from_second(60).unwrap();
+    let lock = fence(f.dir.path()).unwrap();
+    stage(&lock, [0; 32], [1; 32], &f.config, before, now).unwrap();
+    let first = f.event(EventKind::Blocked);
+    // An unrelated save before the first pass must carry the old watermark.
+    stage(&lock, [1; 32], [3; 32], &f.config, first, now).unwrap();
+    let manifest = activation::load(&lock, [3; 32]).unwrap().unwrap();
+    let mut sent = Vec::new();
+    let mut collect = |_: &str, _: &str, _: Option<&str>, _: &str, text: &str| {
+        sent.push(
+            serde_json::from_str::<serde_json::Value>(text).unwrap()["seq"]
+                .as_u64()
+                .unwrap(),
+        );
+        Delivery {
+            outcome: "sent".into(),
+            error: None,
+            chat: None,
+        }
+    };
+    assert!(
+        pass(
+            &lock,
+            &f.store,
+            &f.config,
+            Some(&manifest),
+            now,
+            &mut collect
+        )
+        .unwrap()
+    );
+
+    let now = Timestamp::from_second(120).unwrap();
+    f.config.automation.rules.get_mut("rule").unwrap().enabled = false;
+    stage(&lock, [3; 32], [2; 32], &f.config, first, now).unwrap();
+    let paused = f.event(EventKind::Blocked);
+    f.config.automation.rules.get_mut("rule").unwrap().enabled = true;
+    stage(&lock, [2; 32], [1; 32], &f.config, paused, now).unwrap();
+    let resumed = f.event(EventKind::Blocked);
+    let manifest = activation::load(&lock, [1; 32]).unwrap().unwrap();
+    assert!(
+        pass(
+            &lock,
+            &f.store,
+            &f.config,
+            Some(&manifest),
+            now,
+            &mut collect
+        )
+        .unwrap()
+    );
+    assert_eq!(sent, [first, resumed]);
+}
+
+#[test]
+fn unpublished_candidate_does_not_replace_live_activation() {
+    let f = Fixture::new(None);
+    let now = Timestamp::from_second(60).unwrap();
+    let lock = fence(f.dir.path()).unwrap();
+    stage(&lock, [0; 32], [1; 32], &f.config, 0, now).unwrap();
+    let original = activation::load(&lock, [1; 32]).unwrap().unwrap();
+    stage(&lock, [1; 32], [2; 32], &f.config, 5, now).unwrap();
+    let recovered = activation::load(&lock, [1; 32]).unwrap().unwrap();
+    assert_eq!(
+        original.rules["rule"].generation,
+        recovered.rules["rule"].generation
+    );
+    assert_eq!(recovered.rules["rule"].cursor, 0);
+    assert!(activation::load(&lock, [2; 32]).unwrap().is_none());
 }

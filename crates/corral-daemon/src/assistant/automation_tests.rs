@@ -34,7 +34,29 @@ event = "blocked"
 }
 
 fn fire(shared: &Shared, id: Option<&str>) -> Result<String> {
-    deliver(shared, "rule", "pi", id, "fire-1", "untrusted trigger")
+    let policy = crate::automation::effective(&load_config(shared)?, "rule")?;
+    deliver(shared, "rule", &policy, id, "fire-1", "untrusted trigger")
+}
+
+#[test]
+fn same_profile_does_not_admit_a_stale_policy() {
+    let (_dir, shared) = fixture();
+    save_rule(&shared, true, "first policy");
+    let policy = crate::automation::effective(&load_config(&shared).unwrap(), "rule").unwrap();
+    save_rule(&shared, true, "second policy");
+    let error = deliver(&shared, "rule", &policy, None, "stale", "trigger").unwrap_err();
+    assert!(error.to_string().contains("policy changed"));
+    let policy = crate::automation::effective(&load_config(&shared).unwrap(), "rule").unwrap();
+    let path = shared.root().join(crate::STATE_DIR).join("corral.toml");
+    let text = fs::read_to_string(&path).unwrap();
+    fs::write(
+        &path,
+        text.replace("event = \"blocked\"", "cron = \"* * * * *\""),
+    )
+    .unwrap();
+    let error = deliver(&shared, "rule", &policy, None, "stale", "trigger").unwrap_err();
+    assert!(error.to_string().contains("policy changed"));
+    assert_eq!(allocated_chat(&shared, "rule").unwrap(), None);
 }
 
 #[test]

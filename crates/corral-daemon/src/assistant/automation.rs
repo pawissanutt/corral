@@ -237,10 +237,11 @@ fn retire(shared: &Shared, chat: &mut Chat, active: Option<SessionRef>) -> Resul
     Ok(())
 }
 
+/// The scheduler holds its workspace fence through this admission.
 pub(crate) fn deliver(
     shared: &Shared,
     rule: &str,
-    profile: &str,
+    policy: &str,
     chat: Option<&str>,
     input_id: &str,
     text: &str,
@@ -252,14 +253,14 @@ pub(crate) fn deliver(
         .unwrap_or_else(|error| error.into_inner());
     // Automation is itself explicit opt-in; it need not also enable the quick thread.
     let config = load_config(shared)?;
-    let (saved_profile, instructions) = saved(&config, rule)?;
-    if saved_profile != profile {
+    let (profile, instructions) = saved(&config, rule)?;
+    if crate::automation::effective(&config, rule)? != policy {
         return Err(refuse(
-            "automation profile changed since firing was scheduled",
+            "automation policy changed since firing was scheduled",
             vec![],
         ));
     }
-    let launch = launch_settings(&config, saved_profile)?;
+    let launch = launch_settings(&config, profile)?;
     if let Some(id) = chat {
         ensure!(number(id).is_some(), "invalid automation chat id");
         if lookup(shared, id)?.is_some_and(|chat| !belongs(&chat, rule)) {

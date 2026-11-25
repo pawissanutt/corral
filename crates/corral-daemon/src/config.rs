@@ -6,7 +6,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use corral_engine::{Config, Refusal};
+use corral_engine::{Config, Refusal, Store};
 use corral_protocol::config::ConfigDocument;
 use sha2::{Digest, Sha256};
 
@@ -45,7 +45,7 @@ pub(crate) fn get_at(root: &Path) -> Result<ConfigDocument> {
 }
 
 pub(crate) fn put(shared: &Shared, mut document: ConfigDocument) -> Result<ConfigDocument> {
-    Config::check(shared.root(), &document.toml).map_err(|problems| {
+    let candidate = Config::check(shared.root(), &document.toml).map_err(|problems| {
         let mut reason = String::from("configuration problems:");
         for problem in &problems {
             reason.push_str(&format!("\n{problem}"));
@@ -57,6 +57,7 @@ pub(crate) fn put(shared: &Shared, mut document: ConfigDocument) -> Result<Confi
         }
     })?;
     let state = shared.root().join(crate::STATE_DIR);
+    let fence = crate::automation::fence(&state)?;
     let path = path(shared.root());
     let mut file =
         tempfile::NamedTempFile::new_in(&state).context("create candidate configuration")?;
@@ -68,9 +69,26 @@ pub(crate) fn put(shared: &Shared, mut document: ConfigDocument) -> Result<Confi
     file.as_file()
         .set_permissions(permissions)
         .context("set candidate configuration permissions")?;
+    file.as_file().sync_all()?;
+    let current = fingerprint(shared.root())?.context("missing corral.toml")?;
+    let digest = Sha256::digest(document.toml.as_bytes()).into();
+    let store = Store::open(&state.join("corral.db"))?;
     shared.update_config_fingerprint(|| {
-        file.persist(&path).context("replace corral.toml")?;
-        Ok(Some(Sha256::digest(document.toml.as_bytes()).into()))
+        // An immediate transaction excludes event writers through config publication.
+        store.transaction(|store| {
+            crate::automation::stage(
+                &fence,
+                current,
+                digest,
+                &candidate,
+                store.latest_seq()?,
+                jiff::Timestamp::now(),
+            )?;
+            file.persist(&path).context("replace corral.toml")?;
+            fs::File::open(&state)?.sync_all()?;
+            Ok(())
+        })?;
+        Ok(Some(digest))
     })?;
     document.revision = Some(revision(&document.toml));
     Ok(document)

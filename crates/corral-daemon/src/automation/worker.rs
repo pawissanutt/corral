@@ -4,7 +4,7 @@ use std::{sync::Arc, thread, time::Duration};
 use corral_engine::{Config, Store};
 use jiff::Timestamp;
 
-use super::{Delivery, pass};
+use super::{Delivery, activation, fence, pass};
 use crate::{assistant::automation as chat, state::Shared};
 
 pub(crate) fn start(shared: &Arc<Shared>) {
@@ -25,13 +25,23 @@ pub(crate) fn start(shared: &Arc<Shared>) {
                 if shared.lock().stop {
                     break;
                 }
-                let result = Config::load(&state_dir.join("corral.toml")).and_then(|config| {
+                let result = (|| {
+                    let fence = fence(&state_dir)?;
+                    let digest = crate::config::fingerprint(shared.root())?
+                        .ok_or_else(|| anyhow::anyhow!("missing corral.toml"))?;
+                    let config = Config::load(&state_dir.join("corral.toml"))?;
+                    anyhow::ensure!(
+                        crate::config::fingerprint(shared.root())? == Some(digest),
+                        "configuration changed while loading"
+                    );
+                    let manifest = activation::load(&fence, digest)?;
                     pass(
-                        &state_dir,
+                        &fence,
                         &store,
                         &config,
+                        manifest.as_ref(),
                         Timestamp::now(),
-                        &mut |rule, profile, prior, id, text| {
+                        &mut |rule, policy, prior, id, text| {
                             if shared.lock().stop {
                                 return Delivery {
                                     outcome: "skipped".into(),
@@ -39,7 +49,7 @@ pub(crate) fn start(shared: &Arc<Shared>) {
                                     chat: prior.map(str::to_owned),
                                 };
                             }
-                            match chat::deliver(&shared, rule, profile, prior, id, text) {
+                            match chat::deliver(&shared, rule, policy, prior, id, text) {
                                 Ok(chat) => Delivery {
                                     outcome: "sent".into(),
                                     error: None,
@@ -65,7 +75,7 @@ pub(crate) fn start(shared: &Arc<Shared>) {
                             }
                         },
                     )
-                });
+                })();
                 match result {
                     Ok(changed) => {
                         previous_error = None;
