@@ -72,15 +72,10 @@ fn coverage_is_stated_overall_and_per_group_with_the_reason_the_rest_is_missing(
         },
     );
     let page = page(&state, &feed);
-    assert!(page.head.contains("1 of 3 runs"), "{}", page.head);
-    assert!(page.head.contains("reported usage on their start day"));
-    assert!(
-        page.coverage
-            .unwrap()
-            .reasons
-            .iter()
-            .any(|reason| reason.contains("no cost"))
-    );
+    let gaps = page.gaps.as_ref().unwrap();
+    assert!(gaps.reasons[0].contains("1 of 3 runs"), "{}", gaps.reasons[0]);
+    assert!(gaps.reasons[0].contains("reported usage on their start day"));
+    assert!(gaps.reasons.iter().any(|reason| reason.contains("no cost")));
     let total = page.total.as_ref().unwrap();
     assert_eq!(total.covered, "1 of 3");
     let claude = page.rows.iter().find(|row| row.key == "claude").unwrap();
@@ -94,7 +89,7 @@ fn coverage_is_stated_overall_and_per_group_with_the_reason_the_rest_is_missing(
             .contains("without matching usage in this group on the start day")
     );
     let pi = page.rows.iter().find(|row| row.key == "pi").unwrap();
-    assert_eq!(pi.covered, "1 of 1");
+    assert_eq!(pi.covered, "1");
     assert!(pi.reasons.as_deref().unwrap().contains("no reported cost"));
     assert!(!page.headers.contains(&"Run time"));
     let days = page.days.unwrap();
@@ -238,7 +233,7 @@ fn estimate_is_kept_apart_from_reported_cost_and_its_coverage_is_stated() {
         },
     );
     let page = page(&state, &feed);
-    assert_eq!(page.headers[4..], ["Reported", "API est."]);
+    assert_eq!(page.headers[4..], ["Est. cost", "Reported"]);
     assert!(page.estimate_note.contains("not a charge"));
     let total = page.total.as_ref().unwrap();
     assert_eq!(total.cost, "$0.50");
@@ -270,7 +265,7 @@ fn estimate_is_kept_apart_from_reported_cost_and_its_coverage_is_stated() {
         (codex.cost.as_str(), codex.estimate.as_str()),
         (UNKNOWN, UNKNOWN)
     );
-    let reasons = page.coverage.unwrap().reasons.join(" ");
+    let reasons = page.gaps.unwrap().reasons.join(" ");
     assert!(reasons.contains("covers 3 of the 5 requests"), "{reasons}");
     assert!(
         reasons.contains("later requests are still included"),

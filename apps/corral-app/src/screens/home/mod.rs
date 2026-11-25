@@ -13,6 +13,8 @@ mod panels;
 mod parts;
 mod phone;
 
+pub(crate) use dash::tile;
+
 use nsh_core::prelude::*;
 
 use crate::model::Form;

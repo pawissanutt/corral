@@ -11,10 +11,10 @@ pub use period::{Days, Local, MOST_DAYS, PERIODS, Period, State, local, series_r
 
 use corral_types::UsageBy;
 
+use crate::model::home::Tile;
+
 /// Usage page title.
 pub const TITLE: &str = "Usage";
-/// Desktop page subtitle.
-pub const SUBTITLE: &str = "tokens and cost the agents reported · visibility only, no routing";
 /// Stands in for a figure corral does not hold; the page's closing note says so once.
 pub const UNKNOWN: &str = "—";
 
@@ -36,12 +36,30 @@ pub enum Status {
     Loading,
 }
 
-/// What the totals leave out besides the runs the head names: requests that reported tokens
-/// without a price. Held in tone.
+/// Under the tiles: what the totals leave out in one quiet line, and, behind Details, every
+/// reason in full with the notes on where the figures come from.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Coverage {
+pub struct Gaps {
+    /// "Cost reported for 1,514 of 31,843 requests · estimate covers 23,686 of 31,843 · …",
+    /// or [`ALL_COVERED`] when nothing is missing.
+    pub line: String,
+    /// Something is missing: the line leads with the held ◐ marker.
+    pub partial: bool,
+    /// The Details section is expanded.
+    pub open: bool,
+    /// The period's reasons in full: the run-coverage sentence first.
     pub reasons: Vec<String>,
+    /// Each row with reasons, in row order: (the row's key as shown, its reasons).
+    pub groups: Vec<(String, String)>,
+    /// The full estimate note with rate sources, the quota note, the disclaimer, the zone.
+    pub notes: Vec<String>,
 }
+
+/// The coverage line when nothing is missing.
+pub const ALL_COVERED: &str = "Every request reported tokens and cost.";
+/// The Details toggle's labels, closed and open.
+pub const DETAILS: &str = "Details";
+pub const HIDE_DETAILS: &str = "Hide details";
 
 /// One day of the period in the per-day view: its height against the period's busiest day and
 /// its facts in words.
@@ -88,7 +106,8 @@ pub struct GroupRow {
     pub named: bool,
     /// A task's title, after its id.
     pub detail: Option<String>,
-    /// "1 of 2": the group's runs that reported usage, of those started in the period.
+    /// The group's runs that reported usage, of those started in the period: "18" when every
+    /// run did, "12 of 14" when not.
     pub covered: String,
     /// Some of the group's runs reported no usage: the coverage is held in tone.
     pub runs_missing: bool,
@@ -108,8 +127,8 @@ impl GroupRow {
     /// The figures in one line, for a form with no table.
     pub fn summary(&self) -> String {
         format!(
-            "covers {} runs · {} requests · {} in · {} out · reported {} · API est. {}",
-            self.covered, self.requests, self.input, self.output, self.cost, self.estimate
+            "{} runs · {} requests · {} in · {} out · est. {} · reported {}",
+            self.covered, self.requests, self.input, self.output, self.estimate, self.cost
         )
     }
 }
@@ -118,13 +137,13 @@ impl GroupRow {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Page {
     pub status: Status,
-    /// The head's line: which runs the totals cover and why the rest are missing, once
-    /// corrald has answered for the period.
+    /// The head's line: the period's days and how many.
     pub head: String,
-    /// The period's days, how many, and the local time they are counted in.
-    pub period: String,
-    /// None until corrald has answered for the period, and while nothing else is missing.
-    pub coverage: Option<Coverage>,
+    /// Tokens, the estimate, the reported cost and the runs; empty until corrald has answered
+    /// for the period.
+    pub stats: Vec<Tile>,
+    /// What the totals leave out; None until corrald has answered for the period.
+    pub gaps: Option<Gaps>,
     pub days: Option<DayStrip>,
     /// "By profile".
     pub group_title: String,
@@ -132,14 +151,10 @@ pub struct Page {
     pub rows: Vec<GroupRow>,
     /// The period's totals under the rows.
     pub total: Option<GroupRow>,
-    /// That no harness reports quota or remaining allowance.
-    pub quota: &'static str,
-    /// That the estimate column is separate from the reported cost.
+    /// One line under the table: what the estimate column is and is not.
     pub estimate_note: String,
     /// Said in place of the rows.
     pub rows_empty: Option<&'static str>,
-    /// One short paragraph on where the figures come from and what [`UNKNOWN`] means.
-    pub disclaimer: &'static str,
     /// Deduplicated read errors; render once above the content.
     pub notices: Vec<String>,
     /// The custom range's fields, while Custom is chosen.

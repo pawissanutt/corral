@@ -1,14 +1,16 @@
 //! Activity › Usage: the tokens and cost agent hosts reported over a period of local days,
-//! visibility only. The head says which runs the totals cover ("covers N of M runs; the other K
-//! ran on a harness that reports no usage"); then the tokens of each day, one table grouped by
-//! the selected key (profile, model, task or day) with each group's own coverage and the
-//! period's total under it, that quota is unknown, and where the figures come from. Desktop puts
-//! the period and grouping switches in the page head and keeps the page to `MEASURE_PAGE`,
-//! centred; the terminal and the phone put them at the top of the scroll, where they wrap. Loading, stale and failed reads are said once, compactly,
-//! above the content. Every word and figure is `model::usage`'s.
+//! visibility only. The head says the period's days; then four tiles (tokens, the estimate,
+//! the reported cost, the runs), one quiet line of what the totals leave out with Details for
+//! every reason (`gaps`), the tokens of each day, one table grouped by the selected key
+//! (profile, model, task or day) with the period's total under it, and a line on what the
+//! estimate is. Desktop puts the period and grouping switches in the page head and keeps the
+//! page to `MEASURE_PAGE`, centred; the terminal and the phone put them at the top of the
+//! scroll, where they wrap. Loading, stale and failed reads are said once, compactly, above
+//! the content. Every word and figure is `model::usage`'s.
 
 mod controls;
 mod days;
+mod gaps;
 mod shown;
 mod table;
 
@@ -16,7 +18,7 @@ use nsh_core::element::cell_size;
 use nsh_core::prelude::*;
 
 use crate::model::text::span;
-use crate::model::usage::{Coverage, Page, Status, TITLE};
+use crate::model::usage::{Page, Status, TITLE};
 use crate::model::{Form, Hue};
 use crate::screens::activity::subnav;
 use crate::state::AppState;
@@ -39,8 +41,9 @@ const COLUMN: f32 = 8.0;
 
 /// The Usage page on every form. test ids: "page-title" (desktop and terminal head),
 /// "usage" (the scroll), "seg-period-<n>", "seg-by-<n>", "field-usage-from", "field-usage-to",
-/// "btn-usage-apply", "usage-head", "usage-period", "usage-coverage", "usage-days",
-/// "usage-groups", "usage-row-<key>", "usage-estimate", "usage-quota", "btn-retry-usage".
+/// "btn-usage-apply", "usage-head", "usage-stats", "stat-usage-<key>", "usage-coverage",
+/// "btn-usage-details", "usage-details", "usage-days", "usage-groups", "usage-row-<key>",
+/// "usage-estimate", "btn-retry-usage".
 pub fn screen(app: AppState) -> AnyElement {
     shown::keep_loaded(app);
     let data = computed(move || shown::shown(app));
@@ -52,7 +55,7 @@ pub fn screen(app: AppState) -> AnyElement {
 }
 
 /// Above the content: the loading or stale state, then corrald's read failure said once with
-/// its Retry, then what else the totals leave out, held.
+/// its Retry.
 fn status(app: AppState, page: &Page) -> Vec<AnyElement> {
     let pad = |element: AnyElement| match app.form {
         Form::Terminal => element,
@@ -79,10 +82,6 @@ fn status(app: AppState, page: &Page) -> Vec<AnyElement> {
             None,
         )),
     };
-    let coverage = page
-        .coverage
-        .as_ref()
-        .map(|coverage| coverage_notice(app, coverage));
     state
         .into_iter()
         .chain(page.notices.iter().map(|line| {
@@ -95,25 +94,11 @@ fn status(app: AppState, page: &Page) -> Vec<AnyElement> {
             );
             notice(app, Hue::Fail, &vec![span(line.as_str())], Some(retry))
         }))
-        .chain(coverage)
         .map(pad)
         .collect()
 }
 
-/// Each reason a figure is missing, held in tone.
-fn coverage_notice(app: AppState, coverage: &Coverage) -> AnyElement {
-    let words: Vec<_> = coverage
-        .reasons
-        .iter()
-        .map(|reason| span(reason.as_str()))
-        .collect();
-    view()
-        .test_id("usage-coverage")
-        .child(notice(app, Hue::Held, &words, None))
-        .into_element()
-}
-
-/// Quiet small words that wrap rather than clip: the period line and the closing notes.
+/// Quiet small words that wrap rather than clip: the closing line.
 fn quiet(app: AppState, content: impl Into<SharedString>, test_id: &str) -> AnyElement {
     let words = text(content.into()).test_id(test_id);
     match app.form {
@@ -137,8 +122,8 @@ fn measured(width: Signal<Option<f32>>) -> impl Fn(&Bounds<Points>) + 'static {
     }
 }
 
-/// The content under the controls, at `room` (desktop points, or terminal Cells): the period,
-/// the status, the days, the groups with their total, quota and the note.
+/// The content under the controls, at `room` (desktop points, or terminal Cells): the status,
+/// the tiles, the coverage line, the days, the groups with their total and the estimate line.
 fn content(app: AppState, page: &Page, records: bool, room: usize) -> AnyElement {
     let form = app.form;
     let block = |child: AnyElement, top: f32, bottom: f32| match form {
@@ -150,7 +135,6 @@ fn content(app: AppState, page: &Page, records: bool, room: usize) -> AnyElement
             .child(child)
             .into_element(),
     };
-    let period = block(quiet(app, page.period.clone(), "usage-period"), 4.0, 0.0);
     // The phone's table sets each group as a record of its own.
     let groups = if form == Form::Phone {
         section(
@@ -168,9 +152,14 @@ fn content(app: AppState, page: &Page, records: bool, room: usize) -> AnyElement
         block(groups, 8.0, 10.0)
     };
     view()
-        .child(period)
         .children(status(app, page))
         .children((form == Form::Terminal).then(term::blank))
+        .children(gaps::stats(app, page).map(|stats| block(stats, 12.0, 4.0)))
+        .children(
+            page.gaps
+                .as_ref()
+                .map(|gaps| block(gaps::strip(app, gaps), 8.0, 4.0)),
+        )
         .children(
             page.days
                 .as_ref()
@@ -180,14 +169,12 @@ fn content(app: AppState, page: &Page, records: bool, room: usize) -> AnyElement
         .child(block(
             quiet(app, page.estimate_note.clone(), "usage-estimate"),
             0.0,
-            4.0,
+            24.0,
         ))
-        .child(block(quiet(app, page.quota, "usage-quota"), 0.0, 4.0))
-        .child(block(quiet(app, page.disclaimer, "usage-note"), 4.0, 24.0))
         .into_element()
 }
 
-/// The head with what the totals cover as its line, made again when that line changes.
+/// The head with the period's days as its line, made again when that line changes.
 fn page_head(
     app: AppState,
     data: Memo<Page>,

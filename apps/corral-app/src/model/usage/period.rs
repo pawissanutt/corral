@@ -104,6 +104,8 @@ pub struct State {
     pub to: String,
     /// Why the typed range was not applied, until the fields change.
     pub refused: Option<String>,
+    /// The coverage details are expanded.
+    pub details: bool,
 }
 
 impl Default for State {
@@ -115,6 +117,7 @@ impl Default for State {
             from: String::new(),
             to: String::new(),
             refused: None,
+            details: false,
         }
     }
 }
@@ -136,6 +139,12 @@ impl State {
     /// Choose a grouping.
     pub fn select_by(&mut self, by: UsageBy) {
         self.by = by;
+    }
+
+    /// Expand or collapse the coverage details; a period or grouping change keeps them as
+    /// they are.
+    pub fn toggle_details(&mut self) {
+        self.details = !self.details;
     }
 
     /// Choose a period. Custom opens on the days shown until now, typed into its fields, so the

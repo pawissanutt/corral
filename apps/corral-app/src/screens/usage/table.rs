@@ -2,7 +2,8 @@
 //! tokens and cost reported for it, the period's total under them. Figures sit at the trailing
 //! edge in tabular mono;
 //! a figure corral does not hold is the model's quiet dash. A group whose figures are partial
-//! holds its coverage in the held tone and says why under its key. Where the width has no room
+//! holds its coverage in the held tone and marks it ◐, its reasons in the hint (and behind
+//! the page's Details, where the phone, which has no hint, reads them). Where the width has no room
 //! for its columns the groups are records instead; the phone's table sets each row as a record
 //! on its own. test_id "usage-groups".
 
@@ -11,13 +12,14 @@ use nsh_core::prelude::*;
 use crate::model::usage::{GroupRow, Page, UNKNOWN};
 use crate::model::{Form, Hue};
 use crate::state::AppState;
+use crate::ui::kit::hint::hinted;
 use crate::ui::kit::marks::hue_ink;
 use crate::ui::kit::page::Width;
 use crate::ui::kit::table::utable;
 use crate::ui::kit::text::{dim, mono, plain};
-use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
+use crate::ui::tokens::{FONT_MONO, Token, color};
 
-/// Desktop figure columns: room for "12 of 14", "1.2M", "$1,061", "Reported" and "API est.".
+/// Desktop figure columns: room for "12 of 14", "1.2M", "$1,061", "Est. cost" and "Reported".
 const DESKTOP: [Width; 6] = [
     Width::Fill,
     Width::Fixed(96.0),
@@ -58,19 +60,8 @@ fn figure(form: Form, content: &str, ink: AdaptiveColor) -> AnyElement {
     }
 }
 
-/// Why a group is partial, small, in the held tone; it wraps rather than lose its reason.
-fn reasons(form: Form, words: &str) -> Text {
-    let line = text(words.to_owned())
-        .min_w(px(0.0))
-        .text_color(hue_ink(Hue::Held));
-    match form {
-        Form::Terminal => line,
-        Form::Desktop | Form::Phone => line.font_family(FONT_TEXT).text_size(px(11.5)),
-    }
-}
-
 /// A group's key in mono, quiet when the group has none, then a task's title in ink-2, cut to
-/// its room; under them, why the group is partial.
+/// its room; a partial group's held ◐ after them, its reasons in the hint.
 fn key(app: AppState, row: &GroupRow) -> AnyElement {
     let name = mono(app, row.key.clone())
         .number_of_lines(1u32)
@@ -92,18 +83,22 @@ fn key(app: AppState, row: &GroupRow) -> AnyElement {
                 .flex_shrink(1.0)
                 .min_w(px(0.0))
                 .text_color(color(Token::Ink2))
+        }))
+        .children(row.reasons.clone().map(|why| {
+            let marker = text("◐")
+                .flex_shrink_0()
+                .text_color(hue_ink(Hue::Held));
+            hinted(app, marker, why)
         }));
     view()
         .test_id(&row.id)
         .flex_1()
         .min_w(px(0.0))
-        .gap(px(1.0))
         .child(line)
-        .children(row.reasons.as_deref().map(|words| reasons(app.form, words)))
         .into_element()
 }
 
-/// One group as a record: its key and reasons, then its figures in one quiet line.
+/// One group as a record: its key, then its figures in one quiet line.
 fn record(app: AppState, row: &GroupRow) -> AnyElement {
     view()
         .gap(px(2.0))
@@ -151,8 +146,8 @@ pub fn table(app: AppState, page: &Page, records: bool) -> AnyElement {
                         figure(form, &row.covered, covered),
                         figure(form, &row.input, ink),
                         figure(form, &row.output, ink),
-                        figure(form, &row.cost, ink),
                         figure(form, &row.estimate, ink),
+                        figure(form, &row.cost, ink),
                     ]
                 })
                 .collect(),

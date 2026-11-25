@@ -1,8 +1,10 @@
 //! corral's recorded usage over the chosen period as the Usage page. Run coverage counts
-//! only requests on each run's start day; costs also include requests on later days. A note
-//! says how many requests reported tokens without a price. Then the per-day view and one table
-//! grouped by the selected key, each group with its own coverage and reasons, the period's
-//! total under it.
+//! only requests on each run's start day; costs also include requests on later days. The
+//! period's figures as tiles, what they leave out in one line (`summary`) with every reason
+//! behind Details, then the per-day view and one table grouped by the selected key, each
+//! partial group marked with its reasons, the period's total under it.
+
+mod summary;
 
 use std::collections::BTreeMap;
 
@@ -11,10 +13,17 @@ use corral_types::{UsageBy, UsageGroup, UsageSummary, UsageTotal};
 use jiff::civil::Date;
 
 use super::{
-    Coverage, CustomRange, DayBar, DayStrip, Days, GroupRow, Local, MOST_DAYS, Page, Period,
-    SUBTITLE, State, Status, UNKNOWN, count, local, money, plural, series_request, tokens,
+    CustomRange, DayBar, DayStrip, Days, GroupRow, Local, MOST_DAYS, Page, Period, State, Status,
+    UNKNOWN, count, local, money, plural, series_request, tokens,
 };
 use crate::model::daemon::{DetailCache, Feed};
+
+/// What the totals leave out besides the runs: tokens, prices and estimate coverage, each
+/// reason a sentence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Coverage {
+    reasons: Vec<String>,
+}
 
 /// The subscription topic of the usage totals.
 const TOPIC: &str = "usage";
@@ -42,7 +51,7 @@ fn unpriced(total: &UsageTotal) -> u64 {
     total.requests.saturating_sub(total.priced_requests)
 }
 
-/// The head's line names runs with no usage evidence.
+/// Which runs reported usage on their start day, and how many did not.
 fn covers(summary: &UsageSummary) -> String {
     let (covered, total) = (summary.covered_runs, summary.total_runs);
     if total == 0 {
@@ -285,13 +294,17 @@ fn floor_money(value: f64) -> String {
     }
 }
 
-/// Said under the table: what the estimate column is and is not, beside the reported one.
-const ESTIMATE_NOTE: &str = "Reported is the price agent hosts recorded. API est. is an \
+/// Said behind Details: what the estimate column is and is not, beside the reported one.
+const ESTIMATE_NOTE: &str = "Reported is the price agent hosts recorded. Est. cost is an \
                              API-equivalent estimate: the tokens at configured or known API \
                              rates. It is not a charge or a subscription quota, and is never \
                              added to Reported.";
 
-/// Said under the table: corral holds no quota for any harness.
+/// Said under the table: the estimate column in one line.
+const LEGEND: &str = "Est. cost is an API-equivalent estimate at known rates: not a charge or \
+                      a quota, and never added to Reported.";
+
+/// Said behind Details: corral holds no quota for any harness.
 const QUOTA: &str = "Quota is unknown: no harness reports quota or remaining allowance.";
 
 fn add(sum: &mut UsageTotal, total: &UsageTotal) {
@@ -416,7 +429,11 @@ fn group_coverage(group: &UsageGroup) -> (String, bool, Option<String>) {
                     plural(total - covered, "run", "runs")
                 ));
             }
-            format!("{covered} of {total}")
+            if covered >= total {
+                covered.to_string()
+            } else {
+                format!("{covered} of {total}")
+            }
         }
         _ => UNKNOWN.to_owned(),
     };
@@ -522,7 +539,7 @@ fn total_row(summary: &UsageSummary) -> GroupRow {
         covered_runs: Some(summary.covered_runs),
         total_runs: Some(summary.total_runs),
     };
-    // The head and the note above say why the totals are partial; the row does not repeat it.
+    // The coverage line above says why the totals are partial; the row does not repeat it.
     GroupRow {
         reasons: None,
         ..group_row("usage-row-total".into(), "Total".into(), true, None, &group)
@@ -647,8 +664,8 @@ fn offset_words(minutes: i16) -> String {
     format!("UTC{sign}{:02}:{:02}", minutes / 60, minutes % 60)
 }
 
-/// "Thu 22 Oct – Wed 18 Nov 2026 · 28 days · local time, Europe/Warsaw (UTC+01:00)".
-fn period_words(days: Days, local: &Local) -> String {
+/// "Thu 22 Oct – Wed 18 Nov 2026 · 28 days".
+fn range_words(days: Days) -> String {
     let range = if days.first == days.last {
         long_day(days.first)
     } else if days.first.year() == days.last.year() {
@@ -656,14 +673,32 @@ fn period_words(days: Days, local: &Local) -> String {
     } else {
         format!("{} – {}", long_day(days.first), long_day(days.last))
     };
+    format!(
+        "{range} · {}",
+        plural(u64::try_from(days.count()).unwrap_or(0), "day", "days")
+    )
+}
+
+/// "Days are counted in local time, Europe/Warsaw (UTC+01:00)."
+fn zone_words(local: &Local) -> String {
     let zone = match &local.zone {
         Some(zone) => format!("{zone} ({})", offset_words(local.offset_minutes)),
         None => offset_words(local.offset_minutes),
     };
-    format!(
-        "{range} · {} · local time, {zone}",
-        plural(u64::try_from(days.count()).unwrap_or(0), "day", "days")
-    )
+    format!("Days are counted in local time, {zone}.")
+}
+
+/// The estimate note with the rate sources the period's estimate used.
+fn estimate_words(summary: &UsageSummary) -> String {
+    let sources = &summary.total.estimate_sources;
+    if sources.is_empty() {
+        ESTIMATE_NOTE.to_owned()
+    } else {
+        format!(
+            "{ESTIMATE_NOTE} Rate sources: {}.",
+            sources.iter().cloned().collect::<Vec<_>>().join(", ")
+        )
+    }
 }
 
 /// Suppress repeated transport wrappers without hiding the actual daemon cause.
@@ -728,11 +763,20 @@ pub fn page(state: &State, feed: &Feed) -> Page {
         (None, Some(_)) => Some("The period's totals could not be read."),
         (None, None) => Some("Loading the period's totals from corrald…"),
     };
+    let gaps = summary.as_ref().map(|summary| {
+        let notes = vec![
+            estimate_words(summary),
+            QUOTA.to_owned(),
+            DISCLAIMER.to_owned(),
+            zone_words(&local),
+        ];
+        summary::gaps(summary, &rows, state.details, notes)
+    });
     Page {
         status: status(cache),
-        head: summary.as_ref().map_or_else(|| SUBTITLE.to_owned(), covers),
-        period: period_words(days, &local),
-        coverage: summary.as_ref().and_then(coverage),
+        head: range_words(days),
+        stats: summary.as_ref().map(summary::stats).unwrap_or_default(),
+        gaps,
         days: series.map(|series| day_strip(days, series)),
         group_title: format!("By {}", header(by).to_lowercase()),
         headers: [
@@ -740,28 +784,13 @@ pub fn page(state: &State, feed: &Feed) -> Page {
             "Runs",
             "Input",
             "Output",
+            "Est. cost",
             "Reported",
-            "API est.",
         ],
         total: summary.as_ref().filter(|_| !rows.is_empty()).map(total_row),
-        quota: QUOTA,
-        estimate_note: summary.as_ref().map_or_else(
-            || ESTIMATE_NOTE.to_owned(),
-            |summary| {
-                let sources = &summary.total.estimate_sources;
-                if sources.is_empty() {
-                    ESTIMATE_NOTE.to_owned()
-                } else {
-                    format!(
-                        "{ESTIMATE_NOTE} Rate sources: {}.",
-                        sources.iter().cloned().collect::<Vec<_>>().join(", ")
-                    )
-                }
-            },
-        ),
+        estimate_note: LEGEND.to_owned(),
         rows,
         rows_empty,
-        disclaimer: DISCLAIMER,
         notices: notices(
             feed.topics
                 .get(TOPIC)

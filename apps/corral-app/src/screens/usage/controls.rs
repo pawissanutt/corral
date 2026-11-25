@@ -21,8 +21,9 @@ const FIELD_CELLS: f32 = 14.0;
 /// The phone's least touch target.
 const TARGET: f32 = 44.0;
 
-/// Runs `change` on the page's selection state; the switches and fields cause no effects.
-fn change(app: AppState, change: impl FnOnce(&mut State) + 'static) {
+/// Runs `change` on the page's selection state; the switches, fields and the Details toggle
+/// cause no effects.
+pub(super) fn change(app: AppState, change: impl FnOnce(&mut State) + 'static) {
     app.act(app.usage, |state, _| {
         change(state);
         Vec::new()

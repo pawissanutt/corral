@@ -154,7 +154,8 @@ fn tiles(app: AppState, scope: Memo<Scope>) -> AnyElement {
     .into_element()
 }
 
-fn tile(app: AppState, tile: Tile) -> AnyElement {
+/// One number with its label and the line under it; Usage draws its tiles with it too.
+pub(crate) fn tile(app: AppState, tile: Tile) -> AnyElement {
     let form = app.form;
     let spoken = format!(
         "{}: {}, {}. {}",
