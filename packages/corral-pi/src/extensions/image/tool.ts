@@ -21,12 +21,13 @@ export class ImageGeneration {
 
   close(): void { this.stopped.abort(); }
 
-  tool(scope: ImageScope): ToolDefinition {
+  tool(scope: ImageScope, platform = process.platform): ToolDefinition {
+    const root = platform === "linux" ? scope.root : undefined;
     const { provider, model } = this.route;
     const billing = provider === "openai" ? "api" : "subscription";
     return { name: "image_gen", label: "Generate image",
       description: `Generate one PNG using ${provider}/${model} (${billing === "api" ? "metered image model" : "experimental subscription carrier; backend selects image model"}). `
-        + (scope.root ? "Requires an explicit new .png path under this session's directory; returns a preview and saves the PNG." : "Read-only preview. Do not pass a path."),
+        + (root ? "Requires an explicit new .png path under this session's directory; returns a preview and saves the PNG." : "Preview only. Do not pass a path."),
       parameters: Type.Object({ prompt: Type.String({ minLength: 1, maxLength: 8000 }), path: Type.Optional(Type.String({ minLength: 1, maxLength: 4096 })) }, { additionalProperties: false }),
       execute: async (_id, { prompt, path }: { prompt: string; path?: string }, caller) => {
         if (typeof prompt !== "string" || !prompt.trim() || prompt.length > 8000) throw new Error("image_generation_failed: provide a nonblank prompt of at most 8000 characters");
@@ -35,15 +36,15 @@ export class ImageGeneration {
           signal.throwIfAborted();
           const refusal = scope.refusal(path);
           if (refusal) throw new Error(refusal);
-          if (!scope.root && path !== undefined) throw new Error("image_generation_unavailable: read-only preview cannot save a path");
-          if (scope.root && (!path || typeof path !== "string")) throw new Error("image_generation_unavailable: select a new relative .png path");
+          if (!root && path !== undefined) throw new Error("image_generation_unavailable: read-only preview cannot save a path");
+          if (root && (!path || typeof path !== "string")) throw new Error("image_generation_unavailable: select a new relative .png path");
         };
         check();
         if (this.busy) throw new Error("image_generation_unavailable: another image request is running");
         this.busy = true;
         let output: ReturnType<typeof preparePng> | undefined;
         try {
-          if (scope.root && path) output = preparePng(scope.root, path);
+          if (root && path) output = preparePng(root, path);
           const generated = await generateImage(this.providers, this.route, prompt, signal);
           const usage = generated.usage;
           // No image or hosted-tool fee can be inferred from a carrier's token price.

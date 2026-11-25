@@ -51,11 +51,14 @@ pub struct PiHostedToolsRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(extend("required" = ["revision", "web_search", "image_gen"]))]
 pub struct PiHostedToolsChange {
     pub revision: String,
-    /// Null restores legacy web search selection.
+    /// Null restores legacy web search selection; omission is not a clear request.
+    #[serde(deserialize_with = "Deserialize::deserialize")]
     pub web_search: Option<String>,
     /// Null removes the override (image generation defaults to disabled).
+    #[serde(deserialize_with = "Deserialize::deserialize")]
     pub image_gen: Option<String>,
 }
 
@@ -93,6 +96,13 @@ mod tests {
         };
         assert_eq!(serde_json::to_value(response).unwrap(), update);
 
+        for field in ["web_search", "image_gen"] {
+            let mut partial = update.clone();
+            partial.as_object_mut().unwrap().remove(field);
+            assert!(
+                serde_json::from_value::<PiHostedToolsRequest>(json!({"change": partial})).is_err()
+            );
+        }
         let mut extra = update;
         extra["unexpected"] = Value::Null;
         assert!(serde_json::from_value::<PiHostedToolsRequest>(json!({"change": extra})).is_err());

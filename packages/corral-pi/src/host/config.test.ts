@@ -1,11 +1,12 @@
 import { expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { bindBuildResume, parseBuildFlags } from "../build/launch.ts";
 import { createSession } from "../build/session-store.ts";
 import { buildHostConfig } from "./build.ts";
 import { parseRunFlags, workspaceSettings } from "./config.ts";
+import { readPiSettings } from "./pi-settings-file.ts";
 import { parseFallbackSettings } from "./fallback-settings.ts";
 
 
@@ -121,6 +122,18 @@ test("Build launch and child profiles use provider-qualified models and preserve
     writeFileSync(join(settings, "pi.toml"), '[build.profiles.metered]\nmodel = "anthropic/claude-opus-5-5"\nconnection = "anthropic-api"\n');
     expect(parse).toThrow('model = "anthropic-api/<model>"');
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("workspace settings read real directories on Darwin and Linux and refuse linked state", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-settings-")), state = join(root, ".corral-next");
+  try {
+    expect(readPiSettings(root)).toEqual({});
+    mkdirSync(state);
+    writeFileSync(join(state, "pi.toml"), '[hosted_tools]\nimage_gen = "off"');
+    expect(readPiSettings(root)).toEqual({ hosted_tools: { image_gen: "off" } });
+    const nested = join(root, "checkout"); mkdirSync(nested); symlinkSync(state, join(nested, ".corral-next"));
+    expect(() => readPiSettings(nested)).toThrow("invalid or unreadable");
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test("hosted routes are explicit per tool and never inherited from a bare checkout", () => {

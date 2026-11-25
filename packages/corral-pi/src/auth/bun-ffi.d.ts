@@ -10,5 +10,6 @@ declare module "bun:ffi" {
     path: string,
     symbols: T,
   ): { readonly symbols: { readonly [K in keyof T]: (...args: number[]) => unknown }; close(): void };
+  export function ptr(buffer: Uint8Array): number;
   export const read: { i32(pointer: number, offset?: number): number };
 }

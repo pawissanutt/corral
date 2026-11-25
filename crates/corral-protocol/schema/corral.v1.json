@@ -5299,7 +5299,7 @@
             "type": "string"
           },
           "web_search": {
-            "description": "Null restores legacy web search selection.",
+            "description": "Null restores legacy web search selection; omission is not a clear request.",
             "type": [
               "string",
               "null"
@@ -5307,7 +5307,9 @@
           }
         },
         "required": [
-          "revision"
+          "revision",
+          "web_search",
+          "image_gen"
         ],
         "type": "object"
       },

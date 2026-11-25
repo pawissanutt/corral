@@ -35,6 +35,7 @@ export interface ChildHooks extends AgentCommunication {
   };
   onEvent(event: HelperEvent): void;
   onToolStart(name: string, args: unknown): void;
+  onImageSaved?(path: string): void;
   onTurn(): void;
   ask(question: ChildQuestion): Promise<string>;
   openingPrompt(): string;
@@ -392,6 +393,9 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
             // SDK tool_execution_start precedes its blocking hook, so count starts only here.
             hooks.onToolStart(event.toolName, event.input);
             return undefined;
+          });
+          pi.on("tool_result", event => {
+            if (event.toolName === "image_gen" && !event.isError && typeof event.input.path === "string") hooks.onImageSaved?.(event.input.path);
           });
           const reserveSynthesis = (nextTurn: number) => {
             if (!research || signal.aborted || synthesis) return;

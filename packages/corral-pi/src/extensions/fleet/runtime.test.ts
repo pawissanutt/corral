@@ -214,11 +214,13 @@ test("task returns live ids immediately and delivers each settlement exactly onc
     controller.abort();
     expect(runtime.snapshot().children.every(child => child.state === "running")).toBe(true);
     runner.children.get("a")!.hooks.onToolStart("edit", { path: "outside.ts" });
+    runner.children.get("a")!.hooks.onImageSaved!("generated.png");
     runner.finish("a"); runner.finish("b", "Provider failed"); runtime.cancel("c");
     await flush();
     expect(delivered).toHaveLength(3);
     for (const child of runtime.snapshot().children) expect(delivered.filter(text => text === formatChildReport(child))).toHaveLength(1);
     expect(delivered.find(text => text.includes("Report from a"))).toContain("[outside owns]");
+    expect(delivered.find(text => text.includes("Report from a"))).toContain("generated.png");
     await runtime.close(); await flush();
     expect(delivered).toHaveLength(3);
   } finally { await runtime.close(); }

@@ -541,7 +541,14 @@ export class FleetRuntime implements FleetControl {
           entry.started = true;
         }
         entry.controller.signal.throwIfAborted();
+        const noteEdit = (raw: string) => {
+          if (!live(entry) || entry.value.kind !== "slice") return;
+          const path = this.path(raw);
+          const outside = entry.spec.owns.length > 0 && !entry.spec.owns.some(owned => owned === "." || path === owned || path.startsWith(`${owned}/`));
+          entry.value.edits = [...entry.value.edits.filter(edit => edit.path !== path), { path, outside, at: this.now() }];
+        };
         entry.handle = this.runner.run(entry.spec, entry.model, {
+          onImageSaved: path => { noteEdit(path); this.touch(entry, true); },
           execution: { sessionFile: entry.value.sessionFile!, sessionId: entry.request, maxTurns: entry.maxTurns, deadlineAt: entry.deadlineAt,
             research: entry.research, serviceTier: entry.serviceTier },
           onEvent: event => {
@@ -557,11 +564,7 @@ export class FleetRuntime implements FleetControl {
             const input = args && typeof args === "object" ? args as Record<string, unknown> : {};
             const short = input.path ?? input.command ?? input.pattern ?? input.question ?? "";
             entry.value.activity = `${name}${short ? ` ${String(short).replace(/\s+/g, " ").slice(0, 120)}` : ""}`;
-            if (entry.value.kind === "slice" && (name === "edit" || name === "write") && typeof input.path === "string") {
-              const path = this.path(input.path);
-              const outside = entry.spec.owns.length > 0 && !entry.spec.owns.some(owned => owned === "." || path === owned || path.startsWith(`${owned}/`));
-              entry.value.edits = [...entry.value.edits.filter(edit => edit.path !== path), { path, outside, at: this.now() }];
-            }
+            if ((name === "edit" || name === "write") && typeof input.path === "string") noteEdit(input.path);
             this.refreshUsage(entry); this.touch(entry, true);
           },
           onTurn: () => {

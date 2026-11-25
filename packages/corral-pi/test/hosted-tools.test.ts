@@ -42,7 +42,12 @@ test("preview-only bindings reject writes, and planning rejects even previews be
   expect(imageContext(recorded, { input: ["text"] }).messages[0]?.content).toEqual([result.content[0]!]);
   expect(imageContext(recorded, { input: ["text", "image"] })).toBe(recorded);
   expect(recorded.messages[0]?.content).toHaveLength(2);
+  const mac = images.tool({ root: "/workspace", refusal: () => undefined }, "darwin");
+  await expect(mac.execute("save", { prompt: "dot", path: "sample.png" }, undefined, undefined, {} as never)).rejects.toThrow("read-only");
   expect(calls).toBe(1);
+  const preview = await mac.execute("preview", { prompt: "dot" }, undefined, undefined, {} as never);
+  expect(preview.content[1]).toMatchObject({ type: "image", data: dot });
+  expect(calls).toBe(2);
   images.close();
 });
 
@@ -113,10 +118,10 @@ test("workspace tools run with the selected account, not the worker's Claude cha
     expect(failure.text).not.toContain("private failure body");
     expect(sends).toBe(2);
     const image = host.session.getToolDefinition("image_gen")!;
-    const draw = (path: string) => image.execute("img", { prompt: "draw a dot", path }, undefined, undefined, {} as never);
-    const result = await draw("sample.png");
+    const draw = (path?: string) => image.execute("img", { prompt: "draw a dot", path }, undefined, undefined, {} as never);
+    const result = await draw(process.platform === "linux" ? "sample.png" : undefined);
     expect(result.content[1]).toEqual({ type: "image", data: png, mimeType: "image/png" });
-    expect(readFileSync(join(cwd, "sample.png"), "base64")).toBe(png);
+    if (process.platform === "linux") expect(readFileSync(join(cwd, "sample.png"), "base64")).toBe(png);
     await expect(draw("sample.png")).rejects.toThrow();
     expect(imageSends).toBe(1);
     expect(host.session.model?.provider).toBe("anthropic");

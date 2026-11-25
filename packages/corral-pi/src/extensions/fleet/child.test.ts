@@ -173,7 +173,7 @@ function childImage(onRequest: () => void) {
   }, () => {});
 }
 
-test("slice executes the hosted image binding for its owned file, never the inherited image tool", async () => {
+test.skipIf(process.platform !== "linux")("slice executes the hosted image binding for its owned file, never the inherited image tool", async () => {
   const f = fixture();
   let requests = 0;
   const image = childImage(() => requests++);
