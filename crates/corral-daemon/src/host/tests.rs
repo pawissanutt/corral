@@ -48,13 +48,13 @@ fn a_counter_reset_or_long_gap_is_absent_not_zero() {
 }
 
 #[test]
-fn rates_sum_only_sources_present_in_both_readings() {
-    let prev = BTreeMap::from([("a".into(), (100, 0)), ("gone".into(), (5, 5))]);
-    let now = BTreeMap::from([("a".into(), (300, 0)), ("new".into(), (999, 999))]);
-    assert_eq!(super::rates(&prev, &now, 2.0), Some((100, 0)));
-    let disjoint = BTreeMap::from([("new".into(), (1, 1))]);
-    assert_eq!(super::rates(&prev, &disjoint, 2.0), None);
-    assert_eq!(super::rates(&prev, &now, 0.0), None);
+fn rates_are_absent_when_the_summed_sources_change() {
+    let prev = BTreeMap::from([("a".into(), (100, 0)), ("b".into(), (5, 5))]);
+    let same = BTreeMap::from([("a".into(), (300, 0)), ("b".into(), (25, 5))]);
+    assert_eq!(super::rates(&prev, &same, 2.0), Some((110, 0)));
+    let swapped = BTreeMap::from([("a".into(), (300, 0)), ("new".into(), (999, 999))]);
+    assert_eq!(super::rates(&prev, &swapped, 2.0), None);
+    assert_eq!(super::rates(&prev, &same, 0.0), None);
 }
 
 #[test]

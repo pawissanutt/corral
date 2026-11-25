@@ -105,14 +105,15 @@ pub(crate) fn cpu_percent(prev: (u64, u64), now: (u64, u64)) -> Option<f32> {
     Some(((percent * 10.0).round() / 10.0) as f32)
 }
 
-/// Summed per-second rates over the sources present in both readings. Absent when no source
-/// is shared, no time passed, or any shared counter went backwards (a reset or wrap).
+/// Summed per-second rates. Absent when the set of sources changed (the total would cover
+/// other sources than the coverage names), none is left, no time passed, or any counter went
+/// backwards (a reset or wrap).
 pub(crate) fn rates(
     prev: &BTreeMap<String, (u64, u64)>,
     now: &BTreeMap<String, (u64, u64)>,
     secs: f64,
 ) -> Option<(u64, u64)> {
-    if secs <= 0.0 {
+    if secs <= 0.0 || now.is_empty() || !prev.keys().eq(now.keys()) {
         return None;
     }
     let mut shared = 0;
@@ -212,6 +213,7 @@ impl Sampler {
                     .0;
             }
             drop(inner);
+            let started = Instant::now();
             let counters = probe.counters(origin.elapsed());
             let samples = tracker.push(counters).iter().cloned().collect();
             let metrics = HostMetrics {
@@ -222,11 +224,8 @@ impl Sampler {
                 ..empty(None)
             };
             self.lock().latest = Arc::new(Rows::Host(vec![metrics]));
-            next += interval;
-            // A late wakeup skips missed ticks rather than sampling in a burst.
-            if next < Instant::now() {
-                next = Instant::now() + interval;
-            }
+            // Measured from this reading, so a late wakeup never brings the next one closer.
+            next = started + interval;
         }
     }
 }

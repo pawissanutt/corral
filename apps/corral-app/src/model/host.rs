@@ -161,6 +161,15 @@ pub fn standing(feed: &Feed) -> Standing {
             Standing::Connecting
         };
     };
+    // A reset, an error or a reopened topic leaves the retained row: not current until a page.
+    if feed
+        .topics
+        .get("host")
+        .is_some_and(|topic| topic.stale || topic.error.is_some())
+    {
+        let age = feed.daemon_host_at.map(|at| feed.now.saturating_sub(at));
+        return Standing::Stale { age_secs: age };
+    }
     let age = feed.daemon_host_at.map(|at| feed.now.saturating_sub(at));
     let limit = (metrics.interval_ms * STALE_INTERVALS)
         .div_ceil(1000)
