@@ -403,18 +403,48 @@ fn remove_button(app: AppState, id: &str, action: crate::model::agents::Action) 
     )
 }
 
-/// The inspector of the selected session: its state, id, name and role; what it asks, with the
-/// card that answers it, or what it does; its next step, Open page and More; then its facts,
-/// its newest transcript rows and its Details in brief.
+fn keep_mode(app: AppState, id: Id) {
+    let session = id.clone();
+    let host = computed(move || app.feed.with(|feed| sessions::watch_host(feed, &session)));
+    let session = id.clone();
+    effect(move || {
+        if host.get() {
+            untracked(|| agents::watch_transcript(app, session.clone()));
+        }
+    });
+
+    let target = sessions::changes_target(&id);
+    let changes = computed(move || app.feed.with(|feed| sessions::watch_changes(feed, &id)));
+    effect(move || {
+        if changes.get() {
+            untracked(|| app.watch_detail(target.clone(), true));
+            let pinned = target.clone();
+            cleanup(move || app.watch_detail(pinned, false));
+            let target = target.clone();
+            effect(move || {
+                let needed = app.feed.with(|feed| {
+                    feed.detail(&target)
+                        .is_none_or(|cache| cache.stale && !cache.loading && cache.error.is_none())
+                });
+                if needed {
+                    untracked(|| app.load(target.clone()));
+                }
+            });
+        }
+    });
+}
+
+/// Answer first, then actions, general and mode facts, transcript and Details in brief.
 fn inspector(app: AppState, id: &Id) -> AnyElement {
     let form = app.form;
     let key = id.clone();
-    // The newest rows come from the transcript, read once for the session inspected.
+    // Open the recorded tail even if there is no reachable host to watch.
     untracked(|| {
         app.scope().load(DetailRef::Session {
             id: key.to_string(),
         })
     });
+    keep_mode(app.scope(), id.clone());
     let shown = computed(move || {
         let env = app.env();
         app.feed.with(|feed| sessions::inspect(feed, &key, env))
@@ -496,7 +526,18 @@ fn inspector(app: AppState, id: &Id) -> AnyElement {
                     move || app.open_live(live.clone()),
                 ))
                 .child(more_button(app, record, false));
-            let facts: Vec<(String, AnyElement)> = shown
+            let facts = shown
+                .facts
+                .iter()
+                .map(|(label, value)| {
+                    (
+                        (*label).to_owned(),
+                        plain(app, value.clone()).into_element(),
+                    )
+                })
+                .collect();
+            let mode: Vec<(String, AnyElement)> = shown
+                .mode
                 .facts
                 .iter()
                 .map(|(label, value)| {
@@ -539,6 +580,14 @@ fn inspector(app: AppState, id: &Id) -> AnyElement {
                     .child(actions)
                     .children(blank())
                     .child(kv(app, facts))
+                    .when(!mode.is_empty(), |body| {
+                        body.children(blank()).child(
+                            view()
+                                .test_id("inspect-mode")
+                                .child(dim(app, shown.mode.title).font_weight(FontWeight::BOLD))
+                                .child(kv(app, mode)),
+                        )
+                    })
                     .when(!latest.is_empty(), |body| {
                         body.children(blank())
                             .child(dim(app, "Latest").font_weight(FontWeight::BOLD))

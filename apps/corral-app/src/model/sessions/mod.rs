@@ -19,7 +19,9 @@ use crate::model::list::Column;
 #[cfg(test)]
 use crate::model::{Id, list::Section, projects::Scope};
 
-pub use inspect::{Inspect, Latest, inspect, latest};
+pub use inspect::{
+    Inspect, Latest, ModeBlock, changes_target, inspect, latest, watch_changes, watch_host,
+};
 pub use row::{SessionRow, row, summary};
 
 pub const TITLE: &str = "Sessions";

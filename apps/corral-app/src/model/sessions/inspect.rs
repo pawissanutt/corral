@@ -11,6 +11,9 @@ use crate::model::{Id, Live};
 
 use super::row::{SessionRow, row};
 
+mod mode;
+pub use mode::{ModeBlock, changes_target, watch_changes, watch_host};
+
 /// How many transcript rows the inspector shows.
 const LATEST: usize = 4;
 
@@ -32,6 +35,7 @@ pub struct Inspect {
     pub state: String,
     /// `project`, `corral`; only the facts reported.
     pub facts: Vec<(&'static str, String)>,
+    pub mode: ModeBlock,
     /// The run's task, whose page the task fact opens.
     pub task: Option<Id>,
     /// The newest transcript rows, oldest first; empty until the transcript is read.
@@ -106,24 +110,20 @@ pub fn inspect(feed: &Feed, id: &Id, env: Env) -> Option<Inspect> {
         _ => row.line.state.word().to_owned(),
     };
     let mut listed: Vec<(&'static str, String)> = vec![("role", row.role.clone())];
-    listed.extend(
-        row.line
-            .task
-            .as_ref()
-            .map(|task| ("task", task.to_string())),
-    );
     listed.extend(row.line.project.clone().map(|project| ("project", project)));
-    listed.extend(row.branch.clone().map(|branch| ("branch", branch)));
+    if cx.build().is_none() {
+        listed.extend(row.branch.clone().map(|branch| ("branch", branch)));
+        listed.extend(row.context.clone().map(|context| ("context", context)));
+    }
     listed.extend(row.model_effort().map(|model| ("model", model)));
     listed.extend(row.cost.clone().map(|cost| ("cost", cost)));
-    listed.extend(row.context.clone().map(|context| ("context", context)));
-    listed.extend(row.quiet.clone().map(|quiet| ("quiet", quiet)));
     listed.extend(row.age.clone().map(|age| ("age", age)));
     Some(Inspect {
         question: blocked.then(|| row.line.doing.clone()).flatten(),
         state,
         facts: listed,
-        task: row.line.task.clone(),
+        mode: mode::preview(&cx, &messages),
+        task: cx.task.cloned(),
         latest: latest(&messages),
         details: details_brief(&cx),
         row,
