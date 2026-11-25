@@ -64,7 +64,8 @@ export async function runHost(config: HostConfig, overrides: HostOverrides = {})
     config = { ...config, ...choice };
   }
   preparePrivateDirectory(config.local.dir);
-  const bridge = await startBridge({ path: config.local.socket, sessionId: id || config.identity.role, events });
+  const bridge = await startBridge({ path: config.local.socket, sessionId: id || config.identity.role,
+    sessionDir: config.local.dir, events });
   try {
     const record = openRecord(bridge.path);
     if (existing && !record.transcript) throw new SessionResumeRefused(existing, "the recorded Chat changed during launch; try again");

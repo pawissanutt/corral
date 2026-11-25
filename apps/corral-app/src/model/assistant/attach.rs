@@ -535,8 +535,8 @@ pub fn fact_chips(
     (chips, view)
 }
 
-/// The chips of transcript message `entry` (its served id) and the open one's readback, read
-/// from whichever session page this device holds it in; none while it carries nothing.
+/// The chips of transcript message `entry` (its served id), including facts merged from older
+/// pages. A session can also be cached under an alias; use the most complete copy.
 pub fn message_attachments(
     state: &State,
     feed: &Feed,
@@ -546,11 +546,13 @@ pub fn message_attachments(
         .details
         .values()
         .filter_map(|cache| match cache.body() {
-            Some(DetailBody::Session(page)) => Some(page),
+            Some(DetailBody::Session(page)) => page
+                .messages
+                .iter()
+                .find(|message| !message.id.is_empty() && message.id == entry),
             _ => None,
         })
-        .flat_map(|page| page.messages.iter())
-        .find(|message| !message.id.is_empty() && message.id == entry)
+        .max_by_key(|message| message.attachments.len())
         .map(|message| message.attachments.as_slice())
         .unwrap_or_default();
     fact_chips(state, feed, entry, facts)

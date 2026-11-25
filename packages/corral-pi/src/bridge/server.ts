@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 
 import type { RemoteHandler, RemoteRegistry } from "../host/remote/registry.ts";
 import { utf8Prefix } from "../roles/assistant/owner-action.ts";
+import { parseManifestSubmitInput } from "./attachment-manifest.ts";
 import type { BridgeEvent, EventLog, EventPage } from "./events.ts";
 import { FrameInvalid, FrameTooLarge, LineReader } from "./framing.ts";
 import {
@@ -37,6 +38,8 @@ interface EventRing {
 export interface BridgeServerOptions {
   readonly path: string;
   readonly sessionId: string;
+  /** The host's own private launch directory, never supplied by a request. */
+  readonly sessionDir?: string;
   readonly events: EventLog;
   readonly handlers?: BridgeHandlers;
   readonly liveEvents?: EventRing;
@@ -143,8 +146,12 @@ export async function startBridge(options: BridgeServerOptions): Promise<BridgeS
     if (close) socket.end();
   };
 
-  const submit = async (host: BridgeHandlers, frame: Pick<RequestFrame, "id" | "args">, automation = false): Promise<Record<string, unknown>> => {
-    const input = parseSubmitInput(frame.args);
+  const submit = async (host: BridgeHandlers, frame: Pick<RequestFrame, "id" | "args">,
+    mode?: "manifest" | "automation"): Promise<Record<string, unknown>> => {
+    const automation = mode === "automation";
+    const input = mode === "manifest"
+      ? parseManifestSubmitInput(frame.args, options.sessionDir)
+      : parseSubmitInput(frame.args);
     const identity = { request_id: frame.id, input: input.inputId ?? frame.id };
     const request = { ...identity, origin: input.origin, busy_policy: input.busyPolicy };
     const outcome = automation
@@ -182,7 +189,8 @@ export async function startBridge(options: BridgeServerOptions): Promise<BridgeS
       case "hello": return host.hello();
       case "get_state": return host.state();
       case "submit_input": return submit(host, frame);
-      case "submit_automation_v2": return submit(host, frame, true);
+      case "submit_input_manifest": return submit(host, frame, "manifest");
+      case "submit_automation_v2": return submit(host, frame, "automation");
       case "retire_automation": return host.retireAutomation?.() ?? { retired: false, reason: "unbound_automation" };
       case "answer": return host.answer(parseAnswer(frame.args));
       case "pause": return host.pause();

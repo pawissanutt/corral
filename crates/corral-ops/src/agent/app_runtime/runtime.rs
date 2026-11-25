@@ -8,6 +8,9 @@ use corral_protocol::subscription::LiveText;
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 
+// Leave room for the authenticated envelope in the 64 KiB bridge frame.
+const OWNER_TURN_ARGS_MAX: usize = 62 * 1024;
+
 pub struct Runtime {
     session: String,
     generation: u32,
@@ -411,7 +414,6 @@ fn deliver(ctx: &Ctx, runtime: &mut Runtime) -> Result<bool> {
         .as_u64()
         .context("host state has no current turn")?
         + 1;
-    let mut grounded = context(ctx, &message)?;
     let mut args = json!({ "entry": message.id, "input": input,
         "turn": turn, "text": message.text, "device": message.device,
         "via": format!("app:{}", message.device), "typed_at": message.typed_at, "context": "" });
@@ -419,11 +421,24 @@ fn deliver(ctx: &Ctx, runtime: &mut Runtime) -> Result<bool> {
         args["attachments"] = json!(materialized.metadata);
     }
     let base = serde_json::to_vec(&args)?.len();
-    ensure!(
-        base <= 62 * 1024,
-        "owner input exceeds authenticated bridge frame"
-    );
-    bound_json_text(&mut grounded, 62 * 1024 - base);
+    let Some(context_budget) = OWNER_TURN_ARGS_MAX.checked_sub(base) else {
+        // This entry cannot fit even with no optional context. Preserve the owner's words and
+        // attachments, but fail it before delivery rather than blocking the rest of the queue.
+        ctx.store.update_app_message(&message.id, |m| {
+            if matches!(m.state.as_str(), "sent" | "waiting" | "late") {
+                m.state = "failed".into();
+                m.turn = None;
+                m.failure = Some(concat!(
+                    "owner_input_too_large: Message text and attachment metadata exceed the assistant bridge frame. ",
+                    "Shorten the message or split the attachments across sends."
+                ).into());
+            }
+            Ok(())
+        })?;
+        return Ok(true);
+    };
+    let mut grounded = context(ctx, &message)?;
+    bound_json_text(&mut grounded, context_budget);
     args["context"] = Value::String(grounded);
     // Persist before writing to the socket; if that write becomes uncertain, restart cannot
     // silently run a second turn. Same-host bridge keys settle a retry without double execution.

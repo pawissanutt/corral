@@ -140,6 +140,132 @@ fn transcript_first_paint_waits_for_no_older_page_and_prepend_joins_split_record
 }
 
 #[test]
+fn attachment_only_pages_extend_chips_and_survive_a_refresh() {
+    use corral_protocol::attachment::{AttachmentFact, AttachmentKind};
+
+    use crate::model::assistant::{State, attachment_ref, message_attachments};
+
+    let runtime = nsh_core::element::Runtime::default();
+    let _entered = runtime.enter();
+    let feed = signal(Feed::default());
+    let mut app = AppState::new();
+    app.ready = true;
+    let entry = "B-1/entry/owner";
+    let digest = "ab".repeat(32);
+    let part = |stamp: &str, words: &[&str], names: &[&str], older: &str| {
+        let mut wire = page(stamp, &[(entry, words)], Some(older));
+        let message = &mut wire["body"]["body"]["messages"][0];
+        message["author"] = value("user");
+        // Equal digests are allowed; these are distinct facts with distinct labels.
+        message["attachments"] = value(
+            names
+                .iter()
+                .map(|name| AttachmentFact {
+                    id: digest.clone(),
+                    kind: AttachmentKind::File,
+                    name: (*name).into(),
+                    media_type: Some("text/plain".into()),
+                    bytes: Some(4),
+                    sha256: Some(digest.clone()),
+                    url: None,
+                })
+                .collect::<Vec<_>>(),
+        );
+        wire
+    };
+    let check = |names: &[&str]| {
+        feed.with_untracked(|feed| {
+            let mut state = State::default();
+            let (chips, _) = message_attachments(&state, feed, entry);
+            assert_eq!(
+                chips
+                    .iter()
+                    .map(|chip| chip.label.as_str())
+                    .collect::<Vec<_>>(),
+                names
+                    .iter()
+                    .map(|name| format!("file {name} · 4 B"))
+                    .collect::<Vec<_>>()
+            );
+            let effects = state.act_live(chips[0].open.clone().unwrap(), feed);
+            assert!(
+                matches!(effects.as_slice(), [crate::model::effect::Effect::Detail(request)]
+                if request.target == attachment_ref(entry, &digest))
+            );
+        });
+        assert_eq!(
+            shown(feed),
+            [(entry.to_owned(), vec!["owner words".to_owned()])]
+        );
+    };
+    let (a, b, c) = ("first.txt", "second.txt", "third.txt");
+    let words: &[&str] = &["owner words"];
+    let empty: &[&str] = &[];
+    // An old daemon kept a prefix. A suffix of the same length does not cover that history.
+    let prefix: DetailReply = decode(part("old-daemon", words, &[a], "before")).unwrap();
+    let held_prefix = DetailCache {
+        target: target(),
+        pages: vec![prefix.clone()],
+        merged: prefix.body,
+        transcript_seams: Default::default(),
+        loading: false,
+        stale: false,
+        error: None,
+    };
+    let suffix: DetailReply = decode(part("v1", words, &[c], "older")).unwrap();
+    assert!(history_missing(
+        &held_prefix,
+        std::slice::from_ref(&suffix),
+        session(&suffix).unwrap()
+    ));
+
+    let get = read(&mut app, feed, None);
+    let next = reply(&mut app, feed, get, None, part("v1", words, &[c], "older"));
+    assert!(next.is_empty());
+    check(&[c]);
+
+    let get = read(&mut app, feed, Some("older"));
+    let next = reply(
+        &mut app,
+        feed,
+        get,
+        Some("older"),
+        part("v1", empty, &[a, b], "before"),
+    );
+    assert!(next.is_empty());
+    check(&[a, b, c]);
+
+    let get = read(&mut app, feed, None);
+    let get = reply(
+        &mut app,
+        feed,
+        get,
+        None,
+        part("v2", words, &[b, c], "v2-older"),
+    );
+    assert_eq!(
+        get.len(),
+        1,
+        "a refresh must recover the held attachment-only history"
+    );
+    check(&[a, b, c]);
+    let next = reply(
+        &mut app,
+        feed,
+        get,
+        Some("v2-older"),
+        part("v2", empty, &[a], "v2-before"),
+    );
+    assert!(next.is_empty());
+    check(&[a, b, c]);
+    feed.with_untracked(|feed| {
+        let cache = feed.detail(&target()).unwrap();
+        assert!(cache.error.is_none());
+        assert!(cache.pages.iter().all(|part| part.etag == "v2"));
+    });
+}
+
+#[test]
 fn latest_page_refresh_does_not_chase_a_displaced_record() {
     let runtime = nsh_core::element::Runtime::default();
     let _entered = runtime.enter();

@@ -390,6 +390,80 @@ fn pi_spills_text_that_exceeds_the_serialized_frame_limit() {
 }
 
 #[test]
+fn pi_spills_expanded_attachment_metadata_and_removes_it_after_each_submission() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let socket = dir.path().join("pi.sock");
+    let digest = "0".repeat(64);
+    let refs: Vec<_> = (1..=180)
+        .map(|i| json!({"kind": "upload", "upload": format!("phone:{i}"), "sha256": digest}))
+        .collect();
+    let attachments: Vec<_> = (1..=refs.len())
+        .map(|i| {
+            json!({"id": format!("a{i}"), "kind": "file", "name": "n".repeat(160),
+            "media_type": "t".repeat(160), "bytes": 1, "sha256": digest})
+        })
+        .collect();
+    assert!(serde_json::to_vec(&refs).unwrap().len() < 60 * 1024);
+    let expanded = serde_json::to_vec(&attachments).unwrap();
+    assert!(expanded.len() > FRAME_MAX);
+    let opened = Arc::new(Mutex::new(Vec::new()));
+    let respond = |disposition: &'static str| -> Handler {
+        let dir = dir.path().to_owned();
+        let expanded = expanded.clone();
+        let opened = Arc::clone(&opened);
+        Box::new(move |request| {
+            assert_eq!(request["command"], "submit_input_manifest");
+            let args = request["args"].as_object().unwrap();
+            assert!(!args.contains_key("attachments"));
+            assert_eq!(args["text"], ""); // Attachment-only input stays attachment-only.
+            assert_eq!(args["origin"], "owner");
+            assert_eq!(args["busy_policy"], "follow_up");
+            assert_eq!(args["input_id"], "phone:input");
+            assert_eq!(args["to"], "parent");
+            assert_eq!(args["typed_at"], "2026-11-18T12:00:00Z");
+            assert_eq!(args["device"], "phone");
+            let meta = &args["attachments_manifest"];
+            let name = meta["name"].as_str().unwrap();
+            assert_eq!(Path::new(name).file_name().unwrap(), name);
+            let path = dir.join(name);
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+            assert_eq!(fs::read(&path).unwrap(), expanded);
+            assert_eq!(meta["bytes"], expanded.len());
+            assert_eq!(meta["sha256"], format!("{:x}", Sha256::digest(&expanded)));
+            opened.lock().unwrap().push(path);
+            json!({"request_id": request["id"], "input": "phone:input", "disposition": disposition})
+        })
+    };
+    let host = serve(&socket, vec![respond("rejected"), respond("queued")]);
+    let client = Client::with_dir(&socket, dir.path());
+    let tag = InputTag {
+        input_id: "phone:input",
+        to: Some("parent"),
+        typed_at: Some("2026-11-18T12:00:00Z"),
+        device: Some("phone"),
+        follow_up: true,
+        attachments: &attachments,
+    };
+    assert!(client.submit_input_tagged("", Origin::Owner, tag).is_err());
+    assert!(!opened.lock().unwrap()[0].exists());
+    assert_eq!(
+        client
+            .submit_input_tagged("", Origin::Owner, tag)
+            .unwrap()
+            .disposition,
+        Disposition::Queued
+    );
+    host.join().unwrap();
+    let paths = opened.lock().unwrap();
+    assert_ne!(paths[0], paths[1]);
+    assert!(!paths[1].exists());
+}
+
+#[test]
 fn a_tagged_reply_keeps_the_owners_input_id() {
     let fixture = Fixture::new();
     let launch = fixture.launch("R1", "agent");

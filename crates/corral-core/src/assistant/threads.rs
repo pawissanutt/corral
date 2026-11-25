@@ -345,9 +345,10 @@ impl Store {
         message.rev += 1;
         let mut head = self.app_thread_head(&message.session)?;
         head.rev += 1;
+        // Failed deliveries still have durable history and owner actions, but are not queued.
         if matches!(
             message.state.as_str(),
-            "done" | "withdrawn" | "saved" | "pm_replied" | "uncertain"
+            "done" | "withdrawn" | "saved" | "pm_replied" | "uncertain" | "failed"
         ) {
             head.pending.retain(|seq| *seq != message.seq);
         }

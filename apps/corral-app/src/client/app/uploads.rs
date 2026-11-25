@@ -2,6 +2,11 @@ use super::*;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use corral_protocol::rpc::ErrorCode;
 use sha2::{Digest, Sha256};
+#[cfg(not(target_arch = "wasm32"))]
+use std::{
+    collections::VecDeque,
+    sync::{Arc, Mutex, OnceLock},
+};
 
 // Picker bytes remain Arc-shared. Native file reads own one bounded allocation.
 enum Bytes {
@@ -303,10 +308,11 @@ impl AppState {
         if feed.with_untracked(|feed| feed.uploads.contains_key(request.upload.as_str())) {
             return vec![];
         }
+        let id = Id::from(&request.upload);
         let error = (!self.ready).then(offline);
         feed.update(|feed| {
             feed.uploads.insert(
-                Id::from(&request.upload),
+                id.clone(),
                 UploadState {
                     kind: request.kind.clone(),
                     name: name.clone(),
@@ -324,16 +330,16 @@ impl AppState {
         if error.is_some() {
             return vec![];
         }
-        // NSH's controller runs on the UI thread: only this worker opens/reads the handle.
-        std::thread::spawn(move || {
-            let result = read_local(&request.path, &request.kind);
-            requests::send(ClientRequest::AttachLoaded {
-                upload: request.upload,
-                kind: request.kind,
-                name,
-                result,
+        if enqueue_local_read(request, name).is_err() {
+            feed.update(|feed| {
+                if let Some(state) = feed.uploads.get_mut(id.as_str()) {
+                    state.status = UploadStatus::Failed(failure(
+                        "local_read_failed",
+                        "Cannot start a local file reader; try again.",
+                    ));
+                }
             });
-        });
+        }
         vec![]
     }
     #[cfg(not(target_arch = "wasm32"))]
@@ -435,6 +441,89 @@ fn validate_bytes(
     }
 }
 #[cfg(not(target_arch = "wasm32"))]
+const LOCAL_READ_WORKERS: usize = 2;
+#[cfg(not(target_arch = "wasm32"))]
+type LocalRead = Box<dyn FnOnce() + Send>;
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+struct LocalReads {
+    pending: VecDeque<LocalRead>,
+    workers: usize,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Default)]
+struct LocalReadQueue(Arc<Mutex<LocalReads>>);
+
+#[cfg(not(target_arch = "wasm32"))]
+impl LocalReadQueue {
+    fn push(&self, job: LocalRead) -> std::io::Result<()> {
+        // Enqueue and worker retirement share the lock so a job cannot miss its drainer.
+        let mut state = self.0.lock().unwrap();
+        if state.workers < LOCAL_READ_WORKERS {
+            let queue = self.clone();
+            match std::thread::Builder::new()
+                .name("corral-local-read".into())
+                .spawn(move || queue.drain())
+            {
+                Ok(_) => state.workers += 1,
+                Err(error) if state.workers == 0 => return Err(error),
+                // A running worker can still take this job.
+                Err(_) => {}
+            }
+        }
+        state.pending.push_back(job);
+        Ok(())
+    }
+
+    fn drain(&self) {
+        loop {
+            let job = {
+                let mut state = self.0.lock().unwrap();
+                let Some(job) = state.pending.pop_front() else {
+                    state.workers -= 1;
+                    return;
+                };
+                job
+            };
+            // Never hold the queue lock during disk I/O or completion delivery.
+            job();
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn enqueue_local_read(request: requests::AttachPath, name: String) -> std::io::Result<()> {
+    static QUEUE: OnceLock<LocalReadQueue> = OnceLock::new();
+    let queue = QUEUE.get_or_init(LocalReadQueue::default);
+    let load = move || ClientRequest::AttachLoaded {
+        result: read_local(&request.path, &request.kind),
+        upload: request.upload,
+        kind: request.kind,
+        name,
+    };
+    #[cfg(not(windows))]
+    queue.push(Box::new(move || {
+        requests::send(load());
+    }))?;
+    #[cfg(windows)]
+    {
+        // The Windows request sender is thread-local to the UI executor.
+        let (sender, receiver) = futures_channel::oneshot::channel();
+        queue.push(Box::new(move || {
+            let _ = sender.send(load());
+        }))?;
+        spawn(async move {
+            if let Ok(loaded) = receiver.await {
+                requests::send(loaded);
+            }
+        });
+    }
+    Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn local_name(path: &str) -> String {
     let name = std::path::Path::new(path)
         .file_name()
@@ -525,6 +614,48 @@ fn read_local(path: &str, kind: &AttachmentKind) -> Result<(Vec<u8>, String), Cl
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn local_reads_queue_a_burst_behind_two_workers() {
+        use std::{sync::mpsc, time::Duration};
+
+        let queue = LocalReadQueue::default();
+        let gate = Arc::new(Mutex::new(()));
+        let blocked = gate.lock().unwrap();
+        let (started, starts) = mpsc::channel();
+        let (finished, finishes) = mpsc::channel();
+        let jobs = 64;
+        let timeout = Duration::from_secs(5);
+        for n in 0..jobs {
+            let (gate, started, finished) = (gate.clone(), started.clone(), finished.clone());
+            queue
+                .push(Box::new(move || {
+                    let _ = started.send(n);
+                    let _guard = gate.lock();
+                    let _ = finished.send(n);
+                }))
+                .unwrap();
+        }
+        let mut running: Vec<_> = (0..LOCAL_READ_WORKERS)
+            .map(|_| starts.recv_timeout(timeout).unwrap())
+            .collect();
+        running.sort_unstable();
+        assert_eq!(running, (0..LOCAL_READ_WORKERS).collect::<Vec<_>>());
+        {
+            let state = queue.0.lock().unwrap();
+            assert_eq!(state.workers, LOCAL_READ_WORKERS);
+            assert_eq!(state.pending.len(), jobs - LOCAL_READ_WORKERS);
+        }
+        drop(blocked);
+
+        let mut completed: Vec<_> = (0..jobs)
+            .map(|_| finishes.recv_timeout(timeout).unwrap())
+            .collect();
+        completed.sort_unstable();
+        assert_eq!(completed, (0..jobs).collect::<Vec<_>>());
+    }
+
     #[test]
     fn text_and_image_boundary_checks_precede_upload() {
         assert!(

@@ -14,7 +14,7 @@ export const INPUT_REPLY_MS = 30_000;
 export const EVENT_PAGE_BYTES = FRAME_MAX_BYTES - 4 * 1024;
 
 export const COMMANDS = [
-  "hello", "get_state", "submit_input", "submit_automation_v2", "retire_automation", "cancel", "events_since", "live_since", "shutdown", "queue_state", "queue_withdraw",
+  "hello", "get_state", "submit_input", "submit_input_manifest", "submit_automation_v2", "retire_automation", "cancel", "events_since", "live_since", "shutdown", "queue_state", "queue_withdraw",
   "set_model", "answer", "pause", "resume", "rewind",
 ] as const;
 export type Command = typeof COMMANDS[number];
@@ -79,6 +79,7 @@ export function parseFrame<C>(value: unknown, resolveCommand: (name: string) => 
 }
 
 export function parseSubmitInput(args: Record<string, unknown>): SessionInput {
+  if (Object.hasOwn(args, "attachments_manifest")) throw new BridgeRefusal("bad_attachment", "manifest requires submit_input_manifest");
   const { text, busy_policy: busyPolicy = "steer", origin, attachments } = args;
   if (typeof text !== "string" || Buffer.byteLength(text) > INPUT_MAX_BYTES ||
       (!text.trim() && (attachments === undefined || Array.isArray(attachments) && attachments.length === 0))) {

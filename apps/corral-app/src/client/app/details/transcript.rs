@@ -37,6 +37,7 @@ pub(in crate::client::app) fn prepend(newer: &mut SessionPage, mut older: Sessio
         && first.id == last.id
     {
         last.items.append(&mut first.items);
+        last.attachments.append(&mut first.attachments);
         newer.messages.remove(0);
     }
     older.messages.append(&mut newer.messages);
@@ -78,7 +79,17 @@ fn history_missing(cache: &DetailCache, pages: &[DetailReply], current: &Session
     if (wanted > 0 || first.items.is_empty()) && fragments.peek().is_none() {
         return true;
     }
-    if fragments.flat_map(|m| &m.items).filter(ordinary).count() < wanted {
+    // Match facts newest-first as well. The old preview may contain an attachment prefix,
+    // while the new snapshot starts with a suffix and needs attachment-only pages to reach it.
+    let mut attachments = first.attachments.iter().rev().peekable();
+    let mut items = 0;
+    for message in fragments {
+        items += message.items.iter().filter(ordinary).count();
+        for fact in message.attachments.iter().rev() {
+            let _ = attachments.next_if(|wanted| *wanted == fact);
+        }
+    }
+    if items < wanted || attachments.peek().is_some() {
         return true;
     }
     let mut results: BTreeSet<_> = first.items.iter().filter_map(result_id).collect();
@@ -417,6 +428,7 @@ impl AppState {
                         && last.id == first.id
                     {
                         last.items.extend(first.items.iter().cloned());
+                        last.attachments.extend(first.attachments.iter().cloned());
                     } else {
                         newest.messages.push(first.clone());
                     }

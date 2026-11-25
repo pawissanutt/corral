@@ -146,16 +146,26 @@ fn branch_key(id: &str) -> u128 {
     u128::from_be_bytes(key)
 }
 
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+struct Skipped {
+    items: usize,
+    attachments: usize,
+}
+
 impl Branch {
-    fn cursor(self, stamp: &str, end: u64, skip: usize) -> Option<String> {
+    fn cursor(self, stamp: &str, end: u64, skip: Skipped) -> Option<String> {
         if end == 0 {
             return None;
         }
-        match self {
-            Self::Latest => Some(format!("transcript:{stamp}:{end}:{skip}:*")),
-            Self::Parent(key) => Some(format!("transcript:{stamp}:{end}:{skip}:{key:032x}")),
-            Self::Root => None,
-        }
+        let Skipped { items, attachments } = skip;
+        let branch = match self {
+            Self::Latest => "*".to_owned(),
+            Self::Parent(key) => format!("{key:032x}"),
+            Self::Root => return None,
+        };
+        Some(format!(
+            "transcript:{stamp}:{end}:{items}:{branch}:{attachments}"
+        ))
     }
 }
 
@@ -170,7 +180,7 @@ impl std::fmt::Display for StaleTranscriptCursor {
 
 impl std::error::Error for StaleTranscriptCursor {}
 
-fn position(page: &str, stamp: &str) -> Result<(u64, usize, Branch)> {
+fn position(page: &str, stamp: &str) -> Result<(u64, Skipped, Branch)> {
     let mut parts = page.split(':');
     ensure!(
         parts.next() == Some("transcript"),
@@ -185,7 +195,7 @@ fn position(page: &str, stamp: &str) -> Result<(u64, usize, Branch)> {
         .context("invalid: missing transcript position")?
         .parse()
         .context("invalid: malformed transcript position")?;
-    let skip = parts
+    let items = parts
         .next()
         .context("invalid: missing transcript item position")?
         .parse()
@@ -197,12 +207,18 @@ fn position(page: &str, stamp: &str) -> Result<(u64, usize, Branch)> {
         ),
         _ => anyhow::bail!("invalid: malformed transcript branch"),
     };
+    // Recognize the old shape so pre-upgrade cursors fail as stale, not malformed.
+    let attachments = parts.next();
     ensure!(
         end > 0 && parts.next().is_none(),
         "invalid: malformed transcript cursor"
     );
     ensure!(tagged == stamp, StaleTranscriptCursor);
-    Ok((end, skip, branch))
+    let attachments = attachments
+        .context("invalid: missing transcript attachment position")?
+        .parse()
+        .context("invalid: malformed transcript attachment position")?;
+    Ok((end, Skipped { items, attachments }, branch))
 }
 
 struct SelectedItem {
@@ -212,29 +228,30 @@ struct SelectedItem {
     size: Option<usize>,
 }
 
-type Selection = (SessionMessage, Vec<SelectedItem>);
-
-fn header_cost(message: &mut SessionMessage) -> Result<usize> {
-    entries::bound_header(message);
-    let attachments = std::mem::take(&mut message.attachments);
-    let mut cost = json_len(message)? + 1;
-    for fact in attachments {
-        let extra = json_len(&fact)?
-            + if message.attachments.is_empty() {
-                r#",\"attachments\":[]"#.len()
-            } else {
-                1
-            };
-        // Keep room for at least one item and the page's array brackets. Any facts
-        // not shown in the structured preview remain in the recorded text item.
-        if cost + extra + CONTINUED_BYTES + 2 > PAGE_BYTES {
-            break;
-        }
-        message.attachments.push(fact);
-        cost += extra;
+impl SelectedItem {
+    fn new(value: SessionItem, source: Source) -> Result<Self> {
+        let size = if matches!(value, SessionItem::ToolCall { .. }) {
+            // Its result can be folded in after selection.
+            None
+        } else {
+            Some(json_len(&value)?)
+        };
+        Ok(Self {
+            value: Some(value),
+            source,
+            pair: None,
+            size,
+        })
     }
-    Ok(cost)
+
+    fn cost(&self) -> usize {
+        self.size
+            .filter(|&bytes| bytes <= ITEM_BYTES)
+            .map_or(CONTINUED_BYTES, |bytes| bytes + 1)
+    }
 }
+
+type Selection = (SessionMessage, Vec<SelectedItem>);
 
 pub(super) struct Page {
     pub(super) messages: Vec<SessionMessage>,
@@ -243,7 +260,7 @@ pub(super) struct Page {
 }
 
 /// Return a newest-first slice of records in chronological display order. The cursor
-/// skips already-returned items at the newer end of a split record.
+/// skips already-returned item and attachment suffixes of a split record.
 pub(super) fn page(
     id: &str,
     path: &Path,
@@ -255,6 +272,7 @@ pub(super) fn page(
     let meta = &transcript.metadata;
     let len = meta.len();
     let stamp = fingerprint(&(
+        "attachment-pages-v1",
         id,
         len,
         meta.dev(),
@@ -282,7 +300,7 @@ pub(super) fn page(
         (end, skip, branch)
     } else {
         let end = boundaries.before(&mut transcript.file, len)?;
-        (end, 0, Branch::Latest)
+        (end, Skipped::default(), Branch::Latest)
     };
     let mut selected = Vec::new();
     // Include both array brackets, and budget one separator per message and item.
@@ -298,8 +316,8 @@ pub(super) fn page(
             && entry.is_none_or(|id| branch_key(id) != expected)
         {
             ensure!(
-                skip == 0,
-                "invalid: transcript item cursor does not match the record"
+                skip == Skipped::default(),
+                "invalid: transcript cursor does not match the record"
             );
             end = start;
             continue;
@@ -318,55 +336,79 @@ pub(super) fn page(
             branch
         };
         if let Some(mut message) = entries::message(value, Some((id, start)))? {
-            let all = std::mem::take(&mut message.items);
+            entries::bound_header(&mut message);
+            let all_items = std::mem::take(&mut message.items);
+            let all_facts = std::mem::take(&mut message.attachments);
+            let (item_count, fact_count) = (all_items.len(), all_facts.len());
             ensure!(
-                skip <= all.len(),
-                "invalid: transcript item cursor is beyond the record"
+                skip.items <= item_count && skip.attachments <= fact_count,
+                "invalid: transcript cursor is beyond the record"
             );
-            let mut cost = header_cost(&mut message)?;
-            let mut items = Vec::new();
-            let count = all.len();
-            for (index, value) in all.into_iter().enumerate().rev().skip(skip) {
-                let bytes = if matches!(value, SessionItem::ToolCall { .. }) {
-                    // Its result can be folded in after selection.
-                    None
-                } else {
-                    Some(json_len(&value)?)
-                };
-                let item_cost = bytes
-                    .filter(|&bytes| bytes <= ITEM_BYTES)
-                    .map_or(CONTINUED_BYTES, |bytes| bytes + 1);
-                if size + cost + item_cost > PAGE_BYTES
-                    && (!selected.is_empty() || !items.is_empty())
-                {
+            let mut cost = json_len(&message)? + 1;
+            let mut remaining = all_items
+                .into_iter()
+                .enumerate()
+                .rev()
+                .skip(skip.items)
+                .map(|(index, value)| SelectedItem::new(value, Source { start, end, index }));
+            let first = remaining.next().transpose()?;
+            // Leave room for a body item as long as there is one left; later pages
+            // may carry only metadata for this same message ID.
+            let reserve = first.as_ref().map_or(0, SelectedItem::cost);
+            if size + cost + reserve > PAGE_BYTES {
+                ensure!(
+                    !selected.is_empty(),
+                    "transcript record exceeds page budget"
+                );
+                break;
+            }
+            for fact in all_facts.into_iter().rev().skip(skip.attachments) {
+                let extra = json_len(&fact)?
+                    + if message.attachments.is_empty() {
+                        r#","attachments":[]"#.len()
+                    } else {
+                        1
+                    };
+                if size + cost + extra + reserve > PAGE_BYTES {
                     break;
                 }
-                cost += item_cost;
-                skip += 1;
-                items.push(SelectedItem {
-                    value: Some(value),
-                    source: Source { start, end, index },
-                    pair: None,
-                    size: bytes,
-                });
+                cost += extra;
+                skip.attachments += 1;
+                message.attachments.push(fact);
             }
-            if !items.is_empty() {
+            message.attachments.reverse();
+            let mut items = Vec::new();
+            for item in first.into_iter().map(Ok).chain(remaining) {
+                let item = item?;
+                let extra = item.cost();
+                if size + cost + extra > PAGE_BYTES {
+                    break;
+                }
+                cost += extra;
+                skip.items += 1;
+                items.push(item);
+            }
+            if !items.is_empty() || !message.attachments.is_empty() {
                 size += cost;
                 items.reverse();
                 selected.push((message, items));
             }
-            if skip < count {
+            if skip.items < item_count || skip.attachments < fact_count {
+                ensure!(
+                    !selected.is_empty(),
+                    "transcript record exceeds page budget"
+                );
                 break;
             }
         } else {
             ensure!(
-                skip == 0,
-                "invalid: transcript item cursor does not match the record"
+                skip == Skipped::default(),
+                "invalid: transcript cursor does not match the record"
             );
         }
         branch = parent;
         end = start;
-        skip = 0;
+        skip = Skipped::default();
     }
     selected.reverse();
     pair_tools(&mut selected);
@@ -375,7 +417,7 @@ pub(super) fn page(
         for item in items {
             append_preview(id, &mut message.items, item)?;
         }
-        if !message.items.is_empty() {
+        if !message.items.is_empty() || !message.attachments.is_empty() {
             messages.push(message);
         }
     }

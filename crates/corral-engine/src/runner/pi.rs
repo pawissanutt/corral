@@ -23,7 +23,6 @@ use std::{
 use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
-#[cfg(unix)]
 use sha2::{Digest, Sha256};
 
 use super::{InputTag, LaunchSpec, Origin, Runner, SessionRef, SessionStatus};
@@ -39,6 +38,10 @@ pub use chat::{ChatLaunch, chat_session};
 
 const VERSION: u32 = 2;
 pub(super) const FRAME_MAX: usize = 64 * 1024;
+// Not a count or upload quota. A 60 KiB app control frame has room only for
+// upload references (each includes a 64-byte digest), whose expanded metadata
+// costs < 820 bytes each, or links that add only a label and small field overhead.
+const ATTACHMENT_MANIFEST_MAX: usize = 1024 * 1024;
 const START_TIMEOUT: Duration = Duration::from_secs(30);
 const IO_TIMEOUT: Duration = Duration::from_secs(10);
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -95,6 +98,20 @@ struct Submit<'a> {
     device: Option<&'a str>,
     #[serde(skip_serializing_if = "<[Value]>::is_empty")]
     attachments: &'a [Value],
+}
+
+#[derive(Serialize)]
+struct ManifestSubmit<'a> {
+    #[serde(flatten)]
+    input: Submit<'a>,
+    attachments_manifest: AttachmentManifest<'a>,
+}
+
+#[derive(Serialize)]
+struct AttachmentManifest<'a> {
+    name: &'a str,
+    bytes: usize,
+    sha256: String,
 }
 
 impl<'a> Client<'a> {
@@ -189,21 +206,74 @@ impl<'a> Client<'a> {
     fn submit(&self, text: &str, origin: Origin, tag: Option<InputTag<'_>>) -> Result<SubmitReply> {
         const COMMAND: &str = "submit_input";
         let id = request_id();
-        let mut frame = if text.len() < FRAME_MAX {
-            encode_body(COMMAND, &id, submit(text, origin, tag))?
+        let input = submit(text, origin, tag);
+        if text.len() < FRAME_MAX {
+            let mut frame = encode_body(COMMAND, &id, &input)?;
+            if frame.len() <= FRAME_MAX {
+                frame.push(b'\n');
+                return self.exchange(COMMAND, &id, &frame, IO_TIMEOUT);
+            }
+        }
+        let dir = self
+            .dir
+            .context("oversized Pi input needs a session directory")?;
+        if origin == Origin::Owner && !input.attachments.is_empty() {
+            return self.submit_manifest(dir, &id, input);
+        }
+        let message = spill(dir, text)?;
+        let frame = encode(COMMAND, &id, submit(&message, origin, tag))?;
+        self.exchange(COMMAND, &id, &frame, IO_TIMEOUT)
+    }
+
+    fn submit_manifest(&self, dir: &Path, id: &str, mut input: Submit<'_>) -> Result<SubmitReply> {
+        // A separate command makes older hosts refuse, rather than silently
+        // accepting an input with the unrecognized manifest field dropped.
+        const COMMAND: &str = "submit_input_manifest";
+        let data =
+            serde_json::to_vec(input.attachments).context("encode Pi attachment metadata")?;
+        ensure!(
+            data.len() <= ATTACHMENT_MANIFEST_MAX,
+            "Pi attachment metadata exceeds the manifest transport bound"
+        );
+        private_dir(dir, true)?;
+        let mut file = tempfile::Builder::new()
+            .prefix("attachments-")
+            .rand_bytes(24)
+            .suffix(".json")
+            .tempfile_in(dir)
+            .context("create private Pi attachment manifest")?;
+        file.write_all(&data)
+            .context("write Pi attachment manifest")?;
+        let name = file
+            .path()
+            .file_name()
+            .and_then(|name| name.to_str())
+            .context("invalid Pi attachment manifest name")?;
+        let attachments_manifest = AttachmentManifest {
+            name,
+            bytes: data.len(),
+            sha256: format!("{:x}", Sha256::digest(&data)),
+        };
+        input.attachments = &[];
+        let mut args = ManifestSubmit {
+            input,
+            attachments_manifest,
+        };
+        let mut frame = if args.input.text.len() < FRAME_MAX {
+            encode_body(COMMAND, id, &args)?
         } else {
             Vec::new()
         };
         if frame.is_empty() || frame.len() > FRAME_MAX {
-            let dir = self
-                .dir
-                .context("oversized Pi input needs a session directory")?;
-            let message = spill(dir, text)?;
-            frame = encode(COMMAND, &id, submit(&message, origin, tag))?;
+            let message = spill(dir, args.input.text)?;
+            args.input.text = &message;
+            frame = encode(COMMAND, id, &args)?;
         } else {
             frame.push(b'\n');
         }
-        self.exchange(COMMAND, &id, &frame, IO_TIMEOUT)
+        // The host hydrates metadata before admission (including `pending`).
+        // Keep the file until exchange completes, then remove on success or error.
+        self.exchange(COMMAND, id, &frame, IO_TIMEOUT)
     }
 
     pub fn cancel(&self) -> Result<Value> {

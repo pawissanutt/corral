@@ -293,6 +293,77 @@ impl Drop for PauseHost {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn oversized_owner_attachment_metadata_fails_only_that_send() {
+    use corral_protocol::{assistant::SendAttachment, attachment::ATTACHMENT_URL_MAX};
+
+    let host = PauseHost::new(false);
+    let ctx = &host.fx.ctx;
+    let mut oversized = request(&host.session, "oversized", AskTarget::Assistant);
+    // The valid URLs alone occupy 62 KiB; attachment and owner-turn fields add overhead.
+    oversized.attachments = (1..=31)
+        .map(|n| {
+            let prefix = format!("https://example.com/{n}/");
+            SendAttachment::Link {
+                url: format!("{prefix}{}", "x".repeat(ATTACHMENT_URL_MAX - prefix.len())),
+                title: None,
+            }
+        })
+        .collect();
+    let ack = send(ctx, &host.device, &oversized).unwrap();
+    let saved = ctx.store.app_message(&ack.entry).unwrap();
+    assert_eq!(saved.attachments.len(), oversized.attachments.len());
+    let next = send(
+        ctx,
+        &host.device,
+        &request(&host.session, "next", AskTarget::Assistant),
+    )
+    .unwrap();
+
+    let mut runtime = start(ctx, &host.session).unwrap();
+    assert!(pump(ctx, &mut runtime).unwrap().changed);
+    let failed = ctx.store.app_message(&ack.entry).unwrap();
+    assert_eq!(failed.state, "failed");
+    assert_eq!(failed.turn, None);
+    assert_eq!(failed.generation, None);
+    assert!(
+        failed
+            .failure
+            .unwrap()
+            .starts_with("owner_input_too_large:")
+    );
+    assert_eq!(failed.text, saved.text);
+    assert_eq!(failed.attachments, saved.attachments);
+    let pending = ctx.store.pending_app_messages(&host.session).unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].id, next.entry);
+    assert_eq!(
+        ctx.store.app_thread_head(&host.session).unwrap().state,
+        "ready"
+    );
+    assert!(
+        host.bridge
+            .commands()
+            .iter()
+            .all(|f| f["command"] != "owner_turn")
+    );
+
+    assert!(pump(ctx, &mut runtime).unwrap().changed);
+    assert_eq!(ctx.store.app_message(&next.entry).unwrap().state, "working");
+    let turns: Vec<_> = host
+        .bridge
+        .commands()
+        .into_iter()
+        .filter(|frame| frame["command"] == "owner_turn")
+        .collect();
+    assert_eq!(turns.len(), 1);
+    assert_eq!(
+        turns[0]["args"]["entry"].as_str(),
+        Some(next.entry.as_str())
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn queued_assistant_message_is_not_delivered_while_paused() {
     let host = PauseHost::new(false);
     let ctx = &host.fx.ctx;
