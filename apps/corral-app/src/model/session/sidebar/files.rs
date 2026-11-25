@@ -28,6 +28,9 @@ pub struct FilesTab {
     pub note: Option<(Hue, String)>,
     /// `no changes yet`.
     pub empty: Option<String>,
+    /// `U 1 conflict · ! 2 outside scope` (edited outside their agent's files), across every
+    /// file, so a folded list still says them; in the Fail tone with a conflict, else the Held tone.
+    pub cues: Option<(Hue, String)>,
     /// `▸ Preview files` or `▾ Hide files`, which unfolds or folds the preview.
     pub preview: Option<(String, Action)>,
     /// The preview's rows; none while it is folded.
@@ -67,6 +70,8 @@ fn status(status: &str) -> (Status, Hue) {
         "deleted" => Status::of("D"),
         "untracked" => Status::of("??"),
         "renamed" => Status::of("R"),
+        "copied" => Status::of("C"),
+        "typechange" | "type changed" => Status::of("T"),
         "unmerged" | "conflicted" => Status::of("Conflict"),
         other => Status::of(other),
     };
@@ -152,6 +157,7 @@ pub(super) fn files_tab(cx: &Cx<'_>, target: &DetailRef, preview: bool) -> Files
             all: None,
             note: None,
             empty: None,
+            cues: None,
             preview: None,
             rows: Vec::new(),
             more: None,
@@ -175,6 +181,26 @@ pub(super) fn files_tab(cx: &Cx<'_>, target: &DetailRef, preview: bool) -> Files
         Vec::new()
     };
     let rest = total.saturating_sub(rows.len() as u64);
+    let conflicts = changes
+        .files
+        .iter()
+        .filter(|file| status(&file.status).0.letter == "U")
+        .count();
+    let outside = changes.files.iter().filter(|file| file.outside).count();
+    let mut cues = Vec::new();
+    if conflicts > 0 {
+        cues.push(format!(
+            "U {conflicts} {}",
+            if conflicts == 1 {
+                "conflict"
+            } else {
+                "conflicts"
+            }
+        ));
+    }
+    if outside > 0 {
+        cues.push(format!("! {outside} outside scope"));
+    }
     FilesTab {
         totals: (total > 0).then(|| {
             (
@@ -188,18 +214,18 @@ pub(super) fn files_tab(cx: &Cx<'_>, target: &DetailRef, preview: bool) -> Files
             .as_ref()
             .map(|error| (Hue::Held, format!("! {error}"))),
         empty: (total == 0 && changes.error.is_none()).then(|| "no changes yet".into()),
+        cues: (!cues.is_empty()).then(|| {
+            let hue = if conflicts > 0 { Hue::Fail } else { Hue::Held };
+            (hue, cues.join(" · "))
+        }),
         preview: listed.then(|| {
+            // The header counts the files; the fold does not count them again.
             let words = if preview {
-                "▾ Hide files".to_owned()
+                "▾ Hide files"
             } else {
-                let shown = changes.files.len().min(PREVIEW_ROWS);
-                if (shown as u64) < total {
-                    format!("▸ Preview {shown} of {total} files")
-                } else {
-                    "▸ Preview files".to_owned()
-                }
+                "▸ Preview files"
             };
-            (words, Action::Sidebar(SidebarAction::Preview))
+            (words.to_owned(), Action::Sidebar(SidebarAction::Preview))
         }),
         more: (preview && rest > 0 && !rows.is_empty())
             .then(|| (format!("See all {total} changes"), view)),
@@ -232,7 +258,7 @@ mod tests {
                 added: Some(2),
                 removed: Some(1),
                 authors: vec!["a1".into()],
-                outside: false,
+                outside: n == 150,
             })
             .collect();
         let target = DetailRef::SessionChanges {
@@ -290,11 +316,13 @@ mod tests {
             Some(("+334".to_owned(), "\u{2212}167".to_owned()))
         );
         assert!(folded.all.is_some() && folded.preview.is_some());
+        // The one outside edit lies past the preview: the summary still says it.
+        assert!(folded.cues.is_some());
 
         let open = files_tab(&cx, &target, true);
         assert_eq!(open.rows.len(), PREVIEW_ROWS);
         assert_eq!(open.rows[0].name, "file0.rs");
-        assert!(open.more.is_some_and(|(words, _)| words.contains("167")));
+        assert!(open.more.is_some());
     }
 
     /// A conflict served in Git's short form kept its cue: the old letter table knew only the

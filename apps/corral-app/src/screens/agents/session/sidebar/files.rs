@@ -1,6 +1,7 @@
 //! The Changes section's body (`session::FilesTab`), summary first: the added and removed lines
 //! (`+` in the Ok ink, `−` in the Fail ink, so the sign says it without the colour) beside the
-//! link to the full Changes view; why the host could not list the files in its tone; then the
+//! link to the full Changes view; why the host could not list the files in its tone; the
+//! conflicts and edits outside an agent's files across every file, in their tone; then the
 //! fold of the short preview. Unfolded, a row per file: its state mark, `!` when it was edited
 //! outside its agent's files, its name, its folder (quiet) and its lines; a row opens the file's
 //! diff. A preview that does not list every file ends in a link to the rest.
@@ -69,6 +70,14 @@ pub(super) fn files(app: AppState, tab: &FilesTab) -> AnyElement {
         out.push(inset(
             app,
             dim(app, note.clone()).text_color(hue_words(app.form, *hue)),
+        ));
+    }
+    if let Some((hue, cues)) = &tab.cues {
+        out.push(inset(
+            app,
+            dim(app, cues.clone())
+                .number_of_lines(2u32)
+                .text_color(hue_words(app.form, *hue)),
         ));
     }
     if let Some(empty) = &tab.empty {
