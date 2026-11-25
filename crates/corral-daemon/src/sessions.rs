@@ -125,11 +125,15 @@ pub(crate) fn run(engine: &Engine, scope: &str) -> Result<Run> {
 }
 
 pub(crate) fn resolve(shared: &Shared, scope: &str) -> Result<Session> {
+    resolve_for(shared, scope, false)
+}
+
+fn resolve_for(shared: &Shared, scope: &str, managed_exit: bool) -> Result<Session> {
     if let Some((parent, child)) = child_scope(scope)? {
-        return resolve_child(resolve(shared, parent)?, child);
+        return resolve_child(resolve_for(shared, parent, managed_exit)?, child);
     }
     if scope.starts_with("B-") {
-        return builds::resolve(shared, scope);
+        return builds::resolve(shared, scope, managed_exit);
     }
     if is_chat(scope) {
         return assistant::resolve(shared, scope);

@@ -15,7 +15,7 @@ use corral_protocol::{app::SESSION_PART_MAX, session_host::*};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Map;
 
-use super::{Session, no_pi_host, resolve};
+use super::{Session, no_pi_host, resolve, resolve_for};
 use crate::{state::Shared, views::json_len};
 
 const OLDER_HOST_HINT: &str =
@@ -180,7 +180,6 @@ pub(crate) fn card_answer(
         answers,
         dismiss,
     } = request;
-    let session = resolve(shared, &id)?;
     let exit = card.strip_prefix("exit-").is_some_and(|suffix| {
         suffix.len() == 36
             && suffix.bytes().enumerate().all(|(i, byte)| {
@@ -191,7 +190,7 @@ pub(crate) fn card_answer(
                 }
             })
     });
-    crate::builds::reject_code(exit && session.role == "code")?;
+    let session = resolve_for(shared, &id, exit)?;
     host_call_on(
         &session,
         "card_answer",
@@ -237,8 +236,7 @@ pub(crate) fn action(shared: &Shared, request: SessionActionRequest) -> Result<S
     let SessionActionRequest { id, action } = request;
     let (command, args) = match action {
         SessionAction::ExitOpen => {
-            let session = resolve(shared, &id)?;
-            crate::builds::reject_code(session.role == "code")?;
+            let session = resolve_for(shared, &id, true)?;
             return host_call_on(&session, "exit_open", Map::new(), HostCall::Act);
         }
         SessionAction::BoardRefresh => ("board_refresh", None),

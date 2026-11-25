@@ -50,6 +50,59 @@ fn code_resume_uses_code_argv_not_managed_build_relaunch() {
     assert_eq!(resumed.id, id);
     assert_eq!(page(&mut owner, id).host, HostPresence::Running);
 }
+#[test]
+fn managed_exit_refuses_code_without_contacting_its_host() {
+    use std::{io::ErrorKind, os::unix::net::UnixListener};
+
+    use corral_protocol::session_host::{SessionAction, SessionActionRequest, SessionCardAnswer};
+
+    let fixture = Fixture::new();
+    let id = "B-exitcode";
+    let data = dir(&fixture, id);
+    fs::create_dir_all(&data).unwrap();
+    fs::set_permissions(&data, fs::Permissions::from_mode(0o700)).unwrap();
+    let socket = fixture.root().join("exit-code.sock");
+    save_code(&data, fixture.root(), &socket);
+    let listener = UnixListener::bind(&socket).unwrap();
+    fs::set_permissions(&socket, fs::Permissions::from_mode(0o600)).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let shared = fixture.shared();
+    let answer = |card: &str| SessionCardAnswer {
+        id: id.into(),
+        card: card.into(),
+        expected_model: None,
+        answers: vec![],
+        dismiss: true,
+    };
+    let open = crate::sessions::forward::action(
+        shared,
+        SessionActionRequest {
+            id: id.into(),
+            action: SessionAction::ExitOpen,
+        },
+    );
+    let managed = crate::sessions::forward::card_answer(
+        shared,
+        "local",
+        answer("exit-12345678-1234-abcd-1234-123456789abc"),
+    );
+    assert!(open.unwrap_err().is::<corral_types::Refusal>());
+    assert!(managed.unwrap_err().is::<corral_types::Refusal>());
+    assert_eq!(listener.accept().unwrap_err().kind(), ErrorKind::WouldBlock);
+    drop(listener);
+    fs::remove_file(&socket).unwrap();
+
+    // The Pi host handshakes as `build`; the durable record identifies it as Code.
+    let script = Script::default().reply("card_answer", |_, request, _| {
+        assert_eq!(request["args"]["card"], "question-1");
+        json!({"status": "delivered"})
+    });
+    let _host = Host::start(socket, id.into(), "build", &data, script);
+    let reply =
+        crate::sessions::forward::card_answer(shared, "local", answer("question-1")).unwrap();
+    assert_eq!(reply.status, "delivered");
+}
+
 pub(super) fn launch_fixture_mode(
     mode: &'static str,
     on_resume: impl Fn(Script) -> Script + Send + Sync + 'static,

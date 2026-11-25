@@ -431,8 +431,11 @@ fn require_at(shared: &Shared, data_root: &Path, id: &str) -> Result<Build> {
         .context(NotFound("build session not found"))
 }
 
-pub(crate) fn resolve(shared: &Shared, id: &str) -> Result<Session> {
+pub(crate) fn resolve(shared: &Shared, id: &str, managed_exit: bool) -> Result<Session> {
     let build = require(shared, id)?;
+    if managed_exit {
+        reject_code(build.record.trusted_code)?;
+    }
     let role = if build.record.trusted_code {
         "code"
     } else {
