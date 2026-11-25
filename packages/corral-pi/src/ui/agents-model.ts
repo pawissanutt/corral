@@ -117,9 +117,6 @@ export function helperStatus(helper: HelperInspection, now: number): Status {
   const time = helper.startedAt === undefined ? undefined : duration((helper.endedAt ?? now) - helper.startedAt);
   return agentStatus(helperState(helper), time);
 }
-export function helperKindName(kind: HelperInspection["kind"]): string {
-  switch (kind) { case "explore": return "explore"; case "oracle": return "oracle"; case "web_search": return "search"; case "expert": return "expert"; }
-}
 
 /** One stretch of the timeline. `to` absent means still open (drawn up to now). */
 export interface AgentSpan { readonly kind: "wait" | "run" | "ask"; readonly from: number; readonly to?: number }
@@ -290,18 +287,19 @@ function helperEnd(helper: HelperInspection, state: AgentState): AgentEnd | unde
   return { at: helper.endedAt, outcome };
 }
 
-/** One row per retained helper call, in host order (newest first). Helpers report no cost, context or files. */
+/** One row per retained agent helper, in host order (newest first). Web searches are tool calls, not agents. */
 export function helperRows(snapshot: PanelSnapshot | null, now: number): AgentRow[] {
-  const helpers = snapshot?.helpers ?? [], bound = snapshot?.bound ?? false, agents = snapshot?.agents ?? [];
+  const helpers = snapshot?.helpers?.filter(helper => helper.kind !== "web_search") ?? [];
+  const bound = snapshot?.bound ?? false, agents = snapshot?.agents ?? [];
   // Names and hues follow creation order; a stable sort keeps host order (oldest last) for equal timestamps.
   const oldest = [...helpers].reverse().sort((a, b) => a.createdAt - b.createdAt);
   const counts = new Map<string, number>(), names = new Map<string, string>(), hues = new Map<string, number>();
   oldest.forEach((helper, index) => {
-    const kind = helperKindName(helper.kind), count = (counts.get(kind) ?? 0) + 1;
+    const kind = helper.kind, count = (counts.get(kind) ?? 0) + 1;
     counts.set(kind, count); names.set(helper.request, count > 1 ? `${kind} ${count}` : kind); hues.set(helper.request, index);
   });
   return helpers.map((helper): AgentRow => {
-    const state = helperState(helper), status = helperStatus(helper, now), kind = helperKindName(helper.kind);
+    const state = helperState(helper), status = helperStatus(helper, now), kind = helper.kind;
     const agent = agents.find(item => item.id === helper.request);
     const parent = agent?.parent === undefined ? undefined : agents.find(item => item.session === agent.parent);
     const fast = helper.serviceTier === "priority";
@@ -327,7 +325,7 @@ export function helperRows(snapshot: PanelSnapshot | null, now: number): AgentRo
       ...(agent?.tokens === undefined ? {} : { usage: { tokens: agent.tokens } }),
       spans: helperSpans(helper), ...(end ? { end } : {}),
       meta, notes,
-      capabilities: { open: true, transcript: bound && helper.kind !== "web_search" && agent?.transcript === true },
+      capabilities: { open: true, transcript: bound && agent?.transcript === true },
       conversation: helper,
     };
   });

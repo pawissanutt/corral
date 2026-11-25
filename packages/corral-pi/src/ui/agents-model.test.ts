@@ -78,6 +78,13 @@ test("an unbound snapshot adds the stale note to every helper row", () => {
   expect(stale(snapshot)).toEqual([false, false]);
 });
 
+test("web searches do not appear as agents or count toward live activity", () => {
+  const model = agentsModel({ ...base, helpers: [helper("done-search", "completed", { kind: "web_search" }),
+    helper("live-search", "running", { kind: "web_search" }), helper("explore", "running")] }, NOW);
+  expect(model.agents.map(row => row.id)).toEqual(["explore"]);
+  expect(liveCount(model)).toBe(1);
+});
+
 test("unavailable sources are marked unavailable, never turned into empty lists", () => {
   const unknown = agentsModel({ ...base, jobs: null, helpers: null }, NOW);
   expect(unknown.sources).toEqual({ helpers: false, jobs: false });
