@@ -48,6 +48,8 @@ pub(crate) fn start(shared: &Arc<Shared>) {
                                 Err(error) => {
                                     let outcome = if error.is::<chat::Skip>() {
                                         "skipped"
+                                    } else if error.is::<chat::Unknown>() {
+                                        "delivery unknown"
                                     } else {
                                         "failed"
                                     };

@@ -24,6 +24,17 @@ impl std::fmt::Display for Skip {
 
 impl std::error::Error for Skip {}
 
+#[derive(Debug)]
+pub(crate) struct Unknown;
+
+impl std::fmt::Display for Unknown {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("no definitive acknowledgement for the submitted automation input")
+    }
+}
+
+impl std::error::Error for Unknown {}
+
 fn saved<'a>(config: &'a Config, rule: &str) -> Result<(&'a str, &'a str)> {
     let rule = config
         .automation
@@ -299,7 +310,7 @@ pub(crate) fn deliver(
     };
     let reply: SubmitReply = Client::for_session(&session)?.request("submit_automation", json!({
         "origin": corral_types::Origin::Auto, "busy_policy": "steer", "input_id": input_id, "text": text,
-    })).map_err(unavailable)?;
+    })).map_err(|error| if error.is::<pi::PiRefusal>() {error} else {error.context(Unknown)})?;
     if reply.disposition == Disposition::Rejected {
         if let Some(skip) = host_skip(reply.reason.as_deref()) {
             return Err(skip.into());
@@ -311,14 +322,9 @@ pub(crate) fn deliver(
             vec![],
         ));
     }
-    ensure!(
-        reply.input.as_deref() == Some(input_id),
-        "Pi did not acknowledge the automation input ID"
-    );
-    ensure!(
-        reply.disposition == Disposition::Started,
-        "Pi did not start the automation input immediately"
-    );
+    if reply.input.as_deref() != Some(input_id) || reply.disposition != Disposition::Started {
+        return Err(Unknown.into());
+    }
     shared.publish();
     Ok(chat.id())
 }
