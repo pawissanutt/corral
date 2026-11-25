@@ -241,4 +241,26 @@ fn a_details_row_opens_its_file_in_the_session_comparison() {
     assert_eq!(changes.scope, None);
     assert!(changes.filter.is_empty());
     assert_eq!(changes.file.as_deref(), Some("src/a.rs"));
+
+    // Opened again from Details with its patch pinned: the pin stays until Apply.
+    let pinned = super::changes_diff::Pinned {
+        target: DetailRef::SessionChangeFile {
+            id: SESSION.into(),
+            comparison: ChangesComparison::Session,
+            scope: None,
+            path: "src/a.rs".into(),
+        },
+        patch: "@@ -1 +1 @@\n-a\n+b\n".into(),
+        truncated: false,
+        read_at: "2026-11-19T12:00:00Z".into(),
+    };
+    state.ui_mut(&id).changes.pinned = Some(pinned.clone());
+    state.act(
+        Action::Changes(ChangesAction::OpenOwn {
+            session: id,
+            path: "src/a.rs".into(),
+        }),
+        &feed,
+    );
+    assert_eq!(state.ui(SESSION).changes.pinned, Some(pinned));
 }

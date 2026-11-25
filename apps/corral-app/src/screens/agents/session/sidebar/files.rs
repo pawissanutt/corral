@@ -37,14 +37,24 @@ fn link(
     .into_element()
 }
 
+/// Words in `hue`, where its ink is legible behind words: a terminal's palette inks (yellow,
+/// green on a light background) are not, so there the words take the plain ink and the sign or
+/// mark beside them says what the colour would.
+fn tinted(app: AppState, hue: Hue) -> AdaptiveColor {
+    match app.form {
+        Form::Terminal => color(Token::Ink),
+        _ => hue_ink(hue),
+    }
+}
+
 /// `+340 −22`.
 fn lines(app: AppState, added: &str, removed: &str) -> AnyElement {
     view()
         .flex_row()
         .flex_shrink_0()
         .gap(px(if app.form == Form::Terminal { 8.0 } else { 4.0 }))
-        .child(mono(app, added.to_owned()).text_color(hue_ink(Hue::Ok)))
-        .child(mono(app, removed.to_owned()).text_color(hue_ink(Hue::Fail)))
+        .child(mono(app, added.to_owned()).text_color(tinted(app, Hue::Ok)))
+        .child(mono(app, removed.to_owned()).text_color(tinted(app, Hue::Fail)))
         .into_element()
 }
 
@@ -77,7 +87,7 @@ pub(super) fn files(app: AppState, tab: &FilesTab) -> AnyElement {
             app,
             dim(app, cues.clone())
                 .number_of_lines(2u32)
-                .text_color(hue_words(app.form, *hue)),
+                .text_color(tinted(app, *hue)),
         ));
     }
     if let Some(empty) = &tab.empty {

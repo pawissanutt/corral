@@ -244,7 +244,7 @@ pub(super) fn files_tab(cx: &Cx<'_>, target: &DetailRef, preview: bool) -> Files
             (words.to_owned(), Action::Sidebar(SidebarAction::Preview))
         }),
         more: (preview && rest > 0 && !rows.is_empty())
-            .then(|| (format!("See all {total} changes"), view)),
+            .then(|| ("See all changes".to_owned(), view)),
         rows,
     }
 }

@@ -772,9 +772,19 @@ pub(super) fn act(state: &mut State, action: ChangesAction, feed: &Feed) -> Vec<
             effects
         }
         ChangesAction::OpenOwn { session, path } => {
+            // A patch pinned for this very file in this comparison stays, so a newer one still
+            // waits for Apply rather than replacing it unasked.
+            let own = DetailRef::SessionChangeFile {
+                id: session.to_string(),
+                comparison: ChangesComparison::Session,
+                scope: None,
+                path: path.clone(),
+            };
             let ui = state.ui_mut(&session);
+            let pinned = ui.changes.pinned.take().filter(|pin| pin.target == own);
             ui.changes = ChangesUi {
                 more: ui.changes.more,
+                pinned,
                 ..ChangesUi::EMPTY
             };
             act(state, ChangesAction::Open { session, path }, feed)
