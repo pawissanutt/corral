@@ -1,4 +1,5 @@
 import { BridgeRefusal } from "../../bridge/protocol.ts";
+import { planIdentityLines } from "../../build/board.ts";
 import type { BuildControls } from "../../build/host-controls.ts";
 import { LIVE_CHILD_STATES, type BoardPlan, type ChildSnapshot, type ExitOption, type ExitState, type FleetControl } from "../../build/types.ts";
 import { boardEntry, exitEntry, finishEntry, type BuildEntry } from "../../ui/build/build-entries.ts";
@@ -180,29 +181,36 @@ export class RemoteBuild {
     const pending = this.planEpisode;
     if (this.filing) return;
     const title = plan.title;
-    // Keep metadata ahead of potentially long titles in the bounded card body. The board part carries structured tags.
+    const retry = board.pendingChoice?.();
+    const options = retry === undefined ? BOARD_OPTIONS : [{ id: retry ? "file_start" : "file", label: retry ? "Retry file and start" : "Retry file only",
+      detail: "Recover the result of your original choice without filing any task twice.", destructive: false }];
+    // The bound on identities keeps all projects and dependencies ahead of optional text in the card.
     const metadata = plan.tasks.flatMap(task => {
       const label = taskMetadataLabel(task);
       return label ? [`${JSON.stringify(task.key)}: ${label}`] : [];
     });
-    const tasks = plan.tasks.map(task => `${task.key}: ${task.title}${task.depends.length ? ` (after ${task.depends.join(", ")})` : ""}`);
-    const body = [pending.error, metadata.length && `Task metadata\n${metadata.join("\n")}`, tasks.join("\n"), plan.why,
-      ...plan.tasks.map(task => task.body && `${task.key}\n${task.body}`)]
-      .filter(Boolean).join("\n\n");
-    const meta = [plan.project, `${plan.tasks.length} tasks`].filter(Boolean).join(" · ");
+    const tasks = plan.tasks.map(task => `${task.key}: ${task.title}`);
+    const projectCount = new Set(plan.tasks.map(task => task.project ?? plan.project)).size;
+    const meta = `${plan.tasks.length} ${plan.tasks.length === 1 ? "task" : "tasks"} · ${projectCount} ${projectCount === 1 ? "project" : "projects"}`;
+    const body = [meta, "Corral files one Backlog parent in each project.", planIdentityLines(plan).join("\n"), pending.error?.slice(0, 300),
+      metadata.length && `Task metadata\n${metadata.join("\n")}`, tasks.join("\n"), plan.why,
+      ...plan.tasks.map(task => task.body && `${task.key}\n${task.body}`)].filter(Boolean).join("\n\n");
     return { card: { id: pending.id, opened_at: pending.opened_at, kind: "board_plan", title, meta, body, tool: "board_plan",
-      questions: [cardQuestion("File this plan on the board?", BOARD_OPTIONS)] }, answer: (answers, dismiss) => {
+      questions: [cardQuestion(retry === undefined ? "File this plan on the board?" : "Recover the original filing?", options)] }, answer: (answers, dismiss) => {
       if (this.filing || board.proposed() !== plan) return "missing";
+      if (dismiss && retry !== undefined) return "dismissed"; // Put aside; the authorized filing still needs reconciliation.
       const answer = dismiss ? { options: ["dismiss"] } : singleAnswer(answers);
       const choice = answer.options[0];
-      if (answer.text !== undefined || !BOARD_OPTIONS.some(option => option.id === choice)) invalidAnswer("choose a board plan action");
+      if (answer.text !== undefined || !options.some(option => option.id === choice)) invalidAnswer("choose an available board plan action");
       if (choice === "dismiss") { board.dismiss(); return "dismissed"; }
-      const start = choice === "file_start", before = new Set(board.tasks().map(task => task.id));
+      const start = choice === "file_start";
       this.filing = true;
       this.host.changed();
-      void board.file(plan, start).then(tasks => this.host.post(boardEntry(tasks.filter(task => !before.has(task.id)), start))).catch(error => {
-        pending.error = errorMessage(error);
-        this.host.error(pending.error);
+      void board.file(plan, start).then(tasks => this.host.post(boardEntry(tasks, start))).catch(error => {
+        const detail = errorMessage(error);
+        // A consumed answer ID cannot be reused; a new card can retry only the saved choice if it was ambiguous.
+        if (board.proposed() === plan) this.planEpisode = { ...episode("board-plan"), plan, error: detail };
+        this.host.error(detail);
       }).finally(() => { this.filing = false; this.host.changed(); });
       return "started";
     } };

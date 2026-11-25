@@ -176,13 +176,13 @@ export class ChoiceDock implements Component {
   private maxRows = 12;
   private short = false;
   private until = 0;
-  private hits: ReadonlyMap<number, number> = new Map();
+  private rendered: { key: string; hits: ReadonlyMap<number, number> } | undefined;
 
   constructor(private readonly host: ChoiceDockHost) {}
 
   setLimit(maxRows: number, short: boolean): void { this.maxRows = maxRows; this.short = short; }
 
-  /** Ignores Enter and digits until `until` (the 400 ms guard after an automatic open). */
+  /** Ignores activation until `until` (the 400 ms guard after an automatic open). */
   guard(until: number): void { this.until = until; }
 
   /**
@@ -222,9 +222,9 @@ export class ChoiceDock implements Component {
 
   render(width: number): string[] {
     const dialog = this.current();
-    if (!dialog) { this.hits = new Map(); return []; }
+    if (!dialog) { this.rendered = undefined; return []; }
     const frame = choiceLines(dialog, this.selected, width, this.maxRows, this.short);
-    this.hits = frame.hits;
+    this.rendered = { key: dialog.key, hits: frame.hits };
     return frame.lines;
   }
 
@@ -233,9 +233,12 @@ export class ChoiceDock implements Component {
     if (!this.host.click(event)) return undefined;
     const dialog = this.current();
     if (!dialog) return undefined;
+    const rendered = this.rendered;
+    // Mouse coordinates refer to the frame the owner saw, not a newly docked decision.
+    if (rendered?.key !== dialog.key || Date.now() < this.until) return { handled: true };
     this.focused = true;
     this.host.focus();
-    const index = this.hits.get(event.y);
+    const index = rendered.hits.get(event.y);
     if (index === undefined) { this.host.changed(); return { handled: true }; }
     if (index === this.selected) this.activate(dialog, index);
     else { this.selected = index; this.host.changed(); }

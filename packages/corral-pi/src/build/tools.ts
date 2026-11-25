@@ -340,16 +340,18 @@ export function createBuildEvidence(options: { context: BuildContext; git: Run; 
   };
 }
 
-export function boardPlanTool(propose: (plan: BoardPlan) => void, available: () => string | undefined): ToolDefinition {
+export function boardPlanTool(propose: (plan: BoardPlan) => Promise<void>, available: () => string | undefined): ToolDefinition {
   return {
     name: "board_plan", label: "Propose board tasks",
     description: "Propose a bounded plan of at most 20 follow-on tasks for the owner to confirm. "
-      + "Give each task a unique key, a concrete title and body, and dependencies naming local keys or existing T-<n> tasks. "
-      + "The owner must confirm before the tasks are filed.",
+      + "Each task may set its own configured project or inherit the plan project (by default, the session project). "
+      + "Give each task a unique key, a concrete title and body, and dependencies naming local keys across projects or existing T-<n> tasks. "
+      + "The owner confirms the whole plan once. Wait for that plan to resolve before proposing another.",
     parameters: Type.Object({
       title: Type.String({ minLength: 1 }), project: Type.Optional(Type.String()), why: Type.String(),
       tasks: Type.Array(Type.Object({
         key: Type.String({ minLength: 1 }), title: Type.String({ minLength: 1 }),
+        project: Type.Optional(Type.String({ minLength: 1, description: "Configured task project; defaults to the plan project." })),
         kind: Type.Optional(Type.String()), profile: Type.Optional(Type.String()),
         size: Type.Optional(StringEnum(TASK_SIZES, { description: "Estimate work scope, from xs (smallest) to xl (largest). Omit if unknown." })),
         difficulty: Type.Optional(StringEnum(TASK_DIFFICULTIES, { description: "Estimate uncertainty or technical complexity, independently of scope and priority. Omit if unknown." })),
@@ -361,7 +363,7 @@ export function boardPlanTool(propose: (plan: BoardPlan) => void, available: () 
       const unavailable = available();
       if (unavailable) return { content: [{ type: "text", text: unavailable }], details: {}, isError: true };
       try {
-        propose(plan);
+        await propose(plan);
         return { content: [{ type: "text", text: "The owner will confirm this board plan before any task is filed or queued." }], details: {} };
       } catch (error) {
         return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], details: {}, isError: true };

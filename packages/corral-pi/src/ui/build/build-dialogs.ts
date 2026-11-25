@@ -1,6 +1,7 @@
 // The three docked dialogs of a build session: the exit choice, a child's question and the board plan.
 import { basename } from "node:path";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { boardLabel } from "../../build/board.ts";
 import type { BoardPlan, BoardPreview, BuildPanelState, ChildSnapshot, ExitOption, LandCandidate } from "../../build/types.ts";
 import { plainLabel, PANEL_ERROR, PANEL_MUTED, PANEL_TEXT } from "../panels-view.ts";
 import type { ChoiceDialog } from "./choice-dock.ts";
@@ -94,17 +95,20 @@ export function planEdges(plan: BoardPlan): number {
 }
 
 /** `error` is a failed filing: it heads the body and the options stay available for another try. */
-export function planDialog(plan: BoardPlan, preview: PreviewState, episode: number, error?: string): ChoiceDialog {
+export function planDialog(plan: BoardPlan, preview: PreviewState, episode: number, error?: string, retry?: boolean): ChoiceDialog {
   const count = plan.tasks.length, edges = planEdges(plan);
+  const projects = new Set(plan.tasks.map(task => task.project ?? plan.project).filter(Boolean));
   const waiting = preview.state === "loading" ? "the preview is still being read" : preview.state === "failed" ? "the preview failed" : undefined;
-  const meta = [plan.project, `${count} ${count === 1 ? "task" : "tasks"}`, `${edges} dependency ${edges === 1 ? "edge" : "edges"}`, "preview only"];
+  const meta = [`${count} ${count === 1 ? "task" : "tasks"}`, projects.size && `${projects.size} ${projects.size === 1 ? "project" : "projects"}`,
+    `${edges} dependency ${edges === 1 ? "edge" : "edges"}`, retry === undefined ? "preview only" : "recover original choice"];
+  const locked = retry === undefined ? undefined : "the original filing may already have succeeded";
   const table = (width: number, rows: number) => preview.state === "ready" ? previewLines(plan, preview.value, width, rows)
     : preview.state === "failed" ? wrapped(preview.error, PANEL_ERROR, width, rows)
     : wrapped("Preparing the board preview…", PANEL_MUTED, width, rows);
   return {
     key: `plan:${episode}`,
-    title: "File this plan on the board?",
-    short: "File this plan?",
+    title: retry === undefined ? `File ${count} ${count === 1 ? "task" : "tasks"} on the board?` : "Recover the original filing?",
+    short: retry === undefined ? `File ${count} ${count === 1 ? "task" : "tasks"}?` : "Recover the filing?",
     meta: meta.filter(Boolean).join(" · "),
     body: (width, rows) => {
       if (!error) return table(width, rows);
@@ -112,10 +116,13 @@ export function planDialog(plan: BoardPlan, preview: PreviewState, episode: numb
       return [...head, ...table(width, rows - head.length)];
     },
     options: [
-      { label: "File and start", detail: `your confirmation queues these ${count} ${count === 1 ? "task" : "tasks"} only; they start as slots free`,
-        ...(waiting ? { unavailable: waiting } : {}) },
-      { label: "File only", detail: "they land in Backlog; you start them from the board", ...(waiting ? { unavailable: waiting } : {}) },
-      { label: "Not now", detail: "nothing is written; the plan is discarded" },
+      { label: retry === true ? "Retry file and start" : "File and start",
+        detail: retry === true ? "recover the original filing, without duplicating tasks" : `queue these ${count} ${count === 1 ? "task" : "tasks"}; they start as slots free`,
+        unavailable: retry === false ? locked : waiting },
+      { label: retry === false ? "Retry file only" : "File only",
+        detail: retry === false ? "recover the original filing, without duplicating tasks" : "they land in Backlog; you start them from the board",
+        unavailable: retry === true ? locked : waiting },
+      { label: "Not now", detail: "nothing is written; the plan is discarded", unavailable: locked },
     ],
   };
 }
@@ -133,7 +140,7 @@ function cell(text: string, width: number): string {
 export function previewLines(plan: BoardPlan, preview: BoardPreview, width: number, rows: number): string[] {
   if (rows < 1 || width < 1) return [];
   const tasks = new Map(preview.tasks.map(task => [task.key, task]));
-  const id = (key: string) => plainLabel(tasks.get(key)?.id ?? key);
+  const id = (key: string) => boardLabel(tasks.get(key)?.id ?? key);
   const label = (task: BoardPlan["tasks"][number]) => plainLabel(task.title);
   if (rows === 1) {
     return [PANEL_MUTED + truncateToWidth(`${plan.tasks.length} ${plan.tasks.length === 1 ? "task" : "tasks"} · details in Chat`, width, "…")];
@@ -158,7 +165,18 @@ export function previewLines(plan: BoardPlan, preview: BoardPreview, width: numb
     layout = value => taskId(value) + gap + cell(label(value), Math.max(0, width - task - gap.length));
   }
   const metadata = (value: BoardPlan["tasks"][number]) => taskMetadataLabel(tasks.get(value.key) ?? value);
-  const lines = plan.tasks.flatMap(value => [layout(value), ...wrapMetadata(metadata(value), width - 2).map(line => PANEL_TEXT + "  " + line)]);
+  const project = (value: BoardPlan["tasks"][number]) => {
+    const project = tasks.get(value.key)?.project ?? value.project ?? plan.project;
+    return project && boardLabel(project);
+  };
+  const lines = plan.tasks.flatMap(value => {
+    const key = id(value.key);
+    // The title row's key column is compact; the details must carry any key it clips.
+    const identity = [visibleWidth(key) > task ? key : undefined, project(value), starts(value.depends)].filter(Boolean).join(" · ");
+    return [layout(value),
+      ...wrapMetadata(identity, width - 2).map(line => PANEL_MUTED + "  " + line),
+      ...wrapMetadata(metadata(value), width - 2).map(line => PANEL_TEXT + "  " + line)];
+  });
   if (header && lines.length < rows) lines.unshift(header);
   if (lines.length > rows) {
     const omitted = lines.length - (rows - 1);
@@ -166,7 +184,7 @@ export function previewLines(plan: BoardPlan, preview: BoardPreview, width: numb
     const first = plan.tasks[0];
     if (rows === 2 && first && metadata(first) && width > task + gap.length) {
       // With just one content row before the omission notice, prefer identified metadata to a clipped title.
-      lines[0] = taskId(first) + gap + truncateToWidth(metadata(first), width - task - gap.length, "…");
+      lines[0] = taskId(first) + gap + truncateToWidth([project(first), metadata(first)].filter(Boolean).join(" · "), width - task - gap.length, "…");
     }
     lines.push(PANEL_MUTED + `… ${omitted} more ${omitted === 1 ? "row" : "rows"} · see plan in Chat`);
   }

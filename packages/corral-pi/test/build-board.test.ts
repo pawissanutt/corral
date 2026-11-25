@@ -1,10 +1,11 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { boardTask, createBoard, validatePlan } from "../src/build/board.ts";
+import { boardLabel, boardTask, createBoard, validatePlan } from "../src/build/board.ts";
 import type { Run, TaskReadback } from "../src/build/corral-cli.ts";
 import type { BoardPlan, BuildContext } from "../src/build/types.ts";
+import { previewLines } from "../src/ui/build/build-dialogs.ts";
 
 function context(workspaceRoot?: string): BuildContext {
   return { corral: "corral-next", dir: "/sessions/B-one", settings: { exitPolicy: "review", maxParallel: 3, profiles: [] }, session: {
@@ -19,61 +20,54 @@ const plan: BoardPlan = { title: "Parser follow-ons", why: "Separate remaining w
   { key: "parser", title: "Extract parser", depends: [], body: "Extract syntax", kind: "feature", size: "s" },
 ] };
 
-test("confirmation files parent and dependency-ordered tasks with new; Ready waits for complete bodies", async () => {
+test("an unacknowledged filing retries the same ID, bytes and owner choice after restart", async () => {
   const root = mkdtempSync(join(tmpdir(), "build-board-"));
-  const known = new Map<string, TaskReadback>([["T-100", { id: "T-100", title: "Existing", status: "done" }]]);
-  const calls: string[][] = [];
-  const files: string[] = [];
-  const bodies = new Map<string, string>();
-  let counter = 0;
-  const run: Run = async (argv, { cwd }) => {
-    expect(cwd).toBe(root);
-    expect(argv.slice(0, 3)).toEqual(["--root", root, "--json"]);
-    const args = argv.slice(3);
-    calls.push(args);
-    const [command, id] = args;
-    let task = known.get(id!);
-    if (command === "new") {
-      const depends = args.indexOf("--depends-on");
-      task = { id: `T-${++counter}`, title: args.at(-1)!, status: "backlog",
-        depends_on: depends >= 0 ? args[depends + 1]!.split(",") : [] };
-    } else if (command === "edit") {
-      const path = args[args.indexOf("--body-file") + 1]!;
-      expect(statSync(path).mode & 0o777).toBe(0o600);
-      files.push(path);
-      bodies.set(id!, readFileSync(path, "utf8"));
-    } else if (command === "move") {
-      expect(bodies.has(id!)).toBeTrue();
-      task = { ...task!, status: "ready" };
-    } else expect(command).toBe("show");
-    if (!task) throw new Error(`Unexpected argv: ${args.join(" ")}`);
-    known.set(task.id, task);
-    return { code: 0, stdout: JSON.stringify({ task }), stderr: "" };
+  const calls: { args: readonly string[]; input?: string }[] = [];
+  let attempts = 0;
+  const run: Run = async (args, { input }) => {
+    calls.push({ args, input });
+    if (args[4] === "check") return { code: 0, stdout: "null", stderr: "" };
+    expect(args[4]).toBe("file");
+    if (++attempts === 1) return { code: 1, stdout: "", stderr: "lost reply" };
+    const tasks = [
+      { key: "test", project: "app", id: "T-2", status: "ready", depends_on: ["T-3", "T-100"] },
+      { key: "parser", project: "app", id: "T-3", status: "ready", depends_on: [] },
+    ];
+    return { code: 0, stdout: JSON.stringify({ tasks }), stderr: "" };
   };
-  const board = createBoard({ context: context(root), run, tmpDir: join(root, "board"), changed() {} });
+  const open = () => createBoard({ context: context(root), run, tmpDir: join(root, "board"), changed() {} });
+  let board = open();
   try {
-    board.propose(plan);
-    expect(await board.preview(plan)).toMatchObject({ tracker: plan.title, tasks: [{ id: "test" }, { id: "parser" }] });
-    expect(calls).toEqual([]);
-    const tasks = await board.file(plan, true);
-    expect(calls.filter(argv => argv[0] === "new")).toEqual([
-      ["new", "--project=app", "--", "Parser follow-ons"],
-      ["new", "--project=app", "--parent", "T-1", "--kind=feature", "--size=s", "--", "Extract parser"],
-      ["new", "--project=app", "--parent", "T-1", "--depends-on", "T-2,T-100", "--", "Add tests"],
+    const first = board.propose(plan);
+    await expect(board.propose({ ...plan, title: "Replacement" })).rejects.toThrow("already pending");
+    await first;
+    const proposal = board.proposed()!;
+    await expect(board.file(proposal, true)).rejects.toThrow("lost reply");
+    expect(board.pendingChoice?.()).toBe(true);
+    board.close();
+    board = open();
+    expect(board.proposed()).toEqual(proposal);
+    const restored = board.proposed()!;
+    await expect(board.file(restored, false)).rejects.toThrow("original filing choice");
+    expect(() => board.dismiss()).toThrow("original filing choice");
+    const [tasks, double] = await Promise.all([board.file(restored, true), board.file(restored, true)]);
+    expect(double).toEqual(tasks);
+    expect(tasks.map(task => [task.key, task.project, task.id, task.phase])).toEqual([
+      ["test", "app", "T-2", "waiting"], ["parser", "app", "T-3", "queued"],
     ]);
-    expect(calls.find(argv => argv[0] === "edit" && argv[1] === "T-3")?.at(-1)).toBe("--profile=pi-test");
-    expect([...bodies.values()]).toEqual([plan.why, plan.tasks[1]!.body, plan.tasks[0]!.body]);
-    for (const path of files) expect(() => statSync(path)).toThrow();
-    expect(tasks.map(task => [task.id, task.phase])).toEqual([["T-2", "queued"], ["T-3", "waiting"]]);
-    known.set("T-2", { ...known.get("T-2")!, status: "done" });
-    await board.refresh();
-    expect(board.tasks().map(task => [task.id, task.phase])).toEqual([["T-2", "landed"], ["T-3", "queued"]]);
+    expect(await board.file(restored, true)).toEqual(tasks);
+    expect(calls).toHaveLength(3);
+    expect(calls[1]).toEqual(calls[2]);
+    expect(board.proposed()).toBeUndefined();
+    board.close();
+    board = open();
+    expect(board.tasks()).toEqual(tasks);
   } finally { board.close(); rmSync(root, { recursive: true, force: true }); }
 });
 
 test("outside-workspace lifecycle is safe while filing and preview refuse", async () => {
   const board = createBoard({ context: context(), tmpDir: "/unused", run: async () => { throw new Error("must not run"); }, changed() {} });
-  board.propose(plan);
+  await expect(board.propose(plan)).rejects.toThrow("workspace");
   expect(board.proposed()).toBeUndefined();
   await board.refresh();
   expect(board.tasks()).toEqual([]);
@@ -97,6 +91,18 @@ test("plan validation accepts existing tasks and rejects duplicate keys, unknown
   expect(() => validatePlan({ ...plan, tasks: [{ ...second!, depends: ["unknown"] }] })).toThrow("Unknown dependency");
   expect(() => validatePlan({ ...plan, tasks: [first!, { ...second!, depends: ["test"] }] })).toThrow("cycle");
   expect(() => validatePlan({ ...plan, tasks: Array.from({ length: 21 }, (_, i) => ({ ...second!, key: `key-${i}` })) })).toThrow("at most 20");
+});
+
+test("board keys remain distinct on surfaces that collapse whitespace or interpret bidi", () => {
+  const keys = ["api spec", "api  spec", "api\u202espec"];
+  const labels = keys.map(key => boardLabel(key));
+  expect(labels.map(label => JSON.parse(label))).toEqual(keys);
+  expect(new Set(labels.map(label => label.replace(/\s+/g, " "))).size).toBe(keys.length);
+  expect(labels.join("")).not.toContain("\u202e");
+  const proposal = { ...plan, project: "app", tasks: keys.map(key => ({ key, title: "Same title", depends: [], body: "" })) };
+  const preview = { tracker: proposal.title, tasks: proposal.tasks.map(task => ({ ...task, id: task.key })) };
+  const shown = previewLines(proposal, preview, 120, 22).join("\n");
+  for (const label of labels) expect(shown).toContain(label);
 });
 
 test("plan tag validation rejects malformed labels and plans whose tags cannot fit the preview", () => {

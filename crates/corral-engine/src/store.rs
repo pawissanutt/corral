@@ -1,6 +1,7 @@
 use std::{path::Path, time::Duration};
 
 use anyhow::{Context, Result, ensure};
+use corral_types::board_plan::BoardPlanReceipt;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde::de::DeserializeOwned;
 
@@ -115,6 +116,56 @@ impl Store {
             )
             .context("set first task id")?;
         Ok(())
+    }
+
+    /// The receipt table is additive and created by the first successful filing.
+    pub(crate) fn board_plan_receipt(&self, id: &str) -> Result<Option<(String, String)>> {
+        let exists: bool = self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM main.sqlite_schema WHERE type='table' AND name='board_plan_receipts')",
+            [],
+            |row| row.get(0),
+        ).context("check for board plan receipt table")?;
+        if !exists {
+            return Ok(None);
+        }
+        self.connection
+            .query_row(
+                "SELECT request_hash, receipt FROM board_plan_receipts WHERE id=?1",
+                [id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .context("look up board plan receipt")
+    }
+
+    /// The caller holds the same creating transaction as the task and event writes.
+    pub(crate) fn record_board_plan_receipt(
+        &self,
+        id: &str,
+        hash: &str,
+        receipt: &BoardPlanReceipt,
+    ) -> Result<()> {
+        self.connection
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS board_plan_receipts (
+                    id TEXT PRIMARY KEY, request_hash TEXT NOT NULL, receipt TEXT NOT NULL
+                )",
+            )
+            .context("initialize board plan receipt table")?;
+        self.connection
+            .execute(
+                "INSERT INTO board_plan_receipts(id,request_hash,receipt) VALUES(?1,?2,?3)",
+                params![id, hash, encode(receipt)?],
+            )
+            .context("record board plan receipt")?;
+        Ok(())
+    }
+
+    pub(crate) fn task_dependencies(&self, id: &str) -> Result<Option<Vec<String>>> {
+        self.optional_document(
+            "SELECT json_extract(document,'$.depends_on') FROM tasks WHERE id=?1",
+            [id],
+        )
     }
 
     /// Read the ID sequence without consuming an ID.

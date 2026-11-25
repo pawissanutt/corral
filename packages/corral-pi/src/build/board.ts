@@ -1,5 +1,5 @@
-import { mkdir, writeFile, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { json, type Run, type TaskReadback } from "./corral-cli.ts";
 import { TASK_DIFFICULTIES, TASK_SIZES, type BoardControl, type BoardPhase, type BoardPlan, type BoardPreview,
   type BoardTaskPlan, type BoardTaskStatus, type BuildContext } from "./types.ts";
@@ -26,6 +26,7 @@ function orderedTasks(plan: BoardPlan): BoardTaskPlan[] {
     if (visiting.has(task.key)) throw new Error(`Board dependencies contain a cycle at ${task.key}.`);
     if (visited.has(task.key)) return;
     if (!task.key.trim() || !task.title.trim()) throw new Error("Each board task needs a key and title.");
+    if (/^T-\d+$/.test(task.key)) throw new Error(`Board key ${task.key} looks like an existing task ID.`);
     visiting.add(task.key);
     for (const dependency of task.depends) {
       const parent = tasks.get(dependency);
@@ -75,20 +76,90 @@ export function boardTask(value: TaskReadback, known: ReadonlyMap<string, TaskRe
     default: phase = "backlog";
   }
   return { id: value.id, title: value.title, status: value.status, phase, depends: dependencies, detail, updatedAt: now,
-    size: value.size ?? undefined, difficulty: value.difficulty ?? undefined, tags: value.tags };
+    project: value.project ?? undefined, size: value.size ?? undefined, difficulty: value.difficulty ?? undefined, tags: value.tags };
 }
 
 interface TaskResponse { task: TaskReadback }
+interface FilingReceipt {
+  parents: { project: string; id: string }[];
+  tasks: (Pick<TaskReadback, "id" | "status"> & { key: string; project: string; depends_on: string[] })[];
+}
+interface Pending {
+  id: string;
+  // Keep the actual bytes the CLI hashes, even across host upgrades and restarts.
+  request: string;
+  start?: boolean;
+}
+interface SavedBoard {
+  pending?: Pending;
+  filed?: readonly BoardTaskStatus[];
+}
+
+function loadBoard(path: string): SavedBoard {
+  try { return JSON.parse(readFileSync(path, "utf8")) as SavedBoard; }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
+    throw error;
+  }
+}
+
+function syncDirectory(dir: string): void {
+  const fd = openSync(dir, "r");
+  try { fsyncSync(fd); } finally { closeSync(fd); }
+}
+
+/** The host never substitutes a new proposal ID after sending an authorized filing. */
+function saveBoard(dir: string, path: string, saved: SavedBoard): void {
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const staging = join(dir, `.filing-${crypto.randomUUID()}.tmp`);
+  try {
+    writeFileSync(staging, JSON.stringify(saved), { mode: 0o600, flag: "wx", flush: true });
+    renameSync(staging, path);
+    if (saved.pending?.start !== undefined) {
+      // A new build can have freshly created ancestors. Flush the whole path before the engine can commit,
+      // even if a previously interrupted mkdir left some of those directories already present.
+      for (let here = realpathSync(dir); ; here = dirname(here)) {
+        syncDirectory(here);
+        if (here === dirname(here)) break;
+      }
+    } else syncDirectory(dir);
+  } finally { rmSync(staging, { force: true }); }
+}
+
+class InvalidPlan extends Error {}
+
+/** Keep exact identifiers distinct even on surfaces that collapse spaces or interpret bidi text. */
+export function boardLabel(value: string, quoted = false): string {
+  return !quoted && /^[\w./:@-]+$/.test(value) ? value : JSON.stringify(value)
+    .replace(/[ \u007f-\uffff]/g, unit => "\\u" + unit.charCodeAt(0).toString(16).padStart(4, "0"));
+}
+
+/** The complete decision-critical text must fit the remote card before optional titles or briefs. */
+export function planIdentityLines(plan: BoardPlan): string[] {
+  return plan.tasks.map(task => `${boardLabel(task.key, true)} → ${boardLabel(task.project ?? plan.project ?? "", true)}`
+    + (task.depends.length ? ` · after ${task.depends.map(dep => boardLabel(dep, true)).join(", ")}` : " · no dependencies"));
+}
+
+function effectivePlan(plan: BoardPlan, fallback?: string): BoardPlan {
+  const project = plan.project ?? fallback;
+  if (!project) throw new Error("Board plans require a configured default project.");
+  return validatePlan({ ...plan, project, tasks: plan.tasks.map(task => ({ ...task, project: task.project ?? project })) });
+}
 
 export function createBoard(options: {
   context: BuildContext; run: Run; tmpDir: string; changed: () => void; now?: () => number; pollMs?: number;
-}): BoardControl & { propose(plan: BoardPlan): void; close(): void } {
+}): BoardControl & { propose(plan: BoardPlan): Promise<void>; close(): void } {
   const root = options.context.session.workspaceRoot;
+  const path = join(options.tmpDir, "filing.json");
+  const saved = root ? loadBoard(path) : {};
   const now = options.now ?? Date.now;
   const listeners = new Set<() => void>();
   const known = new Map<string, TaskReadback>();
-  let statuses: readonly BoardTaskStatus[] = [];
-  let proposed: BoardPlan | undefined;
+  let statuses: readonly BoardTaskStatus[] = saved.filed ?? [];
+  let pending = saved.pending;
+  let proposed: BoardPlan | undefined = pending && JSON.parse(pending.request) as BoardPlan;
+  let proposing = false;
+  const receipts = new WeakMap<BoardPlan, { start: boolean; tasks: readonly BoardTaskStatus[] }>();
   let closed = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let refreshing: Promise<void> | undefined;
@@ -100,6 +171,19 @@ export function createBoard(options: {
   function command(argv: readonly string[]): Promise<TaskResponse> {
     const cwd = available();
     return json<TaskResponse>(options.run, ["--root", cwd, "--json", ...argv], cwd);
+  }
+  async function submit<T>(args: readonly string[], input: string): Promise<T> {
+    const cwd = available();
+    const result = await options.run(["--root", cwd, "--json", "board-plan", ...args], { cwd, input });
+    let value;
+    try { value = JSON.parse(result.stdout); } catch { /* A missing/unreadable reply is not a refusal. */ }
+    if (result.code === 0 && value !== undefined) return value as T;
+    if (result.code === 2 && value?.code === "invalid_plan" && typeof value.refusal === "string") throw new InvalidPlan(value.refusal);
+    throw new Error(result.stderr.trim() || value?.refusal || "No valid reply from corral-next board-plan.");
+  }
+  function persist(next: Pending | undefined, filed = statuses) {
+    saveBoard(options.tmpDir, path, { pending: next, filed: filed.slice(-100) });
+    pending = next;
   }
   function changed() { options.changed(); for (const listener of listeners) listener(); }
   function schedule() {
@@ -123,7 +207,9 @@ export function createBoard(options: {
     }
     statuses = statuses.map(task => {
       const error = errors.get(task.id);
-      return error ? { ...task, phase: "failed", detail: error, updatedAt: now() } : boardTask(known.get(task.id)!, known, now());
+      const value = known.get(task.id);
+      return error ? { ...task, phase: "failed", detail: error, updatedAt: now() }
+        : value ? { ...boardTask(value, known, now()), key: task.key, project: value.project ?? task.project } : task;
     });
     changed(); schedule();
   }
@@ -133,71 +219,85 @@ export function createBoard(options: {
     refreshing = doRefresh().finally(() => { refreshing = undefined; });
     return refreshing;
   }
-  async function body(task: TaskReadback, text: string, profile?: string): Promise<TaskReadback> {
-    if (!text && !profile) return task;
-    const path = join(options.tmpDir, `${task.id}-${crypto.randomUUID()}.md`);
-    if (text) {
-      await mkdir(options.tmpDir, { recursive: true, mode: 0o700 });
-      await writeFile(path, text, { mode: 0o600, flag: "wx" });
-    }
+  async function file(plan: BoardPlan, start: boolean, saved: Pending): Promise<readonly BoardTaskStatus[]> {
+    // Persist the owner-authorized mode before sending; an uncertain reply is never permission to switch modes.
+    persist({ ...saved, start });
     try {
-      return (await command(["edit", task.id, ...(text ? ["--body-file", path] : []), ...(profile ? [`--profile=${profile}`] : [])])).task;
-    } finally { if (text) await rm(path, { force: true }); }
-  }
-  async function file(plan: BoardPlan, start: boolean): Promise<readonly BoardTaskStatus[]> {
-    available();
-    const ordered = orderedTasks(validatePlan(plan));
-    const project = plan.project ?? options.context.session.project;
-    if (!project) throw new Error("Board plans require a configured project.");
-    const args = [`--project=${project}`];
-    const parent = (await command(["new", ...args, "--", plan.title])).task;
-    proposed = undefined;
-    const ids = new Map<string, string>();
-    const filed: TaskReadback[] = [];
-    const update = (task: TaskReadback) => {
-      known.set(task.id, task);
-      const status = boardTask(task, known, now());
-      const prior = statuses.findIndex(row => row.id === task.id);
-      statuses = prior < 0 ? [...statuses, status] : statuses.map(row => row.id === task.id ? status : row);
+      const receipt = await submit<FilingReceipt>(["file", "--id", saved.id, ...(start ? ["--start"] : [])], saved.request);
+      if (!Array.isArray(receipt?.tasks) || receipt.tasks.length !== plan.tasks.length || receipt.tasks.some((row, index) => {
+        const item = plan.tasks[index]!;
+        return row?.key !== item.key || row.project !== item.project || !/^T-\d+$/.test(row.id)
+          || row.status !== (start ? "ready" : "backlog") || !Array.isArray(row.depends_on);
+      })) throw new Error("Corral returned an incomplete or mismatched filing receipt.");
+      const values = receipt.tasks.map((row, index) => {
+        const { title, size, difficulty, tags } = plan.tasks[index]!;
+        return { ...row, title, size, difficulty, tags };
+      });
+      for (const value of values) known.set(value.id, value);
+      const tasks = values.map(value => ({ ...boardTask(value, known, now()), key: value.key }));
+      const next = [...statuses, ...tasks];
+      persist(undefined, next);
+      statuses = next;
+      proposed = undefined;
+      receipts.set(plan, { start, tasks });
       changed();
-    };
-    try {
-      await body(parent, plan.why);
-      for (const item of ordered) {
-        const depends = item.depends.map(key => ids.get(key) ?? key);
-        const task = (await command(["new", ...args, "--parent", parent.id,
-          ...(item.kind ? [`--kind=${item.kind}`] : []), ...(item.size ? [`--size=${item.size}`] : []),
-          ...(item.difficulty ? [`--difficulty=${item.difficulty}`] : []), ...(item.tags ?? []).map(tag => `--tag=${tag}`),
-          ...(depends.length ? ["--depends-on", depends.join(",")] : []), "--", item.title])).task;
-        ids.set(item.key, task.id);
-        update(task);
-        filed.push(await body(task, item.body, item.profile));
-      }
-      if (start) {
-        for (const task of filed) update((await command(["move", task.id, "ready"])).task);
-      }
-      return statuses;
+      schedule();
+      return tasks;
     } catch (error) {
-      throw new Error(`Could not finish filing ${parent.id}: ${error instanceof Error ? error.message : String(error)}`);
-    } finally { schedule(); }
+      // The engine only issues invalid_plan after checking that this ID did not already commit.
+      if (error instanceof InvalidPlan) {
+        persist({ id: saved.id, request: saved.request });
+        changed();
+        throw error;
+      }
+      throw new Error(`Filing was not acknowledged. Retry the same choice to recover it: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
+  schedule();
   return {
     tasks() { return statuses; },
     proposed() { return proposed; },
-    propose(plan) { if (!root) return; proposed = structuredClone(validatePlan(plan)); changed(); },
+    pendingChoice() { return pending?.start; },
+    async propose(plan) {
+      available();
+      if (pending || proposing) throw new Error("Another board plan is already pending. Resolve it before proposing a new plan.");
+      const effective = effectivePlan(plan, options.context.session.project);
+      if (Buffer.byteLength(JSON.stringify(planIdentityLines(effective).join("\n"))) > 7 * 1024) {
+        throw new Error("Board plan keys, projects and dependencies exceed the confirmation preview budget.");
+      }
+      const request = JSON.stringify(effective);
+      if (Buffer.byteLength(request) > 128 * 1024) throw new Error("Board plans may contain at most 128 KiB of text and metadata.");
+      proposing = true;
+      try {
+        await submit<null>(["check"], request);
+        if (closed) throw new Error("The board session closed during validation.");
+        persist({ id: crypto.randomUUID(), request });
+        proposed = JSON.parse(request) as BoardPlan;
+        changed();
+      } finally { proposing = false; }
+    },
     async preview(plan): Promise<BoardPreview> {
       available();
       // The engine assigns IDs only when the owner confirms; preview shows the plan's actual keys.
-      const tasks = validatePlan(plan).tasks.map(({ key, title, depends, size, difficulty, tags }) =>
-        ({ key, id: key, title, depends, size, difficulty, tags }));
+      const tasks = effectivePlan(plan, options.context.session.project).tasks.map(({ key, title, project, depends, size, difficulty, tags }) =>
+        ({ key, id: key, title, project, depends, size, difficulty, tags }));
       return { tracker: plan.title, tasks };
     },
-    file(plan, start) {
-      if (filing) return filing;
-      filing = file(plan, start).finally(() => { filing = undefined; });
-      return filing;
+    async file(plan, start) {
+      available();
+      const prior = receipts.get(plan);
+      if (prior?.start === start) return prior.tasks;
+      if (!pending || proposed !== plan) throw new Error("That board plan is no longer pending.");
+      if (pending.start !== undefined && pending.start !== start) throw new Error("Retry the original filing choice; its result is not yet known.");
+      return filing ??= file(plan, start, pending).finally(() => { filing = undefined; });
     },
-    dismiss() { if (!root) return; proposed = undefined; changed(); },
+    dismiss() {
+      if (!pending) return;
+      if (filing || pending.start !== undefined) throw new Error("Retry the original filing choice before replacing or dismissing it.");
+      persist(undefined);
+      proposed = undefined;
+      changed();
+    },
     refresh,
     close() { closed = true; clearTimeout(timer); },
     subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },

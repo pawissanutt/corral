@@ -540,6 +540,8 @@ fn file(board: &mut BuildBoard, plan: &BoardPlan, start: bool, at: &str) {
             0,
             BoardTask {
                 id,
+                key: Some(planned.key.clone()),
+                project: planned.project.clone().or_else(|| plan.project.clone()),
                 title: planned.title.clone(),
                 status: phase.into(),
                 phase: phase.into(),

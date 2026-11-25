@@ -472,6 +472,8 @@ export interface BoardTaskPlan extends BoardTaskMetadata {
   /** Local key, unique in the plan; `depends` refers to keys or existing `T-<n>` ids. */
   readonly key: string;
   readonly title: string;
+  /** Defaults to the plan's project; materialized in an accepted proposal. */
+  readonly project?: string;
   readonly kind?: string;
   readonly profile?: string;
   readonly depends: readonly string[];
@@ -489,6 +491,8 @@ export type BoardPhase = "backlog" | "waiting" | "queued" | "running" | "gating"
 
 export interface BoardTaskStatus extends BoardTaskMetadata {
   readonly id: string;
+  readonly key?: string;
+  readonly project?: string;
   readonly title: string;
   /** corral's task status, verbatim. */
   readonly status: string;
@@ -501,14 +505,16 @@ export interface BoardTaskStatus extends BoardTaskMetadata {
 
 export interface BoardPreview {
   readonly tracker: string;
-  readonly tasks: readonly (BoardTaskMetadata & { readonly key: string; readonly id: string; readonly title: string; readonly depends: readonly string[] })[];
+  readonly tasks: readonly (BoardTaskMetadata & { readonly key: string; readonly id: string; readonly title: string; readonly project?: string; readonly depends: readonly string[] })[];
 }
 
 export interface BoardControl {
   /** Tasks this session filed, as last read. */
   tasks(): readonly BoardTaskStatus[];
-  /** A plan the model proposed and the owner has not answered. */
+  /** The open proposal, including one whose filing reply still needs reconciliation. */
   proposed(): BoardPlan | undefined;
+  /** If set, only retrying this exact owner choice is safe. */
+  pendingChoice?(): boolean | undefined;
   preview(plan: BoardPlan): Promise<BoardPreview>;
   /** Files the plan; with `start`, queues every filed task. Only the owner's dialog calls this. */
   file(plan: BoardPlan, start: boolean): Promise<readonly BoardTaskStatus[]>;

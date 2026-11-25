@@ -13,7 +13,7 @@ import type { ChildMark, MarkSink } from "../../host/transcript-marks.ts";
 import { PANEL_BLUE, PANEL_WARNING } from "../panels-view.ts";
 import { exitDialog, planDialog, questionDialog } from "./build-dialogs.ts";
 import type { PreviewState } from "./build-dialogs.ts";
-import { finishEntry } from "./build-entries.ts";
+import { boardEntry, finishEntry } from "./build-entries.ts";
 import type { BuildEntry } from "./build-entries.ts";
 import { CHOICE_GUARD_MS, ChoiceDock } from "./choice-dock.ts";
 import type { ChoiceDialog, ChoiceOption } from "./choice-dock.ts";
@@ -85,7 +85,7 @@ export function childQuestionCard(child: string, askedAt: number): (card: Readon
  */
 function cardOf(shown: Shown, pinned?: string): (card: Readonly<CardEntry["card"]>) => boolean {
   if (shown.kind === "exit") return pinned === undefined ? card => card.kind === "exit" : card => card.kind === "exit" && card.id === pinned;
-  if (shown.kind === "plan") return card => card.kind === "board_plan";
+  if (shown.kind === "plan") return card => card.kind === "board_plan" && (pinned === undefined || card.id === pinned);
   return childQuestionCard(shown.id, shown.askedAt);
 }
 
@@ -191,9 +191,9 @@ export class BuildController implements BuildCardSource {
 
     const proposed = ui.board?.proposed();
     if (proposed !== this.tracked) {
+      if (this.shown?.kind === "plan") this.close();
       this.track(proposed);
       if (proposed) arrivals.push({ kind: "plan" });
-      else if (this.shown?.kind === "plan") this.close();
     }
 
     const first = arrivals[0];
@@ -223,7 +223,8 @@ export class BuildController implements BuildCardSource {
       if (!child?.question || child.state !== "needs" || child.question.askedAt !== shown.askedAt) return undefined;
       return questionDialog(child, this.host.color(childHue(fleet, child.id)));
     }
-    return this.tracked ? planDialog(this.tracked, this.preview, this.planEpisode, this.fileError) : undefined;
+    return this.tracked && ui.board?.proposed() === this.tracked
+      ? planDialog(this.tracked, this.preview, this.planEpisode, this.fileError, ui.board.pendingChoice?.()) : undefined;
   }
 
   /** Docks a dialog the owner asked for; false plus a notice when there is nothing to open. */
@@ -510,14 +511,16 @@ export class BuildController implements BuildCardSource {
     }
     // Only a session with a board (not bare) ever tracks a plan.
     const plan = this.tracked, board = ui.board;
-    if (!plan || !board || this.filing) return;
+    if (!plan || !board || board.proposed() !== plan || this.filing) return;
     const dismiss = index === 2, start = index === 0;
     if (!dismiss && this.preview.state !== "ready") return;
     if (this.host.dialogs) {
+      const card = this.watching?.id;
+      if (!card) { this.host.notice("Reopen the plan to see its current choices", "warning"); return; }
       this.filing = true;
       this.fileError = undefined;
       // The host files (or discards) the plan, and posts the filed tasks to the conversation.
-      this.decide({ kind: "plan" }, [{ options: [dismiss ? "dismiss" : start ? "file_start" : "file"] }]).then(status => {
+      this.decide({ kind: "plan" }, [{ options: [dismiss ? "dismiss" : start ? "file_start" : "file"] }], card).then(status => {
         if (this.disposed) return;
         if (this.shown?.kind === "plan") this.close();
         if (status === "dismissed") this.host.notice("Nothing filed. The plan is discarded.", "text");
@@ -528,15 +531,19 @@ export class BuildController implements BuildCardSource {
       return;
     }
     if (dismiss) {
-      board.dismiss();
+      try { board.dismiss(); } catch (error) {
+        this.host.notice(message(error), "error");
+        return;
+      }
       this.close();
       this.host.notice("Nothing filed. The plan is discarded.", "text");
       return;
     }
     this.filing = true;
     this.fileError = undefined;
-    board.file(plan, start).then(() => {
+    board.file(plan, start).then(tasks => {
       if (this.disposed) return;
+      this.host.post(boardEntry(tasks, start));
       if (this.shown?.kind === "plan") this.close();
       this.host.showPlan();
     }, error => { this.fileError = message(error); })
@@ -556,7 +563,11 @@ export class BuildController implements BuildCardSource {
     else if (shown.kind === "question") {
       this.dismissed.add(questionKey(shown.id, shown.askedAt));
       this.host.notice(`${shown.id} keeps waiting`, "text");
-    } else this.host.notice("Nothing filed. The plan still waits · F10 Plan, then p, reopens it", "text");
+    } else {
+      const uncertain = this.host.ui.board?.pendingChoice?.() !== undefined;
+      this.host.notice(uncertain ? "Filing not acknowledged · F10 Plan, then p, to retry the original choice"
+        : "Nothing filed. The plan still waits · F10 Plan, then p, reopens it", "text");
+    }
   }
 
   // ---------- internals ----------

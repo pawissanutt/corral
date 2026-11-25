@@ -116,7 +116,8 @@ pub struct BoardRow {
     pub now: String,
     /// `depends on T-41, T-42`.
     pub depends: Option<String>,
-    /// `size m · difficulty unset · bug`.
+    /// `size m · difficulty unset · bug`, led by `publish → corral → T-12` once the board named
+    /// the task's key or project.
     pub meta: String,
     /// The host's detail, when `now` does not already say it.
     pub detail: Option<String>,
@@ -131,7 +132,7 @@ pub struct BoardRow {
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlanCard {
     pub title: String,
-    /// `for corral · 4 tasks · 3 dependencies`.
+    /// `for corral, site · 4 tasks · 3 dependencies`: the projects the tasks are filed in.
     pub facts: String,
     pub why: String,
     pub tasks: Vec<PlanTask>,
@@ -145,7 +146,8 @@ pub struct PlanTask {
     pub id: String,
     pub key: String,
     pub title: String,
-    /// `feature · size m · difficulty hard · tags bug · omp`, an unset size or difficulty said.
+    /// `project corral · feature · size m · difficulty hard · tags bug · omp`, an unset size or
+    /// difficulty said.
     pub facts: Option<String>,
     /// `after T1, T2`.
     pub depends: Option<String>,
@@ -434,9 +436,25 @@ fn read(target: DetailRef) -> Effect {
 
 fn plan(cx: &Cx<'_>, plan: &BoardPlan) -> PlanCard {
     let edges: usize = plan.tasks.iter().map(|task| task.depends.len()).sum();
+    let default = plan.project.as_deref();
+    // Each task's own project, else the plan's, each named once in the order proposed.
+    let mut projects: Vec<&str> = Vec::new();
+    for project in plan
+        .tasks
+        .iter()
+        .filter_map(|task| meta::plan_project(task, default))
+    {
+        if !projects.contains(&project) {
+            projects.push(project);
+        }
+    }
+    if projects.is_empty() {
+        projects.extend(default);
+    }
     let mut facts = Vec::new();
-    if let Some(project) = &plan.project {
-        facts.push(format!("for {project}"));
+    if !projects.is_empty() {
+        let projects: Vec<_> = projects.into_iter().map(meta::board_label).collect();
+        facts.push(format!("for {}", projects.join(", ")));
     }
     facts.push(plural(plan.tasks.len(), "task", "tasks"));
     if edges > 0 {
@@ -453,9 +471,15 @@ fn plan(cx: &Cx<'_>, plan: &BoardPlan) -> PlanCard {
                 id: format!("plan-task-{}", task.key),
                 key: task.key.clone(),
                 title: task.title.clone(),
-                facts: Some(meta::plan_facts(task)),
-                depends: (!task.depends.is_empty())
-                    .then(|| format!("after {}", task.depends.join(", "))),
+                facts: Some(meta::plan_facts(task, default)),
+                depends: (!task.depends.is_empty()).then(|| {
+                    let depends: Vec<_> = task
+                        .depends
+                        .iter()
+                        .map(|dep| meta::board_label(dep))
+                        .collect();
+                    format!("after {}", depends.join(", "))
+                }),
                 preview: (!open)
                     .then(|| body.lines().map(str::trim).find(|line| !line.is_empty()))
                     .flatten()
@@ -480,6 +504,24 @@ fn plan(cx: &Cx<'_>, plan: &BoardPlan) -> PlanCard {
         tasks,
         review: review(cx),
     }
+}
+
+/// `publish → corral → T-12 · size m …`: the plan key the board confirmed, its project and the
+/// task's id, ahead of its metadata. A task filed before the board named them shows the metadata
+/// alone.
+fn identified(task: &BoardTask, meta: String) -> String {
+    if task.key.is_none() && task.project.is_none() {
+        return meta;
+    }
+    let identity: Vec<_> = task
+        .key
+        .as_deref()
+        .into_iter()
+        .chain(task.project.as_deref())
+        .chain([task.id.as_str()])
+        .map(meta::board_label)
+        .collect();
+    format!("{} · {meta}", identity.join(" → "))
 }
 
 fn rows(cx: &Cx<'_>, board: &BuildBoard) -> Vec<BoardRow> {
@@ -508,7 +550,10 @@ fn rows(cx: &Cx<'_>, board: &BuildBoard) -> Vec<BoardRow> {
                 now: stage.now,
                 depends: (!task.depends.is_empty())
                     .then(|| format!("depends on {}", task.depends.join(", "))),
-                meta: meta::line(task.size.as_deref(), task.difficulty, &task.tags),
+                meta: identified(
+                    task,
+                    meta::line(task.size.as_deref(), task.difficulty, &task.tags),
+                ),
                 detail,
                 updated,
                 selected: cx.ui.board.selected.as_deref() == Some(task.id.as_str()),

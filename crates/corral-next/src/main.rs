@@ -1,4 +1,5 @@
 mod args;
+mod board_plan;
 mod editor;
 mod ext;
 mod hook;
@@ -96,6 +97,9 @@ fn run(command: Command, out: &mut Output<'_>) -> Result<u8> {
         return Ok(0);
     }
     let root = Engine::discover_root(&cwd, out.root)?;
+    if let Command::BoardPlan(command) = command {
+        return board_plan::run(&root, command, out);
+    }
     if let Command::Config(ConfigCommand::Check) = command {
         let config = checked_config(&root)?;
         out.value(&config, |out, _| writeln!(out, "Configuration is valid"))?;
@@ -370,6 +374,7 @@ fn run(command: Command, out: &mut Output<'_>) -> Result<u8> {
         #[cfg(unix)]
         Command::PiStartup(_) => unreachable!("handled before opening the engine"),
         Command::Init { .. }
+        | Command::BoardPlan(_)
         | Command::Config(_)
         | Command::Ext(_)
         | Command::Tool { .. }

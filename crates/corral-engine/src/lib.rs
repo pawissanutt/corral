@@ -5,6 +5,7 @@
 //! models via [`Store`]; neither needs direct SQL access.
 
 pub mod artifacts;
+pub mod board_plan;
 mod checkout;
 mod citations;
 pub mod config;

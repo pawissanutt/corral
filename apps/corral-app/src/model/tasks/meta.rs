@@ -61,10 +61,45 @@ pub fn line(size: Option<&str>, difficulty: Option<TaskDifficulty>, tags: &[Stri
     parts.join(" · ")
 }
 
-/// A proposed task's facts as the owner confirms them: kind, size and difficulty (unset said),
-/// tags and profile.
-pub fn plan_facts(task: &corral_protocol::detail::BoardTaskPlan) -> String {
-    let mut facts: Vec<String> = task.kind.iter().cloned().collect();
+/// Distinguish exact board identifiers even in a view that folds spaces or interprets bidi.
+pub fn board_label(value: &str) -> String {
+    if !value.is_empty()
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"_./:@-".contains(&b))
+    {
+        return value.to_owned();
+    }
+    let mut label = String::from("\"");
+    for ch in value.chars() {
+        if ch == ' ' {
+            label.push_str("\\u{20}");
+        } else {
+            label.extend(ch.escape_default());
+        }
+    }
+    label.push('"');
+    label
+}
+
+/// The project a proposed task is filed in: its own, else the plan's. An older host names only
+/// the plan's.
+pub fn plan_project<'a>(
+    task: &'a corral_protocol::detail::BoardTaskPlan,
+    plan: Option<&'a str>,
+) -> Option<&'a str> {
+    task.project.as_deref().or(plan)
+}
+
+/// A proposed task's facts as the owner confirms them: its project, kind, size and difficulty
+/// (unset said), tags and profile. `plan` is the plan's own project, which a task without one
+/// is filed in.
+pub fn plan_facts(task: &corral_protocol::detail::BoardTaskPlan, plan: Option<&str>) -> String {
+    let mut facts: Vec<String> = plan_project(task, plan)
+        .map(|project| format!("project {}", board_label(project)))
+        .into_iter()
+        .collect();
+    facts.extend(task.kind.iter().cloned());
     facts.push(format!("size {}", size_word(task.size.as_deref())));
     facts.push(format!("difficulty {}", difficulty_word(task.difficulty)));
     if !task.tags.is_empty() {

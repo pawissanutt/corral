@@ -11,6 +11,16 @@ import { scriptedFixtureInstall } from "./support/fixture-install.ts";
 import { within } from "./support/wait.ts";
 
 const deadline = 20_000;
+const followOns = {
+  title: "Corral and Lite follow-ons", why: "One approval for the connected work.",
+  tasks: [
+    ...Array.from({ length: 4 }, (_, i) => ({ key: `corral-${i}`, title: `Corral ${i}`, body: `Corral brief ${i}`, depends: i === 0 ? ["lite-0"] : [] })),
+    ...Array.from({ length: 6 }, (_, i) => ({ key: `lite-${i}`, project: "mitimind-lite", title: `Lite ${i}`, body: `Lite brief ${i}`,
+      depends: i === 0 ? ["T-001"] : i === 1 ? ["corral-0"] : [] })),
+  ],
+};
+const singleTask = { key: "single", title: "Single-project child", body: "Single-project brief", depends: [] };
+const boardCall = (callId: string, args: Record<string, unknown>) => ({ callId, name: "board_plan", arguments: args });
 const steps: FakeStep[] = [
   { toolCalls: [{ callId: "owner-choice", name: "ask_user", arguments: { questions: [
     { question: "Which line should the build use?", options: ["revised", "alternate"], freeText: false },
@@ -23,13 +33,21 @@ const steps: FakeStep[] = [
     command: "git add line.txt && git commit -m 'Update the fixture line'",
   } }] },
   { match: "[ask_user answer", text: "Committed the chosen line." },
+  { match: "Propose two graphs", toolCalls: [boardCall("invalid-ref", { title: "Missing dependency", why: "", tasks: [{ ...singleTask, depends: ["T-999"] }] })] },
+  { match: "Propose two graphs", toolCalls: [boardCall("multi", followOns)] },
+  { match: "Propose two graphs", toolCalls: [boardCall("replacement", { title: "Must not replace", why: "", tasks: [singleTask] })] },
+  { match: "Propose two graphs", text: "One valid proposal remains." },
+  { match: "Propose one to discard", toolCalls: [boardCall("discard", { title: "Will be discarded", why: "", tasks: [singleTask] })] },
+  { match: "Propose one to discard", text: "Discard or file this proposal." },
+  { match: "Propose one to keep", toolCalls: [boardCall("single", { title: "Single-project plan", why: "", tasks: [singleTask] })] },
+  { match: "Propose one to keep", text: "File this proposal in Backlog." },
 ];
 
 interface Frame { id?: number; method?: string; params?: unknown; error?: unknown; result?: unknown }
 interface LivePage {
   topic: string; scope: string; cursor: { rev: number; after: string | null };
   events: { kind: string; turn?: number; state?: string; tool?: string; failed?: boolean; aborted?: boolean; error?: string }[];
-  state?: { cards: { id: string; kind: string }[]; exit?: { phase: string; landed?: string; base_branch?: string } };
+  state?: { cards?: { id: string; kind: string }[]; exit?: { phase: string; landed?: string; base_branch?: string } };
 }
 interface BuildRow { id: string; build: { worktree: string; branch: string } }
 interface Removed { worktree: boolean; branch: boolean; record: boolean; kept?: string; lines: string[] }
@@ -131,10 +149,13 @@ async function run(engine: string, daemonBin: string): Promise<void> {
     GIT_CEILING_DIRECTORIES: root, GIT_AUTHOR_NAME: "Journey", GIT_AUTHOR_EMAIL: "journey@example.invalid",
     GIT_COMMITTER_NAME: "Journey", GIT_COMMITTER_EMAIL: "journey@example.invalid", CORRAL_NEXT_BIN: engine,
   };
-  const command = async (program: string, args: string[], cwd: string, want = 0) => {
-    const child = spawn(program, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
+  const command = async (program: string, args: string[], cwd: string, want = 0, input?: string) => {
+    const child = spawn(program, args, { cwd, env, stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"] });
     try {
-      const [code, out, err] = await within(Promise.all([processExit(child), text(child.stdout), text(child.stderr)]), deadline, [program, ...args].join(" "));
+      const exit = processExit(child);
+      child.stdin?.end(input);
+      assert(child.stdout && child.stderr);
+      const [code, out, err] = await within(Promise.all([exit, text(child.stdout), text(child.stderr)]), deadline, [program, ...args].join(" "));
       assert.equal(code, want, `${program} ${args.join(" ")}\n${out}${err}`);
       return out;
     } finally { if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL"); }
@@ -157,7 +178,9 @@ async function run(engine: string, daemonBin: string): Promise<void> {
     await git("add", ".");
     await git("commit", "-m", "base");
     await command(engine, ["--root", root, "init", "--first-id", "1"], root);
-    writeFileSync(join(state, "corral.toml"), `[runner]\nmode = "process"\n[defaults]\nbase = "trunk"\nauto_dispatch = false\nauto_land = false\n[projects.demo]\npath = "repo"\ngate = ['test "$(cat line.txt)" = revised']\n`);
+    mkdirSync(join(root, "lite"));
+    writeFileSync(join(state, "corral.toml"), `[runner]\nmode = "process"\n[defaults]\nbase = "trunk"\nauto_dispatch = false\nauto_land = false\n[projects.corral]\npath = "repo"\ngate = ['test "$(cat line.txt)" = revised']\n[projects.mitimind-lite]\npath = "lite"\n`);
+    await command(engine, ["--root", root, "new", "--project", "corral", "Existing prerequisite"], root);
     const log = openSync(daemonLog, "w");
     try {
       daemon = spawn(daemonBin, ["--root", root, "run"], { cwd: root, env, stdio: ["ignore", log, log] });
@@ -166,7 +189,7 @@ async function run(engine: string, daemonBin: string): Promise<void> {
     await waitSocket(daemonPath, exited);
     owner = new DaemonClient(daemonPath);
     assert((await owner.hello()).caps.includes("session.state.v1"));
-    const row = await owner.rpc<BuildRow>("build.start", { project: "demo", name: "walk", here: false });
+    const row = await owner.rpc<BuildRow>("build.start", { project: "corral", name: "walk", here: false });
     id = row.id;
     assert.match(id, /^B-/);
     assert.equal(row.build.branch, "build/walk");
@@ -185,7 +208,7 @@ async function run(engine: string, daemonBin: string): Promise<void> {
     await owner.through(id, page => {
       asked ||= page.events.some(event => event.kind === "live_tool" && event.tool === "ask_user" && event.state === "ended" && event.failed === false);
       turnEnded ||= page.events.some(event => event.kind === "live_turn" && event.state === "ended" && event.turn === send.turn && !event.aborted && !event.error);
-      questionId ??= page.state?.cards.find(card => card.kind === "question")?.id;
+      questionId ??= page.state?.cards?.find(card => card.kind === "question")?.id;
       return asked && turnEnded && questionId !== undefined;
     }, "live tool call and deferred question");
     const question = (await cardList()).find(card => card.id === questionId);
@@ -204,8 +227,89 @@ async function run(engine: string, daemonBin: string): Promise<void> {
     assert.equal(await git("show", "build/walk:line.txt"), "revised\n");
     assert(!(await cardList()).some(card => card.id === questionId));
 
+    type FiledTask = { id: string; project: string; status: string; title: string; body: string; parent: string | null; depends_on: string[] };
+    type Board = { tasks: { key: string; id: string; project: string; status: string; depends?: string[] }[]; proposed?: { title: string } };
+    const rows = async (): Promise<FiledTask[]> => JSON.parse(await command(engine, ["--root", root, "--json", "list", "--all"], root));
+    const board = async (): Promise<Board> => {
+      const { body } = await owner!.rpc<{ body: { kind: string; body: Partial<Board> } }>("detail.get", { kind: "build_board", id });
+      assert.equal(body.kind, "build_board");
+      return { ...body.body, tasks: body.body.tasks ?? [] };
+    };
+    const propose = async (key: string, prompt: string, expectedFailures = 0) => {
+      const sent = await owner!.rpc<{ turn: number }>("session.send", { id, cmd_id: key, text: prompt, policy: "steer" });
+      const results: boolean[] = [];
+      await owner!.through(id!, page => {
+        for (const event of page.events) if (event.kind === "live_tool" && event.tool === "board_plan" && event.state === "ended") results.push(event.failed === true);
+        return page.events.some(event => event.kind === "live_turn" && event.state === "ended" && event.turn === sent.turn && !event.aborted && !event.error);
+      }, `proposal ${key} completes`);
+      assert.equal(results.filter(Boolean).length, expectedFailures);
+      assert.equal(results.filter(failed => !failed).length, 1);
+      const cards = (await cardList()).filter(card => card.kind === "board_plan");
+      assert.equal(cards.length, 1);
+      return cards[0]!;
+    };
+    const answerBoard = (card: SessionCard, option: string) => owner!.rpc<{ status: string }>("session.card.answer", { id, card: card.id, answers: [{ options: [option] }] });
+    const whenFiled = () => owner!.through(id!, page => page.events.some(event => event.kind === "live_part"), "board changes after the answer");
+    const multi = await propose("multi-graph", "Propose two graphs", 2);
+    assert.equal(multi.title, followOns.title);
+    assert.equal(multi.meta, "10 tasks · 2 projects");
+    assert(multi.body?.includes('"corral-0" → "corral" · after "lite-0"'));
+    assert(multi.body?.includes('"lite-1" → "mitimind-lite" · after "corral-0"'));
+    assert.equal((await rows()).length, 1, "previews and refusals never file tasks");
+    const { pending } = JSON.parse(readFileSync(join(recordDir(id), "board", "filing.json"), "utf8")) as { pending: { id: string; request: string } };
+    assert.equal((await answerBoard(multi, "file_start")).status, "started");
+    assert.equal((await answerBoard(multi, "file_start")).status, "missing", "the consumed card cannot file a second time");
+    // A card is hidden in flight; wait until a board read actually shows the ten committed children.
+    await within((async () => {
+      while ((await board()).tasks.length !== 10) await whenFiled();
+    })(), deadline, "committed graph read back from build_board");
+    const filed = (await board()).tasks;
+    const mapped = new Map(filed.map(task => [task.key, task]));
+    // Simulate resending the exact request after its CLI reply was lost; changing the choice must refuse.
+    const replayArgs = ["--root", root, "--json", "board-plan", "file", "--id", pending.id];
+    const replay = JSON.parse(await command(engine, [...replayArgs, "--start"], root, 0, pending.request)) as Board;
+    assert.deepEqual(replay.tasks.map(task => task.id), followOns.tasks.map(task => mapped.get(task.key)?.id));
+    assert.equal(JSON.parse(await command(engine, replayArgs, root, 2, pending.request)).code, "plan_conflict");
+    const stored = await rows();
+    assert.equal(stored.length, 13, "one existing task, ten children, two project-local parents");
+    assert.equal(stored.filter(task => task.title === followOns.title && task.status === "backlog").length, 2);
+    for (const expected of followOns.tasks) {
+      const entry = mapped.get(expected.key);
+      assert(entry);
+      const task = stored.find(task => task.id === entry.id);
+      assert(task);
+      const project = "project" in expected ? expected.project : "corral";
+      const parent = stored.find(candidate => candidate.id === task.parent);
+      assert.equal(parent?.title, followOns.title);
+      assert.equal(parent.project, project);
+      assert.equal(entry.project, project);
+      assert.equal(task.project, project);
+      assert.equal(task.status, "ready");
+      assert.equal(task.body, expected.body);
+      const depends = expected.depends.map(dep => mapped.get(dep)?.id ?? dep);
+      assert.deepEqual(task.depends_on, depends);
+      assert.deepEqual(entry.depends ?? [], depends);
+    }
+    const discarded = await propose("discard-graph", "Propose one to discard");
+    assert.equal((await answerBoard(discarded, "dismiss")).status, "dismissed");
+    assert.equal((await board()).proposed, undefined);
+    assert.equal((await rows()).length, 13);
+    const single = await propose("single-graph", "Propose one to keep");
+    assert.equal((await answerBoard(single, "file")).status, "started");
+    await within((async () => {
+      while ((await board()).tasks.length !== 11) await whenFiled();
+    })(), deadline, "single-project filing readback");
+    const singleRows = (await rows()).filter(task => [single.title, singleTask.title].includes(task.title));
+    assert.equal(singleRows.length, 2);
+    assert(singleRows.every(task => task.project === "corral" && task.status === "backlog"));
+    console.log("board graph: 4 Corral + 6 Lite children, 2 parents, cross-project edges; invalid/dismiss/duplicate and lost-reply replay unchanged; file-only also read back");
+    for (const task of followOns.tasks) {
+      const entry = mapped.get(task.key)!;
+      console.log(`${task.key} → ${entry.project} → ${entry.id}${entry.depends?.length ? ` (after ${entry.depends.join(", ")})` : ""}`);
+    }
+
     await owner.rpc("session.action", { id, action: "exit_open" });
-    await owner.through(id, page => page.state?.cards.some(card => card.kind === "exit") === true, "exit card arrives");
+    await owner.through(id, page => page.state?.cards?.some(card => card.kind === "exit") === true, "exit card arrives");
     // Detail invalidations, rather than a fixed sleep, tell the app when the exit summary is ready.
     let exit: SessionCard | undefined, land: SessionCard["questions"][number]["options"][number] | undefined;
     for (;;) {

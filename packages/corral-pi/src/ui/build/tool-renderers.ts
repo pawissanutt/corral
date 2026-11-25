@@ -4,6 +4,7 @@
 // Each tool draws its own frame (`renderShell: "self"`): Pi puts one blank row above it and no box around it, and the
 // card keeps the output padding free on both sides itself, so it starts in the column of the conversation entries.
 import type { AgentToolResult, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { boardLabel } from "../../build/board.ts";
 import type { BoardPlan, BoardTaskPlan, ChildSnapshot, ChildSpec } from "../../build/types.ts";
 import { spinner } from "../frame.ts";
 import { plainLabel, PANEL_BLUE, PANEL_ERROR, PANEL_MUTED, PANEL_SUCCESS, PANEL_TEXT, PANEL_WARNING } from "../panels-view.ts";
@@ -129,11 +130,11 @@ function pendingPlan(cards: BuildCardSource | undefined, plan: BoardPlan): Board
 }
 
 function planTaskLines(task: BoardTaskPlan, width: number): string[] {
-  const name = `${plainLabel(task.key)}: ${plainLabel(task.title)}`;
-  const detail = [task.kind && `kind: ${plainLabel(task.kind)}`, task.profile && `profile: ${plainLabel(task.profile)}`,
-    task.depends.length && `after ${task.depends.map(plainLabel).join(", ")}`].filter(Boolean).join(" · ");
+  const name = `${boardLabel(task.key)}${task.project ? ` → ${boardLabel(task.project)}` : ""}: ${plainLabel(task.title)}`;
+  const detail = [task.kind && `kind: ${plainLabel(task.kind)}`, task.profile && `profile: ${plainLabel(task.profile)}`].filter(Boolean).join(" · ");
   return [
     ...cardWrap(name, PANEL_TEXT, width),
+    ...cardWrap(task.depends.length ? `after ${task.depends.map(dep => boardLabel(dep)).join(", ")}` : "no dependencies", PANEL_MUTED, width),
     ...(detail ? cardWrap(detail, PANEL_MUTED, width, 2) : []),
     ...wrapMetadata(taskMetadataLabel(task), width - 2).map(line => cardLine(PANEL_TEXT + "  " + line, width)),
   ];

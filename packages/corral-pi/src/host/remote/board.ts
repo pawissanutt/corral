@@ -6,6 +6,11 @@ import { clipText, cursorOffset, fingerprintPart, fitRows, isoTime, jsonBytes, o
 
 const KiB = 1024;
 const BOARD_KEY_BYTES = 160;
+const BOARD_PROJECT_BYTES = 256;
+/** What the proposal as a whole may take once the briefs are in; the filed tasks keep the rest of the part. */
+const BOARD_PLAN_BYTES = 37 * KiB;
+/** What the board part keeps for its own fields (`unavailable`, the filed tasks' list) whatever the proposal holds. */
+const BOARD_ENVELOPE_BYTES = 2 * KiB;
 const BRIEF_PAGE_BYTES = 40 * KiB;
 const proposalFingerprints = new WeakMap<BoardPlan, string>();
 
@@ -23,14 +28,17 @@ function boardKeys(plan: BoardPlan): Map<string, string> {
 
 function boardPlan(plan: BoardPlan) {
   const keys = boardKeys(plan);
-  // Reserve room for all twenty task identities so a clipped body cannot hide a dependency.
-  const tasks = plan.tasks.slice(0, 20).map(({ key, title, kind, size, difficulty, tags, profile, depends, body }) => ({
-    key: keys.get(key)!, title: clipText(title, 240), kind: optionalText(kind, 64), size: optionalText(size, 64),
-    difficulty, tags, profile: optionalText(profile, 160), depends: fitRows(depends.map(key => keys.get(key) ?? key), 0, 32, 512),
-    body: "", body_bytes: Buffer.byteLength(body),
+  // Identities (key, project, every accepted dependency) are never clipped; only the reasons and the briefs give way.
+  const tasks = plan.tasks.slice(0, 20).map(({ key, project, title, kind, size, difficulty, tags, profile, depends, body }) => ({
+    key: keys.get(key)!, project: optionalText(project ?? plan.project, BOARD_PROJECT_BYTES), title: clipText(title, 240),
+    kind: optionalText(kind, 64), size: optionalText(size, 64), difficulty, tags, profile: optionalText(profile, 160),
+    depends: depends.map(key => keys.get(key) ?? key), body: "", body_bytes: Buffer.byteLength(body),
   }));
-  const result = { title: clipText(plan.title, 512), project: optionalText(plan.project, 256), why: clipText(plan.why, 8 * KiB), tasks };
-  let room = Math.max(0, 37 * KiB - jsonBytes(result));
+  const head = { title: clipText(plan.title, 512), project: optionalText(plan.project, BOARD_PROJECT_BYTES) };
+  // Leave the filed tasks' list and the part's envelope their share, then give the reasons what the identities leave.
+  const why = clipText(plan.why, Math.min(8 * KiB, Math.max(0, SESSION_PART_MAX - BOARD_ENVELOPE_BYTES - jsonBytes({ ...head, why: "", tasks }))));
+  const result = { ...head, why, tasks };
+  let room = Math.max(0, BOARD_PLAN_BYTES - jsonBytes(result));
   for (const [i, row] of tasks.entries()) {
     row.body = clipText(plan.tasks[i]!.body, Math.min(2 * KiB, Math.floor(room / (tasks.length - i))));
     room -= jsonBytes(row.body) - 2;
@@ -70,8 +78,8 @@ function boardPlanTask(plan: BoardPlan | undefined, key: string, after?: string)
 export function boardPart(board: Pick<BoardControl, "tasks" | "proposed"> | undefined, unavailable?: string) {
   const plan = board?.proposed();
   const proposed = plan === undefined ? undefined : boardPlan(plan);
-  const tasks = [...board?.tasks() ?? []].slice(-100).reverse().map(({ id, title, status, phase, size, difficulty, tags, depends, detail, updatedAt }) => ({
-    id, title: clipText(title, 512), status, phase, size: optionalText(size, 64), difficulty, tags, depends: fitRows(depends, 0, 64, KiB),
+  const tasks = [...board?.tasks() ?? []].slice(-100).reverse().map(({ id, key, project, title, status, phase, size, difficulty, tags, depends, detail, updatedAt }) => ({
+    id, key: optionalText(key, BOARD_KEY_BYTES), project: optionalText(project, BOARD_PROJECT_BYTES), title: clipText(title, 512), status, phase, size: optionalText(size, 64), difficulty, tags, depends: fitRows(depends, 0, 64, KiB),
     detail: optionalText(detail, 512), updated_at: isoTime(updatedAt),
   }));
   return { proposed, unavailable, tasks: fitRows(tasks, 0, 100, SESSION_PART_MAX - jsonBytes({ proposed, unavailable, tasks: [] })) };

@@ -79,9 +79,10 @@ export interface TaskReadback {
   id: string;
   title: string;
   status: string;
+  project?: string | null;
   size?: string | null;
   difficulty?: TaskDifficulty | null;
-  tags?: string[];
-  depends_on?: string[];
+  tags?: readonly string[];
+  depends_on?: readonly string[];
   blocked?: { reason: string } | null;
 }

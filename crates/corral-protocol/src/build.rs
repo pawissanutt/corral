@@ -108,6 +108,12 @@ pub struct BuildBoard {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct BoardTask {
     pub id: String,
+    /// The plan key this task was filed under, confirmed by the board; absent when unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    /// The project it was filed in, confirmed by the board; absent when unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
     pub title: String,
     pub status: String,
     pub phase: String,
@@ -140,6 +146,10 @@ pub struct BoardPlan {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct BoardTaskPlan {
     pub key: String,
+    /// The project this task is filed in: its own, else the plan's. Absent from an older host,
+    /// where the plan's project applies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
     pub title: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,

@@ -25,6 +25,8 @@ pub(crate) enum Command {
     #[cfg(unix)]
     #[command(hide = true, subcommand)]
     PiStartup(crate::pi_startup_cmd::Command),
+    #[command(hide = true, subcommand)]
+    BoardPlan(crate::board_plan::Command),
     /// Initialize a workspace in the current directory or the selected root.
     Init {
         #[arg(long)]

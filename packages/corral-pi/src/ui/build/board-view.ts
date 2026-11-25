@@ -1,4 +1,5 @@
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { boardLabel } from "../../build/board.ts";
 import type { BoardPhase, BoardPlan, BoardTaskStatus } from "../../build/types.ts";
 import { taskMetadataLabel } from "./task-metadata.ts";
 import { duration, toneColor } from "../agents-model.ts";
@@ -75,6 +76,7 @@ export function boardDetailLines(task: BoardTaskStatus, now: number): string[] {
     // The stage's `now` repeats the detail for blocked and failed tasks, so it is named once.
     `${stage.glyph} ${stage.word}` + (stage.now === plainLabel(task.detail ?? "") ? "" : " · " + stage.now),
     `corral status: ${plainLabel(task.status) || "unknown"} · ${depends}`,
+    ...(task.key || task.project ? [[task.key, task.project, task.id].filter((part): part is string => Boolean(part)).map(part => boardLabel(part)).join(" → ")] : []),
     ...(metadata ? [metadata] : []),
     ...(task.detail ?? "").split("\n").map(plainLabel).filter(Boolean),
     age < 1000 ? "updated just now" : `updated ${duration(age)} ago`,

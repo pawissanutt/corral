@@ -279,6 +279,7 @@ pub(super) fn proposal(project: Option<String>) -> BoardPlan {
         tasks: vec![
             BoardTaskPlan {
                 key: "publish".into(),
+                project: None,
                 title: "Publish the updated guide".into(),
                 kind: Some("task".into()),
                 size: Some("s".into()),
@@ -291,6 +292,7 @@ pub(super) fn proposal(project: Option<String>) -> BoardPlan {
             },
             BoardTaskPlan {
                 key: "audit".into(),
+                project: None,
                 title: "Audit legacy links".into(),
                 kind: None,
                 size: None,

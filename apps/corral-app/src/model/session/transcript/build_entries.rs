@@ -7,7 +7,7 @@
 
 use serde_json::Value;
 
-use crate::model::session::Tab;
+use crate::model::{session::Tab, tasks::meta::board_label};
 
 use super::build_cards::{BuildCard, ExitLine, finish};
 use super::replay::{Cx, Rest};
@@ -196,8 +196,14 @@ fn filed(details: &Value, told: Told) -> Option<FiledEntry> {
                 } else {
                     format!(" (after {})", depends.join(", "))
                 };
+                let identity = [str_of(task, "key"), str_of(task, "project"), Some(id)]
+                    .into_iter()
+                    .flatten()
+                    .map(board_label)
+                    .collect::<Vec<_>>()
+                    .join(" → ");
                 Some(format!(
-                    "{id}  {}{after}",
+                    "{identity}  {}{after}",
                     str_of(task, "title").unwrap_or_default()
                 ))
             })

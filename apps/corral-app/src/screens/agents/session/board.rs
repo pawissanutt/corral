@@ -378,7 +378,14 @@ fn plan_task(app: AppState, task: &PlanTask) -> AnyElement {
         .flex_wrap()
         .items_center()
         .gap_x(px(8.0))
-        .child(mono_words(app, task.key.clone(), Token::Ink3).flex_shrink_0())
+        .child(
+            mono_words(
+                app,
+                crate::model::tasks::meta::board_label(&task.key),
+                Token::Ink3,
+            )
+            .flex_shrink_0(),
+        )
         .child(
             words(form, task.title.clone(), color(Token::Ink))
                 .font_weight(FontWeight::SEMIBOLD)

@@ -47,7 +47,7 @@ function harness(dialog: ChoiceDialog) {
     changed: () => {},
   });
   dock.focused = true;
-  return { dock, calls };
+  return { dock, calls, replace(value: ChoiceDialog) { dialog = value; } };
 }
 
 test("digits outside the options do nothing and are not typed into the composer", () => {
@@ -69,7 +69,7 @@ test("an unavailable option is never picked; the host is asked to raise its reas
   expect(calls.refused).toEqual([EXIT.options[1]!.label, EXIT.options[1]!.label]);
 });
 
-test("the guard after an automatic open swallows Enter and digits only", () => {
+test("the guard after an automatic open swallows activation but leaves navigation", () => {
   const { dock, calls } = harness(EXIT);
   dock.guard(Date.now() + 10_000);
   expect(dock.handleKey(ENTER)).toBeTrue();
@@ -84,6 +84,23 @@ test("the guard after an automatic open swallows Enter and digits only", () => {
   dock.guard(0);
   dock.handleKey(ENTER);
   expect(calls.picks).toEqual([2]);
+});
+
+test("an old card's mouse hit cannot confirm a replacement before it is painted", () => {
+  const first = { ...EXIT, key: "plan:1" };
+  const { dock, calls, replace } = harness(first);
+  const y = dock.render(120).findIndex(row => row.includes(first.options[0]!.label));
+  expect(y).toBeGreaterThan(0);
+  replace({ ...first, key: "plan:2" });
+  expect(dock.handleMouse(click(4, y))?.handled).toBeTrue();
+  expect(calls.picks).toEqual([]);
+  dock.render(120);
+  dock.guard(Date.now() + 10_000);
+  dock.handleMouse(click(4, y));
+  expect(calls.picks).toEqual([]);
+  dock.guard(0);
+  dock.handleMouse(click(4, y));
+  expect(calls.picks).toEqual([0]);
 });
 
 test("view keys pass the docked dialog with its selection kept; a letter is typing and leaves the dialog", () => {

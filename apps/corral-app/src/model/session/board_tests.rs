@@ -70,6 +70,7 @@ fn brief_tab(brief: Result<&str, &str>) -> super::PlanTask {
             why: "Two services.".into(),
             tasks: vec![BoardTaskPlan {
                 key: "t1".into(),
+                project: None,
                 title: "Token store".into(),
                 kind: None,
                 size: None,
@@ -150,4 +151,87 @@ fn a_clipped_brief_is_replaced_by_the_whole_brief_once_read_and_stays_clipped_wh
     let why = failed.read.expect("the failed read is said");
     assert_eq!(why.hue, Hue::Fail);
     assert!(why.retry.is_some());
+}
+
+fn proposed_task(key: &str, project: Option<&str>, depends: &[&str]) -> BoardTaskPlan {
+    BoardTaskPlan {
+        key: key.into(),
+        project: project.map(str::to_owned),
+        title: key.into(),
+        kind: None,
+        size: None,
+        difficulty: None,
+        tags: Vec::new(),
+        profile: None,
+        depends: depends.iter().map(|key| (*key).to_owned()).collect(),
+        body: String::new(),
+        body_bytes: 0,
+    }
+}
+
+/// A task without its own project is filed in the plan's, and the plan names every project it
+/// files in; a filed task shows the key and project the board confirmed, an older one neither.
+#[test]
+fn a_plan_names_each_tasks_effective_project_and_a_filed_task_its_confirmed_identity() {
+    let named = |id: &str, key: Option<&str>, project: Option<&str>| BoardTask {
+        id: id.into(),
+        key: key.map(str::to_owned),
+        project: project.map(str::to_owned),
+        title: id.into(),
+        status: "backlog".into(),
+        phase: "backlog".into(),
+        size: None,
+        difficulty: None,
+        tags: Vec::new(),
+        depends: Vec::new(),
+        detail: None,
+        updated_at: "2026-11-19T12:00:00Z".into(),
+    };
+    let mut feed = feed(None, Vec::new());
+    let target = DetailRef::BuildBoard { id: SESSION.into() };
+    let body = DetailBody::BuildBoard(BuildBoard {
+        tasks: vec![
+            named("T-7", Some("publish"), Some("site")),
+            named("T-6", None, None),
+        ],
+        proposed: Some(BoardPlan {
+            title: "Split".into(),
+            project: Some("corral".into()),
+            why: String::new(),
+            tasks: vec![
+                proposed_task("a", None, &[]),
+                proposed_task("b", Some("site"), &["a"]),
+            ],
+        }),
+        unavailable: None,
+    });
+    if let Some(cache) = feed.details.get_mut(&detail_key(&target)) {
+        cache.merged = Some(body);
+    }
+    let id = Id::from(SESSION);
+    let facts = Facts {
+        role: SessionRole::Build,
+        task: None,
+    };
+    let ui = Ui::default();
+    let cx = Cx::new(&feed, &ui, &id, daemon_env(&feed, Form::Desktop), &facts);
+    let tab = board_tab(&cx);
+
+    let plan = tab.plan.expect("the plan is shown");
+    assert_eq!(plan.facts, "for corral, site · 2 tasks · 1 dependency");
+    assert!(
+        plan.tasks[0]
+            .facts
+            .as_deref()
+            .is_some_and(|f| f.starts_with("project corral"))
+    );
+    assert!(
+        plan.tasks[1]
+            .facts
+            .as_deref()
+            .is_some_and(|f| f.starts_with("project site"))
+    );
+    assert_eq!(plan.tasks[1].depends.as_deref(), Some("after a"));
+    assert!(tab.rows[0].meta.starts_with("publish → site → T-7 · "));
+    assert!(tab.rows[1].meta.starts_with("size "));
 }

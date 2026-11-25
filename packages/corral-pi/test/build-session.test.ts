@@ -254,13 +254,13 @@ test("owner-confirmed board_plan keeps agent metadata from the previews to CLI c
   const root = mkdtempSync(join(tmpdir(), "terminal-board-"));
   const metadata = { size: "s", difficulty: "hard", tags: ["bug", "BUG", "--API, old", "Needs  Design", "Needs\u00a0Design"] };
   const label = 'tags: ["bug","BUG","--API, old","Needs  Design","Needs\\u00a0Design"]';
-  const { controls, calls } = fixture(root, undefined, true, false, async argv => {
-    if (argv[3] !== "new") throw new Error(`unexpected board command: ${argv.join(" ")}`);
-    const id = argv.includes("--parent") ? "T-002" : "T-001";
-    const tags = argv.filter(arg => arg.startsWith("--tag=")).map(arg => arg.slice("--tag=".length));
-    const size = argv.find(arg => arg.startsWith("--size="))?.split("=")[1];
-    const difficulty = argv.find(arg => arg.startsWith("--difficulty="))?.split("=")[1];
-    return { code: 0, stderr: "", stdout: JSON.stringify({ task: { id, title: argv.at(-1), status: "backlog", size, difficulty, tags } }) };
+  const { controls, calls } = fixture(root, undefined, true, false, async (argv, { input }) => {
+    expect(argv[3]).toBe("board-plan");
+    expect(JSON.parse(input!)).toMatchObject({ title: "Plan", project: "app", tasks: [{ key: "slice", project: "app", ...metadata }] });
+    if (argv[4] === "check") return { code: 0, stderr: "", stdout: "null" };
+    expect(argv[4]).toBe("file");
+    expect(argv).not.toContain("--start");
+    return { code: 0, stderr: "", stdout: JSON.stringify({ tasks: [{ key: "slice", project: "app", id: "T-002", status: "backlog", depends_on: [] }] }) };
   });
   const { dialogs, entries, appended } = terminalDecisions(controls);
   try {
@@ -275,7 +275,7 @@ test("owner-confirmed board_plan keeps agent metadata from the previews to CLI c
     const card = cardDetail(dialogs.entries().find(entry => entry.card.kind === "board_plan")!.card);
     expect(card.body).toContain(`"slice": size: s · difficulty: hard · ${label}`);
     expect(card.body_more).toBeFalse();
-    expect(calls).toEqual([]);
+    expect(calls.map(argv => argv.slice(3))).toEqual([["board-plan", "check"]]);
 
     const dock = dialogs.watch(card => card.kind === "board_plan", () => {})!;
     expect(await dock.answer([{ options: ["file"] }])).toBe("started");
@@ -283,9 +283,9 @@ test("owner-confirmed board_plan keeps agent metadata from the previews to CLI c
     await expect(dialogs.resolve(dock.id, [{ options: ["file_start"] }], false, { source: "remote" }))
       .rejects.toMatchObject({ code: "invalid_card_answer" });
     expect(calls.map(argv => argv.slice(3))).toEqual([
-      ["new", "--project=app", "--", "Plan"],
-      ["new", "--project=app", "--parent", "T-001", "--size=s", "--difficulty=hard", ...metadata.tags.map(tag => `--tag=${tag}`), "--", "Slice"],
+      ["board-plan", "check"], ["board-plan", "file", "--id", calls[1]?.[6]],
     ]);
+    expect(calls[1]?.[6]).toMatch(/^[\da-f-]{36}$/);
     expect(boardPart(board).tasks[0]).toMatchObject({ id: "T-002", ...metadata });
     expect(entries).toHaveLength(1);
     expect(entries).toMatchObject([{ customType: "corral_build_board",

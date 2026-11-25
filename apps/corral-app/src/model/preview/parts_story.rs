@@ -122,6 +122,8 @@ fn task(
 ) -> BoardTask {
     BoardTask {
         id: id.into(),
+        key: None,
+        project: None,
         title: title.into(),
         status: status.into(),
         phase: phase.into(),

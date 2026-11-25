@@ -777,7 +777,8 @@ export class NativePanels implements PanelSurface {
       ? ["No exit chosen. Nothing was landed · F2 Finish reopens it", () => ui.exit.state().phase !== "pending"]
       : kind === "question"
         ? [`${id} keeps waiting · F2 Answer ${id}'s question reopens it`, () => !this.build?.questions().some(child => child.id === id)]
-        : ["Nothing filed. The plan still waits · F10 Plan, then p, reopens it", () => !ui.board?.proposed()];
+        : [ui.board?.pendingChoice?.() !== undefined ? "Filing not acknowledged · F10 Plan, then p, to retry the original choice"
+          : "Nothing filed. The plan still waits · F10 Plan, then p, reopens it", () => !ui.board?.proposed()];
     this.workbench.notice(text, "text");
     const notice = this.workbench.currentNotice;
     if (notice) this.dismissal = { notice, settled };

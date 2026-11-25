@@ -5,6 +5,7 @@
 import type { MessageRenderer } from "@earendil-works/pi-coding-agent";
 import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { Component, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
+import { boardLabel } from "../../build/board.ts";
 import type { BoardTaskStatus, ExitChoice, ExitOption, ExitPhase, ExitRecord, ExitState, LandCandidate, LandProgress } from "../../build/types.ts";
 import { taskMetadataLabel } from "./task-metadata.ts";
 import { onSurface } from "../frame.ts";
@@ -29,7 +30,7 @@ export type ExitEntryDetails = { readonly choice: ExitChoice; readonly label: st
   /** The candidate the host prepared for this Land, as it stood when Land ended. */
   readonly candidate?: LandCandidate }
   & Pick<ExitRecord, "landed" | "baseBranch" | "gateAttempt" | "overrideReason">;
-export interface BoardEntryDetails { readonly filed: readonly Pick<BoardTaskStatus, "id" | "title" | "depends" | "size" | "difficulty" | "tags">[]; readonly started: boolean }
+export interface BoardEntryDetails { readonly filed: readonly Pick<BoardTaskStatus, "id" | "key" | "project" | "title" | "depends" | "size" | "difficulty" | "tags">[]; readonly started: boolean }
 export interface FinishEntryDetails { readonly id: string }
 
 /**
@@ -120,12 +121,16 @@ export function exitEntry(option: ExitOption, state: ExitState): BuildEntry<Exit
   return { customType: BUILD_EXIT_ENTRY, display: true, details, content: sentences.join(" ") };
 }
 
+function boardIdentity(task: Pick<BoardTaskStatus, "key" | "project" | "id">): string {
+  return [task.key, task.project, task.id].filter((part): part is string => Boolean(part)).map(part => boardLabel(part)).join(" → ");
+}
+
 export function boardEntry(filed: readonly BoardTaskStatus[], started: boolean): BuildEntry<BoardEntryDetails> {
-  const tasks = filed.map(({ id, title, depends, size, difficulty, tags }) =>
-    ({ id: plainLabel(id), title: plainLabel(title), depends: depends.map(plainLabel), size, difficulty, tags }));
+  const tasks = filed.map(({ id, key, project, title, depends, size, difficulty, tags }) =>
+    ({ id: plainLabel(id), key, project, title: plainLabel(title), depends: depends.map(plainLabel), size, difficulty, tags }));
   const list = tasks.map(task => {
     const metadata = taskMetadataLabel(task);
-    return `${task.id} ${task.title}` + (task.depends.length ? ` (after ${task.depends.join(", ")})` : "") + (metadata ? ` · ${metadata}` : "");
+    return `${boardIdentity(task)} ${task.title}` + (task.depends.length ? ` (after ${task.depends.join(", ")})` : "") + (metadata ? ` · ${metadata}` : "");
   }).join("; ");
   const count = `${tasks.length} board ${tasks.length === 1 ? "task" : "tasks"}`;
   return {
@@ -175,6 +180,7 @@ function boardLines(details: BoardEntryDetails, width: number): string[] {
     ...bubble("you chose", details.started ? "File and start" : "File only", width),
     ...cardWrap(`✓ Filed ${count}` + (ids.length ? ": " + ids.join(", ") : "")
       + (details.started ? " · queued, they start as slots free" : " · in Backlog"), PANEL_SUCCESS, width),
+    ...details.filed.filter(task => task.key || task.project).flatMap(task => cardWrap(boardIdentity(task), PANEL_TEXT, width)),
   ];
 }
 /** Renders exit and board entries as a `you chose …` bubble plus an outcome line; finish entries as the live result card. */
