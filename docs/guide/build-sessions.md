@@ -104,7 +104,16 @@ For the parent build, edit and write inside the session worktree work normally, 
 bound workspace Markdown memory. An edit or write outside the worktree, including an ordinary
 canonical symlink escape, requires host-issued owner approval. Protected `.git`,
 `.corral`, `.corral-next` and `.worktrees` paths are hard blocks, except for the scoped
-worktree and workspace memory exceptions.
+worktree and workspace memory exceptions. The outside-worktree approval prevents accidental
+changes elsewhere; the `.worktrees` block prevents accidental edits in other checkouts. The
+`.git` block prevents repository corruption; `.corral` and `.corral-next` protect engine state
+from direct edits.
+
+Build slice children cannot approve outside-worktree writes and retain these blocks. Trusted
+Code slice children may edit outside the cwd and under `.worktrees`, but still cannot edit
+`.git`, `.corral` or `.corral-next` (or unresolved destinations), preventing state corruption
+and unsafe destination mistakes. Explore and review children remain read-only. Children cannot
+run Git write commands, preventing conflicting Git changes in a shared worktree.
 
 To enable `bash_rules` for `bash` and `job_start`, add this top-level table to
 `.corral-next/pi.toml` in the workspace (or the repository root for a bare build). This
@@ -131,8 +140,8 @@ the tool automatically. Only the host prompt authorizes; ordinary chat and `ask_
 
 Never use shell, another tool or `ask_user` to bypass a refusal or approval. Rules do not
 inspect command intent or side effects, grant OS elevation or provide a sandbox. Shell and
-other tools can have effects outside edit/write enforcement. This change gives children and
-other roles no new authority.
+other tools can have effects outside edit/write enforcement. These checks are accident guards,
+not a security boundary.
 
 ## Finish
 

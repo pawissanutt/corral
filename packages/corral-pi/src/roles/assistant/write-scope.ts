@@ -9,14 +9,14 @@ const PROTECTED = new Set([".git", ".corral", ".corral-next", ".worktrees"]);
 const UNSAFE = "The write destination could not be resolved safely; nothing was written.";
 const STATE = "Writes into Git or Corral state are refused; nothing was written.";
 
-function hasProtectedComponent(path: string, ownWorktree?: string): boolean {
+function hasProtectedComponent(path: string, ownWorktree?: string, allowWorktrees = false): boolean {
   const parts = path.split(sep);
   const parent = ownWorktree === undefined ? undefined : dirname(ownWorktree);
   // Only a Build's own direct .worktrees entry exempts its containing segment, never
   // another protected ancestor, a nested protected component, or the container itself.
   const exempt = ownWorktree && parent && basename(parent).toLowerCase() === ".worktrees" && within(path, ownWorktree)
     ? parent.split(sep).length - 1 : -1;
-  return parts.some((part, i) => i !== exempt && PROTECTED.has(part.toLowerCase()));
+  return parts.some((part, i) => i !== exempt && !(allowWorktrees && part.toLowerCase() === ".worktrees") && PROTECTED.has(part.toLowerCase()));
 }
 
 function isMarkdownMemory(path: string, workspace: string): boolean {
@@ -58,7 +58,7 @@ function canonicalDestination(path: string): string {
 }
 
 export function classifyWriteScope(path: string, scope: {
-  cwd: string; root: string; workspace?: string; buildWorktree?: boolean;
+  cwd: string; root: string; workspace?: string; buildWorktree?: boolean; allowWorktrees?: boolean;
 }): WriteScopeDecision {
   try {
     const root = resolve(scope.root);
@@ -74,8 +74,8 @@ export function classifyWriteScope(path: string, scope: {
         return { action: "allow" };
       }
     }
-    if (hasProtectedComponent(target, scope.buildWorktree ? root : undefined)
-      || hasProtectedComponent(canonical, scope.buildWorktree ? canonicalRoot : undefined)) {
+    if (hasProtectedComponent(target, scope.buildWorktree ? root : undefined, scope.allowWorktrees)
+      || hasProtectedComponent(canonical, scope.buildWorktree ? canonicalRoot : undefined, scope.allowWorktrees)) {
       return { action: "deny", reason: STATE };
     }
     if (within(target, root) && within(canonical, canonicalRoot)) return { action: "allow" };

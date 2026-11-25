@@ -12,6 +12,7 @@ import { installChildFallback } from "../../host/model-selection.ts";
 import { resourceLoaderOptions, restrictedSettings } from "../../host/restrict.ts";
 import { closeResidentSession, residentLifecycle } from "../../claude/resident.ts";
 import { classifyBuildWrite } from "../../roles/build/guard.ts";
+import { classifyWriteScope } from "../../roles/assistant/write-scope.ts";
 import { executionRefusal, exploreLoadout } from "../../roles/common/execution.ts";
 import { researchCode } from "../codemode/research.ts";
 import type { HelperEvent } from "../subagent/inspection.ts";
@@ -366,7 +367,10 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
               const path = event.input.path;
               if (typeof path !== "string") reason = "Build writes require a path";
               else if (options.writeRefusal) reason = options.writeRefusal(path);
-              else {
+              else if (options.context.session.trustedCode === true) {
+                const decision = classifyWriteScope(path, { cwd, root: cwd, allowWorktrees: true });
+                if (decision.action === "deny") reason = decision.reason;
+              } else {
                 const decision = classifyBuildWrite(path, cwd, undefined, options.buildWorktree);
                 if (!decision.allowed) reason = decision.reason;
               }

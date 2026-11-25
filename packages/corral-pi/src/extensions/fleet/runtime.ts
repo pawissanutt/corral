@@ -19,7 +19,7 @@ import { resolveModel, resolveProfiles, type ResolvedModel } from "./profiles.ts
 import { formatChildReport } from "./tools.ts";
 /** The runtime needs no build exit, board, launcher or Git metadata. */
 export interface FleetContext {
-  readonly session: { readonly worktree: string; readonly name: string };
+  readonly session: { readonly worktree: string; readonly name: string; readonly trustedCode?: true };
   readonly dir: string;
   readonly settings: { readonly maxParallel: number; readonly profiles: readonly BuildProfile[] };
 }

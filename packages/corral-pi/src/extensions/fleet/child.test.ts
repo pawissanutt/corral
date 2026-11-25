@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
@@ -172,6 +172,29 @@ for (const checkout of ["T-17-r2", "T-17-handoff-01234567-r2"]) {
     } finally { f.cleanup(); }
   });
 }
+
+test("trusted Code slices can write in worktrees and outside cwd, but not state", async () => {
+  const f = fixture();
+  mkdirSync(join(f.dir, ".git"));
+  symlinkSync(join(f.dir, ".git"), join(f.dir, "state-link"));
+  f.body(async () => {
+    for (const path of [".worktrees/x/file", "../outside-file"]) {
+      for (const toolName of ["edit", "write"]) expect(await f.emit("tool_call", { toolName, input: { path } })).toBeUndefined();
+    }
+    for (const path of [".git/config", ".corral/tasks/file", ".corral-next/state", "state-link/config"]) {
+      expect(await f.emit("tool_call", { toolName: "write", input: { path } })).toMatchObject({ block: true });
+    }
+    expect(await f.emit("tool_call", { toolName: "bash", input: { command: "git commit -am x" } })).toMatchObject({ block: true });
+    f.messages.push(answer("Done"));
+  });
+  try {
+    const handle = createSdkRunner({ ...f.options, context: { ...f.options.context,
+      session: { ...f.options.context.session, trustedCode: true } } })
+      .run({ id: "slice", title: "Slice", brief: "Implement", owns: [] },
+        { profile: "fixture", provider: "fixture", model: "fixture" }, f.hooks, new AbortController().signal);
+    expect(await handle.done).toMatchObject({ report: "Done" });
+  } finally { f.cleanup(); }
+});
 
 test("bound slices intersect SDK base tools and honor the supplied write refusal without loading local overrides", async () => {
   const f = fixture();

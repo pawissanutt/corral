@@ -292,7 +292,15 @@ For a parent assistant, edit and write inside its starting cwd work normally, as
 workspace Markdown memory under `.corral-next/memory/`. An edit or write outside the starting
 cwd, including a symlink that resolves outside it, requires host-issued owner approval.
 Protected `.git`, `.corral`, `.corral-next` and `.worktrees` paths are hard blocks, except
-for the scoped worktree and workspace memory exceptions.
+for the scoped worktree and workspace memory exceptions. Outside-cwd approval prevents
+accidental changes elsewhere; the `.worktrees` block prevents accidental edits in other
+checkouts. The `.git` block prevents repository corruption; `.corral` and `.corral-next`
+protect engine state from direct edits.
+
+Trusted Code slice children instead may edit outside cwd and under `.worktrees`, but still
+cannot edit `.git`, `.corral` or `.corral-next` or unresolved destinations, preventing state
+corruption and unsafe destination mistakes. Explore and review children remain read-only;
+children cannot run Git write commands, preventing conflicting Git changes in a shared worktree.
 
 For `corral-pi chat`, enable rules for both `bash` and `job_start` by adding a top-level
 `[bash_rules]` table to the workspace's `.corral-next/pi.toml`. For example:
@@ -318,8 +326,8 @@ the tool automatically. Only the host prompt authorizes; ordinary chat and `ask_
 
 Never use shell, another tool or `ask_user` to bypass a refusal or approval. These checks do
 not detect command intent or side effects, provide OS elevation or sandbox shell or other
-tools. Shell and other tools can have effects outside edit/write enforcement. This change
-gives children and other roles no new authority.
+tools. Shell and other tools can have effects outside edit/write enforcement; these are
+accident guards, not a security boundary.
 
 ## Records and lifecycle
 
