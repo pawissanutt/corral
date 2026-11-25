@@ -191,16 +191,18 @@ function column(frame: LayoutFrame, row: number, text: string): number {
   return at < 0 ? -1 : visibleWidth(line.slice(0, at));
 }
 
-test("F10 opens Board in a build session, and a click on the Board tab does the same", () => {
+test("F10, Alt+4 and the tab click open Plan in a build session", () => {
   const build = fakeBuild(work);
   const h = shell(140, 46, build);
   try {
-    expect(h.panels.handleInput(KEY.f10)).toBeTrue(); expect(h.panels.workbench.view).toBe("board");
+    expect(h.panels.handleInput(KEY.f10)).toBeTrue(); expect(h.panels.workbench.view).toBe("plan");
     expect(h.panels.handleInput(KEY.f9)).toBeTrue(); expect(h.panels.workbench.view).toBe("conversation");
     const frame = h.frame(), row = frame.lines.findIndex(line => stripTerminalSequences(line).includes("F10"));
-    const x = column(frame, row, "Board");
+    const x = column(frame, row, "Plan");
     expect(x).toBeGreaterThan(0);
-    expect(click(frame, x, row)).toBeTrue(); expect(h.panels.workbench.view).toBe("board");
+    expect(click(frame, x, row)).toBeTrue(); expect(h.panels.workbench.view).toBe("plan");
+    expect(h.panels.handleInput(KEY.esc)).toBeTrue(); expect(h.panels.workbench.view).toBe("conversation");
+    expect(h.panels.handleInput("\x1b4")).toBeTrue(); expect(h.panels.workbench.view).toBe("plan");
   } finally { h.stop(); }
 });
 
@@ -218,21 +220,21 @@ test("trusted code is marked and keeps board actions without a managed finish", 
   } finally { h.stop(); }
 });
 
-test("a bare session offers no Board tab, key, view or F2 row; a build session with a board offers them all", () => {
+test("bare and managed builds have Plan, but only managed builds have board actions", () => {
   for (const bare of [false, true]) {
     const build = fakeBuild(work, "a", bare);
     const h = shell(140, 46, build);
     try {
       const ids = h.panels.actions().map(action => action.id);
-      expect(ids.includes("/panels board")).toBe(!bare);
+      expect(ids).toContain("/panels plan");
       expect(ids.includes("build.board.refresh")).toBe(!bare);
       expect(ids.includes("build.plan.draft")).toBe(!bare);
       expect(ids.includes("build.finish")).toBeTrue();
-      expect(h.panels.workbench.boardView === undefined).toBe(bare);
       h.panels.handleInput(KEY.f10);
-      expect(h.panels.workbench.view === "board").toBe(!bare);
+      expect(h.panels.workbench.view).toBe("plan");
+      h.panels.workbench.chat();
       h.panels.openView("board");
-      expect(h.panels.workbench.view === "board").toBe(!bare);
+      expect(h.panels.workbench.view).toBe("plan");
       expect(h.frame().lines.length).toBeGreaterThan(0);
     } finally { h.stop(); }
   }
@@ -450,7 +452,7 @@ test("every build surface fits 140x46, 80x24, 80x14 and 52x24 with a docked dial
       expect(plain(h.dock.render(h.terminal.columns))).toContain("How should this leave");
       const docked = check("exit dialog");
       if (columns === 52) expect(docked).toContain("→ picker-ui");
-      const views: readonly MainView[] = ["conversation", "agents", "changes", "board"];
+      const views: readonly MainView[] = ["conversation", "agents", "changes", "plan"];
       for (const view of views) { h.panels.workbench.setView(view); check(view); }
       h.panels.workbench.openChild("picker-ui"); check("agent");
       h.panels.workbench.openChild("app-store"); check("agent asking");

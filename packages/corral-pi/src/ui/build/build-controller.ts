@@ -47,7 +47,7 @@ export interface BuildControllerHost {
    * a card, and decisions go straight to the build controls.
    */
   readonly dialogs?: RemoteDialogs;
-  showBoard(): void;
+  showPlan(): void;
   openChild(id: string): void;
   color(hue: number): string;
   now(): number;
@@ -521,7 +521,7 @@ export class BuildController implements BuildCardSource {
         if (this.disposed) return;
         if (this.shown?.kind === "plan") this.close();
         if (status === "dismissed") this.host.notice("Nothing filed. The plan is discarded.", "text");
-        else if (status === "started") this.host.showBoard();
+        else if (status === "started") this.host.showPlan();
         else this.host.notice("The plan is no longer waiting", "warning");
       }, error => { this.fileError = message(error); })
         .finally(() => { this.filing = false; if (!this.disposed) this.host.changed(); });
@@ -538,7 +538,7 @@ export class BuildController implements BuildCardSource {
     board.file(plan, start).then(() => {
       if (this.disposed) return;
       if (this.shown?.kind === "plan") this.close();
-      this.host.showBoard();
+      this.host.showPlan();
     }, error => { this.fileError = message(error); })
       .finally(() => { this.filing = false; if (!this.disposed) this.host.changed(); });
   }
@@ -556,7 +556,7 @@ export class BuildController implements BuildCardSource {
     else if (shown.kind === "question") {
       this.dismissed.add(questionKey(shown.id, shown.askedAt));
       this.host.notice(`${shown.id} keeps waiting`, "text");
-    } else this.host.notice("Nothing filed. The plan still waits on the Board tab.", "text");
+    } else this.host.notice("Nothing filed. The plan still waits · F10 Plan, then p, reopens it", "text");
   }
 
   // ---------- internals ----------

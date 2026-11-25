@@ -1,3 +1,4 @@
+import type { PlanDocument } from "./plan-page.ts";
 import type { TranscriptRead } from "./agent-history.ts";
 // First-party native panels over the existing InteractiveMode, never a second agent/editor loop.
 import type * as Sdk from "@earendil-works/pi-coding-agent";
@@ -54,6 +55,8 @@ import { AttentionSignal } from "./attention.ts";
 import { noticeGlyph, toastFrame } from "./toast.ts";
 
 export interface NativePanelsOptions {
+  readonly planDocument?: () => PlanDocument | undefined;
+  readonly openPlanDocument?: () => void;
   readonly build?: BuildUi;
   /** The child runtime of a session that is not a build session; the Agents page steers, cancels, answers and re-models its children through it. Read when used: the host may build it after the panels. */
   readonly fleetControl?: FleetControl;
@@ -100,11 +103,11 @@ export type PanelView = "chat" | "agents" | "changes" | "task" | "proof" | "arti
 /** `/panels <target>` names for main views; history, project, refresh and toggle are actions. */
 const PANEL_VIEWS: Readonly<Record<string, MainView>> = {
   chat: "conversation", files: "changes", changes: "changes", agents: "agents", activity: "agents", jobs: "agents", helpers: "agents",
-  usage: "usage", evidence: "evidence", proof: "evidence", task: "task", timeline: "timeline", events: "timeline", board: "board",
+  usage: "usage", evidence: "evidence", proof: "evidence", task: "task", timeline: "timeline", events: "timeline", board: "plan", plan: "plan",
 };
 /** Views that read the bound task; sessions without one do not offer them. */
 const TASK_VIEWS: Readonly<Partial<Record<MainView, true>>> = { task: true, evidence: true };
-const PANEL_TARGETS = "chat, agents, changes, task, proof, usage, events, history, project, refresh or toggle";
+const PANEL_TARGETS = "chat, agents, changes, plan, task, proof, usage, events, history, project, refresh or toggle";
 
 /** Where keys go when no Pi dialog or overlay is open: Pi's editor, the main view, the sidebar, the queue, the owner questions or a docked build dialog. */
 export type PanelFocus = "composer" | "main" | "sidebar" | "queue" | "questions" | "choice";
@@ -204,8 +207,8 @@ export class NativePanels implements PanelSurface {
   private readonly adoption = new DialogAdoption();
   /** `/todo`'s hold on the sidebar's Plan tab; see `planSurface`. */
   private readonly planView: PlanSurface = {
-    show: () => this.showPlan(),
-    scroll: delta => { this.showPlan(); this.sidebar.page(delta, this.workbench.sideSource()); this.refresh(); },
+    show: () => this.showSidebarPlan(),
+    scroll: delta => { this.showSidebarPlan(); this.sidebar.page(delta, this.workbench.sideSource()); this.refresh(); },
     notice: (text, tone) => this.workbench.notice(text, tone),
   };
   constructor(private readonly options: NativePanelsOptions) {
@@ -235,7 +238,7 @@ export class NativePanels implements PanelSurface {
       overlay: () => !this.canInteract, draft: () => this.ui?.getEditorText() ?? "", setDraft: text => this.ui?.setEditorText(text),
       focusComposer: () => this.focusComposer(), focusDock: () => this.focusChoice(),
       notice: (text, tone) => this.workbench.notice(text, tone), post: entry => this.post(entry),
-      showBoard: () => { this.workbench.setView("board"); }, openChild: id => this.workbench.openChild(id),
+      showPlan: () => { this.workbench.setView("plan"); }, openChild: id => this.workbench.openChild(id),
       color: agentColor, now: () => Date.now(), changed: () => this.refresh(), ...(options.marks ? { marks: options.marks } : {}),
       get dialogs() { return panels.attachedDialogs(); },
     }) : undefined;
@@ -247,7 +250,7 @@ export class NativePanels implements PanelSurface {
       // A build session's queue names the parent as every item's receiver: children never take queued input.
       ...(build ? { receiver: () => "parent" } : {}),
     });
-    this.workbench = new NativeWorkbench({ ...options, ...(build && this.build ? { build, buildController: this.build } : {}), fleet: () => this.options.fleetControl,
+    this.workbench = new NativeWorkbench({ ...options, openLedger: step => { void this.showLedger(step); }, ...(build && this.build ? { build, buildController: this.build } : {}), fleet: () => this.options.fleetControl,
       ...(this.settingsPage ? { settingsPage: this.settingsPage } : {}),
       childCards: {
         watch: (id, askedAt, settled) => this.attachedDialogs()?.watch(childQuestionCard(id, askedAt), settled),
@@ -369,7 +372,7 @@ export class NativePanels implements PanelSurface {
    * the drawer it opens as F6 does, so Enter on the plan or a step opens the whole ledger. While a dialog or popup
    * holds the keys only the tab changes.
    */
-  private showPlan(): void {
+  private showSidebarPlan(): void {
     if (this.disposed) return;
     this.sidebar.tab = "plan";
     if (this.canInteract) this.focusSidebar();
@@ -379,7 +382,7 @@ export class NativePanels implements PanelSurface {
   private async showLedger(step: string | undefined): Promise<void> {
     const ui = this.ui;
     if (!ui || !this.canInteract) return;
-    const ledger = planLedger(this.workbench.sideSource().plan);
+    const ledger = planLedger(this.workbench.planSource());
     this.overlay = "pager"; this.refresh();
     try { await openPager(ui, { title: ledger.title, lines: ledger.lines, start: ledger.startOf(step), wrap: true }); }
     finally { this.overlay = undefined; this.refresh(); }
@@ -571,11 +574,12 @@ export class NativePanels implements PanelSurface {
     this.refresh();
   }
   private openSideTarget(target: SideTarget): void {
-    // A build child waiting for an answer docks its question; every other agent opens in the agents view.
+    // A build child waiting for an answer docks its question; every other agent opens its conversation, a job Agents.
     const id = this.build && target.kind === "agent" ? childIdOf(target.key) : undefined;
     const asking = id !== undefined && this.snapshot()?.build?.fleet.children.some(child => child.id === id && child.state === "needs");
     if (id !== undefined && asking) this.build?.open("question", id);
-    else if (target.kind === "agent" || target.kind === "job") this.workbench.openAgents(target.key);
+    else if (target.kind === "agent") this.workbench.openConversation(target.key);
+    else if (target.kind === "job") this.workbench.openAgents(target.key);
     else if (target.kind === "file") void this.workbench.openFile(target.path);
     else if (target.kind === "scope") void this.workbench.repository();
     else if (target.kind === "plan") void this.showLedger(target.step);
@@ -755,7 +759,7 @@ export class NativePanels implements PanelSurface {
       ? ["No exit chosen. Nothing was landed · F2 Finish reopens it", () => ui.exit.state().phase !== "pending"]
       : kind === "question"
         ? [`${id} keeps waiting · F2 Answer ${id}'s question reopens it`, () => !this.build?.questions().some(child => child.id === id)]
-        : ["Nothing filed. The plan still waits · F10 Board, then p, reopens it", () => !ui.board?.proposed()];
+        : ["Nothing filed. The plan still waits · F10 Plan, then p, reopens it", () => !ui.board?.proposed()];
     this.workbench.notice(text, "text");
     const notice = this.workbench.currentNotice;
     if (notice) this.dismissal = { notice, settled };
@@ -1091,22 +1095,22 @@ export class NativePanels implements PanelSurface {
     this.nativeAction("app.model.select");
     return true;
   }
-  /** `/board`: the Board view, when the interactive panels are running. */
-  showBoard(): void {
-    if (!this.build || !this.options.build?.board || !this.ui || this.disposed) return;
-    this.workbench.setView("board");
+  /** `/board`: the Plan page, when the interactive panels are running. */
+  showPlan(): void {
+    if (!this.ui || this.disposed) return;
+    this.workbench.setView("plan");
   }
   /**
    * Opens a view by name, for a tool row's clickable label. `select` picks inside it: an Agents row key (`job:<id>`,
-   * `helper:<request>`; a bare id reads as a job) or a Changes file path. `plan` shows the
-   * sidebar's Plan tab (the rail, or the drawer below the rail's width). A view this session lacks says why in a
+   * `helper:<request>`; a bare id reads as a job) or a Changes file path. `plan` opens the Plan page, or the
+   * sidebar's Plan tab in a task-bound session. A view this session lacks says why in a
    * notice and changes nothing.
    */
   openView(view: PanelView, select?: string): void {
     if (this.disposed) return;
     const taskBound = !!this.options.identity.task;
     const missing = (view === "task" || view === "proof" || view === "artifacts") && !taskBound ? "this session has no bound task"
-      : view === "board" && !this.options.build?.board ? (this.build ? "a bare session has no board" : "only a build session has a board") : undefined;
+      : view === "board" && taskBound ? "this session has a bound task" : undefined;
     if (missing) { this.workbench.notice(`Cannot open ${view}: ${missing}`, "warning"); return; }
     switch (view) {
       case "chat": this.workbench.chat(); break;
@@ -1114,8 +1118,10 @@ export class NativePanels implements PanelSurface {
       case "changes": if (select) void this.workbench.openFile(select); else this.workbench.setView("changes"); break;
       case "proof": this.workbench.setView("evidence"); break;
       case "artifacts": this.workbench.setView("artifacts"); break;
-      case "task": case "usage": case "board": this.workbench.setView(view); break;
+      case "task": case "usage": this.workbench.setView(view); break;
+      case "board": this.workbench.setView("plan"); break;
       case "plan":
+        if (!taskBound) { this.workbench.setView("plan"); break; }
         this.sidebar.tab = "plan";
         if ((this.terminal?.physical.columns ?? 0) < PANEL_BREAKPOINT) { this.sidebar.drawer = true; this.drawerByKey = false; }
         else if (!this.sidebarEnabled) { this.sidebarEnabled = true; this.terminal?.refreshLayout(); }
@@ -1134,7 +1140,8 @@ export class NativePanels implements PanelSurface {
     if (value === "project") { await this.workbench.repository(); this.refresh(); return; }
     if (value === "refresh") { await this.workbench.task.refresh(true); await this.loadFiles(); return; }
     if (value === "toggle") { this.toggleSidebar(); return; }
-    const view = value === "board" && !this.options.build?.board ? undefined : PANEL_VIEWS[value];
+    const view = PANEL_VIEWS[value];
+    if (view === "plan" && this.options.identity.task) { this.workbench.notice(`/panels ${value}: this session has a bound task`, "warning"); return; }
     if (view && (!TASK_VIEWS[view] || this.options.identity.task)) {
       if (view === "agents") this.workbench.openAgents(); else if (view === "conversation") this.workbench.chat(); else this.workbench.setView(view);
       this.refresh(); return;
@@ -1160,8 +1167,7 @@ export class NativePanels implements PanelSurface {
       panel("views", "chat", "Chat", "F9"),
       panel("views", "agents", "Agents", "F8"),
       panel("views", "changes", "Changes", "F7"),
-      ...(taskBound ? [panel("views", "task", "Task", "F5"), panel("views", "proof", "Proof", "F10")] : []),
-      ...(build?.board ? [build.board] : []),
+      ...(taskBound ? [panel("views", "task", "Task", "F5"), panel("views", "proof", "Proof", "F10")] : [panel("views", "plan", "Plan", "F10")]),
       panel("views", "usage", "Usage"),
       action("inspect", "agents.details", "Agent details", "", async () => { await this.workbench.openAgentDetails(); }, () => {
         if (ready()) return ready();
@@ -1201,12 +1207,12 @@ export class NativePanels implements PanelSurface {
     return items;
   }
   /**
-   * F2 in a build session: Board (a view), the message receiver, open questions, Finish and board planning (message),
+   * F2 in a build session: the message receiver, open questions, Finish and board planning (message),
    * and the board status reread (workspace), each with its unavailable reason; undefined in every other role. A bare
-   * session has no board, so Board, board planning and the reread are not offered.
+   * session has no board, so board planning and the reread are not offered.
    */
   private buildActions(action: ActionMaker, ready: () => string | undefined):
-    { readonly board?: HostAction; readonly message: readonly HostAction[]; readonly refresh?: HostAction } | undefined {
+    { readonly message: readonly HostAction[]; readonly refresh?: HostAction } | undefined {
     const build = this.build, ui = this.options.build;
     if (!build || !ui) return undefined;
     const receiver = targetKey(), unavailable = () => ready() ?? boardUnavailable(this.snapshot()?.build), board = ui.board;
@@ -1221,7 +1227,6 @@ export class NativePanels implements PanelSurface {
     ];
     if (!board) return { message };
     return {
-      board: action("views", "/panels board", "Board", "F10", () => this.panelCommand("board")),
       message: [...message,
         action("message", "build.plan.review", "Review the proposed board plan", "", () => { build.open("plan"); },
           () => ready() ?? (board.proposed() ? undefined : "no plan is waiting")),
@@ -1272,6 +1277,9 @@ export class NativePanels implements PanelSurface {
     if (!ui || !this.canInteract) return;
     const identity = this.options.identity, answerKey = this.questions ? questionsKey() : undefined;
     const groups = keyGroups({ taskBound: !!identity.task,
+      ...(this.workbench.view === "plan" ? { planActions: this.workbench.planPage?.actions() ?? [] } : {}),
+      ...(this.workbench.view === "job" ? { jobActions: this.workbench.jobPage.actions() } : {}),
+      ...(this.workbench.view === "agent" ? { agentBackLabel: this.workbench.agentBackLabel() } : {}),
       jobs: this.snapshot()?.jobs != null, queueControl: this.queue.controllable, lifecycle: !!identity.task,
       sidebarKey: this.sidebarToggle, ...(answerKey ? { questionsKey: answerKey } : {}), ...(this.build ? { build: true, board: !!this.options.build?.board, trustedCode: this.build.state()?.session.trustedCode === true } : {}) });
     this.overlay = "keys"; this.refresh();

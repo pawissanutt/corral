@@ -1,3 +1,5 @@
+import { tabSpec } from "./header.ts";
+import { contextHints } from "./keymap.ts";
 import type { TranscriptPage } from "../host/transcript-preview.ts";
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -65,7 +67,8 @@ function bindUi(wb: NativeWorkbench, overrides: Partial<ExtensionUIContext> = {}
  * NativePanels installed against a recording terminal and a minimal UI context that captures the dock, the footer
  * and the commands. Like Pi, `custom` raises `ui_prompt_start` when a dialog opens and `ui_prompt_end` when it closes.
  */
-function shell(columns: number, rows: number, state: () => PanelSnapshot | null, options: Partial<NativePanelsOptions> = {}) {
+function shell(columns: number, rows: number, state: () => PanelSnapshot | null, options: Partial<NativePanelsOptions> = {},
+  input = async (): Promise<string | undefined> => undefined) {
   const panels = new NativePanels({ identity: worker, cwd: work, snapshot: state, ...options });
   const physical = new RecordingTerminal(); physical.resize(columns, rows);
   const terminal = panels.wrap(physical); terminal.start(() => {}, () => {});
@@ -91,7 +94,7 @@ function shell(columns: number, rows: number, state: () => PanelSnapshot | null,
       customs.push(factory(tui, theme, undefined, (value: unknown) => { handlers.get("ui_prompt_end")?.({}, context); resolve(value); }));
       return promise;
     },
-    confirm: async () => true, input: async () => undefined, select: async () => undefined,
+    confirm: async () => true, input, select: async () => undefined,
   };
   const context: { readonly mode: string; readonly ui: unknown } = { mode: "tui", ui };
   panels.install(pi, sdk);
@@ -205,6 +208,7 @@ test("job control keys keep the captured target through the Stop confirmation", 
   try {
     wb.openAgents("job:j-1");
     wb.handleInput("b"); await settle();
+    wb.handleInput(KEY.enter);
     wb.handleInput("p"); await settle();
     wb.handleInput("x"); await settle();
     expect(confirmations).toBe(1);
@@ -224,8 +228,14 @@ test("agents keys walk agents then jobs, f pauses a job's follow and Ctrl+O fold
     wb.handleInput(KEY.f8);
     expect(wb.agentsView.entry()?.row.key).toBe("helper:first");
     wb.handleInput("j"); expect(wb.agentsView.entry()?.row.key).toBe("job:build");
+    for (const key of ["f", "p", "?", "\x1bOR"]) expect(wb.handleInput(key)).toBeTrue();
+    expect(wb.view).toBe("agents"); expect(wb.focused).toBeTrue();
+    expect(screen()).not.toMatch(/resume follow|pause follow|Legend/);
+    wb.handleInput(KEY.enter); expect(wb.view).toBe("job");
     expect(screen()).toContain("pause follow");
     wb.handleInput("f"); expect(screen()).toContain("resume follow");
+    wb.handleInput(KEY.esc); expect(wb.view).toBe("agents");
+    expect(wb.agentsView.selected).toBe("job:build");
     wb.handleInput("k"); wb.handleInput(KEY.enter); expect(wb.view).toBe("agent");
     expect(wb.handleInput(KEY.ctrlO)).toBeTrue(); expect(wb.view).toBe("agent");
   } finally { setKeybindings(previous); wb.dispose(); }
@@ -251,7 +261,7 @@ test("a footer click replays its key, and the F1 list runs F8", async () => {
 });
 
 test("the footer lists the keys of what is open: the palette, the keys list or a pager", async () => {
-  const h = shell(140, 46, () => snapshot({ jobs: [job("build", "running")] }), { identity: assistant });
+  const h = shell(140, 46, () => snapshot({ jobs: [job("build", "running")] }), { identity: assistant }, async () => "OUTPUT");
   const footer = () => stripTerminalSequences(h.footer.render(140).at(-1) ?? "");
   const close = async () => { h.customs.at(-1)?.handleInput?.(KEY.esc); await settle(); };
   try {
@@ -265,6 +275,7 @@ test("the footer lists the keys of what is open: the palette, the keys list or a
     await close();
     h.panels.workbench.openAgents("job:build");
     expect(h.panels.handleInput(KEY.enter)).toBeTrue(); await settle();
+    expect(h.panels.handleInput("\x1bOR")).toBeTrue(); await settle();
     expect(footer()).toMatch(/PgUp\/PgDn\s+page/); expect(footer()).toMatch(/esc\s+close/); expect(footer()).not.toMatch(/choose|F1/);
     await close();
     expect(footer()).toMatch(/F1\s+keys/);
@@ -388,11 +399,11 @@ test("an expanded image's footer lists its own keys, never in the image title", 
   } finally { h.stop(); }
 });
 
-test("F10 and F5 do nothing for an assistant", () => {
+test("F10 opens Plan and F5 does nothing for an assistant", () => {
   const h = shell(140, 46, () => snapshot(), { identity: assistant });
   try {
-    expect(h.panels.handleInput(KEY.f10)).toBeFalse(); expect(h.panels.workbench.view).toBe("conversation");
-    expect(h.panels.handleInput(KEY.f5)).toBeFalse(); expect(h.panels.workbench.view).toBe("conversation");
+    expect(h.panels.handleInput(KEY.f10)).toBeTrue(); expect(h.panels.workbench.view).toBe("plan");
+    expect(h.panels.handleInput(KEY.f5)).toBeFalse(); expect(h.panels.workbench.view).toBe("plan");
   } finally { h.stop(); }
 });
 
@@ -489,6 +500,30 @@ test("a one-line notice takes header row 1's state place and is kept with its ti
     void h.panels.workbench.openAgentDetails(); await settle();
     expect(plain(h.customs.at(-1)?.render(100) ?? [])).toContain("model");
   } finally { h.stop(); }
+});
+
+test("an agent opened from outside Agents shows its conversation, and Esc returns to the tab it was opened over", () => {
+  const state = snapshot({ helpers: [helper("first", { phase: "completed" })] });
+  const wb = new NativeWorkbench({ cwd: work, identity: assistant, snapshot: () => state, changed() {}, canInteract: () => true });
+  bindUi(wb);
+  const view = viewport(wb);
+  const shown = () => plain(renderLayoutFrame(view.root, 100, 40, () => {}).lines);
+  try {
+    // From Agents the back link names Agents, as before.
+    wb.openAgents("helper:first"); wb.handleInput(KEY.enter);
+    expect(wb.view).toBe("agent"); expect(shown()).toContain("‹ Agents");
+    wb.setView("changes");
+    wb.openConversation("helper:first");
+    expect(wb.view).toBe("agent"); expect(shown()).toContain("‹ Changes");
+    expect(wb.handleInput(KEY.esc)).toBeTrue();
+    expect(wb.view).toBe("changes");
+    wb.setView("usage");
+    wb.openConversation("helper:first");
+    const target = contextHints(wb.hintState("agent", { items: 0, editable: 0, control: false })).find(hint => hint.id === "escape")?.label;
+    expect(wb.handleInput(KEY.esc)).toBeTrue();
+    expect(wb.view).toBe("conversation");
+    expect(target).toBe(tabSpec("conversation").label);
+  } finally { wb.dispose(); }
 });
 
 test("Open an agent by id reads an evicted ID and a stale completion cannot replace the selected agent", async () => {

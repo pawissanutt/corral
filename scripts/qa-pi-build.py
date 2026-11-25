@@ -299,11 +299,11 @@ try:
     save('01-ready-140x46', 'ready')
     check(header() is not None and 'corral / build · qa' in header(), 'header row 1 reads "corral / build · qa"')
     tabs = tab_row()
-    for word in ('Chat', 'Agents', 'Changes', 'Board'):
+    for word in ('Chat', 'Agents', 'Changes', 'Plan'):
         check(re.search(r'\b' + word + r'\b', tabs) is not None, f'the tab row offers {word}')
     for word in ('Inbox', 'Task', 'Proof'):
         check(re.search(r'\b' + word + r'\b', tabs) is None, f'the tab row has no {word} tab')
-    check(re.search(r'F10\s*Board', tabs) is not None, 'Board sits on F10')
+    check(re.search(r'F10\s*Plan', tabs) is not None, 'Plan sits on F10')
     check(row_with('qa-repo · .worktrees/build-qa', 'exit policy: review required') is not None,
           'header row 2 names the repository, the session worktree and the exit policy')
     check(status_unbound(), 'BUILD goes directly to cost and context, without a binding segment')
@@ -326,7 +326,7 @@ try:
     send(KEY['f8'])
     until(lambda: agent_row(SPIN, 'alpha') and agent_row(SPIN, 'beta'), 'F8 Agents lists alpha and beta as running (spinner rows of its table)')
     save('02-agents-running-140x46', 'delegation')
-    check(main_text().index('alpha') < main_text().index('beta'), 'Agents lists the children in fleet order')
+    check(main_text().index('alpha') < main_text().index('beta'), 'Agents preserves fleet order within the running group')
 
     # Scene 3: one child's conversation and the message target.
     send(KEY['enter'])
@@ -368,14 +368,14 @@ try:
     until(lambda: row_with('alpha.txt') is not None and row_with('beta.txt') is not None, 'the filter cycles back to all files')
     checks.append('Changes attributes alpha.txt to alpha and beta.txt to beta through the author filter')
 
-    # Scene 5: Board outside a corral workspace.
+    # Scene 5: Board tasks outside a corral workspace.
     send(KEY['f10'])
     until(lambda: row_with('The board is not available in this session.') is not None and matches(r'outside a corral workspace'),
-          'F10 Board states that the session is outside a corral workspace')
-    save('05-board-140x46', 'board')
+          'F10 Plan states that the session is outside a corral workspace')
+    save('05-plan-140x46', 'plan')
     body = main_text()
     for offer in ('Plan board tasks', 'details', 'refresh'):
-        check(offer not in body, f'Board offers no "{offer}"')
+        check(offer not in body, f'Plan offers no "{offer}"')
 
     # Scene 6: /finish docks the exit choice.
     send(KEY['f9'])

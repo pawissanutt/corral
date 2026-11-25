@@ -1,3 +1,4 @@
+import { PlanPage, stepCount, type PlanDocument } from "./plan-page.ts";
 import type { TranscriptPage } from "../host/transcript-preview.ts";
 import { recordedText, type TranscriptRead } from "./agent-history.ts";
 import { createHash } from "node:crypto";
@@ -19,6 +20,7 @@ import { LifecycleView } from "./lifecycle-view.ts";
 import { ArtifactView } from "./artifact-view.ts";
 import { agentStatus, agentsModel, isLive, liveCount, statusLabel, visibleCommands, type AgentActions, type AgentRow, type AgentsModel } from "./agents-model.ts";
 import { AgentsView, type AgentsAction } from "./agents-view.ts";
+import { JobPage } from "./job-page.ts";
 import { AgentConversation } from "./agent-conversation.ts";
 import { HelperChat } from "./helper-chat.ts";
 import { openOutputPager, pagerLines, type JobFreeze } from "./job-detail.ts";
@@ -31,14 +33,14 @@ import { TaskStore } from "./task-store.ts";
 import { taskHeadline, taskLines } from "./task-view.ts";
 import { HistoryNavigator, type HistoryRead } from "./history.ts";
 import {
-  boardBadge, changesBadge, headerFrame, mainTabs, proofBadge, tabRow, tabSpec, COMPACT_COLUMNS, NOTICE_MS, SHORT_ROWS,
+  planBadge, changesBadge, headerFrame, mainTabs, proofBadge, tabRow, tabSpec, COMPACT_COLUMNS, NOTICE_MS, SHORT_ROWS,
   type HeaderHit, type HeaderInput, type HeaderStatus, type Notice, type TabHit, type TabId, type TabSpec,
 } from "./header.ts";
 import { FILTER_KEY, keyLabel, piKey, viewKey, type HintState, type KeyContext } from "./keymap.ts";
 import { emptyChatLines, jumpLabel, labelJumpControl, TranscriptWatch } from "./chat-overlay.ts";
 import { openPager } from "./pager.ts";
 import type { BuildController } from "./build/build-controller.ts";
-import { BoardView, boardDetailLines, type BoardAction } from "./build/board-view.ts";
+import { boardDetailLines, type BoardAction } from "./build/board-view.ts";
 import { childIdOf, childKey } from "./build/contract.ts";
 import { childActions, childAuthors, fleetExtras, shownFleet, steerable } from "./build/fleet-rows.ts";
 import { childPrompts, type ChildCards } from "./fleet-prompts.ts";
@@ -100,24 +102,24 @@ function inset(component: Component): Component {
 export function plainClick(event: TuiMouseEvent): boolean {
   return event.type === "click" && event.button === "left" && !event.shift && !event.alt && !event.ctrl && (event.clickCount ?? 1) === 1;
 }
-export type MainView = "task" | "conversation" | "agents" | "agent" | "changes" | "evidence" | "timeline" | "usage" | "artifacts" | "board"
+export type MainView = "task" | "conversation" | "agents" | "job" | "agent" | "changes" | "evidence" | "timeline" | "usage" | "artifacts" | "plan"
   | "settings";
 /**
  * The tab a view highlights: one agent's conversation highlights Agents, Timeline highlights Task, Artifacts
  * highlights Proof, Usage highlights Chat. Settings highlights the tab of the view it opened over (`tabOf`).
  */
 const TAB_OF: Readonly<Record<MainView, TabId>> = {
-  task: "task", timeline: "task", conversation: "conversation", agents: "agents", agent: "agents",
-  changes: "changes", evidence: "evidence", artifacts: "evidence", usage: "conversation", board: "board", settings: "conversation",
+  task: "task", timeline: "task", conversation: "conversation", agents: "agents", agent: "agents", job: "agents",
+  changes: "changes", evidence: "evidence", artifacts: "evidence", usage: "conversation", plan: "plan", settings: "conversation",
 };
 /** A sub-view's place, read on its highlighted tab when the row has room and in the footer's lead. */
 const PLACE: Readonly<Partial<Record<MainView, string>>> = {
-  timeline: "Task › Events", artifacts: "Proof › Artifacts", usage: "Chat › Usage",
+  job: "Agents › Command", timeline: "Task › Events", artifacts: "Proof › Artifacts", usage: "Chat › Usage",
 };
 /** The footer and F1 context of each view while it has the focus. */
 const CONTEXT_OF: Readonly<Record<MainView, KeyContext>> = {
-  task: "task", timeline: "lifecycle", conversation: "composer", agents: "agents", agent: "agent",
-  changes: "changes", evidence: "proof", artifacts: "artifacts", usage: "usage", board: "board",
+  task: "task", timeline: "lifecycle", conversation: "composer", agents: "agents", agent: "agent", job: "job",
+  changes: "changes", evidence: "proof", artifacts: "artifacts", usage: "usage", plan: "plan",
   // Settings holds Pi's focus in the composer's place, as a dialog does, and draws its own keys there.
   settings: "dialog",
 };
@@ -169,6 +171,9 @@ function barePolicy(session: BuildPanelState["session"]): { readonly long: strin
 }
 
 export interface WorkbenchOptions {
+  readonly planDocument?: () => PlanDocument | undefined;
+  readonly openPlanDocument?: () => void;
+  readonly openLedger?: (step: string) => void;
   readonly jobControl?: JobControl;
   readonly identity: HostIdentity;
   readonly artifacts?: () => Promise<unknown>;
@@ -225,8 +230,10 @@ export class NativeWorkbench {
   readonly images: NativeImageViewer;
   /** F8: helper calls and jobs, with keyed selection. */
   readonly agentsView: AgentsView;
-  /** F10 in a build session: the board tasks this session filed. */
-  readonly boardView: BoardView | undefined;
+  readonly jobPage: JobPage;
+  private jobKey: string | undefined;
+  /** F10 in sessions without a bound task. */
+  readonly planPage: PlanPage | undefined;
   /** Steer, cancel, model and answer on child rows: a build session's controls, else the session's own fleet runtime once the host has built it. */
   private readonly buildActs: ChildActs | undefined;
   private fleetActs: { readonly fleet: FleetControl; readonly acts: ChildActs } | undefined;
@@ -235,6 +242,8 @@ export class NativeWorkbench {
   private conversation: AgentConversation | undefined;
   /** The agent whose conversation the `agent` view shows. */
   private agentKey: string | undefined;
+  /** The tab an agent's conversation was opened over from outside Agents: Esc and its back link return there. */
+  private agentFrom: "task" | "conversation" | "changes" | "evidence" | "plan" | undefined;
   private ui: ExtensionUIContext | undefined;
   private changes: ChangesView | undefined;
   private changesScroll: ScrollView | undefined;
@@ -315,9 +324,16 @@ export class NativeWorkbench {
     this.launchRoot = this.review.root;
     this.agentsView = new AgentsView({
       model: () => this.agentsWithTranscriptPicker(), now: () => Date.now(), short: () => this.size(0).rows < SHORT_ROWS,
-      legend: () => this.legend, freeze: () => this.jobFreeze, color: agentColor,
+      color: agentColor,
       click: event => options.canInteract() && plainClick(event), focus: () => { this.focusMain(); options.changed(); },
       act: (action, key) => this.agentAction(action, key), focused,
+    });
+    this.jobPage = new JobPage({
+      entry: () => this.agentsModel().jobs.find(row => row.key === this.jobKey),
+      bound: () => this.options.snapshot()?.bound === true, now: () => Date.now(), legend: () => this.legend,
+      freeze: () => this.jobFreeze, click: event => options.canInteract() && plainClick(event),
+      back: () => this.openAgents(this.jobKey), focus: () => { this.focusMain(); options.changed(); },
+      act: (action, key) => this.agentAction(action, key),
     });
     const build = options.build, controller = options.buildController;
     if (build && controller) {
@@ -327,16 +343,17 @@ export class NativeWorkbench {
         question: id => { controller.open("question", id); },
         ...this.childDialogs(),
       });
-      // A bare session has no board: no Board tab, view or actions.
-      const board = build.board;
-      if (board) this.boardView = new BoardView({
-        tasks: () => board.tasks(), proposed: () => board.proposed(),
-        unavailable: () => boardUnavailable(options.snapshot()?.build),
-        now: () => Date.now(), short: () => this.size(0).rows < SHORT_ROWS,
-        click: event => options.canInteract() && plainClick(event), focus: () => { this.focusMain(); options.changed(); },
-        act: (action, id) => this.boardAction(action, id), focused,
-      });
     }
+    const board = build?.board;
+    if (!options.identity.task) this.planPage = new PlanPage({
+      data: () => ({ document: options.planDocument?.(), steps: this.planSource(),
+        ...(board ? { board: { tasks: board.tasks(), proposed: board.proposed(), unavailable: boardUnavailable(options.snapshot()?.build) } } : {}),
+      }),
+      now: () => Date.now(), short: () => this.size(0).rows < SHORT_ROWS,
+      click: event => options.canInteract() && plainClick(event), focus: () => { this.focusMain(); options.changed(); },
+      document: () => options.openPlanDocument?.(), ledger: step => options.openLedger?.(step),
+      board: (action, id) => this.boardAction(action, id), focused,
+    });
   }
   /** A build session's `since session` base is the commit the session started from, while Changes reads its worktree. */
   private buildBases(persisted: ReviewBases | undefined): ReviewBases {
@@ -383,7 +400,7 @@ export class NativeWorkbench {
     return this.compact(width).short ? 1 : 2;
   }
   setView(view: MainView): void {
-    if (view === "board" && !this.boardView) return;
+    if (view === "plan" && !this.planPage) return;
     if (view === "settings") { this.openSettings(); return; }
     // Settings stays over the main view until it closes: the view under it changes and shows once it does.
     if (this.view === "settings") {
@@ -393,7 +410,7 @@ export class NativeWorkbench {
       return;
     }
     this.transcriptEpoch++;
-    if (this.view === "agent" && view !== "agent") { this.conversation?.remember(); this.leaveChild(); }
+    if (this.view === "agent" && view !== "agent") { this.conversation?.remember(); this.leaveChild(); this.agentFrom = undefined; }
     if (view === "conversation") this.watch?.back();
     this.images.close();
     this.view = view; this.focused = view !== "conversation";
@@ -429,6 +446,20 @@ export class NativeWorkbench {
     // Another agent (or the same one, read again) starts its new-rows count from what it shows now.
     this.conversation?.restore(key); this.childWatch?.rewrapped();
     this.setView("agent");
+  }
+  agentBackLabel(): string { return this.agentFrom ? tabSpec(this.agentFrom).label : "Agents"; }
+
+  /**
+   * An agent's conversation opened from outside Agents (the sidebar), as Enter on its row opens it. Esc and the back
+   * link return to the tab it was opened over. A row with no conversation to open is selected in Agents instead.
+   */
+  openConversation(key: string): void {
+    if (!this.agentRow(key)?.capabilities.open) { this.openAgents(key); return; }
+    const view = this.view === "settings" ? this.settingsFrom : this.view;
+    const tab = this.tabOf(view);
+    const from = view === "agent" ? this.agentFrom : tab === "agents" ? undefined : tab;
+    this.agentAction("open", key);
+    if (this.view === "agent" || (this.view === "settings" && this.settingsFrom === "agent")) this.agentFrom = from;
   }
   /**
    * A build child's conversation; a child that can take a message becomes the composer's receiver, and a notice
@@ -573,7 +604,12 @@ export class NativeWorkbench {
     }
     const job = this.agentsModel().jobs.find(row => row.key === key)?.job;
     if (job === undefined) return;
-    if (action === "output" || action === "search") void this.openJobOutput(job, action === "search");
+    if (action === "output") {
+      this.jobKey = key;
+      this.jobPage.scroll.scrollTo(0, { disableFollow: true });
+      this.setView("job");
+    } else if (action === "search") void this.searchJobOutput(job);
+    else if (action === "legend") { this.legend = !this.legend; this.options.changed(); }
     else if (action === "follow") this.toggleFollow(job);
     else if (action === "peek" || action === "background" || action === "stop") void this.controlJob(job, action);
   }
@@ -600,18 +636,15 @@ export class NativeWorkbench {
       : { job: id, tail: job.detail.tail, lines: job.detail.lines, running: job.state === "running" };
     this.options.changed();
   }
-  private async openJobOutput(id: string, search: boolean): Promise<void> {
+  private async searchJobOutput(id: string): Promise<void> {
     const ui = this.ui, snapshot = this.options.snapshot(), job = snapshot?.jobs?.find(item => item.job === id);
     if (!ui || !this.options.canInteract()) return;
     if (!job?.detail || !snapshot?.bound) { this.notice("Command output unavailable from this host", "warning"); return; }
     const lines = pagerLines(job);
-    let start = lines.length;
-    if (search) {
-      const query = await ui.input("Search retained command output");
-      if (!query) return;
-      start = lines.findIndex(line => line.includes(query));
-      if (start < 0) { this.notice(`No match for ${JSON.stringify(plainLabel(query))} in retained output`); return; }
-    }
+    const query = await ui.input("Search retained command output");
+    if (!query) return;
+    const start = lines.findIndex(line => line.includes(query));
+    if (start < 0) { this.notice(`No match for ${JSON.stringify(plainLabel(query))} in retained output`); return; }
     await this.inPager(() => openOutputPager(ui, `Job ${id} · retained output · ${lines.length} lines`, lines, start));
   }
   private async controlJob(job: string, action: "peek" | "background" | "stop"): Promise<void> {
@@ -688,10 +721,12 @@ export class NativeWorkbench {
         case "agents": return live ? { text: String(live), tone: "accent" } : undefined;
         case "changes": return changesBadge({ checked: r.checkedAt !== undefined, files: r.files.length, scopeRequired: r.scopeRequired, error: r.error !== undefined });
         case "evidence": return proofBadge({ ...(gate ? { gate } : {}), ...(review ? { review } : {}), stale: this.task.stale, error: this.task.error !== undefined });
-        case "board": {
+        case "plan": {
           const board = this.options.build?.board, tasks = board?.tasks() ?? [];
-          return boardBadge({ open: tasks.filter(task => task.phase !== "landed").length,
-            alert: tasks.some(task => task.phase === "blocked" || task.phase === "failed"), proposed: board?.proposed() !== undefined });
+          const steps = stepCount(this.planSource());
+          return planBadge({ open: tasks.filter(task => task.phase !== "landed").length,
+            alert: tasks.some(task => task.phase === "blocked" || task.phase === "failed"),
+            proposed: board?.proposed() !== undefined || this.options.planDocument?.()?.phase === "review", steps });
         }
       }
     };
@@ -714,9 +749,9 @@ export class NativeWorkbench {
   private settingsBack(): string {
     return this.placeOf(this.settingsFrom) ?? tabSpec(this.tabOf(this.settingsFrom)).label;
   }
-  /** The main tabs of this role; a build session without a board (bare) has no Board tab. */
+  /** The main tabs of this role. */
   private tabs(): readonly TabId[] {
-    return mainTabs(this.options.identity).filter(id => id !== "board" || this.boardView !== undefined);
+    return mainTabs(this.options.identity);
   }
   private chrome(): { readonly header: Component; readonly tabs: Component } {
     let hits: readonly TabHit[] = [];
@@ -808,7 +843,8 @@ export class NativeWorkbench {
       ...(this.options.readTranscript ? { read: this.options.readTranscript } : {}),
       lifetime: () => this.transcriptLifetime(), changed: this.options.changed, canInteract: this.options.canInteract,
       rewrapped: () => this.childWatch?.rewrapped(),
-      back: () => this.openAgents(), answer: (key: string) => this.agentAction("answer", key) });
+      back: () => this.back(), backLabel: () => this.agentBackLabel(),
+      answer: (key: string) => this.agentAction("answer", key) });
     if (this.agentKey !== undefined) this.conversation.restore(this.agentKey);
     if (this.view === "agent") this.conversation.refresh();
     this.childWatch = new TranscriptWatch(this.conversation.scroll, this.options.modal);
@@ -870,6 +906,7 @@ export class NativeWorkbench {
         this.images.setViewportHeight(Math.max(0, viewport.height - this.chromeRows(viewport.width))); return this.images.isOpen;
       } },
       { component: this.changes.root, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "changes" },
+      { component: this.jobPage.scroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "job" },
       { component: this.agentsView.scroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "agents" },
       { component: this.conversation.scroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "agent" },
       { component: this.evidenceScroll, basis: 0, grow: 1, minSize: 1,
@@ -878,7 +915,7 @@ export class NativeWorkbench {
       { component: this.usageScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "usage" },
       { component: this.lifecycleScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "timeline" },
       { component: this.artifactScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "artifacts" && !this.images.isOpen },
-      ...(this.boardView ? [{ component: this.boardView.scroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "board" }] : []),
+      ...(this.planPage ? [{ component: this.planPage.scroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "plan" }] : []),
       ...(this.settingsScroll ? [{ component: this.settingsScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "settings" }] : []),
     ]);
     const rail = this.options.rail;
@@ -1055,10 +1092,14 @@ export class NativeWorkbench {
     const draft = ui.getEditorText(); ui.setEditorText(draft + (draft ? "\n\n" : "") + reference + "\n");
     this.focused = false; this.options.changed(); // Never submit or overwrite the existing draft.
   }
-  /** The view one step back: Settings to the view it opened over, an agent's conversation to Agents, Events to Task (Chat without a task), Artifacts to Proof, the rest to Chat. */
+  /**
+   * The view one step back: Settings to the view it opened over, an agent's conversation to Agents (or to the tab the
+   * sidebar opened it over), Events to Task (Chat without a task), Artifacts to Proof, the rest to Chat.
+   */
   private back(): void {
     if (this.view === "settings") this.closeSettings();
-    else if (this.view === "agent") this.openAgents();
+    else if (this.view === "job") this.openAgents(this.jobKey);
+    else if (this.view === "agent") { if (this.agentFrom) this.setView(this.agentFrom); else this.openAgents(); }
     else if (this.view === "timeline" && this.options.identity.task) this.setView("task");
     else if (this.view === "artifacts") this.setView("evidence");
     else this.setView("conversation");
@@ -1079,10 +1120,11 @@ export class NativeWorkbench {
     const identity = this.options.identity, build = this.options.build, controller = this.options.buildController;
     const selection = context === "agent" && this.agentKey?.startsWith("retained:")
       ? this.agentRow(this.agentKey)?.capabilities.transcript ? ["transcript" as const] : []
-      : context === "agents" || context === "agent" ? this.agentsView.actions() : context === "board" ? this.boardView?.actions() : undefined;
+      : context === "agents" || context === "agent" ? this.agentsView.actions() : context === "job" ? this.jobPage.actions() : context === "plan" ? this.planPage?.actions() : undefined;
     const target = controller?.target();
     const lead = this.focused && !this.images.isOpen && this.view !== "conversation" && context === CONTEXT_OF[this.view] ? this.place() : undefined;
     return {
+      ...(context === "agent" ? { agentBackLabel: this.agentBackLabel() } : {}),
       context, streaming: this.options.snapshot()?.streaming ?? false, queue, chat: this.view === "conversation" && !this.images.isOpen,
       mode: { taskBound: !!identity.task, lifecycle: !!identity.task },
       ...(selection ? { selection } : {}), ...(questions > 0 ? { questions } : {}), ...(lead !== undefined ? { lead } : {}),
@@ -1093,6 +1135,11 @@ export class NativeWorkbench {
         exit: controller.dialog()?.key.startsWith("exit:") ?? false,
       } } : {}),
     };
+  }
+  /** The same held ledger feeds the sidebar and the Plan page. */
+  planSource(snapshot = this.options.snapshot()): SideSource["plan"] {
+    return { progress: snapshot?.ledger ?? null, stale: snapshot?.ledgerStale ?? false,
+      ...(snapshot?.ledgerContinued !== undefined ? { continued: snapshot.ledgerContinued } : {}) };
   }
   /** The sidebar's inputs: the agents view's rows, the Changes file list and the plan. */
   sideSource(): SideSource {
@@ -1117,8 +1164,7 @@ export class NativeWorkbench {
           return { path: file.path, letter: LETTERS[fileStatus(file)] ?? "M", added: stat?.added, removed: stat?.removed, ...flag };
         }),
       },
-      plan: { progress: snapshot?.ledger ?? null, stale: snapshot?.ledgerStale ?? false,
-        ...(snapshot?.ledgerContinued !== undefined ? { continued: snapshot.ledgerContinued } : {}) },
+      plan: this.planSource(snapshot),
       bound: snapshot?.bound ?? false,
       color: agentColor,
       ...(this.focused && this.selectedAgent() ? { current: this.selectedAgent()!.key } : {}),
@@ -1147,9 +1193,10 @@ export class NativeWorkbench {
       case "timeline": return this.lifecycleScroll;
       case "agent": return this.conversation?.scroll;
       case "agents": return this.agentsView.scroll;
+      case "job": return this.jobPage.scroll;
       case "changes": return this.changesScroll;
       case "evidence": return this.evidenceScroll;
-      case "board": return this.boardView?.scroll;
+      case "plan": return this.planPage?.scroll;
       case "settings": return this.settingsScroll;
       case "conversation": return undefined;
     }
@@ -1176,7 +1223,7 @@ export class NativeWorkbench {
     if (matchesKey(data, "f7")) { this.setView("changes"); return true; }
     if (matchesKey(data, "f8")) { this.openAgents(); return true; }
     if (matchesKey(data, "f10") && tabs.includes("evidence")) { this.setView("evidence"); return true; }
-    if (matchesKey(data, "f10") && tabs.includes("board")) { this.setView("board"); return true; }
+    if (matchesKey(data, "f10") && tabs.includes("plan")) { this.setView("plan"); return true; }
     if (this.images.isOpen && matchesKey(data, "escape")) { this.images.close(); return true; }
     // End: the open conversation (Chat or one agent's) back to its latest row, as the jump control says.
     const active = this.activeWatch();
@@ -1192,7 +1239,9 @@ export class NativeWorkbench {
     if (view === "task" && tabs.includes("task") && data === "l") { this.setView("timeline"); return true; }
     if (view === "timeline" && this.lifecycle.handleInput(data)) { this.lifecycleScroll?.scrollTo(0, { disableFollow: true }); return true; }
     if (view === "agents" && this.agentsView.handleKey(data)) { this.options.changed(); return true; }
-    if (view === "board" && this.boardView?.handleKey(data)) { this.options.changed(); return true; }
+    if (view === "job" && this.jobPage.handleKey(data)) return true;
+    if (view === "agents" && (matchesKey(data, FILTER_KEY) || data === "?" || data === "f" || data === "p")) return true;
+    if (view === "plan" && this.planPage?.handleKey(data)) { this.options.changed(); return true; }
     if (view === "agent") {
       if (getKeybindings().matches(data, "app.tools.expand")) {
         this.toolsExpanded = !this.toolsExpanded; this.conversation?.expandTools(this.toolsExpanded); this.options.changed(); return true;
@@ -1207,7 +1256,7 @@ export class NativeWorkbench {
     if (view === "evidence" && matchesKey(data, "enter")) { this.proofEnter(); return true; }
     if (view === "artifacts" && this.artifacts.handleInput(data)) { this.artifactScroll?.scrollTo(0, { disableFollow: true }); return true; }
     if (matchesKey(data, "enter")) return true; // No Enter action here: nothing happens, Tab gives the keys to the composer.
-    if ((view === "task" || view === "evidence" || view === "agents" || view === "artifacts" || view === "usage" || view === "timeline")
+    if ((view === "task" || view === "evidence" || view === "artifacts" || view === "usage" || view === "timeline")
       && data === "?") { this.legend = !this.legend; this.options.changed(); return true; }
     const scroll = this.scrollOf(view);
     if (matchesKey(data, "up") || matchesKey(data, "down") || matchesKey(data, "pageUp") || matchesKey(data, "pageDown")) {

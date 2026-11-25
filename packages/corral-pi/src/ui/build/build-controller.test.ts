@@ -155,7 +155,7 @@ function harness(options: { readonly remote?: boolean } = {}) {
     notice: (text, tone) => { s.notices.push({ text, tone }); },
     post: entry => { s.posts.push(entry); s.posted?.(); },
     marks: { add: mark => { s.marks.push(mark); return true; } },
-    showBoard: () => { s.calls.push("board"); },
+    showPlan: () => { s.calls.push("board"); },
     openChild: id => { s.calls.push(`open ${id}`); },
     color: () => "", now: () => 1000, changed: () => {}, ...(dialogs ? { dialogs } : {}),
   });

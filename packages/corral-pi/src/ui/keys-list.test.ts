@@ -55,6 +55,20 @@ test("the list stays within its rows and width; a drawn selection is always a ru
   }
 });
 
+test("the F1 reference separates command-page keys from the Agents list", () => {
+  const groups = keyGroups(mode);
+  const keys = (title: string) => groups.find(group => group.title === title)?.rows.map(row => row.key) ?? [];
+  expect(keys("Command")).toEqual(["F3", "f", "p", "b", "x", "?", "esc"]);
+  const exited = { ...mode, jobActions: ["search", "legend"] };
+  expect(keyGroups(exited).find(group => group.title === "Command")?.rows.map(row => row.key)).toEqual(["F3", "?", "esc"]);
+  expect(keys("Agents").filter(key => ["F3", "f", "p", "?"].includes(key))).toEqual([]);
+});
+
+test("the Plan reference omits actions the open page cannot run", () => {
+  const groups = keyGroups({ ...mode, taskBound: false, build: true, planActions: ["select", "open", "plan", "refresh"] });
+  expect(groups.find(group => group.title === "Plan")?.rows.map(row => row.key)).toEqual(["↑↓ / j/k", "PgUp/PgDn", "⏎", "n", "r", "Esc"]);
+});
+
 // 68 lines: runnable groups between reference-only groups, as in a task-bound session.
 const fixture = ([["Views", 6, true], ["Agents", 15, false], ["Changes", 3, true], ["Task", 20, false], ["Anywhere", 10, false], ["Queue", 8, true]] as const)
   .map(([title, count, runs]) => ({ title, rows: Array.from({ length: count }, (_, index) => ({ key: "k", label: `${title} ${index + 1}`,

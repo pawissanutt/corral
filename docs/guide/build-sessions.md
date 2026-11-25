@@ -54,8 +54,9 @@ conversation and, where available, answer, steer, stop or change its model.
 **Changes** lets you inspect changed files and diffs, switch comparisons and
 scopes, and see attribution and changes outside assigned ownership.
 
-**Board** shows workspace tasks and blocked or failed work. Refresh it and review
-proposed plans; you can file a proposal, file and start its tasks, or dismiss it.
+**Plan (F10)** includes **Board tasks** in a non-bare build. It shows tasks filed
+from this session, including blocked or failed work. Refresh the board status or
+review a proposal; you can file it, file and start its tasks, or dismiss it.
 
 ## Artifacts in Code sessions
 

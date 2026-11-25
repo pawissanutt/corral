@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { sliceByColumn, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import type { HostIdentity } from "../roles/types.ts";
-import { boardBadge, changesBadge, headerFrame, headerRows, mainTabs, proofBadge, tabRow, tabSpec, type HeaderInput, type TabId, type TabSpec } from "./header.ts";
+import { planBadge, changesBadge, headerFrame, headerRows, mainTabs, proofBadge, tabRow, tabSpec, type HeaderInput, type TabId, type TabSpec } from "./header.ts";
 import { PANEL_LINE, PANEL_ON_ACCENT } from "./panels-view.ts";
 
 const worker: HostIdentity = { store: "s", project: "demo", role: "worker", task: "T-1", run: "R-1" };
@@ -12,7 +12,7 @@ const build: HostIdentity = { store: "s", project: "demo", role: "build" };
 const BADGES: Partial<Record<TabId, TabSpec["badge"]>> = {
   conversation: { text: "●", tone: "accent" }, agents: { text: "12", tone: "accent" },
   changes: { text: "148", tone: "text" }, evidence: { text: "✓R·", tone: "warning" },
-  board: { text: "3", tone: "accent" },
+  plan: { text: "3", tone: "accent" },
 };
 const specs = (identity: HostIdentity) => mainTabs(identity).map(id => tabSpec(id, BADGES[id]));
 
@@ -40,20 +40,21 @@ test("task-bound roles get Task and Proof, an assistant neither", () => {
   for (const identity of [worker, reviewer]) {
     expect(mainTabs(identity)).toContain("task"); expect(mainTabs(identity)).toContain("evidence");
   }
-  expect(mainTabs(assistant)).toEqual(["conversation", "agents", "changes"]);
+  expect(mainTabs(assistant)).toEqual(["conversation", "agents", "changes", "plan"]);
 });
 
-test("a build session has Chat, Agents, Changes and Board, with Board on F10", () => {
-  expect(mainTabs(build)).toEqual(["conversation", "agents", "changes", "board"]);
-  expect(tabSpec("board")).toMatchObject({ key: "F10", label: "Board" });
+test("a build session has Chat, Agents, Changes and Plan, with Plan on F10", () => {
+  expect(mainTabs(build)).toEqual(["conversation", "agents", "changes", "plan"]);
+  expect(tabSpec("plan")).toMatchObject({ key: "F10", label: "Plan" });
 });
 
-test("the Board badge counts open tasks, warns on blocked or failed, and shows ◆ for a plan with nothing filed", () => {
-  expect(boardBadge({ open: 3, alert: false, proposed: false })).toEqual({ text: "3", tone: "accent" });
-  expect(boardBadge({ open: 3, alert: true, proposed: false })?.tone).toBe("warning");
-  expect(boardBadge({ open: 0, alert: false, proposed: true })).toEqual({ text: "◆", tone: "warning" });
-  expect(boardBadge({ open: 2, alert: false, proposed: true })?.text).toBe("2");
-  expect(boardBadge({ open: 0, alert: false, proposed: false })).toBeUndefined();
+test("the Plan badge counts open tasks, warns on blocked or failed, and gives a waiting plan priority over step progress", () => {
+  expect(planBadge({ open: 3, alert: false, proposed: false, steps: undefined })).toEqual({ text: "3", tone: "accent" });
+  expect(planBadge({ open: 3, alert: true, proposed: false, steps: undefined })?.tone).toBe("warning");
+  expect(planBadge({ open: 0, alert: false, proposed: true, steps: undefined })).toEqual({ text: "◆", tone: "warning" });
+  expect(planBadge({ open: 2, alert: false, proposed: true, steps: "1/2" })?.text).toBe("◆")
+  expect(planBadge({ open: 2, alert: true, proposed: false, steps: "1/2" })).toEqual({ text: "1/2", tone: "warning" });
+  expect(planBadge({ open: 0, alert: false, proposed: false, steps: undefined })).toBeUndefined();
 });
 
 test("a failed read or a missing project says what it is about, and the Changes badge never reads 0", () => {
@@ -168,7 +169,7 @@ test("separators go first, then Changes reads Diff, then inactive labels; counts
   const narrow = stripTerminalSequences(tabRow(tabs, "conversation", 61).line);
   expect(narrow).not.toContain("Agents"); expect(narrow).toMatch(/F7\s+148/); expect(narrow).toMatch(/F8\s+12/);
   const quarter = stripTerminalSequences(tabRow(specs(build), "conversation", 46).line);
-  expect(quarter).toContain("Chat"); expect(quarter).not.toContain("Agents"); expect(quarter).not.toContain("Board");
+  expect(quarter).toContain("Chat"); expect(quarter).not.toContain("Agents"); expect(quarter).not.toContain("Plan");
   for (const key of ["F9", "F8", "F7", "F10"]) expect(quarter).toContain(key);
 });
 

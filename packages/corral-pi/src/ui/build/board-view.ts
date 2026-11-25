@@ -1,8 +1,4 @@
-// F10 Board view of a build session: a summary line, the plan waiting for the owner, the table of the tasks this
-// session filed (the mock's `.board` grid) and the selected task's actions as key caps. The task's full detail
-// opens with Enter. Selection is keyed by task id, so a task inserted above never moves it.
-import { ScrollView, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import type { TuiMouseEvent } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { BoardPhase, BoardPlan, BoardTaskStatus } from "../../build/types.ts";
 import { taskMetadataLabel } from "./task-metadata.ts";
 import { duration, toneColor } from "../agents-model.ts";
@@ -14,15 +10,6 @@ import type { BuildTone } from "./contract.ts";
 export type BoardAction = "details" | "refresh" | "plan" | "review";
 export interface BoardStage { readonly glyph: string; readonly tone: BuildTone; readonly word: string; readonly now: string }
 export interface BoardHit { readonly id?: string; readonly action?: BoardAction; readonly from?: number; readonly to?: number }
-export interface BoardViewHost {
-  tasks(): readonly BoardTaskStatus[]; proposed(): BoardPlan | undefined; unavailable(): string | undefined;
-  now(): number; short(): boolean;
-  click(event: TuiMouseEvent): boolean; focus(): void;
-  act(action: BoardAction, id?: string): void;
-  /** True while the view has the keys: the selection bar is accent then, muted otherwise. Absent reads as focused. */
-  focused?(): boolean;
-}
-
 const BOLD = "\x1b[1m", UNBOLD = "\x1b[22m", GAP = "  ";
 /** Id column floor and cap, the title column at full density, the stage column, the narrowest `now` column. */
 const ID_MIN = 6, ID_MAX = 10, TITLE_MAX = 40, STAGE = 10, NOW_MIN = 12;
@@ -97,14 +84,6 @@ export function boardDetailLines(task: BoardTaskStatus, now: number): string[] {
 function shownTask(tasks: readonly BoardTaskStatus[], selected: string | undefined): BoardTaskStatus | undefined {
   return tasks.find(task => task.id === selected) ?? tasks[0];
 }
-function offered(tasks: readonly BoardTaskStatus[], proposed: BoardPlan | undefined, selected: string | undefined, unavailable: string | undefined): BoardAction[] {
-  const actions: BoardAction[] = [];
-  if (proposed) actions.push("review");
-  if (shownTask(tasks, selected)) actions.push("details");
-  if (unavailable === undefined) actions.push("plan", "refresh");
-  return actions;
-}
-
 /** The task's actions as key caps after a one-cell inset; actions that do not fit are left out (their keys stay in the footer). */
 function actionLine(id: string, actions: readonly ("details" | "refresh")[], width: number): { readonly line: string; readonly hits: BoardHit[] } {
   const hits: BoardHit[] = [];
@@ -121,18 +100,18 @@ function actionLine(id: string, actions: readonly ("details" | "refresh")[], wid
 }
 
 /**
- * The whole Board page for `width` columns; `hits[row]` lists the click targets on that rendered row. A hit
+ * The Board tasks section for `width` columns; `hits[row]` lists the click targets on that rendered row. A hit
  * without a range covers the row. Columns follow the mock's `.board` grid, two cells apart after the bar: full
  * density id, title (40), stage, now; med id, stage, now, then the title on a second row under the id; min id and
  * stage, then the title. The empty states are paragraphs one blank row apart (none when the view is short).
  */
-export function renderBoard(tasks: readonly BoardTaskStatus[], proposed: BoardPlan | undefined, selected: string | undefined,
-  width: number, options: { readonly now: number; readonly short: boolean; readonly unavailable?: string; readonly focused?: boolean }):
+export function renderBoard(tasks: readonly BoardTaskStatus[], proposed: BoardPlan | undefined, selected: string | null | undefined,
+  width: number, options: { readonly now: number; readonly short: boolean; readonly unavailable?: string; readonly focused?: boolean; readonly selectReview?: boolean }):
   { readonly lines: string[]; readonly hits: ReadonlyMap<number, readonly BoardHit[]>; readonly selectedRow: number } {
   const density = agentDensity(width), lines: string[] = [], hits = new Map<number, BoardHit[]>();
   const push = (line: string, rowHits?: readonly BoardHit[]) => { if (rowHits?.length) hits.set(lines.length, [...rowHits]); lines.push(line); };
   const paragraph = () => { if (!options.short) push(fill("", width)); };
-  const shown = shownTask(tasks, selected);
+  const shown = selected === null ? undefined : shownTask(tasks, selected);
   let selectedRow = -1;
 
   if (tasks.length) {
@@ -141,7 +120,8 @@ export function renderBoard(tasks: readonly BoardTaskStatus[], proposed: BoardPl
   }
   if (proposed) {
     const count = proposed.tasks.length;
-    push(fill(" " + PANEL_WARNING + `◆ A plan is waiting for you: ${plainLabel(proposed.title)} · ${count} ${count === 1 ? "task" : "tasks"}`, width),
+    if (options.selectReview) selectedRow = lines.length;
+    push(fill((options.selectReview ? (options.focused === false ? PANEL_MUTED : PANEL_BLUE) + "▌" : " ") + PANEL_WARNING + `◆ A plan is waiting for you: ${plainLabel(proposed.title)} · ${count} ${count === 1 ? "task" : "tasks"}`, width, options.selectReview ? PANEL_SELECTED : PANEL_BG),
       [{ action: "review" }]);
   }
 
@@ -198,79 +178,4 @@ export function renderBoard(tasks: readonly BoardTaskStatus[], proposed: BoardPl
     push(row.line, row.hits);
   }
   return { lines, hits, selectedRow };
-}
-
-/** The Board page as a scrollable component with keyed selection, keys and pointer targets. */
-export class BoardView {
-  selected: string | undefined;
-  readonly scroll: ScrollView;
-  private hits: ReadonlyMap<number, readonly BoardHit[]> = new Map();
-  private reveal = false;
-  constructor(private readonly host: BoardViewHost) {
-    this.scroll = new ScrollView({
-      render: width => this.render(width),
-      handleMouse: event => this.mouse(event),
-      invalidate() {},
-    }, { primary: true, follow: "none", scrollbar: "auto" });
-  }
-  /** The shown task: the selected id while it is listed, else the first task. */
-  task(): BoardTaskStatus | undefined { return shownTask(this.host.tasks(), this.selected); }
-  move(delta: number): void {
-    const tasks = this.host.tasks(), shown = this.task();
-    const index = shown ? tasks.findIndex(task => task.id === shown.id) + delta : 0;
-    const next = tasks[Math.max(0, Math.min(tasks.length - 1, index))];
-    if (next) this.select(next.id);
-  }
-  select(id: string): void { this.selected = id; this.reveal = true; }
-  handleKey(data: string): boolean {
-    if (matchesKey(data, "up") || data === "k") { this.move(-1); return true; }
-    if (matchesKey(data, "down") || data === "j") { this.move(1); return true; }
-    if (matchesKey(data, "pageUp") || matchesKey(data, "pageDown")) {
-      const page = Math.max(1, this.scroll.viewportHeight - 2);
-      this.scroll.scrollBy(matchesKey(data, "pageUp") ? -page : page); return true;
-    }
-    const action: BoardAction | undefined = matchesKey(data, "enter") ? "details" : data === "r" ? "refresh" : data === "n" ? "plan"
-      : data === "p" ? "review" : undefined;
-    if (!action || !this.actions().includes(action)) return false;
-    this.host.act(action, action === "details" ? this.task()?.id : undefined);
-    return true;
-  }
-  /** Offered right now, in footer order: review a waiting plan, details of the shown task, plan tasks and refresh where a board exists. */
-  actions(): readonly BoardAction[] {
-    return offered(this.host.tasks(), this.host.proposed(), this.selected, this.host.unavailable());
-  }
-
-  private render(width: number): string[] {
-    const unavailable = this.host.unavailable();
-    const frame = renderBoard(this.host.tasks(), this.host.proposed(), this.selected, width, {
-      now: this.host.now(), short: this.host.short(), focused: this.host.focused?.() ?? true, ...(unavailable === undefined ? {} : { unavailable }),
-    });
-    this.hits = frame.hits;
-    const height = this.scroll.viewportHeight, top = this.scroll.scrollTop, row = frame.selectedRow;
-    if (this.reveal && row >= 0 && height > 0) {
-      this.reveal = false;
-      const target = row < top ? row : row + 2 > top + height ? row + 2 - height : top;
-      if (target !== top) {
-        this.scroll.updateLayout(frame.lines.length, height, () => {});
-        this.scroll.scrollTo(target, { disableFollow: true });
-      }
-    }
-    return frame.lines;
-  }
-  private mouse(event: TuiMouseEvent): { readonly handled: boolean } | undefined {
-    if (!this.host.click(event)) return undefined;
-    this.host.focus();
-    const rowHits = this.hits.get(event.y) ?? [];
-    const hit = rowHits.find(item => item.from !== undefined && item.to !== undefined && event.x >= item.from && event.x < item.to)
-      ?? rowHits.find(item => item.from === undefined);
-    if (!hit) return { handled: true };
-    if (hit.id !== undefined && hit.id !== this.task()?.id) {
-      this.select(hit.id);
-      if (hit.action === undefined) return { handled: true };
-    }
-    // A click on the shown task's row opens its details.
-    const action = hit.action ?? "details";
-    if (this.actions().includes(action)) this.host.act(action, action === "details" || action === "refresh" ? hit.id ?? this.task()?.id : undefined);
-    return { handled: true };
-  }
 }

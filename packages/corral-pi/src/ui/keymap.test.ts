@@ -5,8 +5,8 @@ import { chromeTier } from "./header.ts";
 import { contextHints, footerBase, footerRow, keyGroups, viewKey, type HintState, type KeyContext } from "./keymap.ts";
 import { PANEL_BLUE, PANEL_KEY } from "./panels-view.ts";
 
-const CONTEXTS: readonly KeyContext[] = ["composer", "agents", "agent", "changes", "task", "lifecycle", "proof", "artifacts",
-  "usage", "image", "sidebar", "queue", "dialog", "palette", "keys", "pager", "board", "choice", "questions"];
+const CONTEXTS: readonly KeyContext[] = ["composer", "agents", "job", "agent", "changes", "task", "lifecycle", "proof", "artifacts",
+  "usage", "image", "sidebar", "queue", "dialog", "palette", "keys", "pager", "plan", "choice", "questions"];
 const state = (context: KeyContext, overrides: Partial<HintState> = {}): HintState => ({
   context, mode: { taskBound: true, lifecycle: true }, streaming: true,
   queue: { items: 3, editable: 2, control: true },
@@ -122,8 +122,8 @@ test("the build footer never overflows from 10 to 200 columns, and the docked ch
     ...TARGETS.flatMap(build => [false, true].map(streaming => state("composer", { build, streaming }))),
     state("agents", { build: BUILD, selection: CHILD_ROW }),
     state("agent", { build: BUILD, selection: CHILD_ROW }),
-    state("board", { build: BUILD, selection: ["review", "details", "plan", "refresh"] }),
-    state("board", { build: { ...BUILD, proposed: false }, selection: ["plan", "refresh"] }),
+    state("plan", { build: BUILD, selection: ["select", "open", "review", "plan", "refresh"] }),
+    state("plan", { build: { ...BUILD, proposed: false }, selection: ["plan", "refresh"] }),
     state("choice", { build: BUILD }),
   ];
   for (const item of cases) {
@@ -164,16 +164,16 @@ test("a answer is offered only when the selected child asks", () => {
   }
 });
 
-test("the board offers review, plan and task hints only when the view offers them", () => {
-  const keys = (selection: string[]) => contextHints(state("board", { build: BUILD, selection })).map(hint => hint.key);
-  expect(keys(["review", "details", "plan", "refresh"])).toEqual(["↑↓", "p", "esc", "⏎", "n", "r"]);
-  expect(keys(["details"])).not.toContain("p");
-  expect(keys(["details"])).not.toContain("n");
+test("Plan offers board and selection hints only when the view offers them", () => {
+  const keys = (selection: string[]) => contextHints(state("plan", { build: BUILD, selection })).map(hint => hint.key);
+  expect(keys(["select", "open", "review", "plan", "refresh"])).toEqual(["↑↓", "esc", "⏎", "j/k", "PgUp/PgDn", "p", "n", "r"]);
+  expect(keys(["select", "open"])).not.toContain("p");
+  expect(keys(["select", "open"])).not.toContain("n");
   // No task on the board: no task keys, only what still acts.
-  expect(keys(["plan", "refresh"])).toEqual(["n", "esc", "r"]);
+  expect(keys(["plan", "refresh"])).toEqual(["esc", "PgUp/PgDn", "n", "r"]);
   // Outside a workspace with nothing filed: neither task keys nor planning.
-  expect(keys([])).toEqual(["esc"]);
-  const row = stripTerminalSequences(footerRow(contextHints(state("board", { build: BUILD, selection: [] })), chromeTier(140), 140, footerBase("board")).line);
+  expect(keys([])).toEqual(["esc", "PgUp/PgDn"]);
+  const row = stripTerminalSequences(footerRow(contextHints(state("plan", { build: BUILD, selection: [] })), chromeTier(140), 140, footerBase("plan")).line);
   expect(row).not.toContain("↑↓"); expect(row).toMatch(/F2\s+actions/); expect(row).toMatch(/F1\s+keys/);
 });
 
@@ -189,13 +189,13 @@ test("binding alt+t to an editor action removes Alt+T from the hints and the key
   } finally { setKeybindings(previous); }
 });
 
-test("the build keys list has Board and no Task or Proof; other modes keep theirs", () => {
+test("the build keys list has Plan and no Task or Proof; other modes keep theirs", () => {
   const titles = (build: boolean, taskBound: boolean) =>
     keyGroups({ taskBound, jobs: true, queueControl: true, lifecycle: true, build }).map(group => group.title);
-  expect(titles(true, false)).toContain("Board");
+  expect(titles(true, false)).toContain("Plan");
   for (const title of ["Task", "Proof", "Inbox"]) expect(titles(true, false)).not.toContain(title);
   expect(titles(false, true)).toContain("Task"); expect(titles(false, true)).toContain("Proof"); expect(titles(false, true)).not.toContain("Inbox");
-  expect(titles(false, true)).not.toContain("Board");
+  expect(titles(false, true)).not.toContain("Plan");
 });
 
 const FOOTER_WIDTHS = [46, 61, 92, 104, 140];
@@ -214,10 +214,10 @@ test("F2 shows whenever the essential hints, F2 and F1 fit, at every width tier"
   }
 });
 
-test("in the choice, agent, board, lifecycle and artifacts footers Esc comes right after the primary action and is never dropped", () => {
+test("in the choice, agent, plan, lifecycle and artifacts footers Esc comes right after the primary action and is never dropped", () => {
   const cases: HintState[] = [
     state("choice", { build: { ...BUILD, exit: true } }), state("agent", { selection: CHILD_ROW }),
-    state("board", { build: BUILD, selection: ["review", "details", "plan", "refresh"] }), state("lifecycle"), state("artifacts"),
+    state("plan", { build: BUILD, selection: ["select", "open", "review", "plan", "refresh"] }), state("lifecycle"), state("artifacts"),
   ];
   for (const item of cases) {
     const hints = contextHints(item), at = hints.findIndex(hint => hint.id === "escape");
@@ -250,7 +250,7 @@ test("`/` is never a view key: filters and job search take F3", () => {
     expect(contextHints(state(context, { selection })).some(hint => hint.key === "/")).toBeFalse();
   }
   expect(contextHints(state("changes")).find(hint => hint.id === "filter")?.key).toBe("F3");
-  expect(contextHints(state("agents", { selection: ["output", "search"] })).find(hint => hint.id === "search")?.key).toBe("F3");
+  expect(contextHints(state("job", { selection: ["search"] })).find(hint => hint.id === "search")?.key).toBe("F3");
   const keys = keyGroups({ taskBound: true, jobs: true, queueControl: true, lifecycle: true }).flatMap(group => group.rows).map(row => row.key);
   expect(keys).not.toContain("/"); expect(keys).toContain("F3");
 });
@@ -258,7 +258,7 @@ test("`/` is never a view key: filters and job search take F3", () => {
 test("F1 lists each view's F-key with its Alt+digit, and the Scroll and Exit groups", () => {
   const groups = keyGroups({ taskBound: false, jobs: false, queueControl: false, lifecycle: false });
   const views = groups.find(group => group.title === "Views")!.rows.map(row => row.key);
-  expect(views).toEqual(["F9/Alt+1", "F8/Alt+2", "F7/Alt+3"]);
+  expect(views).toEqual(["F9/Alt+1", "F8/Alt+2", "F7/Alt+3", "F10/Alt+4"]);
   for (const title of ["Scroll", "Exit"]) expect(groups.some(group => group.title === title)).toBeTrue();
   const exit = (build: boolean, trustedCode = false) => keyGroups({ taskBound: false, jobs: false, queueControl: false, lifecycle: false, build, trustedCode })
     .find(group => group.title === "Exit")!.rows.map(row => row.key);

@@ -19,7 +19,7 @@ export function chromeTier(columns: number): ChromeTier {
   return columns >= WIDE_COLUMNS ? "wide" : columns >= RAIL_COLUMNS ? "mid" : columns >= COMPACT_COLUMNS ? "narrow" : "tiny";
 }
 
-export type TabId = "task" | "conversation" | "agents" | "changes" | "evidence" | "board";
+export type TabId = "task" | "conversation" | "agents" | "changes" | "evidence" | "plan";
 export type BadgeTone = "text" | "accent" | "success" | "warning" | "error";
 /** A tab's badge: `text` where the row has room, `short` (when given) once it must shorten. */
 export interface TabBadge { readonly text: string; readonly short?: string; readonly tone: BadgeTone }
@@ -80,15 +80,14 @@ const TAB_TEXT: Readonly<Record<TabId, { readonly key: string; readonly label: s
   agents: { key: "F8", label: "Agents" },
   changes: { key: "F7", label: "Changes", short: "Diff" },
   evidence: { key: "F10", label: "Proof" },
-  board: { key: "F10", label: "Board" },
+  plan: { key: "F10", label: "Plan" },
 };
 const TASK_TABS: readonly TabId[] = ["task", "conversation", "agents", "changes", "evidence"];
-const SESSION_TABS: readonly TabId[] = ["conversation", "agents", "changes"];
-const BUILD_TABS: readonly TabId[] = ["conversation", "agents", "changes", "board"];
+const SESSION_TABS: readonly TabId[] = ["conversation", "agents", "changes", "plan"];
 
-/** Task-bound roles keep Task and Proof; assistant sessions have neither. A build session has Board in Proof's place on F10. */
+/** Task-bound sessions keep Task and Proof; all other sessions have Plan on F10. */
 export function mainTabs(identity: HostIdentity): readonly TabId[] {
-  return identity.role === "build" ? BUILD_TABS : identity.task ? TASK_TABS : SESSION_TABS;
+  return identity.task ? TASK_TABS : SESSION_TABS;
 }
 /**
  * The key cap and label of a main view tab, with an optional count badge and the unread dot. Chat takes no
@@ -105,10 +104,11 @@ export function changesBadge(input: { readonly checked: boolean; readonly files:
   return input.checked && input.files > 0 ? { text: String(input.files), tone: "text" } : undefined;
 }
 
-/** Board tasks not yet landed, in warning when one is blocked or failed; `◆` when a plan waits and nothing is filed. */
-export function boardBadge(input: { readonly open: number; readonly alert: boolean; readonly proposed: boolean }): TabBadge | undefined {
-  if (input.open > 0) return { text: String(input.open), tone: input.alert ? "warning" : "accent" };
-  return input.proposed ? { text: "◆", tone: "warning" } : undefined;
+/** Waiting reviews take priority over step progress and the filed task count. */
+export function planBadge(input: { readonly open: number; readonly alert: boolean; readonly proposed: boolean; readonly steps: string | undefined }): TabBadge | undefined {
+  if (input.proposed) return { text: "◆", tone: "warning" };
+  const text = input.steps ?? (input.open > 0 ? String(input.open) : undefined);
+  return text === undefined ? undefined : { text, tone: input.alert ? "warning" : "accent" };
 }
 
 /**

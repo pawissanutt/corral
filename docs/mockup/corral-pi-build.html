@@ -551,7 +551,7 @@ function chooseExit(i){
   if(c.id==='gate'){S.phase='gating';const e={k:'jobs',title:'Gate',jobs:[{cmd:'just check',res:'passed · fmt, clippy, nextest, app typecheck and tests',dur:45,el:0,st:'queued'}]};S.jobs=e.jobs;
     S.log.push({k:'asst',html:'mitiplay allows landing on the gate alone. Rebased onto main (no conflicts); running the gate on that commit.'},e);}
   if(c.id==='board'){S.phase='shipped';ensureBoard();S.board.tasks.unshift({id:'T-962',title:'Save-slot picker on arrival',kind:'frontend m',profile:'this session',dep:[],st:'gating',el:200,dur:200,g:0,r:0,act:''});
-    S.log.push({k:'note',tone:'ok',text:'✓ T-962 created in Review from build/save-slots · gate queued · independent review required'},{k:'note',tone:'mu',text:'This session stays untethered. Follow the task under Board (F10) or on the corral board.'});}
+    S.log.push({k:'note',tone:'ok',text:'✓ T-962 created in Review from build/save-slots · gate queued · independent review required'},{k:'note',tone:'mu',text:'This session stays untethered. Follow the task under Plan (F10) or on the corral board.'});}
   if(c.id==='iterate'){S.phase='open';S.log.push({k:'note',tone:'mu',text:'Session stays open. The exit choice comes back when you say done, or from F2 → Finish.'});}
 }
 function simAsk(){
@@ -1126,7 +1126,7 @@ function dialogDef(){
     return{title:'File this plan on the board?',meta:'mitiplay · 5 tasks · 3 dependency edges · preview only',
     body:`<div class="plan ${d}">`+(d==='full'?`<div class="tr th"><span>task</span><span>title</span><span>kind</span><span>profile</span><span>starts</span></div>`:'')+PLAN.map((p,i)=>`<div class="tr"><span class="b">${p.id}</span><span class="el">${h(p.title)}</span>${d==='full'?`<span class="mu">${p.kind}</span><span class="mu">${p.profile}</span>`:''}${d==='min'?'':`<span class="mu el">${starts(p,i)}</span>`}</div>`).join('')+`</div>`,
     opts:[['File and start','your confirmation starts these 5 tasks only; 2 slots, the rest wait'],['File only','they land in Backlog; you start them from the board'],['Edit the plan','back to the conversation; nothing is written']],pick:fileBoard,
-    esc(){closeOverlay();toast('Nothing filed. The plan still waits · F10 Board, then p, reopens it');}};
+    esc(){closeOverlay();toast('Nothing filed. The plan still waits · F10 Plan, then p, reopens it');}};
   }
   return null;
 }

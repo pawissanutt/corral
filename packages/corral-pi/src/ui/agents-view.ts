@@ -1,21 +1,16 @@
-// F8 agents view: one scrollable page with the agents table (the mock's `.fleet` grid at three densities),
-// running commands and the latest completion, the selected row's detail with its actions as key caps, and the
-// timeline. Selection is keyed ("helper:<request>", "child:<id>", "job:<id>"), so rows inserted above never
-// move it. Every row keeps one blank cell each side; only the selected row has a surface of its own.
 import { ScrollView, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import {
-  duration, money, sparkline, timeLabel, toneColor, visibleCommands, type AgentRow, type AgentSpan, type AgentsModel, type JobRow, type Status, type Tone,
+  orderedAgents, duration, money, sparkline, timeLabel, toneColor, visibleCommands, type AgentRow, type AgentSpan, type AgentsModel, type JobRow, type Status, type Tone,
 } from "./agents-model.ts";
 import { keyCap, rule, spinner } from "./frame.ts";
-import { jobDetailLines, type JobFreeze } from "./job-detail.ts";
+import { jobPreviewLines } from "./job-detail.ts";
 import { PANEL_BG, PANEL_BLUE, PANEL_HEAD, PANEL_MUTED, PANEL_RULE, PANEL_SELECTED, PANEL_TEXT, PANEL_WARNING, RESET } from "./panels-view.ts";
-import { FILTER_KEY, keyLabel } from "./keymap.ts";
 
 export type AgentsAction = "open" | "answer" | "transcript" | "steer" | "cancel" | "model"
-  | "output" | "search" | "follow" | "peek" | "background" | "stop";
+  | "fold" | "output" | "legend" | "search" | "follow" | "peek" | "background" | "stop";
 export interface AgentsViewHost {
-  model(): AgentsModel; now(): number; short(): boolean; legend(): boolean;
-  freeze(): JobFreeze | undefined; color(hue: number): string;
+  model(): AgentsModel; now(): number; short(): boolean;
+  color(hue: number): string;
   click(event: TuiMouseEvent): boolean;       // plain click allowed (workbench plainClick + canInteract)
   focus(): void;
   act(action: AgentsAction, key: string): void;
@@ -25,15 +20,15 @@ export interface AgentsViewHost {
 export type AgentsEntry = { readonly kind: "agent"; readonly row: AgentRow } | { readonly kind: "job"; readonly row: JobRow };
 export interface AgentsHit { readonly key: string; readonly action?: AgentsAction; readonly from?: number; readonly to?: number }
 export interface AgentsOptions {
-  readonly now: number; readonly short: boolean; readonly legend: boolean;
-  readonly freeze: JobFreeze | undefined; readonly color: (hue: number) => string;
+  readonly now: number; readonly short: boolean; readonly expanded?: boolean;
+  readonly color: (hue: number) => string;
   /** The selection bar in accent while the view has the keys, muted otherwise; absent reads as focused. */
   readonly focused?: boolean;
 }
 
 /**
  * Table density by main-area columns, measured as the mock does (the area minus four cells of padding): every
- * column from 112 content cells, two-row entries with profile and model from 60, below that name, time and cost only.
+ * column from 112 content cells, two-row entries below that (command ids drop below 60 content cells).
  */
 export function agentDensity(width: number): "full" | "med" | "min" {
   const content = width - 4;
@@ -42,7 +37,7 @@ export function agentDensity(width: number): "full" | "med" | "min" {
 
 const BOLD = "\x1b[1m", UNBOLD = "\x1b[22m", GAP = "  ";
 /** `.fleet` column widths in cells; columns are two cells apart. */
-const NAME = 11, PROFILE = 27, TIME = 9, COST = 6, CTX = 4, FILES = 5, PULSE_FULL = 14, PULSE_MED = 12, JOB_ID = 14, JOB_STATE = 20;
+const NAME = 11, TIME = 9, COST = 6, PULSE = 12, JOB_ID = 14, JOB_STATE = 20;
 /** Bar, gap, state glyph, gap: the name column starts this many cells into a row. */
 const LEAD = 6;
 /** One timeline column per fleet history bucket until the bars fill their room. */
@@ -52,7 +47,7 @@ const AGENT_KEYS: Readonly<Record<(typeof AGENT_ACTIONS)[number], readonly [stri
   open: ["⏎", "open conversation"], answer: ["a", "answer"], steer: ["s", "steer"], cancel: ["x", "cancel"], model: ["m", "model"],
   transcript: ["t", "transcript"],
 };
-const JOB_ACTIONS = ["output", "search", "follow", "peek", "background", "stop"] as const;
+const DONE = "group:done";
 
 /** Styled text clipped to exactly `width` cells; resets inside the clip restore `base` so the row keeps its surface. */
 function cell(text: string, width: number, base: string, right = false): string {
@@ -72,12 +67,19 @@ function row(text: string, width: number, surface = PANEL_BG): string {
   const base = surface + PANEL_TEXT;
   return PANEL_BG + " " + base + cell(text, width - 2, base) + PANEL_BG + " " + RESET;
 }
-function entriesOf(model: AgentsModel): AgentsEntry[] {
-  return [...model.agents.map(row => ({ kind: "agent" as const, row })), ...visibleCommands(model.jobs).map(row => ({ kind: "job" as const, row }))];
+/** A completion summary appears only beside other agent states. */
+function doneGroup(agents: readonly AgentRow[]): AgentRow[] {
+  const done = agents.filter(agent => agent.state === "done");
+  return done.length >= 3 && agents.some(agent => agent.state !== "done" && agent.key !== "retained-picker") ? done : [];
+}
+function listKeys(model: AgentsModel, expanded: boolean): string[] {
+  const agents = orderedAgents(model.agents), group = doneGroup(agents);
+  return [...agents.flatMap((agent): string[] => !group.length || agent.state !== "done" ? [agent.key]
+    : [...(agent === group[0] ? [DONE] : []), ...(expanded ? [agent.key] : [])]), ...visibleCommands(model.jobs).map(job => job.key)];
 }
 function shownEntry(model: AgentsModel, selected: string | undefined, commands = visibleCommands(model.jobs)): AgentsEntry | undefined {
   if (selected === undefined) {
-    const agent = model.agents[0], job = commands[0];
+    const agent = orderedAgents(model.agents)[0], job = commands[0];
     return agent ? { kind: "agent", row: agent } : job ? { kind: "job", row: job } : undefined;
   }
   // A transcript link or an already-open detail can still point to a retained command outside the list.
@@ -107,21 +109,11 @@ function agentLines(entry: AgentRow, phase: number, selected: boolean, density: 
   const lead = (selected ? bar + "▌" : " ") + GAP + glyph(entry.status, entry.state === "running", now, phase) + GAP;
   const time = cell(toneColor(timeTone(entry.status.tone)) + timeLabel(entry.status), TIME, base, true);
   const cost = cell(PANEL_TEXT + money(entry.usage?.cost), COST, base, true);
-  const profile = PANEL_MUTED + entry.profile + " · " + entry.model + (entry.pendingModel ? " → " + entry.pendingModel : "");
   const activity = PANEL_MUTED + entry.activity;
-  if (density === "full") {
-    const ctx = cell(PANEL_TEXT + (entry.usage?.contextPercent === undefined ? "–" : `${Math.round(entry.usage.contextPercent)}%`), CTX, base, true);
-    const files = cell((entry.outside ? PANEL_WARNING + "!" : "") + PANEL_TEXT + (entry.files === undefined ? "–" : String(entry.files)), FILES, base, true);
-    const rest = grid - (LEAD + NAME + PROFILE + TIME + COST + CTX + FILES + PULSE_FULL + GAP.length * 7);
-    return [row(lead + cell(name, NAME, base) + GAP + cell(profile, PROFILE, base) + GAP + time + GAP + cost + GAP + ctx + GAP + files
-      + GAP + cell(pulse(entry, PULSE_FULL, hue), PULSE_FULL, base) + GAP + cell(activity, rest, base), width, surface)];
-  }
-  const first = density === "med"
-    ? lead + cell(name, NAME, base) + GAP + cell(profile, grid - (LEAD + NAME + TIME + COST + GAP.length * 3), base) + GAP + time + GAP + cost
-    : lead + cell(name, grid - (LEAD + TIME + COST + GAP.length * 2), base) + GAP + time + GAP + cost;
-  const beat = density === "med" ? pulse(entry, PULSE_MED, hue) : "";
-  const second = " ".repeat(LEAD) + cell(activity, grid - LEAD - (beat ? PULSE_MED + GAP.length : 0), base) + (beat ? GAP + beat : "");
-  return [row(first, width, surface), row(second, width, surface)];
+  const rest = grid - LEAD - TIME - COST - GAP.length * 2;
+  if (density === "full") return [row(lead + cell(name, NAME, base) + GAP + cell(activity, rest - NAME - GAP.length, base)
+    + GAP + time + GAP + cost, width, surface)];
+  return [row(lead + cell(name, rest, base) + GAP + time + GAP + cost, width, surface), row(" ".repeat(LEAD) + activity, width, surface)];
 }
 function jobLine(entry: JobRow, phase: number, selected: boolean, density: "full" | "med" | "min", width: number, now: number, bar: string): string {
   const surface = selected ? PANEL_SELECTED : PANEL_BG, base = surface + PANEL_TEXT, grid = gridOf(width);
@@ -133,18 +125,17 @@ function jobLine(entry: JobRow, phase: number, selected: boolean, density: "full
     + GAP + cell(toneColor(timeTone(entry.status.tone)) + state, stateWidth, base, true), width, surface);
 }
 function headerLine(width: number): string {
-  const base = PANEL_BG + PANEL_MUTED, rest = gridOf(width) - (LEAD + NAME + PROFILE + TIME + COST + CTX + FILES + PULSE_FULL + GAP.length * 7);
-  return row(PANEL_MUTED + " ".repeat(LEAD) + cell("agent", NAME, base) + GAP + cell("profile · model", PROFILE, base) + GAP + cell("time", TIME, base, true)
-    + GAP + cell("cost", COST, base, true) + GAP + cell("ctx", CTX, base, true) + GAP + cell("files", FILES, base, true)
-    + GAP + cell("activity", PULSE_FULL, base) + GAP + cell("now", rest, base), width);
+  const base = PANEL_BG + PANEL_MUTED, rest = gridOf(width) - LEAD - NAME - TIME - COST - GAP.length * 3;
+  return row(PANEL_MUTED + " ".repeat(LEAD) + cell("agent", NAME, base) + GAP + cell("now", rest, base)
+    + GAP + cell("time", TIME, base, true) + GAP + cell("cost", COST, base, true), width);
 }
 
-interface Action { readonly action: AgentsAction; readonly key: string; readonly label: string; readonly enabled: boolean }
+export interface Action { readonly action: AgentsAction; readonly key: string; readonly label: string; readonly enabled: boolean }
 /**
  * The actions as key caps, `[s] steer`, two cells apart and wrapped to `width`; an unavailable one is its muted label
  * without a cap. Returns the rows and, per row, the hit range of each available action (cap and label).
  */
-function actionRows(key: string, actions: readonly Action[], width: number): { readonly lines: string[]; readonly hits: AgentsHit[][] } {
+export function actionRows(key: string, actions: readonly Action[], width: number): { readonly lines: string[]; readonly hits: AgentsHit[][] } {
   const room = width - 2, lines: string[] = [], hits: AgentsHit[][] = [];
   let text = "", used = 0, rowHits: AgentsHit[] = [];
   for (const item of actions) {
@@ -166,19 +157,19 @@ function agentActions(entry: AgentRow): Action[] {
     return [{ action, key, label, enabled: entry.disabled?.[action] === undefined }];
   });
 }
-function jobActions(entry: JobRow, freeze: JobFreeze | undefined): Action[] {
-  const frozen = freeze?.job === entry.job;
-  const keys: Readonly<Record<(typeof JOB_ACTIONS)[number], readonly [string, string]>> = {
-    output: ["⏎", "output"], search: [keyLabel(FILTER_KEY), "search output"], follow: ["f", frozen ? "resume follow" : "pause follow"], peek: ["p", "peek"],
-    background: ["b", "background"], stop: ["x", "stop"],
-  };
-  return JOB_ACTIONS.filter(action => entry.capabilities[action] || action === "follow" && frozen)
-    .map(action => ({ action, key: keys[action][0], label: keys[action][1], enabled: true }));
+function jobActions(entry: JobRow): Action[] {
+  return [{ action: "output", key: "⏎", label: "open", enabled: true },
+    ...(entry.capabilities.stop ? [{ action: "stop", key: "x", label: "stop", enabled: true } as const] : []),
+    ...(entry.capabilities.background ? [{ action: "background", key: "b", label: "background", enabled: true } as const] : [])];
 }
-/** The actions the shown entry offers right now; disabled and absent capabilities are excluded. */
-function offered(entry: AgentsEntry | undefined, freeze: JobFreeze | undefined): AgentsAction[] {
-  if (!entry) return [];
-  return (entry.kind === "agent" ? agentActions(entry.row) : jobActions(entry.row, freeze)).filter(action => action.enabled).map(action => action.action);
+/** Known facts share one line, leaving room for a live pulse at its right. */
+function facts(entry: AgentRow, width: number, hue: string): string | undefined {
+  const context = entry.usage?.contextPercent, beat = pulse(entry, PULSE, hue);
+  const profile = [entry.profile, entry.model].filter(value => value && value !== "–" && value !== "—").join(" · ") + (entry.pendingModel ? " → " + entry.pendingModel : "");
+  const text = [profile, context === undefined ? "" : `${Math.round(context)}%`,
+    entry.files === undefined ? "" : `${entry.outside ? PANEL_WARNING + "!" + PANEL_MUTED : ""}${entry.files} files`].filter(Boolean).join(" · ");
+  if (!text && !beat) return undefined;
+  return row(beat && width > PULSE + 6 ? cell(PANEL_MUTED + text, width - PULSE - 4, PANEL_BG + PANEL_MUTED) + GAP + beat : PANEL_MUTED + text, width);
 }
 function wrapped(text: string, color: string, width: number, cap: number): string[] {
   const room = Math.max(1, width - 2), rows = wrapTextWithAnsi(text, room), shown = rows.slice(0, cap);
@@ -247,6 +238,8 @@ export function renderAgents(model: AgentsModel, selected: string | undefined, w
   const divider = () => push(row(rule(width - 2), width));
   const heading = (title: string, note: string) => push(row(BOLD + PANEL_HEAD + title + UNBOLD + PANEL_MUTED + note, width));
   const commands = visibleCommands(model.jobs);
+  const agents = orderedAgents(model.agents), group = doneGroup(agents);
+  const expanded = options.expanded || group.some(agent => agent.key === selected);
   const entry = shownEntry(model, selected, commands), bar = options.focused === false ? PANEL_MUTED : PANEL_BLUE;
   let selectedRow = -1;
 
@@ -258,7 +251,14 @@ export function renderAgents(model: AgentsModel, selected: string | undefined, w
   }
 
   if (model.agents.length && density === "full") push(headerLine(width));
-  model.agents.forEach((agent, index) => {
+  agents.forEach((agent, index) => {
+    if (agent === group[0]) {
+      const on = selected === DONE;
+      if (on) selectedRow = lines.length;
+      push(row((on ? bar + "▌" : " ") + GAP + PANEL_MUTED + (expanded ? "▾" : "▸") + " ✓ Done · " + group.length
+        + "  " + group.map(item => item.name).join(" · "), width, on ? PANEL_SELECTED : PANEL_BG), [{ key: DONE, action: "fold" }]);
+    }
+    if (!expanded && group.length && agent.state === "done") return;
     const on = entry?.row.key === agent.key;
     if (on) selectedRow = lines.length;
     for (const line of agentLines(agent, index, on, density, width, options.color, options.now, bar)) push(line, [{ key: agent.key }]);
@@ -272,13 +272,15 @@ export function renderAgents(model: AgentsModel, selected: string | undefined, w
     });
   }
 
-  if (selected !== undefined && !entry) {
+  if (selected !== undefined && !entry && (selected !== DONE || !group.length)) {
     divider();
     push(row(PANEL_WARNING + `The selected ${selected.startsWith("job:") ? "command" : "agent"} is no longer retained`, width));
   } else if (entry?.kind === "agent") {
     const shown = entry.row;
     divider();
     push(row(BOLD + options.color(shown.hue) + shown.name + UNBOLD + " " + PANEL_TEXT + shown.title, width));
+    const fact = facts(shown, width, options.color(shown.hue));
+    if (fact) push(fact);
     lines.push(...agentDetail(shown, width, options.short));
     const actions = actionRows(shown.key, agentActions(shown), width);
     actions.lines.forEach((line, index) => push(line, actions.hits[index]));
@@ -286,21 +288,19 @@ export function renderAgents(model: AgentsModel, selected: string | undefined, w
     const shown = entry.row;
     divider();
     if (selectedRow === -1) selectedRow = lines.length;
-    const height = options.short ? 10 : 22;
-    for (const line of jobDetailLines(shown.source, { bound: model.bound, now: options.now, legend: options.legend, freeze: options.freeze }, Math.max(4, width - 2), height)) {
-      push(row(line, width));
-    }
-    const actions = actionRows(shown.key, jobActions(shown, options.freeze), width);
+    for (const line of jobPreviewLines(shown.source, { bound: model.bound, now: options.now }, Math.max(1, width - 2), options.short ? 1 : 3)) push(row(line, width));
+    const actions = actionRows(shown.key, jobActions(shown), width);
     actions.lines.forEach((line, index) => push(line, actions.hits[index]));
   }
 
-  if (model.agents.length) {
+  const fleet = model.agents.filter(agent => agent.key !== "retained-picker");
+  if (fleet.length >= 2) {
     divider();
     heading("Timeline", (model.maxParallel === undefined ? "" : ` · up to ${model.maxParallel} at once`)
       + (model.messages ? ` · ${model.messages} ${model.messages === 1 ? "message" : "messages"}` : ""));
-    const bars = timelineLines(model.agents, width, options.now, model.origin, density !== "min", options.color);
+    const bars = timelineLines(fleet, width, options.now, model.origin, density !== "min", options.color);
     bars.forEach((line, index) => {
-      const agent = model.agents[index];
+      const agent = fleet[index];
       push(fill(line, width), agent ? [agent.capabilities.open ? { key: agent.key, action: "open" } : { key: agent.key }] : undefined);
     });
   }
@@ -313,6 +313,7 @@ export class AgentsView {
   readonly scroll: ScrollView;
   private hits: ReadonlyMap<number, AgentsHit[]> = new Map();
   private reveal = false;
+  private expanded = false;
   constructor(private readonly host: AgentsViewHost) {
     this.scroll = new ScrollView({
       render: width => this.render(width),
@@ -324,13 +325,18 @@ export class AgentsView {
   entry(): AgentsEntry | undefined { return shownEntry(this.host.model(), this.selected); }
   /** Agents then visible commands, by key. */
   move(delta: number): void {
-    const entries = entriesOf(this.host.model());
-    const current = this.selected === undefined ? 0 : entries.findIndex(entry => entry.row.key === this.selected);
+    const model = this.host.model();
+    const entries = listKeys(model, this.expanded || doneGroup(model.agents).some(agent => agent.key === this.selected));
+    const current = this.selected === undefined ? 0 : entries.indexOf(this.selected);
     const index = current < 0 ? 0 : current + delta;
     const next = entries[Math.max(0, Math.min(entries.length - 1, index))];
-    if (next) this.select(next.row.key);
+    if (next) this.select(next);
   }
-  select(key: string): void { this.selected = key; this.reveal = true; }
+  select(key: string): void {
+    this.selected = key; this.reveal = true;
+    if (doneGroup(this.host.model().agents).some(agent => agent.key === key)) this.expanded = true;
+  }
+  private toggleDone(): void { this.select(DONE); this.expanded = !this.expanded; }
   handleKey(data: string): boolean {
     if (matchesKey(data, "up") || data === "k") { this.move(-1); return true; }
     if (matchesKey(data, "down") || data === "j") { this.move(1); return true; }
@@ -338,12 +344,13 @@ export class AgentsView {
       const page = Math.max(1, this.scroll.viewportHeight - 2);
       this.scroll.scrollBy(matchesKey(data, "pageUp") ? -page : page); return true;
     }
+    if (this.selected === DONE && matchesKey(data, "enter") && this.actions().includes("fold")) { this.toggleDone(); return true; }
     const entry = this.entry();
     if (!entry) return false;
     const enter = matchesKey(data, "enter");
     const action: AgentsAction | undefined = entry.kind === "agent"
       ? enter ? "open" : data === "a" ? "answer" : data === "t" ? "transcript" : data === "s" ? "steer" : data === "x" ? "cancel" : data === "m" ? "model" : undefined
-      : enter ? "output" : matchesKey(data, FILTER_KEY) ? "search" : data === "f" ? "follow" : data === "p" ? "peek" : data === "b" ? "background" : data === "x" ? "stop" : undefined;
+      : enter ? "output" : data === "b" ? "background" : data === "x" ? "stop" : undefined;
     if (!action) return false;
     if (this.actions().includes(action)) { this.host.act(action, entry.row.key); return true; }
     // A present but disabled capability is shown dim with its reason; its key does nothing else.
@@ -351,11 +358,18 @@ export class AgentsView {
     return reasons[action] !== undefined;
   }
   /** Offered for the shown entry, for the footer and the F1 list. */
-  actions(): readonly AgentsAction[] { return offered(this.entry(), this.host.freeze()); }
+  actions(): readonly AgentsAction[] {
+    if (this.selected === DONE) return doneGroup(this.host.model().agents).length ? ["fold"] : [];
+    const entry = this.entry();
+    return entry ? (entry.kind === "agent" ? agentActions(entry.row) : jobActions(entry.row)).filter(item => item.enabled).map(item => item.action) : [];
+  }
 
   private render(width: number): string[] {
-    const frame = renderAgents(this.host.model(), this.selected, width, {
-      now: this.host.now(), short: this.host.short(), legend: this.host.legend(), freeze: this.host.freeze(), color: hue => this.host.color(hue),
+    const model = this.host.model();
+    if (this.selected === DONE && !doneGroup(model.agents).length) { this.selected = undefined; this.reveal = true; }
+    this.selected ??= shownEntry(model, undefined)?.row.key;
+    const frame = renderAgents(model, this.selected, width, {
+      now: this.host.now(), short: this.host.short(), expanded: this.expanded, color: hue => this.host.color(hue),
       focused: this.host.focused?.() ?? true,
     });
     this.hits = frame.hits;
@@ -377,6 +391,7 @@ export class AgentsView {
     const hit = rowHits.find(item => item.from !== undefined && item.to !== undefined && event.x >= item.from && event.x < item.to)
       ?? rowHits.find(item => item.from === undefined);
     if (!hit) return { handled: true };
+    if (hit.action === "fold") { this.toggleDone(); return { handled: true }; }
     const shown = this.entry()?.row.key;
     if (hit.key !== shown) {
       this.select(hit.key);

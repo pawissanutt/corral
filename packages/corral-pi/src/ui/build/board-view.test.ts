@@ -1,7 +1,9 @@
 import { expect, test } from "bun:test";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import type { BoardPhase, BoardPlan, BoardTaskStatus } from "../../build/types.ts";
-import { boardDetailLines, boardStage, BoardView, renderBoard, type BoardAction, type BoardViewHost } from "./board-view.ts";
+import { boardDetailLines, boardStage, renderBoard, type BoardAction } from "./board-view.ts";
+
+import { PlanPage } from "../plan-page.ts";
 
 const NOW = 1_000_000;
 const PHASES: readonly BoardPhase[] = ["backlog", "waiting", "queued", "running", "gating", "reviewing", "landed", "blocked", "failed"];
@@ -14,12 +16,12 @@ const plan: BoardPlan = {
 
 function host(tasks: BoardTaskStatus[], options: { proposed?: BoardPlan; unavailable?: string } = {}) {
   const acted: { action: BoardAction; id?: string }[] = [];
-  const value: BoardViewHost = {
-    tasks: () => tasks, proposed: () => options.proposed, unavailable: () => options.unavailable,
-    now: () => NOW, short: () => false, click: () => true, focus() {},
-    act(action, id) { acted.push(id === undefined ? { action } : { action, id }); },
-  };
-  return { value, acted };
+  const view = new PlanPage({
+    data: () => ({ document: undefined, steps: { progress: null, stale: false }, board: { tasks, proposed: options.proposed, unavailable: options.unavailable } }),
+    now: () => NOW, short: () => false, click: () => true, focus() {}, focused: () => true,
+    document() {}, ledger() {}, board(action, id) { acted.push(id === undefined ? { action } : { action, id }); },
+  });
+  return { view, acted };
 }
 
 test("every board phase maps to a glyph and a word, and blocked and failed carry their detail", () => {
@@ -44,16 +46,12 @@ test("every board phase maps to a glyph and a word, and blocked and failed carry
 
 test("the selection stays on the same task when a task is inserted above it", () => {
   const tasks = [task("T-1", "running"), task("T-2", "queued"), task("T-3", "backlog")];
-  const { value } = host(tasks);
-  const view = new BoardView(value);
-  view.move(1);
-  expect(view.task()?.id).toBe("T-2");
+  const { view, acted } = host(tasks);
+  view.handleKey("j");
   tasks.unshift(task("T-0", "landed"));
-  expect(view.task()?.id).toBe("T-2");
-  const frame = renderBoard(tasks, undefined, view.selected, 112, { now: NOW, short: false });
-  expect(stripTerminalSequences(frame.lines[frame.selectedRow] ?? "")).toContain("T-2");
-  view.move(1);
-  expect(view.task()?.id).toBe("T-3");
+  view.handleKey("\r");
+  view.handleKey("j"); view.handleKey("\r");
+  expect(acted).toEqual([{ action: "details", id: "T-2" }, { action: "details", id: "T-3" }]);
 });
 
 test("the plan row appears only while a plan waits, and its hit and p review it", () => {
@@ -69,11 +67,11 @@ test("the plan row appears only while a plan waits, and its hit and p review it"
   expect(stripTerminalSequences(frame.lines[row![0]] ?? "")).toContain(plan.title);
 
   const waiting = host(tasks, { proposed: plan });
-  const view = new BoardView(waiting.value);
+  const view = waiting.view;
   expect(view.handleKey("p")).toBeTrue();
   expect(waiting.acted).toEqual([{ action: "review" }]);
   const none = host(tasks);
-  expect(new BoardView(none.value).handleKey("p")).toBeFalse();
+  expect(none.view.handleKey("p")).toBeFalse();
   expect(none.acted).toHaveLength(0);
 });
 
@@ -83,7 +81,7 @@ test("outside a workspace the empty state states the reason and offers no plan a
   expect(frame.lines.map(line => stripTerminalSequences(line)).join("\n")).toContain(reason);
   expect([...frame.hits.values()].flat().some(hit => hit.action === "plan")).toBeFalse();
   const outside = host([], { unavailable: reason });
-  const view = new BoardView(outside.value);
+  const view = outside.view;
   expect(view.actions()).not.toContain("plan");
   expect(view.handleKey("n")).toBeFalse();
   expect(outside.acted).toHaveLength(0);

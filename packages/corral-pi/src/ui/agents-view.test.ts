@@ -29,11 +29,11 @@ const fixture: PanelSnapshot = { bound: true, model: "m", effort: "off", streami
   jobs: [job("build", "running"), job("lint", "exited", 1)],
   agents: [{ id: "h-2", session: "s-2", kind: "explore", state: "completed", model: "model-a", transcript: true }] };
 const options = (overrides: Partial<AgentsOptions> = {}): AgentsOptions =>
-  ({ now: NOW, short: false, legend: false, freeze: undefined, color: agentColor, ...overrides });
+  ({ now: NOW, short: false, color: agentColor, ...overrides });
 const plain = (lines: readonly string[]) => lines.map(line => stripTerminalSequences(line));
 
 function viewHost(model: () => AgentsModel, acted: [AgentsAction, string][] = []) {
-  return { model, now: () => NOW, short: () => false, legend: () => false, freeze: () => undefined, color: agentColor,
+  return { model, now: () => NOW, short: () => false, color: agentColor,
     click: (event: TuiMouseEvent) => event.type === "click" && event.button === "left", focus() {},
     act(action: AgentsAction, key: string) { acted.push([action, key]); } };
 }
@@ -86,7 +86,7 @@ test("selection stays on the same key when a newer helper is inserted above it",
   expect(view.entry()?.row.key).toBe("helper:h-2");
   const frame = renderAgents(agentsModel(snapshot, NOW), view.selected, 140, options());
   expect(stripTerminalSequences(frame.lines[frame.selectedRow] ?? "")).toMatch(/^ ▌  ✓  explore\b/);
-  view.move(1);
+  view.move(-1);
   expect(view.entry()?.row.key).toBe("helper:h-1");
 });
 
@@ -104,14 +104,14 @@ test("every line fits the width, and the table density switches at the mock's 60
   for (const width of [34, 52, 80, 112, 140]) {
     for (const selected of [undefined, "helper:h-2", "job:build", "job:gone"]) {
       for (const short of [false, true]) {
-        for (const line of renderAgents(model, selected, width, options({ short, legend: true })).lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+        for (const line of renderAgents(model, selected, width, options({ short })).lines) expect(visibleWidth(line)).toBe(width);
       }
     }
   }
-  const header = (width: number) => plain(renderAgents(model, undefined, width, options()).lines).some(row => row.includes("profile · model"));
+  const header = (width: number) => plain(renderAgents(model, undefined, width, options()).lines).some(row => /^\s+agent\s+now\s+time\s+cost\s*$/.test(row));
   expect(header(116)).toBe(true); expect(header(115)).toBe(false);
   const profile = (width: number) => plain(renderAgents(model, undefined, width, options()).lines).some(row => /explore\s.*model-a/.test(row));
-  expect(profile(64)).toBe(true); expect(profile(63)).toBe(false);
+  expect(profile(64)).toBe(true); expect(profile(63)).toBe(true);
 });
 
 test("a helper row offers no steer, cancel or model, while a child row shows them dim with the reason", () => {
@@ -213,16 +213,15 @@ const MOCK_FLEET: FleetSnapshot = { mail: [], maxParallel: 3, startedAt: NOW - 2
 ]};
 const buildModel = (fleet = MOCK_FLEET) => agentsModel(fixture, NOW, { extra: fleetExtras(fleet, NOW) });
 
-test("child rows lead the table in fleet order, with their detail and key-cap actions, at 140 and 52 columns", () => {
+test("child rows group by urgency, with their detail and key-cap actions, at 140 and 52 columns", () => {
   for (const width of [140, 52]) {
     for (const selected of [undefined, ...MOCK_FLEET.children.map(child => childKey(child.id))]) {
       const rows = plain(renderAgents(buildModel(), selected, width, options()).lines);
       const at = (needle: string) => rows.findIndex(row => row.includes(needle));
       expect(at("host-slots")).toBeGreaterThanOrEqual(0);
-      expect(at("app-store")).toBeGreaterThan(at("host-slots"));
-      expect(at("picker-ui")).toBeGreaterThan(at("app-store"));
-      expect(at("arrival")).toBeGreaterThan(at("picker-ui"));
-      expect(at("explore")).toBeGreaterThan(at("arrival"));
+      expect(at("app-store")).toBeGreaterThan(at("picker-ui"));
+      expect(at("arrival")).toBeGreaterThan(at("app-store"));
+      expect(at("host-slots")).toBeGreaterThan(at("arrival"));
       expect(at("Timeline")).toBeGreaterThan(at("open conversation"));
       const text = rows.join("\n");
       expect(text).toMatch(/ ⏎  open conversation/);
@@ -233,21 +232,19 @@ test("child rows lead the table in fleet order, with their detail and key-cap ac
   }
 });
 
-test("the full table keeps the mock's column cells: header and rows aligned, a 14-cell sparkline, waiting and done times", () => {
+test("the full table aligns its four headings and the live pulse moves to selected detail", () => {
   const lines = renderAgents(buildModel(), childKey("app-store"), 150, options()).lines, rows = plain(lines);
   const header = rows[0] ?? "", find = (needle: string) => rows.find(row => row.includes(needle)) ?? "";
   expect(header.indexOf("agent")).toBe(7);
-  expect(header.indexOf("profile · model")).toBe(20);
-  expect(header.indexOf("activity")).toBe(81);
-  expect(header.indexOf("now")).toBe(97);
+  expect(header.indexOf("now")).toBe(20);
+  expect(header.trim().split(/\s+/)).toEqual(["agent", "now", "time", "cost"]);
   const done = find("host-slots"), running = find("app-store"), queued = find("arrival");
   expect(done.indexOf("host-slots")).toBe(7);
   // Time is right-aligned under its heading: done shows its run time, a queued child reads `waiting`.
   expect(done.indexOf("1m30s") + "1m30s".length).toBe(header.indexOf("time") + "time".length);
   expect(queued.indexOf("waiting") + "waiting".length).toBe(header.indexOf("time") + "time".length);
-  // Tool calls per 5 s bucket [1, 3, 5, 2], scaled to the busiest bucket shown, right-aligned in 14 cells.
-  expect(running.slice(81, 95)).toBe("          ▁▄▇▃");
-  expect(running.indexOf("edit src/app-store/store.rs")).toBe(97);
+  expect(running.indexOf("edit src/app-store/store.rs")).toBe(20);
+  expect(rows.find(line => line.includes("41%"))?.trimEnd()).toMatch(/default · model-a · 41%.*▁▄▇▃$/);
   // The selected row is the only one on another surface and carries the accent bar.
   expect(running.startsWith(" ▌")).toBeTrue();
   for (const line of lines) expect(visibleWidth(line)).toBe(150);
@@ -258,9 +255,39 @@ test("med and min densities fold the activity onto a second line under the name"
     const rows = plain(renderAgents(buildModel(), undefined, width, options()).lines);
     const name = rows.findIndex(row => row.includes("app-store"));
     expect(rows[name + 1]?.indexOf("edit src/app-store/store.rs")).toBe((rows[name] ?? "").indexOf("app-store"));
-    expect(rows.some(row => row.includes("profile · model"))).toBeFalse();
-    expect((rows[name] ?? "").includes("model-a")).toBe(width >= 60);
+    expect(rows.some(row => /^\s+agent\s+now\s+time\s+cost\s*$/.test(row))).toBeFalse();
+    expect((rows[name] ?? "").includes("model-a")).toBeFalse();
   }
+});
+
+test("Done folds successes until toggled or a member is selected, and one agent has no timeline", () => {
+  const model = agentsModel({ ...fixture, jobs: [], helpers: [helper("live", "running", NOW),
+    ...["one", "two", "three"].map(id => helper(id, "completed", NOW))] }, NOW);
+  const view = new AgentsView(viewHost(() => model));
+  const screen = () => plain(renderLayoutFrame(view.scroll, 116, 30, () => {}).lines).join("\n");
+  expect(screen()).toContain("▸ ✓ Done · 3");
+  view.move(1); view.handleKey("\r");
+  expect(screen()).toContain("▾ ✓ Done · 3");
+  view.handleKey("\r");
+  expect(screen()).toContain("▸ ✓ Done · 3");
+  view.select("helper:two");
+  expect(screen()).toContain("▾ ✓ Done · 3");
+  const single = renderAgents({ ...model, agents: model.agents.slice(0, 1) }, undefined, 116, options());
+  expect(plain(single.lines).join("\n")).not.toContain("Timeline");
+});
+
+test("selection moves to the first row when Done unfolds by itself", () => {
+  const state = { ...fixture, jobs: [], helpers: [helper("live", "running", NOW),
+    ...["one", "two", "three"].map(id => helper(id, "completed", NOW))] };
+  let model = agentsModel(state, NOW);
+  const view = new AgentsView(viewHost(() => model));
+  const render = () => renderLayoutFrame(view.scroll, 116, 30, () => {});
+  render();
+  view.move(1);
+  expect(view.actions()).toEqual(["fold"]);
+  model = agentsModel({ ...state, helpers: state.helpers.slice(1) }, NOW);
+  render();
+  expect(view.entry()?.row.key).toBe("helper:one");
 });
 
 test("the timeline spends one column per 5 s and its axis spans only the bars", () => {

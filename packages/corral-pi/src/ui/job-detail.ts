@@ -2,8 +2,8 @@
 // in a rounded card, and the bounded read-only output pager. Values are this host's job runtime observations,
 // never task settlement.
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
-import { ScrollView, stripTerminalSequences, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { chipRows, jobStatus, type Chip } from "./agents-model.ts";
+import { ScrollView, stripTerminalSequences, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { chipRows, toneColor, jobStatus, type Chip } from "./agents-model.ts";
 import { card, titledBox } from "./frame.ts";
 import {
   plainLabel, PANEL_BLUE, PANEL_ERROR, PANEL_LINE, PANEL_MUTED, PANEL_SUCCESS, PANEL_TEXT, PANEL_WARNING,
@@ -49,16 +49,13 @@ function size(bytes: number): string {
   return bytes < 1024 ? `${bytes} B` : bytes < 1024 * 1024 ? `${Math.round(bytes / 1024)} KB` : `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-/**
- * The job detail: the command in bold with its id and directory, state chips, the legend when it is on, then the
- * numbered retained tail in a card sized to `height` rows with the follow state under it. A stale host or a lost
- * job shows why output is withheld instead of retained text.
- */
-export function jobDetailLines(job: PanelJob, input: { readonly bound: boolean; readonly now: number; readonly legend: boolean; readonly freeze: JobFreeze | undefined },
-  width: number, height: number): string[] {
+/** Title and observation chips shared by the compact preview and the output page. */
+function jobHead(job: PanelJob, input: { readonly bound: boolean; readonly now: number }, width: number, page = false): string[] {
   const d = job.detail, status = jobStatus(job, input.now);
   const cwd = d?.cwd ? " · cwd " + plainLabel(d.cwd.split("/").filter(Boolean).slice(-2).join("/")) : "";
-  const head = "\x1b[1m" + PANEL_TEXT + "$ " + plainLabel(d?.command ?? job.job) + "\x1b[22m" + PANEL_MUTED + "  " + plainLabel(job.job) + cwd;
+  const meta = PANEL_MUTED + "  " + plainLabel(job.job) + (page ? " · " + toneColor(status.tone) + status.glyph + (status.time ? " " + status.time : "") : cwd);
+  const command = "$ " + plainLabel(d?.command ?? job.job), room = width - visibleWidth(meta);
+  const head = "\x1b[1m" + PANEL_TEXT + (room >= 8 ? truncateToWidth(command, room, "…") : command) + "\x1b[22m" + meta;
   const chips: Chip[] = [{ text: `${status.glyph} ${status.word}`, tone: status.tone }];
   if (status.time) chips.push({ text: status.time, tone: "text" });
   if (d) chips.push({ text: size(d.bytes), tone: "text" });
@@ -69,7 +66,22 @@ export function jobDetailLines(job: PanelJob, input: { readonly bound: boolean; 
     chips.push({ text: `⌁ watch /${plainLabel(w.pattern)}/ ${state}`, tone });
   }
   if (!input.bound) chips.push({ text: "stale", tone: "warning" });
-  const rows = [truncateToWidth(head, width, "…"), ...chipRows(chips, width)];
+  return [truncateToWidth(head, width, "…"), ...chipRows(chips, width)];
+}
+
+/** At most three plain output rows, never retained text from an unavailable host. */
+export function jobPreviewLines(job: PanelJob, input: { readonly bound: boolean; readonly now: number }, width: number, limit: number): string[] {
+  const rows = jobHead(job, input, width), d = job.detail;
+  if (job.state === "lost" || !d) return [...rows, PANEL_MUTED + "Detailed output unavailable for this command."];
+  if (!input.bound) return [...rows, PANEL_WARNING + "Output unavailable: stale/disconnected host"];
+  // A newline-terminated live tail has an empty open segment, not another preview row.
+  return [...rows, ...numberedTail(d.tail, d.lines, false).slice(-limit).map(line => outputLine(line.text))];
+}
+
+/** Numbered retained tail sized to the viewport, optionally with its observation legend. */
+export function jobDetailLines(job: PanelJob, input: { readonly bound: boolean; readonly now: number; readonly legend: boolean; readonly freeze: JobFreeze | undefined;
+  readonly page?: boolean }, width: number, height: number): string[] {
+  const d = job.detail, rows = jobHead(job, input, width, input.page);
   if (input.legend) {
     const body = ["Source: this host only. A missing command does not imply completion.",
       "Exit status is a local observation: it does not imply gate PASS or task settlement.",
@@ -88,7 +100,7 @@ export function jobDetailLines(job: PanelJob, input: { readonly bound: boolean; 
   const all = numberedTail(source.tail, source.lines, source.running);
   if (!all.length) return [...rows, PANEL_MUTED + "No output captured yet."];
   // The card spends three rows on its borders and header, and the follow state takes one more.
-  const shown = all.slice(-Math.max(3, height - rows.length - 4));
+  const shown = all.slice(-Math.max(input.page ? 1 : 3, height - rows.length - 4));
   const last = shown.at(-1)?.number, gutter = String(last ?? "").length;
   const body = shown.map((line, index) => {
     const cursor = !frozen && source.running && index === shown.length - 1 ? PANEL_BLUE + "▍" : "";

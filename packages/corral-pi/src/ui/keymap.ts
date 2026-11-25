@@ -5,8 +5,8 @@ import type { ChromeTier } from "./header.ts";
 import { keyCap } from "./frame.ts";
 import { pad, PANEL_BG, PANEL_MUTED, PANEL_TEXT, plainLabel, RESET } from "./panels-view.ts";
 
-export type KeyContext = "composer" | "agents" | "agent" | "changes" | "task" | "lifecycle" | "proof" | "artifacts"
-  | "usage" | "image" | "sidebar" | "queue" | "dialog" | "palette" | "keys" | "pager" | "board" | "choice" | "questions";
+export type KeyContext = "composer" | "agents" | "job" | "agent" | "changes" | "task" | "lifecycle" | "proof" | "artifacts"
+  | "usage" | "image" | "sidebar" | "queue" | "dialog" | "palette" | "keys" | "pager" | "plan" | "choice" | "questions";
 /**
  * One footer hint: a key cap and its label. A `lead` hint has no cap: it names the view that has the keys
  * (`keys → Changes · Tab to type`, short `→ Changes`) and a click on it replays Tab.
@@ -26,8 +26,9 @@ export interface HintState {
   readonly questions?: number;
   /** The open view's name while it has the keys (`Changes`, `Task › Events`): the footer leads with it. */
   readonly lead?: string;
-  /** AgentsAction ids offered for the selected row; in `board`, the BoardAction ids offered. */
+  /** AgentsAction ids offered for the selected row; in `plan`, the Plan page actions. */
   readonly selection?: readonly string[];
+  readonly agentBackLabel?: string;
   readonly authors?: boolean; readonly legend?: boolean;
   /** Build sessions only: who Enter reaches, whether a child can take a message, a waiting board plan, docked options. */
   readonly build?: {
@@ -154,11 +155,11 @@ const AGENT_HINTS: Readonly<Record<string, Hint>> = {
   cancel: letter("x", "cancel"), model: letter("m", "model"),
 };
 const JOB_HINTS: Readonly<Record<string, Hint>> = {
-  output: ENTER("output"), stop: letter("x", "stop"), peek: letter("p", "peek"), follow: letter("f", "follow"),
+  output: ENTER("open"), fold: ENTER("expand/fold"), stop: letter("x", "stop"), peek: letter("p", "peek"), follow: letter("f", "follow"),
   search: hint("search", FILTER_KEY, "search"), background: letter("b", "background", "bg"),
 };
 const AGENT_ORDER = ["open", "answer", "transcript", "steer", "cancel", "model"];
-const JOB_ORDER = ["output", "stop", "peek", "follow", "search", "background"];
+const JOB_ORDER = ["search", "follow", "peek", "background", "stop"];
 
 function targetHint(): Hint | undefined {
   const key = targetKey();
@@ -183,11 +184,12 @@ function composerHints(state: HintState): (Hint | undefined)[] {
     ? [piHint("tui.input.submit", "submit", "steer"), stop, piHint("app.message.followUp", "followUp", "queue"), to, dequeue, focus, expand]
     : [piHint("tui.input.submit", "submit", "send"), to, dequeue, focus, expand];
 }
-function boardHints(state: HintState): (Hint | false | undefined)[] {
-  // Without the view's offered actions, a task is assumed selected and the board reachable. Task keys need a task.
-  const offered = new Set(state.selection ?? ["details", "refresh", ...(state.build?.proposed ? ["review"] : [])]);
-  return [offered.has("details") && UP_DOWN("task", "task"), ...escAfterFirst([offered.has("review") && letter("p", "review plan", "plan"),
-    offered.has("details") && ENTER("details"), offered.has("plan") && letter("n", "plan tasks", "plan"), offered.has("refresh") && letter("r", "refresh")], "chat")];
+function planHints(state: HintState): (Hint | false | undefined)[] {
+  const offered = new Set(state.selection ?? []);
+  return [offered.has("select") && UP_DOWN("select", "select"), ESC("chat"),
+    offered.has("open") && ENTER("open"), offered.has("select") && J_K("select-letter", "select"),
+    pair("page", "PgUp/PgDn", "\x1b[6~", "scroll"), offered.has("review") && letter("p", "review board plan"),
+    offered.has("plan") && letter("n", "plan tasks"), offered.has("refresh") && letter("r", "refresh")];
 }
 /** The view's actions with Esc right after the first one offered, so a narrow footer never drops the way out. */
 function escAfterFirst(actions: readonly (Hint | false | undefined)[], back: string): (Hint | false | undefined)[] {
@@ -220,13 +222,17 @@ function viewHints(state: HintState): Hint[] {
       return pick(...composerHints(state));
     case "agents": {
       const offered = new Set(state.selection ?? []);
-      const job = JOB_ORDER.some(action => offered.has(action));
-      const order = job ? JOB_ORDER : AGENT_ORDER, table = job ? JOB_HINTS : AGENT_HINTS;
+      const command = offered.has("output") || offered.has("fold");
+      const order = command ? ["output", "fold", "stop", "background"] : AGENT_ORDER, table = command ? JOB_HINTS : AGENT_HINTS;
       return pick(UP_DOWN("select", "select"), ...order.filter(action => offered.has(action)).map(action => table[action]), ESC("chat"));
+    }
+    case "job": {
+      const offered = new Set(state.selection ?? []);
+      return pick(ESC("agents"), ...JOB_ORDER.filter(action => offered.has(action)).map(action => JOB_HINTS[action]), offered.has("legend") && legend);
     }
     case "agent": {
       const offered = new Set(state.selection ?? []);
-      return pick(ESC("agents"), ...["answer", "steer", "cancel", "model", "transcript"].filter(action => offered.has(action)).map(action => AGENT_HINTS[action]),
+      return pick(ESC(state.agentBackLabel ?? "agents"), ...["answer", "steer", "cancel", "model", "transcript"].filter(action => offered.has(action)).map(action => AGENT_HINTS[action]),
         piHint("app.tools.expand", "tools", "tools"));
     }
     case "changes":
@@ -266,8 +272,8 @@ function viewHints(state: HintState): Hint[] {
       return pick(UP_DOWN("scroll", "scroll"), pair("page", "PgUp/PgDn", "\x1b[6~", "page"), ESC("close"));
     case "image":
       return pick(ESC("close"), hint("f9", "f9", "chat"));
-    case "board":
-      return pick(...boardHints(state));
+    case "plan":
+      return pick(...planHints(state));
     case "choice": {
       // Choose, then the way out, so a narrow footer never drops Esc. Digits pick directly; the hint names the
       // range and replays nothing, so a click never picks blindly.
@@ -347,15 +353,18 @@ export function footerRow(hints: readonly Hint[], tier: ChromeTier, width: numbe
 
 /**
  * The F1 keys list for this mode: every group holds only keys the mode offers. Rows with data run on Enter.
- * `build` adds Board (unless `board` is false: a bare session has none) and the message receiver, names each agent's
+ * `build` adds board actions to Plan for non-bare sessions, the message receiver, names each agent's
  * own keys, and has no Task or Proof.
  * `sidebarKey` is the chosen sidebar toggle; `questionsKey` the owner-question key when it is free.
  */
 export function keyGroups(mode: {
   readonly taskBound: boolean; readonly jobs: boolean;
   readonly queueControl: boolean; readonly lifecycle: boolean; readonly build?: boolean; readonly board?: boolean; readonly trustedCode?: boolean;
-  readonly sidebarKey?: KeyId; readonly questionsKey?: KeyId;
+  readonly sidebarKey?: KeyId; readonly questionsKey?: KeyId; readonly planActions?: readonly string[];
+  readonly agentBackLabel?: string; readonly jobActions?: readonly string[];
 }): KeyGroup[] {
+  const command = (action: string, key: string, label: string) =>
+    (mode.jobActions?.includes(action) ?? true) && info(key, label);
   const row = (binding: string, label: string): KeyRow => {
     const data = keyData(binding);
     return { key: keyLabel(binding), label, ...(data ? { data } : {}) };
@@ -373,7 +382,7 @@ export function keyGroups(mode: {
   const rows = (...items: (KeyRow | false | undefined)[]) => items.filter((item): item is KeyRow => !!item);
   const focus = mode.queueControl ? queueFocusKey() : undefined;
   const build = mode.build === true, board = build && mode.board !== false, target = build ? targetKey() : undefined;
-  const taskBound = mode.taskBound && !build;
+  const taskBound = mode.taskBound;
   // The views in tab order (header.ts mainTabs): the F-key, and Alt+n when the terminal and the user leave it free.
   const views = [
     taskBound && { key: "f5", label: "Task: the bound task and its run" },
@@ -381,7 +390,7 @@ export function keyGroups(mode: {
     { key: "f8", label: build ? "Agents: every agent, focus the list" : mode.jobs ? "Agents: helper calls and jobs, focus the list" : "Agents: helper calls, focus the list" },
     { key: "f7", label: build ? "Changes: files and diffs, filtered by agent" : "Changes: files and diffs in the chosen comparison" },
     taskBound && { key: "f10", label: "Proof: gate, review and artifacts" },
-    board && { key: "f10", label: "Board: tasks this session filed" },
+    !taskBound && { key: "f10", label: board ? "Plan: document, steps and board tasks" : "Plan: document and steps" },
   ].filter((item): item is { key: string; label: string } => !!item);
   const rail = mode.sidebarKey ?? "ctrl+b", filter = keyLabel(FILTER_KEY);
   const [pageUp, pageDown, top, bottom] = ["tui.altScreen.pageUp", "tui.altScreen.pageDown", "tui.altScreen.top", "tui.altScreen.bottom"].map(piKey);
@@ -414,19 +423,22 @@ export function keyGroups(mode: {
     ) },
     { title: "Agents", rows: rows(
       info("↑↓", "Select an agent" + (mode.jobs ? " or job" : "")),
-      info("⏎", mode.jobs ? "Open its conversation, or a job's output" : "Open its conversation"),
+      info("⏎", mode.jobs ? "Open a conversation or command; expand or fold Done" : "Open its conversation; expand or fold Done"),
       build && info("a", "Answer its question"),
       build && info("s", "Point the composer at it"),
       build && info("x", "Cancel it (asks first); its edits stay" + (mode.jobs ? "; on a job, stops it" : "")),
       build && info("m", "Change its model from its next request"),
       info("t", "Read-only transcript, when the agent has one"),
       !build && mode.jobs && info("x", "Stop the selected job (asks first)"),
-      mode.jobs && info("p", "Peek at the job's current logs"),
-      mode.jobs && info("f", "Follow the job's output on or off"),
-      mode.jobs && info(filter, "Search the job's output"),
       mode.jobs && info("b", "Move the job to the background"),
-      info("esc", "Back to Chat; from a conversation, back to Agents"),
+      info("esc", mode.agentBackLabel ? `Back to ${mode.agentBackLabel}` : "Back to Chat; from a conversation, back to Agents"),
     ) },
+    ...(mode.jobs ? [{ title: "Command", rows: rows(
+      command("search", filter, "Search retained output"), command("follow", "f", "Pause or resume following output"),
+      command("peek", "p", "Peek at current logs"), command("background", "b", "Move the job to the background"),
+      command("stop", "x", "Stop the command (asks first)"), command("legend", "?", "Show or hide the legend"),
+      info("esc", "Back to Agents"),
+    ) }] : []),
     { title: "Changes", rows: rows(
       info("j/k", "Next or previous file"),
       info("n/p", "Next or previous hunk"),
@@ -438,13 +450,16 @@ export function keyGroups(mode: {
       info("r", "Refresh"),
     ) },
   ];
-  if (board) {
-    groups.push({ title: "Board", rows: rows(
-      info("↑↓", "Select a task"),
-      info("⏎", "Details"),
-      info("n", "Plan board tasks from this conversation"),
-      info("p", "Review the proposed plan"),
-      info("r", "Refresh status"),
+  if (!taskBound) {
+    const offered = (action: string) => mode.planActions?.includes(action) ?? true;
+    groups.push({ title: "Plan", rows: rows(
+      offered("select") && info("↑↓ / j/k", "Select a row"),
+      info("PgUp/PgDn", "Scroll"),
+      offered("open") && info("⏎", "Open the selected row"),
+      board && offered("plan") && info("n", "Plan board tasks from this conversation"),
+      board && offered("review") && info("p", "Review the proposed board plan"),
+      board && offered("refresh") && info("r", "Refresh board status"),
+      info("Esc", "Back to Chat"),
     ) });
   }
   if (taskBound) {

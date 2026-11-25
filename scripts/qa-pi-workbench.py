@@ -209,17 +209,16 @@ try:
     send(b'Start the owned background scenario.\r')
     until(lambda: any(call.get('op')=='job_monitor' or call['payload'].get('on')=='line' for call in calls()), 'line monitor registration')
     mark=len(log); send(b'\x1b[19~')  # F8: the agents view; with no helper calls its first entry is the job row.
-    until(lambda: text('Jobs',mark) and text('MONITOR_READY/ armed',mark) and text('BUILD_WAIT',mark), 'job row selected: live output and armed watch')
+    until(lambda: text('Commands',mark) and text('MONITOR_READY/ armed',mark) and text('BUILD_WAIT',mark), 'command row selected: preview and armed watch')
     save_frame('activity-running')
     with open(work/'monitor-gate','w') as gate: gate.write('ready\n')
     until(lambda: text('MONITOR_READY/ matched',mark), 'watch match in the job detail')
     save_frame('activity-matched')
     mark=len(log); send(b'\r')
-    until(lambda: text('retained output',mark) and text('MONITOR_READY',mark), 'Enter opens the bounded output pager')
+    until(lambda: text('‹ Agents',mark) and text('following tail',mark), 'Enter opens the live command page')
     save_frame('job-output')
     mark=len(log); send(b'\x1b')
-    # The pager's footer has no F1; the footer of the view beneath it ends with the F1 key cap again.
-    until(lambda: re.search(rb'F1(?![0-9])', log[mark:]) is not None, 'Esc closes the output pager')
+    until(lambda: text('Commands',mark) and text('MONITOR_READY/ matched',mark), 'Esc returns to the selected command preview')
     mark=len(log); started=[c['payload'].get('kind') for c in calls()].count('turn_started')
     with open(work/'exit-gate','w') as gate: gate.write('done\n')
     until(lambda: text('exit 7',mark) and text('exited',mark), 'actual failed process outcome, not command text')
@@ -265,7 +264,7 @@ try:
     result=dict(status='PASS',production_entrypoint='src/host/main.ts',provider='offline fixtures; real owned Git and jobs',
                 checks=['native real composer', 'quiet transcript run-end row with clock time after the held reply',
                         'working indicator in the composer border moves within 300 ms while a turn runs, reads ✓ done at its end, then is absent when idle',
-                        'F8 agents view selects the job row; Enter opens its output pager', 'real background job output', 'armed and matched watch in the job detail', 'exit code 7, not task/gate PASS',
+                        'F8 Agents selects the command row; Enter opens its command page', 'real background job output', 'armed and matched watch in the job detail', 'exit code 7, not task/gate PASS',
                         'job completion notice drawn as one row (✗ job j1-1 exited 7)', 'failed job_start row reads ✗ with its reason (exit 7)', 'permission cancellation', 'clean terminal exit']
                         + ([] if args.activity_only else ['persistent Changes, not modal', 'native path search', 'external refresh preserves hunk until applied', 'hunk reference without autosend', '140→80→52→140 draft retention', 'explicit comparison']))
     (args.output/'result.json').write_text(json.dumps(result,indent=2)); print(json.dumps(result,indent=2))

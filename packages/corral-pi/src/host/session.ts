@@ -612,6 +612,17 @@ export class HostSession {
       personal: readPersonalPreferences(),
       settings: terminalSettings(options.identity.role, startupRoot, options.client.executable, { modelsPath: this.buildModelsPath }),
       identity: options.identity, cwd: options.cwd, snapshot: () => this.panelSnapshot(),
+      planDocument: () => {
+        const plan = this.planMode;
+        if (!plan) return undefined;
+        const { phase, title, revision } = plan.record, approved = plan.approved;
+        if (phase === "review") return { phase, title: title ?? "Plan", revision };
+        return approved ? { phase: "approved", title: approved.title, revision: approved.revision } : { phase };
+      },
+      openPlanDocument: () => {
+        if (this.planMode?.review) void this.planReview?.show();
+        else void this.planReview?.showApproved();
+      },
       sidebarKey: sidebarToggleKey(process.env),
       marks: this.marks,
       ...(this.buildControls ? { build: this.buildControls.ui, deliverBuildInput: (text: string) => this.deliverBuildInput(text) } : {}),
@@ -1370,10 +1381,10 @@ export class HostSession {
       },
     });
     if (this.buildControls) {
-      const { exit, board } = this.buildControls;
+      const { exit } = this.buildControls;
       if (build?.session.trustedCode !== true) pi.registerCommand("finish", { description: "Choose what happens to this build branch", handler: async () => { if (!this.panels?.finish()) await exit.requestFinish(); } });
-      if (board) pi.registerCommand("board", { description: "Refresh this build session's board tasks", handler: async () => { await board.refresh(); this.panels?.showBoard(); } });
     }
+    if (!this.options.identity.task) pi.registerCommand("board", { description: "Refresh board status and open Plan", handler: async () => { await this.buildControls?.board?.refresh(); this.panels?.showPlan(); } });
     if (this.exportable()) {
       pi.registerCommand(EXPORT_COMMAND, {
         description: "Attach this session's current branch to corral as an offline HTML artifact",
