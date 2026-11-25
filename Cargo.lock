@@ -514,7 +514,7 @@ dependencies = [
  "getrandom 0.4.3",
  "httparse",
  "isahc",
- "jiff",
+ "jiff 0.2.46",
  "rustix",
  "serde",
  "serde_json",
@@ -531,13 +531,15 @@ name = "corral-engine"
 version = "0.6.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "corral-facts",
  "corral-git",
  "corral-herdr",
  "corral-types",
+ "croner",
  "getrandom 0.4.3",
  "glob",
- "jiff",
+ "jiff 0.2.46",
  "libc",
  "pulldown-cmark",
  "regex",
@@ -598,7 +600,7 @@ dependencies = [
  "clap",
  "corral-engine",
  "corral-protocol",
- "jiff",
+ "jiff 0.2.46",
  "serde",
  "serde_json",
  "serde_yaml_ng",
@@ -622,7 +624,7 @@ dependencies = [
 name = "corral-types"
 version = "0.6.0"
 dependencies = [
- "jiff",
+ "jiff 0.2.46",
  "serde",
  "serde_json",
 ]
@@ -649,6 +651,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5ca28b0ae3115b884660db4118d803791fd6756b6e88f39c0f3f7859060d7566"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "croner"
+version = "5.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c0d18af839fad650d1673db4e2e40cfad3288dcb84a13670a9014e8d0978008"
+dependencies = [
+ "chrono",
+ "jiff 1.0.3",
+ "serde",
 ]
 
 [[package]]
@@ -1550,14 +1563,28 @@ version = "0.2.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "175dc66334db3b9ab9985bf8b61cfed50dc16d20964bb47f9e479adcae984a7f"
 dependencies = [
- "jiff-core",
- "jiff-static",
+ "jiff-core 0.1.8",
+ "jiff-static 0.2.46",
  "jiff-tzdb-platform",
  "log",
  "portable-atomic",
  "portable-atomic-util",
  "serde_core",
  "windows-link",
+]
+
+[[package]]
+name = "jiff"
+version = "1.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "107f2e89536b6818514025f6787b0d94d819e54fe3b40365275fc753de485b3f"
+dependencies = [
+ "jiff-core 1.0.2",
+ "jiff-static 1.0.3",
+ "log",
+ "portable-atomic",
+ "portable-atomic-util",
+ "serde_core",
 ]
 
 [[package]]
@@ -1570,15 +1597,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "jiff-core"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d44c923edf2bf456a982253f1a9ee1f6e89e421dffd0065d9b9a581da0def58f"
+dependencies = [
+ "log",
+]
+
+[[package]]
 name = "jiff-static"
 version = "0.2.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c7b1af7547d47354bc438d797e3854601bde8f8d185780c5ba4ab27afa54f1ba"
 dependencies = [
- "jiff-core",
+ "jiff-core 0.1.8",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "jiff-static"
+version = "1.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4996f71e569e3a3e32b925c28ef8f0027dc30bb1d594b33eeda409eea185f5c8"
+dependencies = [
+ "jiff-core 1.0.2",
+ "proc-macro2",
+ "quote",
+ "syn 3.0.10",
 ]
 
 [[package]]

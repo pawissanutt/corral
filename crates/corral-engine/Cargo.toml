@@ -12,6 +12,8 @@ serde_json.workspace = true
 serde_path_to_error = "0.1"
 toml.workspace = true
 jiff.workspace = true
+croner = { version = "5", default-features = false, features = ["std", "chrono"] }
+chrono = { version = "0.4", default-features = false }
 regex.workspace = true
 pulldown-cmark.workspace = true
 sha2.workspace = true
