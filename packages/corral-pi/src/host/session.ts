@@ -649,8 +649,8 @@ export class HostSession {
         enabled: () => this.queue.controlEnabled,
         edit: async key => {
           // An item's images come back staged with its words, so a resend still carries them.
-          const images = this.queue.imagesOf(key), text = await this.queue.edit(key);
-          return text !== undefined && images.length && this.panels ? this.panels.stagedImages.restage(text, images) : text;
+          const queued = this.queue.queuedImages(key), text = await this.queue.edit(key);
+          return text !== undefined && queued && this.panels ? this.panels.stagedImages.restage(queued.text, queued.images) : text;
         },
         remove: key => this.queue.remove(key),
         move: (key, delta) => this.queue.move(key, delta),

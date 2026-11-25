@@ -230,11 +230,18 @@ export class HostQueue {
     return item && await this.remove(key) ? item.text : undefined;
   }
 
-  /** The images queued item `key` carries, in order: an edit restages them, or its `[Image #n]` markers would send nothing. */
-  imagesOf(key: string): ImageContent[] {
+  /**
+   * The images queued item `key` carries, in order, with the words as queued: an edit restages them, or its
+   * `[Image #n]` markers would send nothing. The queued words, not the item's text as typed: the composer renumbered
+   * the markers to match these images before Pi queued them. Undefined when it carries no image.
+   */
+  queuedImages(key: string): { readonly text: string; readonly images: ImageContent[] } | undefined {
     const message = this.queued.get(key)?.message;
     const content = message && "content" in message ? message.content : undefined;
-    return Array.isArray(content) ? content.filter((part): part is ImageContent => part?.type === "image") : [];
+    if (!Array.isArray(content)) return undefined;
+    const images = content.filter((part): part is ImageContent => part?.type === "image");
+    const text = content.map(part => part?.type === "text" ? part.text : "").join("");
+    return images.length ? { text, images } : undefined;
   }
 
   moveOwner(key: string, delta: -1 | 1): boolean {

@@ -93,9 +93,34 @@ pub fn drop_image_marker(text: &str, removed: usize) -> String {
     })
 }
 
+/// `text` without its `[Image #n]` markers (and one space beside each): a draft saved on the
+/// device keeps no marker, because the staged images it names live in memory only and a
+/// restored draft's marker would name whatever image is pasted next.
+pub fn strip_image_markers(text: &str) -> String {
+    replace_markers(text, "[Image #", |_, suffix, out, tail| {
+        if !suffix.is_empty() {
+            return false;
+        }
+        if out.ends_with(' ') {
+            out.pop();
+        } else if let Some(after) = tail.strip_prefix(' ') {
+            *tail = after;
+        }
+        true
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_saved_draft_keeps_no_image_marker_a_restart_cannot_back() {
+        assert_eq!(
+            strip_image_markers("[Image #1] look at [Image #2] here"),
+            "look at here"
+        );
+    }
 
     #[test]
     fn a_folded_paste_sends_exactly_what_was_pasted() {

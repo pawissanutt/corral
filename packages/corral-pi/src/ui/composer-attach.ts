@@ -27,8 +27,14 @@ const PATH_START = String.raw`(?:\/|~\/|file:\/\/|[A-Za-z]:[\\/])`;
 const ANCHORED = new RegExp(`^${PATH_START}`);
 /** A second path after unescaped whitespace: two dropped files, not one path with a space in its name. */
 const SECOND_PATH = new RegExp(String.raw`(?<!\\)\s${PATH_START}`);
-/** Pi's clipboard image file (interactive-mode handleClipboardPaste). */
-const PI_CLIPBOARD = /^pi-clipboard-[0-9a-f-]+\.(?:png|jpe?g|gif|webp)$/i;
+/** Pi's clipboard image file (interactive-mode handleClipboardPaste: `pi-clipboard-<randomUUID>.<ext>` in the temp dir). */
+const PI_CLIPBOARD = /^pi-clipboard-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(?:png|jpe?g|gif|webp)$/;
+
+/** Removes Pi's clipboard temp file once its image is staged; any other file is the owner's and stays. */
+function removeClipboardFile(path: string): void {
+  if (dirname(path) !== tmpdir() || !PI_CLIPBOARD.test(basename(path))) return;
+  try { unlinkSync(path); } catch { /* Already gone: nothing to remove. */ }
+}
 
 function segments(text: string): string[] | undefined {
   const out: string[] = [];
@@ -79,7 +85,7 @@ export function pastedImagePaths(text: string, env: NodeJS.ProcessEnv = process.
   return isImagePath(whole) ? [whole] : undefined;
 }
 
-/** The image at `path` as an ImageContent, or why it cannot be one. Pi's own clipboard temp file is removed once read. */
+/** The image at `path` as an ImageContent, or why it cannot be one. */
 export function readImageFile(path: string): { image: ImageContent; name: string } | { error: string } {
   const name = basename(path);
   let stat;
@@ -90,10 +96,6 @@ export function readImageFile(path: string): { image: ImageContent; name: string
   try { bytes = readFileSync(path); } catch { return { error: `${name} could not be read` }; }
   const mimeType = sniffImageType(bytes);
   if (!mimeType) return { error: `${name} is not a PNG, JPEG, GIF or WebP image` };
-  // The image now lives in the message; a path left in the draft instead keeps its file.
-  if (dirname(path) === tmpdir() && PI_CLIPBOARD.test(name)) {
-    try { unlinkSync(path); } catch { /* Already gone: nothing to remove. */ }
-  }
   return { image: { type: "image", data: bytes.toString("base64"), mimeType }, name };
 }
 
@@ -202,7 +204,7 @@ export class ComposerPaste {
     const at = this.clipboardAt;
     this.clipboardAt = undefined;
     if (at === undefined || this.now() - at > CLIPBOARD_WINDOW_MS) return false;
-    if (this.attachPaths(text, base)) return true;
+    if (this.attachPaths(text, base, true)) return true;
     if (!isLargePaste(text)) return false;
     base.input(PASTE_START + text + PASTE_END);
     return true;
@@ -215,7 +217,7 @@ export class ComposerPaste {
     base.input(PASTE_START + payload + PASTE_END);
   }
 
-  private attachPaths(text: string, base: PasteBase): boolean {
+  private attachPaths(text: string, base: PasteBase, clipboard = false): boolean {
     // A bash command keeps the paths it is given.
     if (base.text().trimStart().startsWith("!")) return false;
     const paths = pastedImagePaths(text);
@@ -233,6 +235,8 @@ export class ComposerPaste {
       loaded.push(read);
     }
     const markers = loaded.map(({ image, name }) => this.deps.images.stage(image, name)).join(" ");
+    // Only Pi's own clipboard paste wrote a temp file for this image; a dropped or typed path is the owner's file.
+    if (clipboard) for (const path of paths) removeClipboardFile(path);
     const { line, col } = base.cursor(), row = base.lines()[line] ?? "";
     const before = row.slice(0, col).at(-1), after = row[col];
     const lead = before !== undefined && /\S/.test(before) ? " " : "", trail = after !== undefined && /\S/.test(after) ? " " : "";

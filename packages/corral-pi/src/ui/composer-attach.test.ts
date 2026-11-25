@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ImageContent } from "@earendil-works/pi-ai";
@@ -28,6 +28,19 @@ test("a dropped image path becomes an image at the cursor", () => {
   expect(calls.input).toEqual([]);
   const taken = images.take("look at [Image #1]");
   expect(taken.images.map(image => image.mimeType)).toEqual(["image/png"]);
+});
+
+test("only Pi's own clipboard paste removes the image file it wrote", () => {
+  const path = join(tmpdir(), `pi-clipboard-${crypto.randomUUID()}.png`);
+  writeFileSync(path, PNG_1X1);
+  try {
+    const router = paste(new StagedImages()), { base } = fakeBase("");
+    expect(router.handle(PASTE_START + path + PASTE_END, base)).toBe(true);
+    expect(existsSync(path)).toBe(true);
+    router.handle("\x16", base);
+    expect(router.inserted(path, base)).toBe(true);
+    expect(existsSync(path)).toBe(false);
+  } finally { rmSync(path, { force: true }); }
 });
 
 test("clipboard text over the fold limit goes through pi-tui's paste fold", () => {

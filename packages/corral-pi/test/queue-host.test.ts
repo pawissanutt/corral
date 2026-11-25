@@ -95,6 +95,21 @@ test("pulling a pane item for edit and requeuing creates a new tail identity", a
   } finally { await fx.close(); }
 });
 
+test("a queued item's images come back with the words they were queued under, not the words as typed", async () => {
+  const image = { type: "image" as const, data: "c2Vjb25k", mimeType: "image/png" };
+  // The composer's transform: the second staged image is the only one still marked, so it becomes image 1.
+  const fx = await codeHost("assistant", { catalog: 10, enabled: ["queue_control"],
+    extend: pi => pi.on("input", event => event.text === "[Image #2] B"
+      ? { action: "transform", text: "[Image #1] B", images: [image] } : { action: "continue" }) });
+  fx.host.markAttached("interactive");
+  try {
+    await fx.host.session.followUp("[Image #2] B");
+    const [item] = snapshot(fx);
+    expect(fx.host.queue.queuedImages(item!.item)).toEqual({ text: "[Image #1] B", images: [image] });
+    fx.host.session.clearQueue();
+  } finally { await fx.close(); }
+});
+
 test("handled and rejected inputs remain distinct from queued or started input", async () => {
   const fx = await codeHost("worker", { catalog: 10, enabled: ["queue_control"],
     extend: pi => pi.registerCommand("fixture-handled", { description: "Fixture handling", async handler() {} }) });
