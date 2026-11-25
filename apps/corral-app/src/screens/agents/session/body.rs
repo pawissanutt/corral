@@ -212,8 +212,8 @@ pub(super) fn chat(app: AppState, page: Memo<SessionPage>) -> AnyElement {
         scroll()
             .test_id("session-transcript")
             .flex_1()
-            .min_h(px(0.0))
-            .child(content),
+            .min_h(px(0.0)),
+        content,
         move || said.with(|t| t.as_ref().map(|t| t.following())),
         move || said.with(|t| t.as_ref().map(transcript::Earlier::of)),
         move |key| said.with(|t| t.as_ref()?.rows_below(key)),

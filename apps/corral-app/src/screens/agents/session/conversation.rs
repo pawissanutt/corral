@@ -161,8 +161,8 @@ pub(super) fn page(
         scroll()
             .test_id("session-conversation")
             .flex_1()
-            .min_h(px(0.0))
-            .child(body),
+            .min_h(px(0.0)),
+        body.into_element(),
         move || said.with(|t| t.as_ref().map(Transcript::following)),
         move || said.with(|t| t.as_ref().map(transcript::Earlier::of)),
         move |key| said.with(|t| t.as_ref()?.rows_below(key)),

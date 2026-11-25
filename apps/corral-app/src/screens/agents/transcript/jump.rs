@@ -78,6 +78,9 @@ pub(super) struct Place {
     pub tail: Option<(String, usize)>,
     /// The scroll offset as last seen: a scroll that changes it is the reader's own.
     pub offset: Option<f32>,
+    /// Content layout, independent of the number of logical rows in a live reply.
+    pub(super) height: Option<f32>,
+    pub(super) queued_end: Option<Id>,
 }
 
 /// What rows arriving mean for the reader.
@@ -166,6 +169,31 @@ pub(super) fn kept(place: Rc<RefCell<Place>>, save: impl Fn(Id, Reading) + 'stat
     });
 }
 
+/// Coalesce requests and recheck the mounted scope and the reader's intent after layout.
+fn queue_end(place: Rc<RefCell<Place>>, scroller: ElementRef) {
+    let scope = {
+        let mut place = place.borrow_mut();
+        let Some(scope) = place.scope.clone() else {
+            return;
+        };
+        if !place.at_end || place.queued_end.as_ref() == Some(&scope) {
+            return;
+        }
+        place.queued_end = Some(scope.clone());
+        scope
+    };
+    after_answer(move || {
+        let mut place = place.borrow_mut();
+        if place.queued_end.as_ref() == Some(&scope) {
+            place.queued_end = None;
+            if place.at_end && place.scope.as_ref() == Some(&scope) {
+                drop(place);
+                scroller.scroll_to_end(false);
+            }
+        }
+    });
+}
+
 /// `surface` (the transcript's scroll) kept at its newest rows while the reader is at the end,
 /// with the jump control over it while they are not. `following` is what the shown transcript
 /// says (`Transcript::following`: its scope, its row count, where its reader left it), tracked:
@@ -178,6 +206,7 @@ pub(super) fn kept(place: Rc<RefCell<Place>>, save: impl Fn(Id, Reading) + 'stat
 pub fn follow(
     app: AppState,
     surface: Scroll,
+    content: AnyElement,
     following: impl Fn() -> Option<Following> + 'static,
     earlier: impl Fn() -> Option<Earlier> + 'static,
     below: impl Fn(&str) -> Option<usize> + 'static,
@@ -236,6 +265,8 @@ pub fn follow(
             known.scope = Some(id.clone());
             known.top = None;
             known.offset = None;
+            known.height = None;
+            known.queued_end = None;
             match resume {
                 Some(Resume::Row { key, offset, rows }) => {
                     known.at_end = false;
@@ -252,7 +283,7 @@ pub fn follow(
                     drop(known);
                     anchors::release(id.as_str(), holder);
                     at_end.set(true);
-                    after_answer(move || scroller.scroll_to_end(false));
+                    queue_end(place.clone(), scroller);
                 }
             }
         });
@@ -310,7 +341,8 @@ pub fn follow(
                 .borrow_mut()
                 .shown(now, top, tail, |key| untracked(|| below(key)));
             match shown {
-                Shown::End => after_answer(move || scroller.scroll_to_end(false)),
+                // Layout, not a row/character count, tells us when the end actually moves.
+                Shown::End => {}
                 Shown::Up { held, arrived: n } => {
                     if let Some((scope, key, offset)) = held {
                         anchors::hold(scope.as_str(), holder, key, offset);
@@ -353,55 +385,68 @@ pub fn follow(
             }
         });
     }
+    let measured = place.clone();
+    let content = view()
+        .min_w(px(0.0))
+        .on_layout(move |frame: &Bounds<Points>| {
+            let height = frame.size.height.0;
+            let changed = measured.borrow_mut().height.replace(height) != Some(height);
+            if changed && height > 0.0 {
+                queue_end(measured.clone(), scroller);
+            }
+        })
+        .child(content);
     let scrolled = place.clone();
-    let surface = surface
-        .element_ref(&scroller)
-        .on_scroll(move |event: &ScrollEvent| {
-            let offset = event.offset.y.0;
-            let below = event.content_size.height.0 - offset - event.size.height.0;
-            let end = below <= END_SLACK;
-            let (flipped, scope, moved) = {
-                let mut known = scrolled.borrow_mut();
-                let moved = known
-                    .offset
-                    .replace(offset)
-                    .is_some_and(|was| (was - offset).abs() > 0.5);
-                if let Some(at) = known
-                    .scope
-                    .as_ref()
-                    .map(|id| anchors::at(id.as_str(), offset))
-                {
-                    known.top = at;
-                }
-                let flipped = end != known.at_end;
-                if flipped {
-                    if !end {
-                        known.left_at = Some(count.get_untracked());
+    let surface =
+        surface
+            .child(content)
+            .element_ref(&scroller)
+            .on_scroll(move |event: &ScrollEvent| {
+                let offset = event.offset.y.0;
+                let below = event.content_size.height.0 - offset - event.size.height.0;
+                let (end, flipped, scope, moved) = {
+                    let mut known = scrolled.borrow_mut();
+                    let previous = known.offset.replace(offset);
+                    let moved = previous.is_some_and(|was| (was - offset).abs() > 0.5);
+                    // An unchanged offset can now be far above the end because the reply
+                    // grew underneath it. Only a real move away pauses an end follower.
+                    let end = below <= END_SLACK || (known.at_end && !moved && previous.is_some());
+                    if let Some(at) = known
+                        .scope
+                        .as_ref()
+                        .map(|id| anchors::at(id.as_str(), offset))
+                    {
+                        known.top = at;
                     }
-                    known.at_end = end;
+                    let flipped = end != known.at_end;
+                    if flipped {
+                        if !end {
+                            known.left_at = Some(count.get_untracked());
+                        }
+                        known.at_end = end;
+                    }
+                    (end, flipped, known.scope.clone(), moved)
+                };
+                if let Some(scope) = &scope {
+                    if end {
+                        anchors::release(scope.as_str(), holder);
+                    } else if moved {
+                        anchors::scrolled(scope.as_str(), holder, offset);
+                    }
                 }
-                (flipped, known.scope.clone(), moved)
-            };
-            if let Some(scope) = &scope {
-                if end {
-                    anchors::release(scope.as_str(), holder);
-                } else if moved {
-                    anchors::scrolled(scope.as_str(), holder, offset);
+                if flipped {
+                    arrived.set(0);
+                    at_end.set(end);
                 }
-            }
-            if flipped {
-                arrived.set(0);
-                at_end.set(end);
-            }
-            let older = earlier.with_untracked(|now| {
-                reach
-                    .borrow_mut()
-                    .scrolled(now.as_ref(), offset, event.size.height.0, end)
+                let older = earlier.with_untracked(|now| {
+                    reach
+                        .borrow_mut()
+                        .scrolled(now.as_ref(), offset, event.size.height.0, end)
+                });
+                if let Some(older) = older {
+                    run(app, older);
+                }
             });
-            if let Some(older) = older {
-                run(app, older);
-            }
-        });
     let control = dynamic(move || {
         let capped = latest.get();
         if at_end.get() && !capped {
