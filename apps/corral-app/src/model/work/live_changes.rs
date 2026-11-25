@@ -3,8 +3,11 @@
 //! seen moves this device's own seen cursor, which Home's "since your last visit" counts from.
 //! The Feed's own filters ([`FeedFilter`]) narrow the loaded rows without touching either.
 
+use std::collections::BTreeMap;
+
 use corral_types::{Event, EventKind};
 use jiff::civil::Date;
+use serde_json::Value;
 
 use crate::model::daemon::{Feed, Link};
 use crate::model::projects::Scope;
@@ -70,6 +73,7 @@ impl FeedEvent {
     /// Whether the Feed's filters keep this row; search reads the words the row shows.
     fn kept(&self, filter: &FeedFilter, kind: &str) -> bool {
         let words = [
+            self.at.as_str(),
             self.id.as_str(),
             self.label.as_str(),
             kind,
@@ -134,7 +138,21 @@ fn headline(event: &Event) -> String {
         .unwrap_or_default()
 }
 
-fn event_row(event: &Event, at: String, feed: &Feed) -> FeedEvent {
+/// The titles named by loaded `created` events, for tasks the board no longer holds (Done and
+/// Dropped tasks leave it).
+fn created_titles(feed: &Feed) -> BTreeMap<&str, &str> {
+    feed.changes
+        .values()
+        .filter(|event| event.kind == EventKind::Created)
+        .filter_map(|event| {
+            let title = event.detail.get("title").and_then(Value::as_str)?;
+            Some((event.task.as_deref()?, title))
+        })
+        .filter(|(_, title)| !title.is_empty())
+        .collect()
+}
+
+fn event_row(event: &Event, at: String, feed: &Feed, titles: &BTreeMap<&str, &str>) -> FeedEvent {
     let text = match event.kind {
         // The headline says the outcome already.
         EventKind::Gate | EventKind::Verdict => String::new(),
@@ -155,9 +173,14 @@ fn event_row(event: &Event, at: String, feed: &Feed) -> FeedEvent {
         title: event
             .task
             .as_deref()
-            .and_then(|id| feed.board.task(id))
-            .map(|task| task.title().to_owned())
-            .filter(|title| !title.is_empty()),
+            .and_then(|id| {
+                feed.board
+                    .task(id)
+                    .map(|task| task.title())
+                    .filter(|title| !title.is_empty())
+                    .or_else(|| titles.get(id).copied())
+            })
+            .map(str::to_owned),
         text,
         who: actor_word(event.actor),
         actor: Who::of(event.actor),
@@ -173,6 +196,7 @@ pub fn feed_page(feed: &Feed, scope: &Scope, filter: &FeedFilter) -> FeedPage {
     let mut days: Vec<(Date, Vec<FeedEvent>)> = Vec::new();
     let mut loaded = 0usize;
     let mut shown = 0usize;
+    let titles = created_titles(feed);
     for event in feed
         .changes
         .values()
@@ -181,7 +205,7 @@ pub fn feed_page(feed: &Feed, scope: &Scope, filter: &FeedFilter) -> FeedPage {
     {
         loaded += 1;
         let (day, at) = local_day(event.ts, feed);
-        let row = event_row(event, at, feed);
+        let row = event_row(event, at, feed, &titles);
         if !row.kept(filter, event.kind.as_str()) {
             continue;
         }
@@ -211,7 +235,8 @@ pub fn feed_page(feed: &Feed, scope: &Scope, filter: &FeedFilter) -> FeedPage {
             "No events match these filters.".to_owned()
         }
     });
-    let counted = (filter.active() && loaded > 0).then(|| {
+    // Kept while any filter is set, even with nothing loaded, so Clear filters stays offered.
+    let counted = filter.active().then(|| {
         let noun = if loaded == 1 { "event" } else { "events" };
         format!("{shown} of {loaded} loaded {noun}")
     });
@@ -406,6 +431,21 @@ mod tests {
         let page = feed_page(&feed, &Scope::All, &none);
         assert_eq!(ids(&page), ["T-4"]);
         assert!(page.no_match.is_none());
+
+        // A task off the board keeps the title its loaded `created` event names.
+        feed.changes.insert(
+            3,
+            Event {
+                detail: json!({"title": "Pair the phone"}),
+                ..event(3, "2026-11-14T07:00:00Z", EventKind::Created, None)
+            },
+        );
+        let page = feed_page(&feed, &Scope::All, &FeedFilter::default());
+        let created = page.days[1]
+            .events
+            .last()
+            .map(|event| event.title.as_deref());
+        assert_eq!(created, Some(Some("Pair the phone")));
 
         let empty = feed_page(&feed_at_noon(), &Scope::All, &none);
         assert!(empty.notice.is_some() && empty.no_match.is_none());

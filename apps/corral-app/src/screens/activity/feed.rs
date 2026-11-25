@@ -458,7 +458,14 @@ fn row(app: AppState, event: &FeedEvent) -> AnyElement {
             } else {
                 color(Token::Ink)
             };
-            let rest = [event.title.as_deref().unwrap_or_default(), &event.text]
+            let title = event.title.as_deref().unwrap_or_default();
+            // An alert's reason leads, so a long title cannot cut it off.
+            let parts = if alert {
+                [event.text.as_str(), title]
+            } else {
+                [title, event.text.as_str()]
+            };
+            let rest = parts
                 .into_iter()
                 .filter(|part| !part.is_empty())
                 .collect::<Vec<_>>()
