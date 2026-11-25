@@ -39,6 +39,28 @@ pub fn next_button(app: AppState, record: &str, step: &NextStep, wide: bool) -> 
     )
 }
 
+/// The record's next step as a list row carries it (test id `next-<record>`): sized to sit
+/// inside the row, filled when the step is the owner's move and otherwise only words, so a
+/// column of routine steps reads quietly and the one waiting on the owner stands out.
+pub fn row_next_button(app: AppState, record: &str, step: &NextStep) -> AnyElement {
+    let action = step.press.clone();
+    button_with(
+        app,
+        step.label.clone(),
+        if step.yours {
+            ButtonKind::Primary
+        } else {
+            ButtonKind::Quiet
+        },
+        ButtonOptions {
+            compact: true,
+            ..ButtonOptions::default()
+        },
+        next_id(record),
+        move || press(app, action.clone()),
+    )
+}
+
 /// The More trigger of `record` (test id `more-<record>`), opening its More menu: the popup
 /// on desktop and in a terminal, the action sheet on a phone. `compact` is the three dots a
 /// list row carries; a page spells the word.

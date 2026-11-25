@@ -99,7 +99,8 @@ pub fn list_page_with(app: AppState, page: ListPage, foot: Option<AnyElement>) -
     list_page_with_sections(app, page, foot, None)
 }
 
-/// A list with optional controls directly under each section heading.
+/// A list with optional controls at the trailing edge of each section heading (a section's
+/// sort), on the heading's line rather than a row of their own.
 pub fn list_page_with_sections(
     app: AppState,
     page: ListPage,
@@ -162,10 +163,8 @@ pub fn list_page_with_sections(
             untracked(move || {
                 let mut out = Vec::new();
                 for section in &sections {
-                    out.push(section_head(app, section, Rc::clone(&on_fold)));
-                    if let Some(control) = accessory.as_ref().and_then(|build| build(section)) {
-                        out.push(control);
-                    }
+                    let control = accessory.as_ref().and_then(|build| build(section));
+                    out.push(section_head(app, section, Rc::clone(&on_fold), control));
                     for id in &section.rows {
                         out.push(table_row(
                             app,
@@ -354,8 +353,14 @@ fn table_head(app: AppState, columns: &[Column], shown: Memo<Vec<bool>>) -> AnyE
 }
 
 /// A section's header: its mark, name and count, then its note; a folding one is a button
-/// that opens and closes it (test id `section-<key>`).
-fn section_head(app: AppState, section: &Section, on_fold: Rc<dyn Fn(&str)>) -> AnyElement {
+/// that opens and closes it (test id `section-<key>`). `trailing` sits at the line's end,
+/// beside the button rather than inside it.
+fn section_head(
+    app: AppState,
+    section: &Section,
+    on_fold: Rc<dyn Fn(&str)>,
+    trailing: Option<AnyElement>,
+) -> AnyElement {
     let form = app.form;
     let label = text(section.label.clone())
         .number_of_lines(1u32)
@@ -397,7 +402,9 @@ fn section_head(app: AppState, section: &Section, on_fold: Rc<dyn Fn(&str)>) -> 
         .test_id(&format!("section-{}", section.key))
         .flex_row()
         .items_center()
-        .flex_none()
+        .flex_1()
+        .min_w(px(0.0))
+        .self_stretch()
         .label(spoken);
     let head = match section.fold {
         Some(open) => {
@@ -412,41 +419,60 @@ fn section_head(app: AppState, section: &Section, on_fold: Rc<dyn Fn(&str)>) -> 
         }
         None => head.role(AccessibilityRole::Header),
     };
+    let line = view().flex_row().items_center().flex_none();
+    let trailing = trailing.map(|trailing| {
+        view()
+            .flex_row()
+            .items_center()
+            .flex_shrink_0()
+            .child(trailing)
+    });
     match form {
-        Form::Terminal => head
+        Form::Terminal => line
             .h(term::rows(1.0))
-            .gap(px(GAP))
-            .child(term::space(1.0))
-            .children(caret)
-            .children(mark)
-            .child(label)
-            .child(count)
-            .children(note)
+            .child(
+                head.gap(px(GAP))
+                    .child(term::space(1.0))
+                    .children(caret)
+                    .children(mark)
+                    .child(label)
+                    .child(count)
+                    .children(note),
+            )
+            .children(trailing.map(|trailing| trailing.pr(cells(1.0))))
             .into_element(),
-        Form::Desktop => head
+        Form::Desktop => line
             .h(px(row_height(form)))
             .pl(px(PAD_LEFT))
             .pr(px(PAD_RIGHT))
             .gap(px(GAP))
             .border_b(px(1.0))
             .border_color(color(Token::Rule))
-            .children(caret)
-            .children(mark)
-            .child(label.font_family(FONT_TEXT).text_size(px(12.0)))
-            .child(count.font_family(FONT_MONO).text_size(px(11.0)))
-            .children(note.map(|note| note.font_family(FONT_TEXT).text_size(px(11.5))))
+            .child(
+                head.gap(px(GAP))
+                    .children(caret)
+                    .children(mark)
+                    .child(label.font_family(FONT_TEXT).text_size(px(12.0)))
+                    .child(count.font_family(FONT_MONO).text_size(px(11.0)))
+                    .children(note.map(|note| note.font_family(FONT_TEXT).text_size(px(11.5)))),
+            )
+            .children(trailing)
             .into_element(),
-        Form::Phone => head
+        Form::Phone => line
             .min_h(px(36.0))
             .pt(px(14.0))
             .pb(px(6.0))
             .px(px(18.0))
             .gap(px(GAP))
-            .children(caret)
-            .children(mark)
-            .child(label.font_family(FONT_TEXT).text_size(px(13.0)))
-            .child(count.font_family(FONT_MONO).text_size(px(12.0)))
-            .children(note.map(|note| note.font_family(FONT_TEXT).text_size(px(12.5))))
+            .child(
+                head.gap(px(GAP))
+                    .children(caret)
+                    .children(mark)
+                    .child(label.font_family(FONT_TEXT).text_size(px(13.0)))
+                    .child(count.font_family(FONT_MONO).text_size(px(12.0)))
+                    .children(note.map(|note| note.font_family(FONT_TEXT).text_size(px(12.5)))),
+            )
+            .children(trailing)
             .into_element(),
     }
 }

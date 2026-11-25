@@ -6,6 +6,8 @@
 //! session asks, answerable there, then its facts, its newest transcript rows and its Details
 //! in brief. The session page itself is `screens::agents::session`.
 
+mod controls;
+
 use std::rc::Rc;
 
 use corral_protocol::detail::DetailRef;
@@ -19,14 +21,13 @@ use crate::model::work::Record;
 use crate::model::{Form, Id, Live, sessions};
 use crate::screens::agents::{self, Compact, ask_session, ask_view};
 use crate::state::AppState;
-use crate::ui::composer::copyable_input;
 use crate::ui::icons::{Icon, icon};
-use crate::ui::kit::button::{ButtonKind, button};
+use crate::ui::kit::button::{ButtonKind, ButtonOptions, button, button_with};
 use crate::ui::kit::chip::chip;
 use crate::ui::kit::list::{
     ListPage, Row, cell_mono, cell_text, cell_title, list_page_with_sections, phone_lines,
 };
-use crate::ui::kit::next::{more_button, next_button};
+use crate::ui::kit::next::{more_button, next_button, row_next_button};
 use crate::ui::kit::notice::{error, notice};
 use crate::ui::kit::page::head;
 use crate::ui::kit::status::{session_mark, session_word_mark};
@@ -103,7 +104,7 @@ pub fn screen(app: AppState) -> AnyElement {
     });
     let page_head = view()
         .child(page_head)
-        .child(filter_bar(app, shown))
+        .child(controls::filter_bar(app, shown))
         .child(stale(app, standing))
         .into_element();
     let columns = sessions::columns();
@@ -127,82 +128,9 @@ pub fn screen(app: AppState) -> AnyElement {
         },
         Some(failed(app, standing)),
         Some(Rc::new(move |section| {
-            (section.fold != Some(false)).then(|| sort_bar(app, section.key.clone()))
+            (section.fold != Some(false)).then(|| controls::sort_bar(app, section.key.clone()))
         })),
     )
-}
-
-fn filter_bar(app: AppState, shown: Memo<sessions::Listing>) -> AnyElement {
-    let field = copyable_input(app, None, move || {
-        app.agents.with(|state| state.list.filter.clone())
-    })
-    .test_id("field-sessions")
-    .label(sessions::FILTER_LABEL)
-    .placeholder(sessions::FILTER_LABEL)
-    .on_change(move |typed: &str| {
-        app.agents
-            .update(|state| state.list.filter = typed.to_owned())
-    })
-    .w_full()
-    .text_color(color(Token::Ink));
-    let chips = computed(move || shown.with(|shown| shown.chips.clone()));
-    view()
-        .px(if app.form == Form::Terminal {
-            term::cells(1.0)
-        } else {
-            px(16.0)
-        })
-        .child(field)
-        .child(dynamic(move || {
-            let chips = chips.get();
-            view()
-                .flex_row()
-                .flex_wrap()
-                .children(chips.into_iter().map(|chip| {
-                    button(
-                        app,
-                        chip.label,
-                        choice(chip.selected),
-                        format!("seg-mode-{}", chip.mode),
-                        move || app.agents.update(|state| state.list.set_mode(&chip.mode)),
-                    )
-                }))
-                .into_element()
-        }))
-        .into_element()
-}
-
-fn choice(selected: bool) -> ButtonKind {
-    if selected {
-        ButtonKind::Primary
-    } else {
-        ButtonKind::Quiet
-    }
-}
-
-fn sort_bar(app: AppState, group: String) -> AnyElement {
-    dynamic(move || {
-        let sort = app.agents.with(|state| state.list.sort(&group));
-        view()
-            .flex_row()
-            .flex_wrap()
-            .children(sessions::Sort::ALL.into_iter().map(|option| {
-                let group = group.clone();
-                button(
-                    app,
-                    option.label(),
-                    choice(sort == option),
-                    format!("seg-sort-{group}-{}", option.slug()),
-                    move || {
-                        app.agents.update(|state| {
-                            state.list.sorts.insert(group.clone(), option);
-                        })
-                    },
-                )
-            }))
-            .into_element()
-    })
-    .into_element()
 }
 
 /// The line over sessions shown from the last update while their source is stale, a line's
@@ -382,8 +310,8 @@ fn cell(
                         .flex_row()
                         .items_center()
                         .gap(px(4.0))
-                        .children(next.map(|next| next_button(app, &shown, &next, false)))
-                        .children(remove.map(|action| remove_button(app, &shown, action)))
+                        .children(next.map(|next| row_next_button(app, &shown, &next)))
+                        .children(remove.map(|action| remove_button(app, &shown, action, true)))
                         .child(more_button(app, record, true))
                         .into_element()
                 })
@@ -393,11 +321,21 @@ fn cell(
 }
 
 /// `Remove…` of a build stopped here: prune's dry run first, in the Remove sheet.
-fn remove_button(app: AppState, id: &str, action: crate::model::agents::Action) -> AnyElement {
-    button(
+/// `compact` sizes it for a list row.
+fn remove_button(
+    app: AppState,
+    id: &str,
+    action: crate::model::agents::Action,
+    compact: bool,
+) -> AnyElement {
+    button_with(
         app,
         "Remove…",
         ButtonKind::Ghost,
+        ButtonOptions {
+            compact,
+            ..ButtonOptions::default()
+        },
         format!("btn-remove-{id}"),
         move || agents::run_agents(app, action.clone()),
     )
@@ -516,7 +454,7 @@ fn inspector(app: AppState, id: &Id) -> AnyElement {
                 .children(
                     row.remove
                         .clone()
-                        .map(|action| remove_button(app, row.line.id.as_str(), action)),
+                        .map(|action| remove_button(app, row.line.id.as_str(), action, false)),
                 )
                 .children(crate::ui::ask::open_beside(app, &live))
                 .child(button(

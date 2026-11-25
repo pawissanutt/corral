@@ -63,6 +63,9 @@ pub struct ButtonOptions {
     /// A handle the caller focuses the button by (`ElementRef::focus`): the confirmation moves
     /// the keyboard focus to its safe choice once the dialog has laid out.
     pub focus: Option<ElementRef>,
+    /// A control inside a list row: on desktop 24 pt high with 8 pt padding and 12 pt words, so
+    /// it sits within the row instead of filling it. Phone and terminal keep their metrics.
+    pub compact: bool,
 }
 
 /// A button with the form's metrics: desktop 30 pt high, 12 pt padding; phone at least 44 pt
@@ -97,6 +100,8 @@ pub fn button_with(
     let label: String = label.into();
     let test_id: String = test_id.into();
     let look = Look::of(form, kind, options.danger);
+    let compact = options.compact && form == Form::Desktop;
+    let height = control_height(if compact { 24.0 } else { 30.0 });
     let glyph = options
         .icon
         .zip(look.icon)
@@ -109,7 +114,7 @@ pub fn button_with(
             .when(look.bold, |t| t.font_weight(FontWeight::BOLD))
             .when(form != Form::Terminal, |t| {
                 t.font_family(FONT_TEXT)
-                    .text_size(px(look.size))
+                    .text_size(px(if compact { 12.0 } else { look.size }))
                     .font_weight(if form == Form::Phone {
                         FontWeight::BOLD
                     } else {
@@ -156,10 +161,10 @@ pub fn button_with(
             .h(px(16.0))
             .child(term::focus_cell(term::focus_of(handle))),
         Form::Desktop => target
-            .h(px(control_height(30.0)))
-            .when(bare, |b| b.w(px(control_height(30.0))))
-            .when(!bare, |b| b.px(look.pad))
-            .rounded(px(6.0))
+            .h(px(height))
+            .when(bare, |b| b.w(px(height)))
+            .when(!bare, |b| b.px(if compact { px(8.0) } else { look.pad }))
+            .rounded(px(if compact { 5.0 } else { 6.0 }))
             .hover(look.hover)
             .active(look.active)
             .focus_visible(ring),
