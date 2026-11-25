@@ -221,6 +221,7 @@ impl AppState {
             }
         };
         if let Some(id) = &id {
+            let ended_chat = ended.is_some();
             feed.update(|feed| {
                 if let Some(operation) = feed.operations.get_mut(id.as_str()) {
                     operation.loading = false;
@@ -232,6 +233,9 @@ impl AppState {
                     feed.forget_ended_quick();
                 }
             });
+            if ended_chat {
+                self.retire_quick_readers(feed);
+            }
         }
         match method {
             APP_SESSION => self.session(feed, decode(result)?).await,

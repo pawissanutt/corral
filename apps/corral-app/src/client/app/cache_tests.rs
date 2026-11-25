@@ -55,13 +55,32 @@ fn aggregate_retention_plateaus_without_evicting_readers_or_unresolved_sends() {
         },
     );
     let (_, params, tag) = outgoing.remove(0);
+    let item_message = |token: &str| SessionMessage {
+        id: "message".into(),
+        author: "assistant".into(),
+        at: None,
+        items: vec![
+            SessionItem::Text {
+                text: "preview".into(),
+            },
+            SessionItem::Continuation {
+                token: token.into(),
+                bytes: 100,
+            },
+        ],
+        model: None,
+        stop_reason: None,
+        usage: None,
+        input: None,
+        attachments: vec![],
+    };
     let body = DetailBody::Session(SessionPage {
         id: "session".into(),
         role: "worker".into(),
         task: None,
         run: None,
         machine: None,
-        messages: vec![],
+        messages: vec![item_message("item")],
         older: Some("older-cursor".into()),
         replyable: false,
         reply_refusal: None,
@@ -162,10 +181,19 @@ fn aggregate_retention_plateaus_without_evicting_readers_or_unresolved_sends() {
         id: "session/child/reader".into(),
     };
     let token = "large-child-item";
-    app.watch_detail(feed, child.clone(), true);
+    // The child page actually references its expansion. A mounted view must not
+    // pin unrelated tokens from pages it has already scrolled past.
     feed.update(|feed| {
+        let mut cache = feed.details[&history_key].clone();
+        cache.target = child.clone();
+        if let Some(DetailBody::Session(page)) = &mut cache.merged {
+            page.id = "session/child/reader".into();
+            page.messages = vec![item_message(token)];
+        }
+        feed.details.insert(detail_key(&child), cache);
         feed.items.insert(token.into(), ItemFetch::Loading);
     });
+    app.watch_detail(feed, child.clone(), true);
     app.touch_item(feed, "session/child/reader", token);
     app.retained.touch(Key::Item(token.into()), MAX_BYTES + 1);
     app.trim_retained(feed);

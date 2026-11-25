@@ -123,6 +123,8 @@ struct Rows {
     parts: BTreeMap<String, Item>,
     /// Where each view of the scope scrolled up from its end holds its reader, by the view.
     holds: BTreeMap<u64, Hold>,
+    /// A layout correction issued to that scroller, until its next scroll event.
+    restores: BTreeMap<u64, f32>,
     /// Places were reported since the holds were last settled.
     dirty: bool,
 }
@@ -424,8 +426,26 @@ pub(super) fn release(scope: &str, view: u64) {
     SCOPES.with(|scopes| {
         if let Some(rows) = scopes.borrow_mut().get_mut(scope) {
             rows.holds.remove(&view);
+            rows.restores.remove(&view);
         }
     });
+}
+
+/// Was this scroll the correction just requested by layout, rather than an edge gesture?
+/// Consume even a mismatch: a later user scroll to that offset is not the old correction.
+pub(super) fn restored(scope: &str, holder: u64, offset: f32) -> bool {
+    SCOPES.with(|scopes| {
+        scopes
+            .borrow_mut()
+            .get_mut(scope)
+            .and_then(|rows| rows.restores.remove(&holder))
+            .is_some_and(|at| (at - offset).abs() <= 1.0)
+    })
+}
+
+/// A reader's geometry is private to its mount; do not retain it after disposal.
+pub(super) fn forget_geometry(scope: &str) {
+    SCOPES.with(|scopes| scopes.borrow_mut().remove(scope));
 }
 
 /// View `view` of `scope`, scrolled up from its end, is at `offset`.
@@ -491,10 +511,32 @@ pub(super) fn settle(scope: &str) -> Vec<(u64, f32)> {
             };
             if hold.at.is_none_or(|was| (was - at).abs() > 0.5) {
                 hold.at = Some(at);
+                rows.restores.insert(view, at);
                 moves.push((view, at));
             }
         }
         moves
+    })
+}
+
+/// Source record at the viewport edge, without disturbing layout holds. Consecutive
+/// records can share a bubble; the stable item key names its own source record.
+/// Nested tool rows without a source key are covered by the outer item's placement.
+pub(super) fn source_at(scope: &str, offset: f32) -> Option<String> {
+    SCOPES.with(|scopes| {
+        let scopes = scopes.borrow();
+        let rows = scopes.get(scope)?;
+        let (anchor, into) = rows.at(offset)?;
+        let source = rows
+            .items_of(&anchor)
+            .into_iter()
+            .rev()
+            .find_map(|(key, top, _)| {
+                let (source, suffix) = key.rsplit_once('|')?;
+                let ordinal = suffix.split('/').next()?;
+                (top <= into && ordinal.parse::<usize>().is_ok()).then(|| source.to_owned())
+            });
+        Some(source.unwrap_or(anchor))
     })
 }
 

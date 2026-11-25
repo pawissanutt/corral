@@ -7,12 +7,18 @@ use super::{
     *,
 };
 use corral_protocol::rpc::ErrorCode;
+#[path = "reader_head.rs"]
+mod head;
+
 pub(super) const PREFIX: &str = "reader:";
 pub(super) const LIMIT: usize = 16;
 #[derive(Default)]
 pub(super) struct Window {
     scope: String,
     path: Vec<Bookmark>,
+    /// Empty pages advance the cursor but have no resident payload. Reject loops until
+    /// real content arrives or the reader changes direction.
+    empty_cursors: BTreeSet<String>,
     pending: Option<Read>,
 }
 #[derive(Clone, Default, serde::Serialize)]
@@ -205,6 +211,7 @@ impl AppState {
             .filter(|w| &w.scope == id)
             .map(|w| {
                 cache::bytes(&w.path)
+                    + w.empty_cursors.iter().map(String::len).sum::<usize>()
                     + w.pending.as_ref().map_or(0, |r| {
                         r.tag.len()
                             + r.cursor.as_ref().map_or(0, String::len)
@@ -322,7 +329,7 @@ impl AppState {
                 Window {
                     scope: intent.scope.clone(),
                     path: vec![Bookmark::default()],
-                    pending: None,
+                    ..Window::default()
                 },
             );
             feed.update(|f| {
@@ -510,79 +517,10 @@ impl AppState {
             return fail(self, &read);
         }
         if latest {
-            let seq = page.seq;
-            let Some(cache) = assemble(target.clone(), vec![page]) else {
+            let Some(cache) = assemble(target, vec![page]) else {
                 return fail(self, &read);
             };
-            let shared = feed.with_untracked(|f| f.details.get(&key).cloned());
-            let protected = self
-                .shared_holders
-                .iter()
-                .filter_map(|(&other, scope)| {
-                    (other != holder
-                        && scope == &read.intent.scope
-                        && !self.reader_windows.contains_key(&other))
-                    .then_some(other)
-                })
-                .collect::<Vec<_>>();
-            let replace = shared
-                .as_ref()
-                .and_then(|c| c.pages.first())
-                .is_none_or(|p| {
-                    p.seq <= seq
-                        && (p.etag != cache.pages[0].etag
-                            || shared.as_ref().is_some_and(|c| c.error.is_some()))
-                });
-            if replace {
-                for &other in &protected {
-                    self.reader_windows.insert(
-                        other,
-                        Window {
-                            scope: read.intent.scope.clone(),
-                            path: vec![Bookmark::default()],
-                            pending: None,
-                        },
-                    );
-                }
-                let superseded = self.detail_inflight.remove(&key);
-                self.detail_latest.remove(&key);
-                self.detail_restarts.remove(&key);
-                self.detail_bytes.remove(&key);
-                self.detail_pages.remove(&key);
-                let reread = self.detail_reread.remove(&key);
-                feed.update(|f| {
-                    if let Some(mut before) = shared {
-                        before.loading = false;
-                        for other in protected {
-                            f.transcript_windows.insert(
-                                other,
-                                ReaderPage {
-                                    scope: read.intent.scope.clone(),
-                                    cache: before.clone(),
-                                    newer: false,
-                                },
-                            );
-                        }
-                    }
-                    if let Some(operation) = superseded
-                        .as_deref()
-                        .and_then(|id| f.operations.get_mut(id))
-                    {
-                        operation.loading = false;
-                    }
-                    f.settle_session(&target, reread);
-                    f.details.insert(key, cache);
-                });
-            } else {
-                feed.update(|f| {
-                    if let Some(shared) = f.details.get_mut(&key) {
-                        shared.error = None;
-                        shared.stale = false;
-                    }
-                });
-            }
-            self.close_reader(feed, holder);
-            return vec![];
+            return self.join_head(feed, &read.intent, cache, true);
         }
         let next = session(&page).and_then(|b| b.older.clone());
         if next.is_some()
@@ -597,6 +535,12 @@ impl AppState {
             && matches!(read.intent.step, ReaderStep::Older { .. })
             && session(&page).is_some_and(|p| p.messages.is_empty())
         {
+            if let (Some(w), Some(cursor)) = (self.reader_windows.get_mut(&holder), &read.cursor) {
+                w.empty_cursors.insert(cursor.clone());
+                if next.as_ref().is_some_and(|n| w.empty_cursors.contains(n)) {
+                    return fail(self, &read);
+                }
+            }
             // An empty transport page adds no rows. Move the boundary without evicting any.
             let mut replacement = held;
             if let Some(DetailBody::Session(p)) = &mut replacement.merged {
@@ -611,6 +555,9 @@ impl AppState {
             replacement.stale = false;
             replacement.error = None;
             return self.publish_reader(feed, holder, path, replacement);
+        }
+        if let Some(w) = self.reader_windows.get_mut(&holder) {
+            w.empty_cursors.clear();
         }
         let limit = self.reader_limit();
         if let Some(seek) = read.seek.as_mut().filter(|s| !s.matched) {
@@ -642,6 +589,9 @@ impl AppState {
                         seek.path[seek.path.len() - 2].cursor.clone()
                     }
                     ReaderStep::Older { .. } if next.is_some() => next,
+                    ReaderStep::Newer => {
+                        return self.join_head(feed, &read.intent, replacement, false);
+                    }
                     _ => return self.publish_reader(feed, holder, seek.path.clone(), replacement),
                 };
                 return self.send_reader(feed, read);
@@ -686,19 +636,7 @@ impl AppState {
             return fail(self, &read);
         }
         if newer && path.len() == 1 {
-            let same = feed.with_untracked(|f| {
-                f.detail(&replacement.target).is_some_and(|c| {
-                    c.error.is_none()
-                        && c.pages
-                            .first()
-                            .zip(replacement.pages.first())
-                            .is_some_and(|(a, b)| a.etag == b.etag)
-                })
-            });
-            if same {
-                self.close_reader(feed, holder);
-                return vec![];
-            }
+            return self.join_head(feed, &read.intent, replacement, false);
         }
         self.publish_reader(feed, holder, path, replacement)
     }

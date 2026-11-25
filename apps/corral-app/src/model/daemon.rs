@@ -63,6 +63,33 @@ pub struct DetailCache {
     pub merged: Option<DetailBody>,
 }
 
+/// Local to a mounted transcript; only its opaque cursor travels on the wire.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReaderStep {
+    Older { cursor: String },
+    Newer,
+    Latest,
+    Close,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReaderIntent {
+    pub holder: u64,
+    pub store: Option<String>,
+    pub scope: String,
+    pub resolved: String,
+    pub anchor: Option<String>,
+    pub step: ReaderStep,
+}
+
+/// A reader's published window; the shared session detail remains the live tail.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReaderPage {
+    pub scope: String,
+    pub cache: DetailCache,
+    pub newer: bool,
+}
+
 impl DetailCache {
     pub fn body(&self) -> Option<&DetailBody> {
         self.merged.as_ref()
@@ -149,6 +176,7 @@ pub struct Feed {
     pub settings: Option<SettingsSnapshot>,
     pub topics: BTreeMap<String, TopicState>,
     pub details: BTreeMap<String, DetailCache>,
+    pub transcript_windows: BTreeMap<u64, ReaderPage>,
     /// Transcript item continuations, by continuation token.
     pub items: BTreeMap<String, crate::model::session::transcript::ItemFetch>,
     /// What each watched session streams (its open turn, fleet, host state and input
@@ -236,7 +264,11 @@ impl Feed {
             state.stale = true;
             state.loading = false;
         }
-        for detail in self.details.values_mut() {
+        for detail in self.details.values_mut().chain(
+            self.transcript_windows
+                .values_mut()
+                .map(|window| &mut window.cache),
+        ) {
             detail.stale = true;
             detail.loading = false;
         }
@@ -345,6 +377,8 @@ impl Feed {
         self.usage = None;
         self.settings = None;
         self.details.clear();
+        self.transcript_windows.clear();
+        self.items.clear();
         // A watched session's turn and child agents are daemon facts this device may no
         // longer read.
         self.live.clear();

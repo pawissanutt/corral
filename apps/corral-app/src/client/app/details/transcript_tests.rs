@@ -173,12 +173,12 @@ fn mounted_readers_protect_a_rolling_first_page_until_the_last_release() {
     let feed = signal(Feed::default());
     let mut app = AppState::new();
     app.ready = true;
-    let reading = |app: &mut AppState, scope: &str, active| {
+    let reading = |app: &mut AppState, holder: u64, scope: &str, active| {
         assert!(
             app.request(
                 feed,
                 ClientRequest::TranscriptReading {
-                    holder: 1,
+                    holder,
                     scope: scope.into(),
                     active,
                 }
@@ -187,7 +187,7 @@ fn mounted_readers_protect_a_rolling_first_page_until_the_last_release() {
             "reading is a local intent"
         );
     };
-    reading(&mut app, "B-1", true);
+    reading(&mut app, 1, "B-1", true);
     let get = read(&mut app, feed, None);
     assert!(
         reply(&mut app, feed, get, None, numbered_page("v1", 2, true)).is_empty(),
@@ -195,9 +195,9 @@ fn mounted_readers_protect_a_rolling_first_page_until_the_last_release() {
     );
     let before = shown(feed);
 
-    reading(&mut app, "B-1", true);
-    reading(&mut app, "B-1", false);
-    reading(&mut app, "B-1/child/a2", true);
+    reading(&mut app, 2, "B-1", true);
+    reading(&mut app, 2, "B-1", false);
+    reading(&mut app, 2, "B-1/child/a2", true);
     let get = read(&mut app, feed, None);
     let older = reply(&mut app, feed, get, None, numbered_page("v2", 3, true));
     assert_eq!(
@@ -218,7 +218,7 @@ fn mounted_readers_protect_a_rolling_first_page_until_the_last_release() {
     assert_eq!(shown(feed).first(), before.first());
     assert_eq!(anchors(feed), ["2", "3"]);
 
-    reading(&mut app, "B-1", false);
+    reading(&mut app, 1, "B-1", false);
     assert!(!app.transcript_readers.contains_key("B-1"));
     let get = read(&mut app, feed, None);
     assert!(reply(&mut app, feed, get, None, numbered_page("v3", 4, true)).is_empty());
@@ -227,7 +227,7 @@ fn mounted_readers_protect_a_rolling_first_page_until_the_last_release() {
         [("4".into(), vec!["recorded".into()])],
         "auto-reconstructed depth does not pin a follower; a child is a different scope"
     );
-    reading(&mut app, "B-1/child/a2", false);
+    reading(&mut app, 2, "B-1/child/a2", false);
     assert!(app.transcript_readers.is_empty());
 }
 

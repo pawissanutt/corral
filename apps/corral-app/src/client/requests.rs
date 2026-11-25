@@ -55,9 +55,11 @@ pub enum ClientRequest {
     },
     OpenHtml(super::html::OpenHtml),
     CancelHtml(String),
+    TranscriptStep(crate::model::daemon::ReaderIntent),
     /// Local, paired registration of a mounted view away from the transcript's end.
     TranscriptReading {
         scope: String,
+        holder: u64,
         active: bool,
     },
     /// A mounted view returned to the end; try to rejoin a blocked automatic read.
@@ -282,8 +284,12 @@ pub fn op_result(request_id: String, operation: String) -> bool {
 }
 /// Call once when a view starts reading away from the end, and release that registration
 /// with `false` on return, scope change or disposal if the acquire was sent successfully.
-pub fn transcript_reading(scope: String, active: bool) -> bool {
-    send(ClientRequest::TranscriptReading { scope, active })
+pub fn transcript_reading(scope: String, holder: u64, active: bool) -> bool {
+    send(ClientRequest::TranscriptReading {
+        scope,
+        holder,
+        active,
+    })
 }
 
 pub fn transcript_tail(scope: String) -> bool {

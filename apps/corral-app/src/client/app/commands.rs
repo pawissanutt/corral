@@ -155,8 +155,23 @@ impl AppState {
                 self.cancel_html(&id);
                 vec![]
             }
-            ClientRequest::TranscriptReading { scope, active } => {
-                self.transcript_reading(feed, scope, active);
+            ClientRequest::TranscriptStep(intent) => self.reader_step(feed, intent),
+            ClientRequest::TranscriptReading {
+                scope,
+                holder,
+                active,
+            } => {
+                if active {
+                    if self.shared_holders.get(&holder) != Some(&scope) {
+                        if let Some(old) = self.shared_holders.insert(holder, scope.clone()) {
+                            self.transcript_reading(feed, old, false);
+                        }
+                        self.transcript_reading(feed, scope, true);
+                    }
+                } else if self.shared_holders.get(&holder) == Some(&scope) {
+                    self.shared_holders.remove(&holder);
+                    self.transcript_reading(feed, scope, false);
+                }
                 vec![]
             }
             ClientRequest::TranscriptTail { scope } => self.transcript_tail(feed, scope),

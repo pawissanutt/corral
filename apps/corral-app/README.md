@@ -364,9 +364,12 @@ owner's `!` commands, images, compaction and branch dividers, model, effort, boo
 and error rows, run marks, host notices, presenter cards and each assistant turn's model,
 stop and usage. Parent and child conversations open at the newest page. Scroll up near the
 start of the visible history to read an older page; **Show earlier messages** also works if
-the page is too short to scroll. If a live session changes so much that the app cannot keep
-your reading position safely, it leaves the old view on screen. **Load latest messages** opens
-the current tail; it does not delete the recorded history. A recorded item larger than its preview shows the preview until its
+the page is too short to scroll. Long conversations use a moving window: only nearby pages
+stay loaded, but you can keep scrolling to the first saved message on the current branch.
+Scroll down (or use **Show newer messages**) to retrace your steps. End jumps back to the
+live reply. If the saved conversation changes, the app tries to find the message you were
+reading. If it cannot safely match that message, it keeps the old view on screen.
+**Load latest messages** opens the current tail; it does not delete the recorded history. A recorded item larger than its preview shows the preview until its
 complete content arrives: words are fetched as soon as they are shown, everything else when
 its row is opened. While the page is open it watches the session's live turn, drawing the
 streamed words and running tools after the recorded messages until the transcript holds them,

@@ -21,7 +21,9 @@ pub(super) struct RetainedCache {
     entries: BTreeMap<Key, (u64, usize)>,
     pins: BTreeMap<String, usize>,
     requests: BTreeMap<String, DetailGet>,
-    item_sessions: BTreeMap<String, String>,
+    /// Continuations referenced by the current shared or detached pages for a scope.
+    /// An open session pins these tokens, not every item ever expanded there.
+    item_refs: BTreeMap<String, BTreeSet<String>>,
     operations: BTreeMap<String, BTreeSet<String>>,
 }
 
@@ -78,6 +80,24 @@ pub(super) fn bytes(value: &impl Serialize) -> usize {
     }
 }
 
+fn cache_bytes(cache: &DetailCache) -> usize {
+    bytes(&cache.pages)
+        + bytes(&cache.merged)
+        + bytes(&cache.target)
+        + bytes(&cache.transcript_seams)
+}
+
+fn item_refs(cache: &DetailCache) -> impl Iterator<Item = &str> {
+    crate::model::session::transcript::page(Some(cache))
+        .into_iter()
+        .flat_map(|page| &page.messages)
+        .flat_map(|message| &message.items)
+        .filter_map(|item| match item {
+            SessionItem::Continuation { token, .. } => Some(token.as_str()),
+            _ => None,
+        })
+}
+
 impl AppState {
     pub(super) fn watch_detail(&mut self, feed: Signal<Feed>, target: DetailRef, open: bool) {
         let key = detail_key(&target);
@@ -109,13 +129,25 @@ impl AppState {
         let size = feed.with_untracked(|feed| {
             let cache = feed.details.get(&key);
             let operations = self.retained.operations.get(&key).into_iter().flatten();
+            let reader_bytes = if let DetailRef::Session { id } = target {
+                let windows = feed.transcript_windows.values().filter(|w| w.scope == *id);
+                let refs: BTreeSet<String> = cache
+                    .into_iter()
+                    .chain(windows.clone().map(|w| &w.cache))
+                    .flat_map(item_refs)
+                    .map(str::to_owned)
+                    .collect();
+                let refs_size = refs.iter().map(String::len).sum::<usize>();
+                self.retained.item_refs.insert(id.clone(), refs);
+                self.reader_staged_bytes(target)
+                    + refs_size
+                    + windows.map(|w| cache_bytes(&w.cache)).sum::<usize>()
+            } else {
+                0
+            };
             key.len()
-                + cache.map_or(0, |cache| {
-                    bytes(&cache.pages)
-                        + bytes(&cache.merged)
-                        + bytes(&cache.target)
-                        + bytes(&cache.transcript_seams)
-                })
+                + reader_bytes
+                + cache.map_or(0, cache_bytes)
                 + self.detail_bytes.get(&key).copied().unwrap_or(0)
                 + self.retained.requests.get(&key).map_or(0, bytes)
                 + operations
@@ -172,9 +204,6 @@ impl AppState {
     }
 
     pub(super) fn touch_item(&mut self, feed: Signal<Feed>, session: &str, token: &str) {
-        self.retained
-            .item_sessions
-            .insert(token.into(), session.into());
         let size = feed.with_untracked(|feed| {
             token.len()
                 + session.len()
@@ -226,11 +255,16 @@ impl AppState {
                             _ => false,
                         })
             }
-            Key::Item(token) => self
-                .retained
-                .item_sessions
-                .get(token)
-                .is_some_and(|session| self.session_pinned(session)),
+            Key::Item(token) => {
+                self.item_fetches
+                    .values()
+                    .any(|fetch| fetch.root() == token)
+                    || self
+                        .retained
+                        .item_refs
+                        .iter()
+                        .any(|(scope, refs)| refs.contains(token) && self.session_pinned(scope))
+            }
         }
     }
 
@@ -276,7 +310,14 @@ impl AppState {
                 self.transcript_deferred.remove(key);
                 self.detail_inflight.remove(key);
                 feed.update(|feed| {
-                    feed.details.remove(key);
+                    if let Some(cache) = feed.details.remove(key)
+                        && let DetailRef::Session { id } = cache.target
+                    {
+                        self.retained.item_refs.remove(&id);
+                        self.retire_reader_scope(&id);
+                        feed.transcript_windows
+                            .retain(|_, window| window.scope != id);
+                    }
                     if let Some(ids) = self.retained.operations.get(key) {
                         for id in ids {
                             if let Some(operation) = feed.operations.get_mut(id.as_str()) {
@@ -289,7 +330,6 @@ impl AppState {
                 self.retained.forget_detail(key);
             }
             Key::Item(token) => {
-                self.retained.item_sessions.remove(token);
                 self.item_fetches
                     .retain(|_, assembly| assembly.root() != token);
                 feed.update(|feed| {

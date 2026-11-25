@@ -16,6 +16,9 @@ use super::{
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
 pub struct TranscriptSeams {
     pub starts: BTreeSet<String>,
+    /// Newer items of the last resident record that were paged out. Include these in
+    /// end-relative item keys so evicting a fragment doesn't rename a visible item.
+    pub suffix: Option<(String, usize)>,
     // A moved physical cut inside a displayed block must not split the reader's item anchor
     // from its bubble. The oldest cut (which protects a future prepend) is never suppressed.
     joins: BTreeSet<String>,
@@ -349,6 +352,7 @@ pub(crate) fn preserve_anchors(
             replacement.transcript_seams = TranscriptSeams {
                 starts,
                 joins: BTreeSet::new(),
+                suffix: replacement.transcript_seams.suffix.take(),
                 tools,
             };
             let interior: BTreeSet<_> = held_layout

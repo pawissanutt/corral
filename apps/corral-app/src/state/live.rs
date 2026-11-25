@@ -236,9 +236,19 @@ impl AppState {
         _ = requests::send(requests::ClientRequest::DetailWatch { target, open });
     }
 
+    /// A daemon transcript step belongs to the view that requested it. Only the explicit
+    /// sample uses the original fixture reducer instead of the detail transport.
+    pub fn transcript_step(&self, intent: crate::model::daemon::ReaderIntent) -> bool {
+        if self.fixture() {
+            return false;
+        }
+        _ = requests::send(requests::ClientRequest::TranscriptStep(intent));
+        true
+    }
+
     /// Keeps the mounted reader's current page from rolling past their reading position.
-    pub fn transcript_reading(&self, scope: &Id, active: bool) -> bool {
-        !self.fixture() && requests::transcript_reading(scope.to_string(), active)
+    pub fn transcript_reading(&self, scope: &Id, holder: u64, active: bool) -> bool {
+        !self.fixture() && requests::transcript_reading(scope.to_string(), holder, active)
     }
 
     pub fn transcript_tail(&self, scope: &Id) {

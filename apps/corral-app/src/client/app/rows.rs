@@ -115,6 +115,7 @@ impl AppState {
                     changed = apply(&mut feed.assistants, delta.rows, delta.left, replacement);
                     feed.forget_ended_quick();
                 });
+                self.retire_quick_readers(feed);
                 Topic::Assistant
             }
             // Single-row topics: the last row of a complete page is the current snapshot.

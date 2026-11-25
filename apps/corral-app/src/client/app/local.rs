@@ -5,8 +5,12 @@ impl AppState {
         self.interrupt_html();
         self.outbox = None;
         self.namespace = None;
+        self.shared_holders.clear();
         self.transcript_readers.clear();
         self.transcript_auto_depth.clear();
+        self.reader_windows.clear();
+        self.item_fetches.clear();
+        self.retained = cache::RetainedCache::default();
         self.offline = super::super::offline::Cache::default();
         feed.update(|feed| {
             feed.mark_stale();
@@ -23,6 +27,8 @@ impl AppState {
             feed.drafts.clear();
             feed.commands.clear();
             feed.details.clear();
+            feed.transcript_windows.clear();
+            feed.items.clear();
         });
     }
     pub async fn boot(

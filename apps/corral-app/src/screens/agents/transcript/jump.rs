@@ -256,7 +256,9 @@ pub(crate) fn follow(
         if !latest.get_untracked() {
             return true;
         }
-        if !status.get_untracked().2 {
+        // End supersedes an older-page read or re-seek. Only coalesce another End
+        // while its own Latest is pending; a failed Latest stays retryable.
+        if !waiting.get_untracked() || !status.get_untracked().2 {
             waiting.set(true);
             if let Some(id) = scope_of.get_untracked()
                 && !latest_reader.step(&id, ReaderStep::Latest)
