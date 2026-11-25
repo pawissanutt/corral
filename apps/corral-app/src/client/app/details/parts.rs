@@ -76,7 +76,7 @@ impl AppState {
         outgoing
     }
 
-    pub(super) fn refresh_transcript_part(
+    pub(in crate::client::app) fn refresh_transcript_part(
         &mut self,
         feed: Signal<Feed>,
         target: DetailRef,

@@ -113,7 +113,9 @@ fn detached_reader_slides_three_pages_across_seven_and_latest_cancels_a_pending_
     assert_rows(&shown(feed).cache, &["1", "2", "3"]);
     assert!(body(&shown(feed).cache).unwrap().older.is_none());
     for (cursor, anchor, id, words, next, expected) in [
-        ("4", "2", "4", "four", "3", &["2", "3", "4"][..]),
+        // In a short viewport its top still sees the oldest page when the
+        // user presses Show newer. That intended eviction must not block the step.
+        ("4", "1", "4", "four", "3", &["2", "3", "4"][..]),
         ("5", "3", "split", "start", "4", &["3", "4", "split"][..]),
         ("6", "split", "split", "end", "5", &["4", "split"][..]),
     ] {
@@ -180,6 +182,58 @@ fn detached_reader_slides_three_pages_across_seven_and_latest_cancels_a_pending_
     assert_eq!(shown(feed), before);
     reply(&mut app, feed, latest, None, fresh);
     assert!(feed.with_untracked(|f| f.transcript_windows.is_empty()));
+}
+
+#[test]
+fn newer_reseek_keeps_the_source_it_finds_on_the_oldest_staged_page() {
+    let runtime = nsh_core::element::Runtime::default();
+    let _entered = runtime.enter();
+    let (mut app, feed) = fixture();
+    for row in (1..=6).rev() {
+        let cursor = row.to_string();
+        let next = (row - 1).to_string();
+        let get = app.reader_step(feed, older(&cursor, None));
+        reply(
+            &mut app,
+            feed,
+            get,
+            Some(&cursor),
+            page(
+                "v1",
+                &[(&cursor, &["saved"])],
+                (row > 1).then_some(next.as_str()),
+            ),
+        );
+    }
+    let get = app.reader_step(feed, intent(ReaderStep::Newer, Some("2")));
+    let held = shown(feed);
+    let mut get = reply(
+        &mut app,
+        feed,
+        get,
+        Some("4"),
+        page("v2", &[("4", &["saved"])], Some("fresh-3")),
+    );
+    for row in (2..=8).rev() {
+        let id = row.to_string();
+        let cursor = format!("fresh-{row}");
+        let next = format!("fresh-{}", row - 1);
+        assert_eq!(shown(feed), held);
+        get = reply(
+            &mut app,
+            feed,
+            get,
+            (row != 8).then_some(cursor.as_str()),
+            page("v2", &[(&id, &["saved"])], Some(&next)),
+        );
+    }
+    assert!(
+        get.is_empty(),
+        "the recovered window already moved one page newer"
+    );
+    let recovered = shown(feed);
+    assert_rows(&recovered.cache, &["2", "3", "4"]);
+    assert!(recovered.cache.error.is_none());
 }
 
 #[test]

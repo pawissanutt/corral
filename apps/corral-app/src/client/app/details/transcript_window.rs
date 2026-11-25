@@ -31,6 +31,8 @@ struct Read {
     intent: ReaderIntent,
     cursor: Option<String>,
     seek: Option<Seek>,
+    /// Live generation observed when this private chain requested its newest page.
+    reread: Option<u64>,
 }
 struct Seek {
     remaining: usize,
@@ -98,6 +100,13 @@ fn anchor(m: &SessionMessage) -> String {
         m.id.clone()
     }
 }
+fn page_index(cache: &DetailCache, source: &str) -> Option<usize> {
+    cache
+        .pages
+        .iter()
+        .position(|p| session(p).is_some_and(|p| p.messages.iter().any(|m| anchor(m) == source)))
+}
+
 fn compatible_anchor(
     feed: &Feed,
     held: &DetailCache,
@@ -361,11 +370,19 @@ impl AppState {
                 intent,
                 cursor,
                 seek: None,
+                reread: None,
             },
         )
     }
     fn send_reader(&mut self, feed: Signal<Feed>, mut read: Read) -> Vec<Outgoing> {
         let target = target(&read.intent.scope);
+        if read.cursor.is_none() {
+            read.reread = feed.with_untracked(|f| {
+                f.live
+                    .get(read.intent.scope.as_str())
+                    .map(|live| live.reread)
+            });
+        }
         read.tag = format!("{PREFIX}{}", requests::new_id());
         let holder = read.intent.holder;
         let outgoing = out(
@@ -520,7 +537,7 @@ impl AppState {
             let Some(cache) = assemble(target, vec![page]) else {
                 return fail(self, &read);
             };
-            return self.join_head(feed, &read.intent, cache, true);
+            return self.join_head(feed, &read.intent, cache, true, read.reread);
         }
         let next = session(&page).and_then(|b| b.older.clone());
         if next.is_some()
@@ -584,13 +601,28 @@ impl AppState {
                 seek.matched = true;
                 replacement.transcript_seams.suffix =
                     seek.path.last().and_then(|b| b.suffix.clone());
+                // Searching from the head can itself move the window forward. If the
+                // verified source already has more newer pages above it than before,
+                // use this result; another fetch would evict the row we just recovered.
+                if matches!(read.intent.step, ReaderStep::Newer)
+                    && read.intent.anchor.as_deref().is_some_and(|key| {
+                        page_index(&held, key)
+                            .zip(page_index(&replacement, key))
+                            .is_some_and(|(old, new)| new > old)
+                    })
+                {
+                    if seek.path.len() == 1 {
+                        return self.join_head(feed, &read.intent, replacement, false, read.reread);
+                    }
+                    return self.publish_reader(feed, holder, seek.path.clone(), replacement);
+                }
                 read.cursor = match read.intent.step {
                     ReaderStep::Newer if seek.path.len() > 1 => {
                         seek.path[seek.path.len() - 2].cursor.clone()
                     }
                     ReaderStep::Older { .. } if next.is_some() => next,
                     ReaderStep::Newer => {
-                        return self.join_head(feed, &read.intent, replacement, false);
+                        return self.join_head(feed, &read.intent, replacement, false, read.reread);
                     }
                     _ => return self.publish_reader(feed, holder, seek.path.clone(), replacement),
                 };
@@ -603,10 +635,17 @@ impl AppState {
             read.cursor = next;
             return self.send_reader(feed, read);
         }
-        let (mut pages, mut path) = read.seek.take().map_or_else(
-            || (held.pages.clone(), path),
-            |seek| (seek.pages, seek.path),
-        );
+        let (base, mut path) = if let Some(seek) = read.seek.take() {
+            // This fresh window has already passed the cross-snapshot anchor check.
+            // The retried directional step is relative to it, not to the stale pages.
+            let Some(base) = assemble(target.clone(), seek.pages) else {
+                return fail(self, &read);
+            };
+            (base, seek.path)
+        } else {
+            (held, path)
+        };
+        let mut pages = base.pages.clone();
         let newer = matches!(read.intent.step, ReaderStep::Newer);
         if newer {
             path.pop();
@@ -630,13 +669,17 @@ impl AppState {
             return fail(self, &read);
         };
         replacement.transcript_seams.suffix = path.last().and_then(|b| b.suffix.clone());
-        if !feed.with_untracked(|f| {
-            compatible_anchor(f, &held, &mut replacement, read.intent.anchor.as_deref())
-        }) {
+        // In a short viewport the row at its top can be on the very page
+        // Show newer intentionally removes. In that case clamp to the first
+        // surviving shared row instead of reporting that the branch changed.
+        let wanted = read.intent.anchor.as_deref().filter(|key| {
+            !newer || page_index(&base, key).is_none() || page_index(&replacement, key).is_some()
+        });
+        if !feed.with_untracked(|f| compatible_anchor(f, &base, &mut replacement, wanted)) {
             return fail(self, &read);
         }
         if newer && path.len() == 1 {
-            return self.join_head(feed, &read.intent, replacement, false);
+            return self.join_head(feed, &read.intent, replacement, false, read.reread);
         }
         self.publish_reader(feed, holder, path, replacement)
     }
