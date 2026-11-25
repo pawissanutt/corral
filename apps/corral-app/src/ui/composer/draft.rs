@@ -100,9 +100,11 @@ pub(super) fn keep_draft(app: AppState, id: Id) {
 /// writes, and so never reports a missing device outbox before pairing. Folded pastes are kept
 /// in memory only, so the saved copy carries their text in place of each `[paste #k …]` marker:
 /// a draft brought back after a restart still sends what was pasted. Staged images are in memory
-/// only too, so the saved copy drops their `[Image #n]` markers rather than name a later image.
+/// only too, so the saved copy drops the `[Image #n]` markers that name one rather than name a
+/// later image; they go before the pastes expand, so text inside a paste is kept as pasted.
 fn keep(app: AppState, id: &Id, text: String) {
-    let text = assistant::strip_image_markers(&app.expand_pastes(id, &text));
+    let backed = assistant::strip_image_markers(&text, app.staged_images(id));
+    let text = app.expand_pastes(id, &backed);
     let kept = app
         .feed
         .with_untracked(|feed| feed.drafts.get(id.as_str()).cloned());

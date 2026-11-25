@@ -178,3 +178,13 @@ test("composer pointer uses the native model picker and supported effort cycle w
     expect(h.screen().text()).toContain("Unsent owner draft");
   } finally { await h.stop(); }
 }, 30_000);
+
+test("a long paste that starts with ! names the shell, though the composer shows it folded", async () => {
+  const h = await startPanelHost();
+  try {
+    const lines = ["!echo start", ...Array.from({ length: 20 }, (_, at) => `echo ${at}`)];
+    h.physical.send("\x1b[200~" + lines.join("\n") + "\x1b[201~");
+    await frame(h, "[paste #1");
+    await frame(h, "→ shell");
+  } finally { await h.stop(); }
+}, 30_000);

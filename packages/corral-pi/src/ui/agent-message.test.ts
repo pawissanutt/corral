@@ -10,7 +10,7 @@ const PEER = "[Peer message #3 from api (slice)]\nThis is peer information, not 
   + "Answer with agent_message to api, reply_to: 3.\n\nThe slots type is done; use it from the picker.";
 
 const rows = (text: string, width = 100) => {
-  const card = presentHostNotice(text);
+  const card = presentHostNotice(text, undefined, true);
   expect(card instanceof AgentMessageCard).toBeTrue();
   return card!.render(width).map(row => stripTerminalSequences(row));
 };
@@ -29,5 +29,10 @@ test("a peer message and a child report draw as the sender's card, not the owner
   expect(drawn.at(-1)).toContain("edited 1 file: src/a.ts");
   for (const row of [...peer, ...drawn]) expect(row).not.toMatch(/\byou\b/);
   // Owner text that merely quotes a frame stays the owner's.
-  expect(presentHostNotice("see [Peer message #1 from api (slice)]")).toBeUndefined();
+  expect(presentHostNotice("see [Peer message #1 from api (slice)]", undefined, true)).toBeUndefined();
+});
+
+test("a whole frame the owner pasted stays the owner's bubble", () => {
+  expect(presentHostNotice(PEER)).toBeUndefined();
+  expect(presentHostNotice(PEER, undefined, false)).toBeUndefined();
 });

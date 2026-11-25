@@ -72,7 +72,7 @@ export async function startPanelHost(extend?: (...args: Parameters<Extend>) => v
     let chatPresentation: PanelHost["chatPresentation"] | undefined;
     mode = new sdk.InteractiveMode(host.runtime, { terminal, tuiMode: "fullscreen", readOnlyQueue: true, verbose: false,
       mainView: (view, presentation) => { transcript = view; chatPresentation = presentation; return panels.mainView(view, presentation); },
-      userPresentation: presentHostNotice });
+      userPresentation: (text, bubble, message) => presentHostNotice(text, bubble, host?.deliveredByHost(message) ?? false) });
     await mode.init(); host.markAttached("interactive");
     void mode.run().catch(error => { throw error; });
     await physical.untilVisible(`${role.toUpperCase()}  │`); // the status bar's role pill and its first separator

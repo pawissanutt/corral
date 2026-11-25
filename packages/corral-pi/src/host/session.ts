@@ -2358,6 +2358,18 @@ export class HostSession {
     }
   }
 
+  /**
+   * Whether user message `message` is input the host delivered itself (origin `auto`: a child's report or a peer
+   * message, never the owner's words): its recorded `corralInput` facts, or, while Pi draws it at its start before
+   * those are recorded, the facts of the input that brings it. A message with neither is not the host's.
+   */
+  deliveredByHost(message: unknown): boolean {
+    if (!message || typeof message !== "object") return false;
+    const recorded = (message as { corralInput?: { origin?: unknown } }).corralInput;
+    if (recorded) return recorded.origin === "auto";
+    return (this.queuedInputFacts.get(message) ?? this.startedInputFacts)?.facts.origin === "auto";
+  }
+
   /** A fleet child's hue (its index in the fleet, as childHue gives it), or undefined. */
   agentHue(id: string): number | undefined {
     const index = (this.buildControls?.fleet ?? this.fleet)?.snapshot().children.findIndex(child => child.id === id) ?? -1;

@@ -264,6 +264,8 @@ const FOLDED_BUBBLE_ROWS = 12, FOLD_FROM = 14;
 
 /** Pi's own bubble for a long owner message, folded to its first 12 rows until a click or Ctrl+O opens it. */
 export class FoldedBubble implements Component {
+  /** Read by the patched InteractiveMode: the owner's own words, so a resumed session keeps them in Up-arrow history. */
+  readonly ownerWords = true;
   private expanded = false;
   private foldable = false;
   constructor(readonly inner: Component) {}
@@ -298,11 +300,12 @@ const LONG_LINES = 16, LONG_CHARS = 1600;
  * message another agent sent, quiet rows for a host notice, Pi's bubble folded for a long owner message, or undefined
  * so Pi draws its own bubble.
  */
-export function presentHostNotice(text: string, bubble?: (text: string) => Component): Component | undefined {
+export function presentHostNotice(text: string, bubble?: (text: string) => Component, hostDelivered = false): Component | undefined {
   // An answer is the owner's even when its text quotes a host shape, so it is read first.
   const answers = classifyOwnerInput(text);
   if (answers) return new AnswerBubble(answers);
-  const agent = classifyAgentNote(text);
+  // Only input the host delivered is another agent's message: the same frame pasted by the owner stays the owner's.
+  const agent = hostDelivered ? classifyAgentNote(text) : undefined;
   if (agent) return new AgentMessageCard(agent, agentIdColor(agent.kind === "peer" ? agent.from : agent.id));
   const notice = classifyHostNotice(text);
   if (notice) return new HostNoticeRows(notice);

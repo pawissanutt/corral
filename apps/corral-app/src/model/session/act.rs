@@ -493,15 +493,21 @@ impl State {
                 match echo::state(sent, scope.as_str(), feed) {
                     EchoState::Refused(why) => {
                         sent.told = true;
-                        refused.push((sent.text.clone(), why));
+                        let uploads = sent
+                            .attachments
+                            .iter()
+                            .filter(|item| matches!(item, SendAttachment::Upload { .. }))
+                            .count();
+                        refused.push((sent.text.clone(), uploads, why));
                     }
                     EchoState::Withdrawn => sent.told = true,
                     _ => {}
                 }
             }
-            for (text, why) in refused {
-                // Its attachments are not staged again, so no `[Image #n]` may name a later image.
-                let text = crate::model::assistant::strip_image_markers(&text);
+            for (text, uploads, why) in refused {
+                // Its attachments are not staged again, so no `[Image #n]` that named one of its
+                // images may name a later image; one past its uploads is the owner's own text.
+                let text = crate::model::assistant::strip_image_markers(&text, uploads);
                 ui.draft = if ui.draft.is_empty() {
                     text
                 } else {

@@ -29,6 +29,7 @@ import { errorPresenter } from "../ui/error-copy.ts";
 import { repaintTranscript } from "../ui/transcript-repaint.ts";
 import { presentHostNotice } from "../ui/host-notices.ts";
 import { setAgentHueSource } from "../ui/agent-hues.ts";
+import type { Component } from "@earendil-works/pi-tui";
 import { RemoteOwner } from "./remote-owner.ts";
 import { installRemote } from "./remote/index.ts";
 import { SessionRecord } from "./session-record.ts";
@@ -344,7 +345,8 @@ async function runSession(config: HostConfig, overrides: HostOverrides, events: 
     ...(codeHandoff ? { onTerminalCommand: (text: string) => session.handleCodeCommand(text) } : {}),
     verbose: false, resumeHint: false, terminal: panels ? panels.wrap(physicalTerminal) : physicalTerminal,
     ...(panels ? { tuiMode: "fullscreen" as const, readOnlyQueue: true, mainView: (transcript, presentation) => panels.mainView(transcript, presentation),
-      errorPresentation: errorPresenter(() => session.latestStopCause()), userPresentation: presentHostNotice, ...panels.presentation() } : {}),
+      errorPresentation: errorPresenter(() => session.latestStopCause()), userPresentation: (text: string, bubble: (text: string) => Component, message?: unknown) =>
+        presentHostNotice(text, bubble, session.deliveredByHost(message)), ...panels.presentation() } : {}),
   });
   guardTerminalStop(terminal, process.stdin);
   await terminal.init();

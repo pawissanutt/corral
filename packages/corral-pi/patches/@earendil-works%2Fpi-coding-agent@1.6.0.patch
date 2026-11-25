@@ -2309,7 +2309,7 @@ index a2f792aa7a1b248101805095b3f20c5fed56d7dc..ca223dd62a0ba7bfe6b2d4a00798c1d5
 +     * user bubble, or undefined to keep the bubble. `bubble` builds Pi's own user bubble for a text with the session's
 +     * theme and transformers. What the model receives is unchanged.
 +     */
-+    userPresentation?: (text: string, bubble: (text: string) => Component) => Component | undefined;
++    userPresentation?: (text: string, bubble: (text: string) => Component, message?: unknown) => Component | undefined;
 +    /**
 +     * Presentation-only replacement for the line a failed or stopped turn draws (`Error: …`, `Operation aborted`,
 +     * `Retry failed after n attempts: …`). With it, the tool calls of a turn the owner stopped read as not run and
@@ -2968,12 +2968,12 @@ index cbd936501adcf0663f06ab29c1e5466207350f64..875ce674dfd49be5abcf5ef547da96a7
                      }
                      else {
 +                        // A host-made input the host presents itself (a notice row); the model still receives the text.
-+                        const presented = this.options.userPresentation?.(textContent, (text) => new UserMessageComponent(text, this.getMarkdownThemeWithSettings(), this.outputPad, this.getMarkdownTransformers(), options?.messageId, options?.timestamp));
++                        const presented = this.options.userPresentation?.(textContent, (text) => new UserMessageComponent(text, this.getMarkdownThemeWithSettings(), this.outputPad, this.getMarkdownTransformers(), options?.messageId, options?.timestamp), message);
 +                        if (presented) {
-+                            if (isExpandable(presented)) {
-+                                presented.setExpanded(this.toolOutputExpanded);
-+                            }
++                            if (isExpandable(presented)) presented.setExpanded(this.toolOutputExpanded);
 +                            this.chatContainer.addChild(presented);
++                            // The owner's own words presented in another form (a folded bubble) stay in the editor history.
++                            if (options?.populateHistory && presented.ownerWords === true) this.editor.addToHistory?.(textContent);
 +                            break;
 +                        }
                          const userComponent = new UserMessageComponent(textContent, this.getMarkdownThemeWithSettings(), this.outputPad, this.getMarkdownTransformers(), options?.messageId, options?.timestamp);

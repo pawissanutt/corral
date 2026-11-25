@@ -50,6 +50,17 @@ test("a message Pi sends first leaves the images of the draft still being writte
   expect(images.take("look at [Image #2]").images.map(image => image.data)).toEqual(["second"]);
 });
 
+test("images whose markers were cleared do not count toward the per-message limit", () => {
+  const path = join(mkdtempSync(join(tmpdir(), "corral-attach-")), "shot.png");
+  writeFileSync(path, PNG_1X1);
+  const images = new StagedImages();
+  for (let at = 0; at < 8; at++) images.stage({ type: "image", data: "x", mimeType: "image/png" }, "old");
+  // The draft that marked all eight was cleared (Ctrl+C); the next image is the new draft's first.
+  const { base, calls } = fakeBase("");
+  expect(paste(images).handle(PASTE_START + path + PASTE_END, base)).toBe(true);
+  expect(calls.insert).toEqual(["[Image #9]"]);
+});
+
 test("clipboard text over the fold limit goes through pi-tui's paste fold", () => {
   const router = paste(new StagedImages()), { base, calls } = fakeBase("");
   expect(router.handle("\x16", base)).toBe(false);

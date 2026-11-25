@@ -95,6 +95,10 @@ export class StagedImages {
   private readonly staged = new Map<number, { readonly image: ImageContent; readonly name: string }>();
   private next = 0;
   get count(): number { return this.staged.size; }
+  /** How many staged images `draft` marks: the images the message being written would carry. */
+  markedIn(draft: string): number {
+    return new Set([...draft.matchAll(IMAGE_MARKER)].map(match => Number(match[1])).filter(n => this.staged.has(n))).size;
+  }
   /** Stages one image and returns its marker; the caller checks `count` against MAX_IMAGES first. */
   stage(image: ImageContent, name: string): string {
     this.next += 1;
@@ -216,7 +220,8 @@ export class ComposerPaste {
     if (!paths) return false;
     const input = this.deps.imageInput();
     if (!input.accepts) { this.deps.notice(`${input.model} does not take images; the file path was inserted instead`, "warning"); return false; }
-    if (this.deps.images.count + paths.length > MAX_IMAGES) {
+    // An image whose marker was deleted or cleared no longer counts; one Pi has yet to send left the draft already.
+    if (this.deps.images.markedIn(base.text()) + paths.length > MAX_IMAGES) {
       this.deps.notice(`At most ${MAX_IMAGES} images per message; the path was inserted instead`, "warning");
       return false;
     }

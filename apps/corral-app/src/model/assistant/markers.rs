@@ -93,12 +93,13 @@ pub fn drop_image_marker(text: &str, removed: usize) -> String {
     })
 }
 
-/// `text` without its `[Image #n]` markers (and one space beside each): a draft saved on the
-/// device keeps no marker, because the staged images it names live in memory only and a
-/// restored draft's marker would name whatever image is pasted next.
-pub fn strip_image_markers(text: &str) -> String {
-    replace_markers(text, "[Image #", |_, suffix, out, tail| {
-        if !suffix.is_empty() {
+/// `text` without the `[Image #n]` markers that name one of its `backed` images, `n` from 1 to
+/// `backed` (and one space beside each): a draft saved on the device keeps no such marker,
+/// because the staged images live in memory only and a restored draft's marker would name
+/// whatever image is pasted next. Any other `[Image #n]` is the owner's own text and stays.
+pub fn strip_image_markers(text: &str, backed: usize) -> String {
+    replace_markers(text, "[Image #", |n, suffix, out, tail| {
+        if !suffix.is_empty() || n == 0 || n > backed {
             return false;
         }
         if out.ends_with(' ') {
@@ -117,8 +118,13 @@ mod tests {
     #[test]
     fn a_saved_draft_keeps_no_image_marker_a_restart_cannot_back() {
         assert_eq!(
-            strip_image_markers("[Image #1] look at [Image #2] here"),
-            "look at here"
+            strip_image_markers("[Image #1] look at [Image #2] here [Image #3]", 2),
+            "look at here [Image #3]"
+        );
+        // Text that only mentions the syntax, with no image staged, is kept whole.
+        assert_eq!(
+            strip_image_markers("write [Image #1] for an image", 0),
+            "write [Image #1] for an image"
         );
     }
 

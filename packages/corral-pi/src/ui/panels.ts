@@ -948,13 +948,14 @@ export class NativePanels implements PanelSurface {
             // A child receives Enter; `/` commands always reach Pi, so `/finish` works with any receiver.
             const build = owner.build;
             if (build?.target() && !this.isShowingAutocomplete()) {
-              const text = this.getText();
+              // What Enter would send: pi-tui's `[paste #n …]` placeholders expanded, as Pi's own submit expands them, so a
+              // folded paste that starts with `/` is a command for Pi and the child gets what was pasted.
+              const text = this.getExpandedText();
               if (keys.getKeys("tui.input.submit").some(key => matchesKey(data, key)) && text.trim() && !text.trimStart().startsWith("/")) {
-                if (owner.stagedImages.count > 0 && new RegExp(IMAGE_MARKER.source).test(text)) {
+                if (owner.stagedImages.count > 0 && new RegExp(IMAGE_MARKER.source).test(this.getText())) {
                   owner.workbench.notice("Images go to the parent only; choose the parent as the receiver to send them", "warning"); return;
                 }
-                // The child gets what was pasted, not pi-tui's `[paste #n …]` placeholders (Pi's submit expands them too).
-                void build.submit(this.getExpandedText()); return;
+                void build.submit(text); return;
               }
               if (keys.getKeys("app.message.followUp").some(key => matchesKey(data, key))) {
                 owner.workbench.notice("Only the parent takes queued follow-ups", "warning"); return;
@@ -989,7 +990,8 @@ export class NativePanels implements PanelSurface {
             // The receiver stays at every width (it decides where Enter goes); the input disposition clips first, then the indicator.
             // A draft Pi runs as an owner `!command` names the shell instead, unless a child takes Enter (it gets the text).
             const columns = owner.terminal?.physical.columns ?? width, target = owner.build?.composerTarget(), stop = piKey("app.interrupt");
-            const shell = owner.build?.target() ? undefined : shellDisposition(this.getText());
+            // Judged on the expanded draft, as Pi's submit sees it: a folded paste that starts with `!` runs in the shell.
+            const shell = owner.build?.target() ? undefined : shellDisposition(this.getExpandedText());
             const status = owner.activity.indicator(columns, owner.clock.now(), stop ? keyLabel(stop) : undefined);
             return composerTop(composerTitle(columns < COMPACT_COLUMNS ? null : owner.snapshot(), target, shell), width, this.accent,
               hidden ? `↑ ${hidden} more` : "", status, visibleWidth(composerTitle(null, target, shell)));

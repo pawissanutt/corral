@@ -172,7 +172,8 @@ impl AppState {
             .collect()
     }
 
-    fn staged_images(&self, session: &Id) -> usize {
+    /// How many images are staged for session `session`'s next message.
+    pub(crate) fn staged_images(&self, session: &Id) -> usize {
         self.ask_staged.with_untracked(|staged| {
             staged
                 .get(session)

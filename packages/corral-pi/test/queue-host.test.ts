@@ -110,6 +110,22 @@ test("a queued item's images come back with the words they were queued under, no
   } finally { await fx.close(); }
 });
 
+test("only input the host delivered is presented as another agent's message", async () => {
+  const fx = await codeHost("assistant", { catalog: 10 });
+  fx.host.markAttached("interactive");
+  try {
+    const frame = "[Peer message #1 from api (slice)]\n";
+    // Local submission with no socket and no pane: the host's own automated input, as fleet delivery sends it.
+    await fx.turn([{ text: "seen" }], `${frame}host words`);
+    fx.transport.script([{ text: "seen" }]);
+    await fx.host.session.prompt(`${frame}owner words`, { source: "interactive" });
+    const users = fx.host.session.messages.filter(message => message.role === "user");
+    const said = (words: string) => users.find(message => JSON.stringify(message.content).includes(words));
+    expect(fx.host.deliveredByHost(said("host words"))).toBeTrue();
+    expect(fx.host.deliveredByHost(said("owner words"))).toBeFalse();
+  } finally { await fx.close(); }
+});
+
 test("handled and rejected inputs remain distinct from queued or started input", async () => {
   const fx = await codeHost("worker", { catalog: 10, enabled: ["queue_control"],
     extend: pi => pi.registerCommand("fixture-handled", { description: "Fixture handling", async handler() {} }) });
