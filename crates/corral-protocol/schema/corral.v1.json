@@ -702,8 +702,22 @@
           "id": {
             "type": "string"
           },
+          "key": {
+            "description": "The plan key this task was filed under, confirmed by the board; absent when unknown.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "phase": {
             "type": "string"
+          },
+          "project": {
+            "description": "The project it was filed in, confirmed by the board; absent when unknown.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "size": {
             "type": [
@@ -773,6 +787,13 @@
             ]
           },
           "profile": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project": {
+            "description": "The project this task is filed in: its own, else the plan's. Absent from an older host,\nwhere the plan's project applies.",
             "type": [
               "string",
               "null"
