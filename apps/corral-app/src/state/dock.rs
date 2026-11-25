@@ -1,9 +1,12 @@
-//! The dock follows the active authenticated store, not the route or the Ask key.
+//! The desktop side pane: Ask's tab and the session tabs kept beside the page. The session
+//! tabs follow the active authenticated store, not the route or the Ask key; Ask's tab is
+//! `Overlay::Ask`. One pane shows one tab at a time, and closing the pane closes both.
 
 use nsh_core::prelude::*;
 
 use super::{AppState, switcher::pin_key};
 use crate::model::agents::switcher::StoreAgents;
+use crate::model::pane::Placement;
 use crate::model::{DataState, Id, Overlay, dock, work::Press};
 
 use std::collections::BTreeMap;
@@ -19,7 +22,9 @@ type Contexts = BTreeMap<((bool, String), Id), ContextRef>;
 pub(super) struct DockUi {
     contexts: Signal<Contexts>,
     panel: Option<Signal<Panel>>,
-    hidden: Signal<bool>,
+    /// Asked for since the window last became too narrow to keep the pane beside the page:
+    /// a narrow window shows the pane over the page only on request, never on its own.
+    narrow_shown: Signal<bool>,
 }
 
 impl DockUi {
@@ -27,7 +32,7 @@ impl DockUi {
         Self {
             contexts: signal(BTreeMap::new()),
             panel: None,
-            hidden: signal(false),
+            narrow_shown: signal(false),
         }
     }
 }
@@ -137,39 +142,113 @@ impl AppState {
             .with(|pins| read(key.as_deref().and_then(|key| pins.get(key))))
     }
 
+    /// Tracked: the session tab the pane would show, shown or not.
     pub fn visible_dock(&self) -> Option<Id> {
         if !dock::supported(self.form) {
             return None;
         }
-        self.with_dock(|saved| saved.and_then(StoreAgents::visible_dock).map(Id::new))
+        let ask = self.ask_chat();
+        self.with_dock(|saved| {
+            saved
+                .and_then(|saved| saved.shown_tab(ask.as_deref()))
+                .map(Id::new)
+        })
     }
 
+    /// Tracked: the chat Ask's tab shows (`quick` as the chat it names), which no session tab
+    /// shows again.
+    fn ask_chat(&self) -> Option<String> {
+        let ask = self.ask_id();
+        self.feed
+            .with(|feed| crate::model::agents::switcher::exact(feed, ask.as_str()))
+    }
+
+    /// Tracked: the session tab the pane shows now: none while Ask's tab is chosen, the pane
+    /// is hidden, or a narrow window has not asked for it.
     pub fn shown_dock(&self) -> Option<Id> {
-        if self.dock_ui.hidden.get() || self.is_open(Overlay::Ask) {
+        if self.is_open(Overlay::Ask)
+            || self.with_dock(|saved| saved.is_some_and(|s| s.pane_hidden))
+        {
+            return None;
+        }
+        if self.pane.placement() == Placement::Over && !self.dock_ui.narrow_shown.get() {
             return None;
         }
         self.visible_dock()
     }
 
-    pub fn can_show_dock(&self) -> bool {
-        self.dock_ui.hidden.get() && self.visible_dock().is_some() && !self.is_open(Overlay::Ask)
+    /// Tracked: whether the side pane shows, on Ask's tab or a session's.
+    pub fn pane_open(&self) -> bool {
+        self.is_open(Overlay::Ask) || self.shown_dock().is_some()
     }
 
+    /// Shows the pane on the session tab last chosen.
     pub fn show_dock(&self) {
-        self.dock_ui.hidden.set(false);
+        self.set_pane_hidden(false);
+        self.dock_ui.narrow_shown.set(true);
     }
 
+    /// Hides the session tabs without closing them; they come back as they were.
     pub fn hide_dock(&self) {
-        self.dock_ui.hidden.set(true);
+        self.set_pane_hidden(true);
+        self.dock_ui.narrow_shown.set(false);
         self.pane.focused.set(false);
     }
 
-    pub(super) fn dock_overlays_page(&self) -> bool {
-        self.pane.placement() == crate::model::pane::Placement::Over && self.shown_dock().is_some()
+    /// Closes the pane, whichever tab it shows.
+    pub fn close_pane(&self) {
+        if untracked(|| self.is_open(Overlay::Ask)) {
+            self.close(Overlay::Ask);
+        } else {
+            self.hide_dock();
+        }
     }
 
+    /// The sidebar's Side pane row, the palette's and `Ctrl J`: closes the pane while it
+    /// shows, else shows it on its last session tab, or on Ask's when it holds none.
+    pub fn toggle_pane(&self) {
+        if !dock::supported(self.form) {
+            return;
+        }
+        if untracked(|| self.pane_open()) {
+            self.close_pane();
+        } else if untracked(|| self.visible_dock()).is_some() {
+            self.show_dock();
+        } else {
+            self.open_ask();
+        }
+    }
+
+    /// Quietly: Ask's tab closes the pane without a store to keep the choice in.
+    fn set_pane_hidden(&self, hidden: bool) {
+        let preview = self.data.get_untracked() == DataState::Fixture;
+        let Some(key) = self.feed.with_untracked(|feed| pin_key(feed, preview)) else {
+            return;
+        };
+        let pins = untracked(|| self.pins_in_view());
+        if pins.with_untracked(|pins| pins.get(&key).is_some_and(|s| s.pane_hidden) != hidden) {
+            pins.update(|pins| pins.store_mut(&key).pane_hidden = hidden);
+        }
+    }
+
+    pub(super) fn dock_overlays_page(&self) -> bool {
+        self.pane.placement() == Placement::Over && self.shown_dock().is_some()
+    }
+
+    /// Takes the pane off a narrow page without hiding it from a wide one.
     pub(super) fn dismiss_dock_overlay(&self) -> bool {
         if untracked(|| self.dock_overlays_page()) {
+            self.dock_ui.narrow_shown.set(false);
+            self.pane.focused.set(false);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Escape with the keyboard in the pane's session tab: the pane closes, as Ask's does.
+    pub(super) fn escape_pane(&self) -> bool {
+        if self.pane.focused.get_untracked() && untracked(|| self.shown_dock()).is_some() {
             self.hide_dock();
             true
         } else {
@@ -191,11 +270,22 @@ impl AppState {
     }
 
     pub fn dock_tabs(&self) -> Vec<dock::Tab> {
+        let ask = self.ask_chat();
         self.with_dock(|saved| {
             saved.map_or_else(Vec::new, |saved| {
-                self.feed.with(|feed| dock::tabs(feed, saved))
+                self.feed
+                    .with(|feed| dock::tabs(feed, saved, ask.as_deref()))
             })
         })
+    }
+
+    /// Tracked: whether the session has a tab in the pane.
+    pub fn docked(&self, id: &Id) -> bool {
+        dock::supported(self.form)
+            && self.ask_chat().as_deref() != Some(id.as_str())
+            && self.with_dock(|saved| {
+                saved.is_some_and(|saved| saved.docked.iter().any(|tab| tab == id.as_str()))
+            })
     }
 
     fn change_dock(
@@ -219,26 +309,46 @@ impl AppState {
         true
     }
 
+    /// Puts any session (a chat, a Code or Build session, a run of any role) in the pane on a
+    /// tab of its own and shows it there.
     pub fn dock_session(&self, id: &Id) {
+        let gone: Vec<String> = untracked(|| self.dock_tabs())
+            .into_iter()
+            .filter(|tab| tab.state == crate::model::status::SessionState::Gone)
+            .map(|tab| tab.id.to_string())
+            .collect();
         let exact = self.feed.with_untracked(|feed| dock::exact(feed, id));
+        // Ask's chat already has Ask's tab: show that rather than a second tab of it.
+        if exact.is_some() && exact == untracked(|| self.ask_chat()) {
+            if dock::supported(self.form) {
+                self.open_ask();
+            }
+            return;
+        }
         if self.change_dock(|saved| {
             let id = exact.ok_or(dock::UNAVAILABLE)?;
-            saved.show_docked(&id).then_some(()).ok_or(dock::FULL)
+            saved
+                .show_docked(&id, |tab| gone.iter().any(|gone| gone == tab))
+                .then_some(())
+                .ok_or(dock::FULL)
         }) {
+            self.leave_ask_for_tab();
             self.show_dock();
-            if untracked(|| self.is_open(Overlay::Ask)) {
-                self.close(Overlay::Ask);
-            }
         }
     }
 
+    /// Chooses a session tab of the pane, leaving Ask's tab as it was.
     pub fn select_dock(&self, id: &Id) {
-        self.change_dock(|saved| {
+        if self.change_dock(|saved| {
             saved.select_docked(id.as_str());
             Ok(())
-        });
+        }) {
+            self.leave_ask_for_tab();
+            self.show_dock();
+        }
     }
 
+    /// Closes a session's tab; the session itself goes on.
     pub fn undock(&self, id: &Id) {
         if self.change_dock(|saved| {
             saved.undock(id.as_str());
@@ -246,6 +356,23 @@ impl AppState {
         }) {
             self.set_dock_context(id, None);
         }
+    }
+
+    /// Ask's tab gives way to a session tab without closing the pane.
+    fn leave_ask_for_tab(&self) {
+        if untracked(|| self.is_open(Overlay::Ask)) {
+            self.close_only(Overlay::Ask);
+        }
+    }
+
+    /// The window grew narrow: the pane leaves the page until it is asked for again.
+    pub(super) fn follow_dock(self) {
+        let over = computed(move || self.pane.placement() == Placement::Over);
+        effect(move || {
+            if over.get() {
+                untracked(|| self.dock_ui.narrow_shown.set(false));
+            }
+        });
     }
 
     pub fn press_work(&self, press: Press) {

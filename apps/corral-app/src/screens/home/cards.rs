@@ -266,15 +266,16 @@ fn head(app: AppState, card: &Card, opened: bool, record: work::Record) -> AnyEl
         )
         .child(figure(form, card.age.clone(), 11.5, Token::Ink3))
         .when(opened, |row| {
-            row.child(button_with(
-                app,
-                "Open page",
-                ButtonKind::Ghost,
-                ButtonOptions::default(),
-                "btn-open-page",
-                move || app.open_live(live.clone()),
-            ))
-            .child(more_button(app, record, true))
+            row.children(crate::ui::ask::open_beside(app, &live))
+                .child(button_with(
+                    app,
+                    "Open page",
+                    ButtonKind::Ghost,
+                    ButtonOptions::default(),
+                    "btn-open-page",
+                    move || app.open_live(live.clone()),
+                ))
+                .child(more_button(app, record, true))
         })
         .into_element()
 }

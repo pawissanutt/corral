@@ -117,6 +117,13 @@ impl AppState {
         self.open_live(Live::Session(id));
     }
 
+    /// Opens the conversation (a chat, a Code or Build session) on a tab of the side pane,
+    /// leaving Ask keyed as it was and the page as it is.
+    pub fn open_agent_beside(&self, id: Id) {
+        self.close_agents();
+        self.dock_session(&id);
+    }
+
     /// Pins or unpins the exact conversation only for a ready authenticated store.
     pub fn toggle_agent_pin(&self, id: &Id) {
         let preview = self.data.get_untracked() == DataState::Fixture;

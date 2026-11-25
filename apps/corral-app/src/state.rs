@@ -334,6 +334,7 @@ impl AppState {
         app.follow_projects();
         app.follow_sessions();
         app.follow_agents();
+        app.follow_dock();
         app.settle_config();
         app.follow_cached_feed();
         app.watch_device_receipts();
@@ -469,8 +470,17 @@ impl AppState {
         self.change(|nav| nav.open(Overlay::Palette));
     }
 
-    /// Closes an overlay; leaving Ask also detaches its contextual chip.
+    /// Closes an overlay; leaving Ask also detaches its contextual chip and closes the side
+    /// pane, so a session tab never takes Ask's place unasked.
     pub fn close(&self, overlay: Overlay) {
+        let pane = overlay == Overlay::Ask && self.nav.with_untracked(|nav| nav.is_open(overlay));
+        self.close_only(overlay);
+        if pane {
+            self.hide_dock();
+        }
+    }
+
+    fn close_only(&self, overlay: Overlay) {
         self.change(|nav| nav.close(overlay));
         if overlay == Overlay::Ask {
             self.ask_context.set(None);
@@ -526,7 +536,7 @@ impl AppState {
             self.close(overlay);
             return;
         }
-        if self.dismiss_dock_overlay() {
+        if self.dismiss_dock_overlay() || self.escape_pane() {
             return;
         }
         // Escape leaves Home's docked composer, so Home's keys walk its cards again.

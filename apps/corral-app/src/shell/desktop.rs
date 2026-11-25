@@ -12,7 +12,7 @@ use nsh_core::prelude::*;
 use crate::model::agents::switcher::{AGENTS_KEY, AGENTS_LABEL};
 use crate::model::commands::area_key;
 use crate::model::nav::{PALETTE_HINT, PALETTE_KEY, SIGNS_AS, THIS_DEVICE};
-use crate::model::{Area, Destination, SettingsSection, Workspace};
+use crate::model::{Area, Destination, SettingsSection, Workspace, dock};
 use crate::screens;
 use crate::shell::{
     activity_pages, confirmation, current_area, places, section_short, sidebar_collapsed, stale,
@@ -183,6 +183,7 @@ fn sidebar(
         .child(scope_switcher(app, ScopeFace::Sidebar))
         .child(scroll().flex_1().min_h(px(0.0)).child(rows))
         .child(agents_opener(app))
+        .child(pane_opener(app))
         .child(palette_opener(app))
         .child(place_row(app, current, Area::Settings))
         .child(when(
@@ -304,6 +305,20 @@ fn rail(app: AppState, current: Memo<Area>, shown: Memo<Vec<Area>>) -> AnyElemen
                 move || app.open_agents(),
             )
             .child(icon(Icon::Agents, 18.0, color(Token::ShellInk2))),
+        )
+        .child(
+            rail_button(
+                app,
+                Hint {
+                    name: dock::PANE,
+                    key: Some(dock::KEY.to_owned()),
+                },
+                move || SharedString::from(dock::PANE),
+                "side-pane-toggle".into(),
+                move || app.pane_open(),
+                move || app.toggle_pane(),
+            )
+            .child(icon(Icon::Split, 18.0, color(Token::ShellInk2))),
         )
         .child(
             rail_button(
@@ -535,42 +550,71 @@ fn rail_hint(hint: Hint) -> AnyElement {
 
 /// The Agents switcher's row above Go to, with its chord.
 fn agents_opener(app: AppState) -> AnyElement {
-    let ink = color(Token::ShellInk);
-    let quiet = color(Token::ShellInk2);
-    view()
-        .h(px(control_height(row_height(app.form))))
-        .flex_shrink_0()
-        .flex_row()
-        .items_center()
-        .gap(px(10.0))
-        .px(px(8.0))
-        .rounded(px(RADIUS_CONTROL))
-        .cursor_pointer()
-        .transition_colors()
-        .duration(120.0_f32)
-        .hover(move |s| s.bg(ink.opacity(0.1)))
-        .active(move |s| s.bg(ink.opacity(0.16)))
-        .focus_visible(focus_ring)
-        .role(AccessibilityRole::Button)
-        .label(AGENTS_LABEL)
-        .test_id("agents-open")
-        .on_press(move || app.open_agents())
-        .child(icon(Icon::Agents, 16.0, quiet))
-        .child(
-            text(AGENTS_LABEL)
-                .flex_1()
-                .min_w(px(0.0))
-                .truncate()
-                .text_size(px(text_size(app.form)))
-                .text_color(quiet),
-        )
-        .child(key_hint(AGENTS_KEY))
-        .into_element()
+    opener(
+        app,
+        AGENTS_LABEL,
+        Icon::Agents,
+        AGENTS_KEY,
+        "agents-open",
+        None,
+        move || app.open_agents(),
+    )
+}
+
+/// The side pane's row under Agents: shows or hides it, with the number of sessions it holds.
+fn pane_opener(app: AppState) -> AnyElement {
+    let held = computed(move || app.dock_tabs().len());
+    let count = dynamic(move || {
+        let held = held.get();
+        (held > 0).then(|| {
+            text(held.to_string())
+                .test_id("side-pane-count")
+                .text_size(px(text_size(app.form) - 2.0))
+                .text_color(color(Token::ShellInk2))
+        })
+    })
+    .into_element();
+    let open = computed(move || app.pane_open());
+    opener(
+        app,
+        dock::PANE,
+        Icon::Split,
+        dock::KEY,
+        "side-pane-toggle",
+        Some((count, open)),
+        move || app.toggle_pane(),
+    )
 }
 
 fn palette_opener(app: AppState) -> AnyElement {
+    opener(
+        app,
+        PALETTE_HINT,
+        Icon::Search,
+        PALETTE_KEY,
+        "palette-open",
+        None,
+        move || app.open_palette(),
+    )
+}
+
+/// A row at the sidebar's foot: icon, name, what it holds, then its key. With `shown` it is a
+/// toggle, tinted and announced expanded while what it opens shows.
+fn opener(
+    app: AppState,
+    label: &'static str,
+    glyph: Icon,
+    key: &'static str,
+    test_id: &'static str,
+    shown: Option<(AnyElement, Memo<bool>)>,
+    on_press: impl Fn() + 'static,
+) -> AnyElement {
     let ink = color(Token::ShellInk);
     let quiet = color(Token::ShellInk2);
+    let (trailing, open) = match shown {
+        Some((trailing, open)) => (Some(trailing), Some(open)),
+        None => (None, None),
+    };
     view()
         .h(px(control_height(row_height(app.form))))
         .flex_shrink_0()
@@ -582,23 +626,35 @@ fn palette_opener(app: AppState) -> AnyElement {
         .cursor_pointer()
         .transition_colors()
         .duration(120.0_f32)
+        .bg(move || {
+            if open.is_some_and(|open| open.get()) {
+                ink.opacity(0.14)
+            } else {
+                AdaptiveColor::TRANSPARENT
+            }
+        })
         .hover(move |s| s.bg(ink.opacity(0.1)))
         .active(move |s| s.bg(ink.opacity(0.16)))
         .focus_visible(focus_ring)
         .role(AccessibilityRole::Button)
-        .label(PALETTE_HINT)
-        .test_id("palette-open")
-        .on_press(move || app.open_palette())
-        .child(icon(Icon::Search, 16.0, quiet))
+        .label(label)
+        .accessibility_state(move || AccessibilityState {
+            expanded: open.map(|open| open.get()),
+            ..AccessibilityState::default()
+        })
+        .test_id(test_id)
+        .on_press(on_press)
+        .child(icon(glyph, 16.0, quiet))
         .child(
-            text(PALETTE_HINT)
+            text(label)
                 .flex_1()
                 .min_w(px(0.0))
                 .truncate()
                 .text_size(px(text_size(app.form)))
                 .text_color(quiet),
         )
-        .child(key_hint(PALETTE_KEY))
+        .children(trailing)
+        .child(key_hint(key))
         .into_element()
 }
 

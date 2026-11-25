@@ -23,6 +23,9 @@ pub const AGENTS_LABEL: &str = "Agents";
 pub const NEW_ASSISTANT: &str = "New assistant";
 pub const NEW_ASSISTANT_NOTE: &str = "a new chat for Ask; the one it was on stays here";
 pub const SWITCHER_SUB: &str = "Pinned on this device, then recent. Enter opens; P pins or unpins.";
+/// The same where the side pane is: S opens the focused conversation there.
+pub const SWITCHER_SUB_PANE: &str =
+    "Pinned on this device, then recent. Enter opens; S opens in the side pane; P pins or unpins.";
 pub const SWITCHER_EMPTY: &str = "No assistant conversations yet.";
 pub const PINNED: &str = "Pinned";
 pub const RECENT_HEADING: &str = "Recent";
@@ -40,6 +43,9 @@ pub struct StoreAgents {
     pub docked: Vec<String>,
     #[serde(default)]
     pub visible_dock: Option<String>,
+    /// The side pane's session tabs are kept but not shown; showing a session there clears it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pane_hidden: bool,
 }
 
 /// Pins keyed by an unambiguous authenticated enrollment and store pair.

@@ -31,6 +31,7 @@ impl AppState {
             }
             Action::NewAssistant => self.new_assistant(),
             Action::Agents => self.open_agents(),
+            Action::SidePane => self.toggle_pane(),
             Action::Theme(theme) => self.set_theme(theme),
             Action::Data(data) => self.set_data(data),
             Action::Hotkey => self.hotkey.set(true),

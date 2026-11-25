@@ -183,10 +183,12 @@ pub(crate) fn linked(app: AppState, linked: &Linked) -> AnyElement {
     )
 }
 
-/// A run, which opens its session's page (`btn-open-reviewer`, `btn-open-run-<run>`).
+/// A run, which opens its session's page (`btn-open-reviewer`, `btn-open-run-<run>`), and on
+/// the desktop opens it in the side pane too.
 pub(crate) fn run(app: AppState, run: &RunLine) -> AnyElement {
     let session = crate::model::Live::Session(run.session.clone());
-    link_row(
+    let beside = crate::ui::ask::open_beside(app, &session);
+    let row = link_row(
         app,
         run.test_id.clone(),
         format!("{}, {}: open its session", run.name, run.words),
@@ -194,7 +196,16 @@ pub(crate) fn run(app: AppState, run: &RunLine) -> AnyElement {
         run.words.clone(),
         String::new(),
         move || app.open_live(session.clone()),
-    )
+    );
+    match beside {
+        None => row,
+        Some(beside) => view()
+            .flex_row()
+            .items_center()
+            .child(view().flex_1().min_w(px(0.0)).child(row))
+            .child(beside)
+            .into_element(),
+    }
 }
 
 /// An event: when, what it says and who did it.

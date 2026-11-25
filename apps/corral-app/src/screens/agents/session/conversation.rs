@@ -94,6 +94,7 @@ pub(super) fn page(
         source.watch_detail(target, open)
     });
     let more = signal(false);
+    let (top_scope, phone_scope) = (scope.clone(), scope.clone());
     let shape = tab.part(|t| of(t).map(Head::of));
     let facts = tab.part(|t| of(t).map(|c| c.facts.clone()));
     let asks = tab.part(|t| t.confirm.is_some() || t.picker.is_some());
@@ -105,14 +106,16 @@ pub(super) fn page(
         }
         let open = more.get();
         let shown = shape.get().flatten()?;
-        Some(untracked(|| bar(app, tab, &shown, facts, open, more)))
+        Some(untracked(|| {
+            bar(app, tab, &shown, &top_scope, facts, open, more)
+        }))
     });
     let phone_head = phone.then(|| {
         dynamic(move || {
             let open = more.get();
             let shown = shape.get().flatten()?;
             Some(untracked(|| {
-                head_column(app, tab, &shown, facts, open, more)
+                head_column(app, tab, &shown, &phone_scope, facts, open, more)
                     .pb(px(8.0))
                     .border_b(px(1.0))
                     .border_color(color(Token::Rule))
@@ -171,6 +174,7 @@ fn head_column(
     app: AppState,
     tab: Tab,
     shown: &Head,
+    scope: &str,
     facts: Memo<Option<Option<(String, String)>>>,
     open: bool,
     more: Signal<bool>,
@@ -210,6 +214,11 @@ fn head_column(
             .flex_1()
             .min_w(px(0.0)),
         )
+        // The conversation on a side pane tab of its own (desktop).
+        .children(crate::ui::ask::open_beside(
+            app,
+            &crate::model::Live::Session(crate::model::Id::from(scope)),
+        ))
         .children(toggle);
     let expanded = !compact || open;
     let child = shown.child.clone();
@@ -249,11 +258,12 @@ fn bar(
     app: AppState,
     tab: Tab,
     shown: &Head,
+    scope: &str,
     facts: Memo<Option<Option<(String, String)>>>,
     open: bool,
     more: Signal<bool>,
 ) -> AnyElement {
-    let column = head_column(app, tab, shown, facts, open, more);
+    let column = head_column(app, tab, shown, scope, facts, open, more);
     match app.form {
         Form::Terminal => view()
             .flex_none()

@@ -136,11 +136,28 @@ pub fn page(app: AppState, id: Id) -> AnyElement {
                 move || !conversation_beside.get(),
                 move || untracked(|| main(app, page)),
             )
-            .otherwise(move || {
-                text(crate::model::dock::CONVERSATION_BESIDE)
-                    .test_id("conversation-beside")
-                    .p(px(16.0))
-                    .text_color(color(Token::Ink2))
+            .otherwise({
+                let id = id.clone();
+                move || {
+                    let back = id.clone();
+                    view()
+                        .test_id("conversation-beside")
+                        .flex_row()
+                        .items_center()
+                        .gap(px(12.0))
+                        .p(px(16.0))
+                        .child(
+                            text(crate::model::dock::CONVERSATION_BESIDE)
+                                .text_color(color(Token::Ink2)),
+                        )
+                        .child(crate::ui::kit::button::button(
+                            app,
+                            crate::model::dock::MOVE_BACK,
+                            crate::ui::kit::button::ButtonKind::Ghost,
+                            "btn-move-back",
+                            move || app.undock(&back),
+                        ))
+                }
             }),
         )
         .child(when(

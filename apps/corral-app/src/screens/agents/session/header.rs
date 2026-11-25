@@ -295,18 +295,7 @@ pub(super) fn head(app: AppState, page: Memo<SessionPage>, wide: Memo<bool>) -> 
         .child(crate::shell::agents_trigger(app, "agents-open-head"))
         .child(views(app, page, wide))
         .child(details_button(app, page))
-        .child(button_with(
-            app,
-            crate::model::dock::DOCK_SIDE,
-            ButtonKind::Quiet,
-            ButtonOptions {
-                icon: Some(Icon::Split),
-                icon_only: true,
-                ..ButtonOptions::default()
-            },
-            "btn-dock-side",
-            move || app.dock_session(&page.with_untracked(|p| p.id.clone())),
-        ))
+        .children(crate::model::dock::supported(app.form).then(|| side_pane_toggle(app, page)))
         .child(more(app, page))
         .child(actions(app, page))
         .into_element()
@@ -559,4 +548,44 @@ pub(in crate::screens::agents) fn popup(
             Form::Terminal => s.min_w(term::cells(28.0)),
         }
     }
+}
+
+/// Open in side pane, or, once the session has a tab there, Move back to the page (outlined, as
+/// a pressed toggle reads): the same icon either way, its words for screen readers.
+fn side_pane_toggle(app: AppState, page: Memo<SessionPage>) -> AnyElement {
+    let id = untracked(|| page.with(|p| p.id.clone()));
+    let docked = {
+        let id = id.clone();
+        computed(move || app.docked(&id))
+    };
+    dynamic(move || {
+        let docked = docked.get();
+        let id = id.clone();
+        untracked(move || {
+            let (label, kind) = if docked {
+                (crate::model::dock::MOVE_BACK, ButtonKind::Ghost)
+            } else {
+                (crate::model::dock::OPEN_BESIDE, ButtonKind::Quiet)
+            };
+            button_with(
+                app,
+                label,
+                kind,
+                ButtonOptions {
+                    icon: Some(Icon::Split),
+                    icon_only: true,
+                    ..ButtonOptions::default()
+                },
+                "btn-dock-side",
+                move || {
+                    if docked {
+                        app.undock(&id);
+                    } else {
+                        app.dock_session(&id);
+                    }
+                },
+            )
+        })
+    })
+    .into_element()
 }

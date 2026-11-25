@@ -115,6 +115,8 @@ pub enum Action {
     NewAssistant,
     /// Open the Agents switcher.
     Agents,
+    /// Show or hide the desktop side pane.
+    SidePane,
     /// Change the persisted appearance.
     Theme(ThemeChoice),
     /// Select live transport, explicit preview, or disconnected data.
@@ -261,6 +263,15 @@ pub fn commands(
             "Switch agent…",
             Some(crate::model::agents::AGENTS_KEY),
             Action::Agents,
+        ));
+    }
+    if live && crate::model::dock::supported(form) {
+        rows.push(row(
+            "side-pane",
+            "Sessions",
+            crate::model::dock::TOGGLE,
+            Some(crate::model::dock::KEY),
+            Action::SidePane,
         ));
     }
     if ask {

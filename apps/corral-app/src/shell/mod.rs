@@ -20,7 +20,7 @@ use nsh_core::prelude::*;
 use crate::model::act::NextButton;
 use crate::model::agents::switcher::{
     AGENTS_CHORD, AGENTS_KEY, AGENTS_LABEL, Entry, NEW_ASSISTANT, NEW_ASSISTANT_NOTE, PINNED,
-    RECENT_HEADING, SWITCHER_EMPTY, SWITCHER_SUB,
+    RECENT_HEADING, SWITCHER_EMPTY, SWITCHER_SUB, SWITCHER_SUB_PANE,
 };
 use crate::model::commands::{
     CONFIRM_CANCEL, CONFIRM_CHECK, CONFIRM_EFFECT_HEADING, CONFIRM_SUB, REFUSED_SUB,
@@ -354,6 +354,15 @@ fn switcher_modal(app: AppState) -> Modal {
         when: When::NotEditing,
         ..KeyOptions::default()
     };
+    let beside = crate::model::dock::supported(app.form);
+    if beside {
+        let (focused, ids) = (focused.clone(), ids.clone());
+        on_key_with("s", options, move |_| {
+            if let Some(id) = focused.get().and_then(|at| ids.get(at)) {
+                app.open_agent_beside(id.clone());
+            }
+        });
+    }
     on_key_with("p", options, move |_| {
         if let Some(id) = focused.get().and_then(|at| ids.get(at)) {
             app.toggle_agent_pin(id);
@@ -362,7 +371,14 @@ fn switcher_modal(app: AppState) -> Modal {
     Modal {
         test_id: "agents".into(),
         title: AGENTS_LABEL.into(),
-        sub: Some(SWITCHER_SUB.into()),
+        sub: Some(
+            if beside {
+                SWITCHER_SUB_PANE
+            } else {
+                SWITCHER_SUB
+            }
+            .into(),
+        ),
         body: view()
             .gap(px(if app.form == Form::Terminal { 0.0 } else { 2.0 }))
             .role(AccessibilityRole::List)
@@ -391,6 +407,21 @@ fn agent_row(app: AppState, entry: Entry, handle: ElementRef) -> AnyElement {
         .items_center()
         .gap(px(if app.form == Form::Terminal { 0.0 } else { 6.0 }))
         .child(view().flex_1().min_w(px(0.0)).child(open))
+        .children(crate::model::dock::supported(app.form).then(|| {
+            let id = entry.id.clone();
+            button_with(
+                app,
+                crate::model::dock::OPEN_BESIDE,
+                ButtonKind::Quiet,
+                ButtonOptions {
+                    icon: Some(Icon::Split),
+                    icon_only: true,
+                    ..ButtonOptions::default()
+                },
+                format!("switch-side-{id}"),
+                move || app.open_agent_beside(id.clone()),
+            )
+        }))
         .child(pin_toggle(app, entry.id))
         .into_element()
 }

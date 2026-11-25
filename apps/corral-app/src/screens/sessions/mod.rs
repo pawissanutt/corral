@@ -518,6 +518,7 @@ fn inspector(app: AppState, id: &Id) -> AnyElement {
                         .clone()
                         .map(|action| remove_button(app, row.line.id.as_str(), action)),
                 )
+                .children(crate::ui::ask::open_beside(app, &live))
                 .child(button(
                     app,
                     "Open page",

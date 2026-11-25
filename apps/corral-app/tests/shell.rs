@@ -336,7 +336,7 @@ fn sending_from_ask_appends_to_the_quick_thread_and_clears_the_draft() {
     app.press("id:btn-send").unwrap();
     app.wait_for(&format!("text:{message}")).unwrap();
     assert_eq!(app.screen().input_text("id:ask-input").unwrap(), Some(""));
-    app.press("id:ask-close").unwrap();
+    app.press("id:pane-close").unwrap();
     app.press_key("/").unwrap();
     app.wait_for(&format!("text:{message}")).unwrap();
 }
@@ -701,7 +701,7 @@ fn desktop_ask_does_not_block_page_keys_after_focus_leaves_the_pane() {
     assert!(!selected(&app, "task-T-8"));
     app.press_key("s").unwrap();
     app.wait_for("id:list-sessions").unwrap();
-    assert_eq!(app.screen().count("id:ask-close").unwrap(), 1);
+    assert_eq!(app.screen().count("id:pane-close").unwrap(), 1);
 }
 
 #[test]
@@ -729,28 +729,26 @@ fn narrow_dock_dismisses_without_undocking_or_leaving_the_page() {
     app.press("id:nav-sessions").unwrap();
     app.press("id:agent-B-k3x9").unwrap();
     app.press("id:btn-dock-side").unwrap();
-    app.press("id:btn-dock-hide").unwrap();
-    app.wait_for("id:btn-dock-show").unwrap();
+    app.press("id:pane-close").unwrap();
     assert_eq!(app.screen().count("id:dock-pane").unwrap(), 0);
     app.press("id:nav-tasks").unwrap();
-    app.press("id:btn-dock-show").unwrap();
+    app.press("id:side-pane-toggle").unwrap();
     app.wait_for("id:dock-tab-B-k3x9").unwrap();
     app.press("id:dock-pane >> id:btn-open-page").unwrap();
-    app.wait_for("id:btn-dock-show").unwrap();
+    assert_eq!(app.screen().count("id:dock-pane").unwrap(), 0);
     assert_eq!(app.screen().count("id:list-tasks").unwrap(), 0);
-    app.press("id:btn-dock-show").unwrap();
+    app.press("id:side-pane-toggle").unwrap();
     app.wait_for("id:dock-transcript").unwrap();
     app.press_key("escape").unwrap();
-    app.wait_for("id:btn-dock-show").unwrap();
     assert_eq!(app.screen().count("id:dock-pane").unwrap(), 0);
     assert_eq!(app.screen().count("id:list-sessions").unwrap(), 0);
-    app.press("id:btn-dock-show").unwrap();
+    app.press("id:side-pane-toggle").unwrap();
     app.wait_for("id:dock-tab-B-k3x9").unwrap();
     app.wait_for("id:dock-transcript").unwrap();
     app.press("id:dock-details-toggle").unwrap();
     app.press("id:dock-pane >> id:side-step-0").unwrap();
     app.wait_for("id:ledger").unwrap();
-    app.wait_for("id:btn-dock-show").unwrap();
+    assert_eq!(app.screen().count("id:dock-pane").unwrap(), 0);
 }
 
 #[test]
@@ -812,4 +810,46 @@ fn dock_context_is_sent_by_the_pane_but_not_shared_with_ask() {
             .unwrap(),
         0
     );
+}
+
+/// Ask and the sessions kept beside the page are tabs of one pane: choosing one keeps the
+/// others in the strip, Escape closes the whole pane rather than revealing a session tab in
+/// Ask's place, and Ctrl+J brings it back on the session tab last chosen.
+#[test]
+fn ask_and_session_tabs_share_one_side_pane() {
+    let mut app = preview(desktop(), &[]);
+    app.press("id:nav-sessions").unwrap();
+    app.wait_for("id:agent-B-k3x9").unwrap();
+    app.press("id:agent-B-k3x9").unwrap();
+    app.wait_for("id:list-sessions >> id:more-B-k3x9").unwrap();
+    app.press("id:list-sessions >> id:more-B-k3x9").unwrap();
+    app.press("id:btn-open-beside").unwrap();
+    app.wait_for("id:dock-transcript").unwrap();
+    app.press("id:side-pane >> id:dock-tab-ask").unwrap();
+    app.wait_for("id:ask-transcript").unwrap();
+    assert_eq!(app.screen().count("id:dock-transcript").unwrap(), 0);
+    app.wait_for("id:dock-tab-B-k3x9").unwrap();
+    app.press("id:dock-tab-B-k3x9").unwrap();
+    app.wait_for("id:dock-transcript").unwrap();
+    app.press("id:dock-tab-ask").unwrap();
+    app.wait_for("id:ask-transcript").unwrap();
+    app.press_key("escape").unwrap();
+    assert_eq!(app.screen().count("id:side-pane").unwrap(), 0);
+    app.press_key("ctrl+j").unwrap();
+    app.wait_for("id:dock-transcript").unwrap();
+    app.press("id:dock-tab-B-k3x9-close").unwrap();
+    assert_eq!(app.screen().count("id:side-pane").unwrap(), 0);
+}
+
+/// The Agents switcher opens a Code session (not only a chat) on a tab of its own in the side
+/// pane, leaving the page where it was.
+#[test]
+fn the_switcher_opens_a_code_session_in_the_side_pane() {
+    let mut app = preview(desktop(), &[("corral.destination", "tasks")]);
+    app.wait_for("id:list-tasks").unwrap();
+    app.press_key("ctrl+g").unwrap();
+    app.press("id:switch-side-B-code").unwrap();
+    app.wait_for("id:dock-tab-B-code").unwrap();
+    app.wait_for("id:dock-transcript").unwrap();
+    app.wait_for("id:list-tasks").unwrap();
 }

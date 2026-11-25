@@ -18,8 +18,6 @@ use crate::model::{Effect, Form, Id, Live};
 use crate::screens::agents::{Compact, ask_session, ask_view};
 use crate::state::AppState;
 use crate::ui::ask::{act, unconnected};
-use crate::ui::atoms::control_height;
-use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button, button_with};
 use crate::ui::kit::marks::{hue_ink, mark};
 use crate::ui::kit::page_phone::short_window;
@@ -158,7 +156,7 @@ pub(crate) fn composer_only(app: AppState) -> AnyElement {
 }
 
 /// The state word: the running mark or its glyph in its hue, then its words.
-fn state_word(app: AppState, word: &StateWord) -> AnyElement {
+pub(super) fn state_word(app: AppState, word: &StateWord) -> AnyElement {
     let form = app.form;
     let ink = if word.hue == Hue::Neutral {
         color(Token::Ink3)
@@ -281,24 +279,30 @@ pub(crate) fn side(app: AppState, focus: ElementRef) -> AnyElement {
         .into_element()
 }
 
+/// The side pane: its strip of tabs (Ask's, then the sessions kept there), then the chosen one.
 fn desktop_body(app: AppState) -> View {
-    view().bg(color(Token::Bg)).child(
-        when(
-            move || app.is_open(crate::model::Overlay::Ask),
-            move || {
-                untracked(|| {
-                    view()
-                        .test_id("ask-pane")
-                        .role(AccessibilityRole::Region)
-                        .label("Ask")
-                        .flex_1()
-                        .min_h(px(0.0))
-                        .child(body(app, Compact::Drawer, desktop_head))
-                })
-            },
+    view()
+        .test_id("side-pane")
+        .role(AccessibilityRole::Region)
+        .label(crate::model::dock::PANE)
+        .bg(color(Token::Bg))
+        .flex_col()
+        .child(super::docked::strip(app))
+        .child(
+            when(
+                move || app.is_open(crate::model::Overlay::Ask),
+                move || {
+                    untracked(|| {
+                        view()
+                            .test_id("ask-pane")
+                            .flex_1()
+                            .min_h(px(0.0))
+                            .child(body(app, Compact::Drawer, desktop_head))
+                    })
+                },
+            )
+            .otherwise(move || super::docked::pane(app)),
         )
-        .otherwise(move || super::docked::pane(app)),
-    )
 }
 
 /// The narrow desktop fallback: the original drawer over the right of the page.
@@ -356,8 +360,8 @@ fn body(
     .into_element()
 }
 
-/// `.dhead`: the title, the state word, End thread, Open session and the close control, 44 pt
-/// high over a rule.
+/// `.dhead`: the title, the state word, End thread and Open session, 40 pt high over a rule,
+/// as a session tab's head; the side pane's strip holds the close.
 fn desktop_head(app: AppState, head: Memo<Head>, id: Id) -> AnyElement {
     let h = head.get_untracked();
     view()
@@ -365,7 +369,7 @@ fn desktop_head(app: AppState, head: Memo<Head>, id: Id) -> AnyElement {
         .items_center()
         .flex_shrink_0()
         .gap(px(8.0))
-        .h(px(44.0))
+        .h(px(40.0))
         .pl(px(16.0))
         .pr(px(10.0))
         .border_b(px(1.0))
@@ -384,30 +388,6 @@ fn desktop_head(app: AppState, head: Memo<Head>, id: Id) -> AnyElement {
         .child(view().flex_1())
         .children(end_button(app, &h.end, ButtonKind::Quiet))
         .children(h.open.then(|| open_session(app, id, ButtonKind::Quiet)))
-        .child(close_icon(app))
-        .into_element()
-}
-
-/// The drawer's close control: the close icon alone, named "Close (Esc)" for screen readers.
-fn close_icon(app: AppState) -> AnyElement {
-    view()
-        .test_id("ask-close")
-        .role(AccessibilityRole::Button)
-        .label("Close (Esc)")
-        .on_press(move || act(app, Action::CloseAsk))
-        .size(px(control_height(30.0)))
-        .items_center()
-        .justify_center()
-        .rounded(px(6.0))
-        .cursor_pointer()
-        .hover(|s| s.bg(color(Token::Hover)))
-        .active(|s| s.bg(color(Token::Sel)))
-        .focus_visible(|s| {
-            s.outline(px(2.0))
-                .outline_color(color(Token::Focus))
-                .outline_offset(px(2.0))
-        })
-        .child(icon(Icon::Close, 14.0, color(Token::Ink2)))
         .into_element()
 }
 

@@ -1,42 +1,26 @@
-//! The desktop page and Ask share one resizable group; only narrow Ask overlays it.
+//! The desktop page and the side pane share one resizable group; a narrow window lays the
+//! pane over the page instead.
 
 use nsh_base::{h_resizable, resizable_panel};
 use nsh_core::prelude::*;
 
-use crate::model::Overlay;
 use crate::model::pane::{PAGE_LEAST, Placement};
 use crate::state::AppState;
 use crate::ui::ask::drawer;
 
 pub(super) fn group(app: AppState, page: AnyElement) -> AnyElement {
     let placement = computed(move || app.pane.placement());
-    let beside = move || {
-        (app.is_open(Overlay::Ask) || app.shown_dock().is_some())
-            && matches!(placement.get(), Placement::Beside { .. })
-    };
+    let beside = move || app.pane_open() && matches!(placement.get(), Placement::Beside { .. });
     let focus = element_ref();
     focus.on_focus_in(move || app.pane.focused.set(true));
     focus.on_focus_out(move || app.pane.focused.set(false));
     view()
         .flex_1()
         .min_h(px(0.0))
-        .child(when(
-            move || app.can_show_dock(),
-            move || {
-                use crate::ui::kit::button::{ButtonKind, button};
-                view().flex_row().justify_end().child(button(
-                    app,
-                    crate::model::dock::SHOW,
-                    ButtonKind::Quiet,
-                    "btn-dock-show",
-                    move || app.show_dock(),
-                ))
-            },
-        ))
         .child(
             h_resizable()
                 .handle_class("bg-border")
-                .handle_accessibility_label("Resize Ask pane")
+                .handle_accessibility_label("Resize side pane")
                 .child(
                     resizable_panel()
                         .min_size(move || px(if beside() { PAGE_LEAST } else { 0.0 }))
@@ -67,10 +51,7 @@ pub(super) fn group(app: AppState, page: AnyElement) -> AnyElement {
 
 pub(super) fn overlay(app: AppState) -> AnyElement {
     when(
-        move || {
-            (app.is_open(Overlay::Ask) || app.shown_dock().is_some())
-                && app.pane.placement() == Placement::Over
-        },
+        move || app.pane_open() && app.pane.placement() == Placement::Over,
         move || untracked(|| drawer::overlay(app)),
     )
     .into_element()

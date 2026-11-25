@@ -142,6 +142,12 @@ impl AppState {
             }
         });
         on_key_with("mod+b", typing, move |_| self.toggle_sidebar());
+        // The side pane, from a field too: the chord never types.
+        if crate::model::dock::supported(self.form) {
+            on_key_with(crate::model::dock::CHORD, anywhere, move |_| {
+                self.toggle_pane()
+            });
+        }
         // The System map's filter is no Tab stop in a terminal: F3 brings the keyboard to it from
         // any control of the page, as it does to a session's path filter. The browser keeps F3.
         if !cfg!(target_arch = "wasm32") {

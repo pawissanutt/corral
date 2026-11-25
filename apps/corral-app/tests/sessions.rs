@@ -524,3 +524,39 @@ fn typing_a_session_filter_narrows_the_rows() {
         .unwrap();
     app.wait_for("id:agent-B-k3x9").unwrap();
 }
+
+/// A child agent's conversation opens on a side pane tab of its own, named by the child, and
+/// keeps its transcript there while the parent's page goes back to its agents.
+#[test]
+fn a_child_conversation_opens_in_the_side_pane() {
+    let mut app = sessions(desktop());
+    open(&mut app, "B-k3x9");
+    open_section(&mut app, "agents");
+    wait_in_tree(&mut app, "agent-B-k3x9-child-migration");
+    app.press("id:agent-B-k3x9-child-migration").unwrap();
+    wait_in_tree(&mut app, "session-agent-detail");
+    app.press("id:btn-child-open").unwrap();
+    wait_in_tree(&mut app, "session-conversation");
+    app.press("id:btn-side-pane-B-k3x9/child/migration")
+        .unwrap();
+    wait_in_tree(&mut app, "dock-tab-B-k3x9/child/migration");
+    wait_in_tree(&mut app, "dock-transcript");
+    app.press("id:btn-agents-back").unwrap();
+    wait_in_tree(&mut app, "session-agents");
+    wait_in_tree(&mut app, "dock-transcript");
+}
+
+/// Ask's chat has Ask's tab: opening it in the side pane shows Ask rather than a second tab
+/// of the same conversation with a draft of its own.
+#[test]
+fn asks_chat_opens_in_asks_tab_not_a_second_one() {
+    let mut app = sessions(desktop());
+    app.press_key("/").unwrap();
+    app.wait_for("id:ask-transcript").unwrap();
+    app.press("id:pane-close").unwrap();
+    app.wait_for("id:agent-A-7").unwrap();
+    app.press("id:list-sessions >> id:more-A-7").unwrap();
+    app.press("id:btn-open-beside").unwrap();
+    app.wait_for("id:ask-transcript").unwrap();
+    assert!(!in_tree(&app, "dock-tab-A-7"));
+}
