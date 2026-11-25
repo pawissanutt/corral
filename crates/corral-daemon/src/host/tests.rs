@@ -84,14 +84,21 @@ fn parsers_read_kernel_text_and_reject_missing_fields() {
     let rows = read::net(dev, |name| name != "lo");
     assert_eq!(rows, BTreeMap::from([("eth0".into(), (1000, 2000))]));
 
-    let diskstats = "   8       0 sda 10 0 4 0 20 0 8 0 0 0 0\n   8       1 sda1 10 0 4 0 20 0 8 0 0 0 0\n";
+    let diskstats =
+        "   8       0 sda 10 0 4 0 20 0 8 0 0 0 0\n   8       1 sda1 10 0 4 0 20 0 8 0 0 0 0\n";
     let rows = read::disks(diskstats, |name| name == "sda");
     assert_eq!(rows, BTreeMap::from([("sda".into(), (2048, 4096))]));
 
     let mountinfo = "22 1 8:1 / / rw - ext4 /dev/sda1 rw\n30 22 8:2 / /home/my\\040files rw - ext4 /dev/sda2 rw\n";
     let path = Path::new("/home/my files/work");
-    assert_eq!(read::mount_of(mountinfo, path).as_deref(), Some("/home/my files"));
-    assert_eq!(read::mount_of(mountinfo, Path::new("/var")).as_deref(), Some("/"));
+    assert_eq!(
+        read::mount_of(mountinfo, path).as_deref(),
+        Some("/home/my files")
+    );
+    assert_eq!(
+        read::mount_of(mountinfo, Path::new("/var")).as_deref(),
+        Some("/")
+    );
 }
 
 /// Reads the real counters twice without generating load: the probe only reads files.
@@ -107,7 +114,11 @@ fn real_counters_smoke() {
     let sample = &samples[1];
     let (used, total) = (sample.memory_used.unwrap(), sample.memory_total.unwrap());
     assert!(used <= total && total > 0);
-    assert!(sample.cpu_percent.is_none_or(|cpu| (0.0..=100.0).contains(&cpu)));
+    assert!(
+        sample
+            .cpu_percent
+            .is_none_or(|cpu| (0.0..=100.0).contains(&cpu))
+    );
     let filesystem = probe.filesystem().expect("statvfs of the temp dir");
     assert!(filesystem.used <= filesystem.total && filesystem.total > 0);
     assert!(filesystem.mount.is_some());

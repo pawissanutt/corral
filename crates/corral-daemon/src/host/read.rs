@@ -35,8 +35,10 @@ pub(crate) fn cpu(stat: &str) -> Option<(u64, u64)> {
     if fields.len() < 4 {
         return None;
     }
-    let total = fields.iter().try_fold(0_u64, |sum, v| sum.checked_add(*v))?;
-    let idle = fields[3] + fields.get(4).copied().unwrap_or(0);
+    let total = fields
+        .iter()
+        .try_fold(0_u64, |sum, v| sum.checked_add(*v))?;
+    let idle = fields[3].saturating_add(fields.get(4).copied().unwrap_or(0));
     Some((total.checked_sub(idle)?, total))
 }
 
@@ -147,7 +149,9 @@ impl Probe {
     pub(super) fn counters(&mut self, mono: Duration) -> Counters {
         let at_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map_or(0, |since| u64::try_from(since.as_millis()).unwrap_or(u64::MAX));
+            .map_or(0, |since| {
+                u64::try_from(since.as_millis()).unwrap_or(u64::MAX)
+            });
         if !cfg!(target_os = "linux") {
             return Counters {
                 at_ms,
@@ -198,7 +202,10 @@ impl Probe {
         let stat = rustix::fs::statvfs(&self.root).ok()?;
         let block = stat.f_frsize;
         let total = stat.f_blocks.checked_mul(block)?;
-        let used = stat.f_blocks.checked_sub(stat.f_bfree)?.checked_mul(block)?;
+        let used = stat
+            .f_blocks
+            .checked_sub(stat.f_bfree)?
+            .checked_mul(block)?;
         let free = stat.f_bavail.checked_mul(block)?;
         Some(HostFilesystem {
             path: self.root.display().to_string(),
