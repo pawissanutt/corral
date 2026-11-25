@@ -301,6 +301,10 @@ test("board_plan rejects silent kind omission even with a ui tag", async () => {
   try {
     const tool = controls.tools.find(tool => tool.name === "board_plan")!;
     const plan = { title: "Plan", why: "", tasks: [{ key: "ui", title: "Make session Details summary-first", body: "", depends: [], tags: ["ui"] }] };
+    for (const kind of [undefined, "", "  ", false, 42]) {
+      expect(() => tool.prepareArguments!({ ...plan, tasks: [{ ...plan.tasks[0], kind }] })).toThrow("explicit routing kind");
+    }
+    expect(tool.prepareArguments!({ ...plan, tasks: [{ ...plan.tasks[0], kind: null }] })).toBeDefined();
     const result = await tool.execute("plan", plan, undefined, undefined, {} as never);
     expect(result.isError).toBeTrue();
     expect(JSON.stringify(result.content)).toContain("explicit routing kind");

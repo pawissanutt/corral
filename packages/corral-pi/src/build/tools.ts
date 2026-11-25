@@ -340,6 +340,17 @@ export function createBuildEvidence(options: { context: BuildContext; git: Run; 
   };
 }
 
+function requireRoutingKinds(input: unknown): void {
+  if (!input || typeof input !== "object" || !Array.isArray((input as { tasks?: unknown }).tasks)) return;
+  for (const task of (input as { tasks: unknown[] }).tasks) {
+    if (!task || typeof task !== "object") continue; // The schema reports malformed tasks.
+    const { key, kind } = task as { key?: unknown; kind?: unknown };
+    if (kind !== null && (typeof kind !== "string" || !kind.trim())) {
+      throw new Error(`Task ${String(key)} needs an explicit routing kind or null for intentionally unset; tags do not classify it.`);
+    }
+  }
+}
+
 export function boardPlanTool(propose: (plan: BoardPlan) => Promise<void>, available: () => string | undefined): ToolDefinition {
   return {
     name: "board_plan", label: "Propose board tasks",
@@ -362,15 +373,15 @@ export function boardPlanTool(propose: (plan: BoardPlan) => Promise<void>, avail
         depends: Type.Array(Type.String()), body: Type.String(),
       }, { additionalProperties: false }), { minItems: 1, maxItems: 20 }),
     }, { additionalProperties: false }),
+    prepareArguments(args) {
+      requireRoutingKinds(args);
+      return args as Record<string, unknown>;
+    },
     async execute(_id, plan: BoardPlan) {
       const unavailable = available();
       if (unavailable) return { content: [{ type: "text", text: unavailable }], details: {}, isError: true };
       try {
-        for (const task of plan.tasks) {
-          if (task.kind !== null && (typeof task.kind !== "string" || !task.kind.trim())) {
-            throw new Error(`Task ${task.key} needs an explicit routing kind or null for intentionally unset; tags do not classify it.`);
-          }
-        }
+        requireRoutingKinds(plan);
         await propose(plan);
         return { content: [{ type: "text", text: "The owner will confirm this board plan before any task is filed or queued." }], details: {} };
       } catch (error) {

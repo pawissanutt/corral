@@ -253,8 +253,8 @@ async function run(engine: string, daemonBin: string): Promise<void> {
     const multi = await propose("multi-graph", "Propose two graphs", 2);
     assert.equal(multi.title, followOns.title);
     assert.equal(multi.meta, "10 tasks · 2 projects");
-    assert(multi.body?.includes('"corral-0" → "corral" · after "lite-0"'));
-    assert(multi.body?.includes('"lite-1" → "mitimind-lite" · after "corral-0"'));
+    assert(multi.body?.includes('"corral-0" → "corral" · kind: unset · after "lite-0"'));
+    assert(multi.body?.includes('"lite-1" → "mitimind-lite" · kind: unset · after "corral-0"'));
     assert.equal((await rows()).length, 1, "previews and refusals never file tasks");
     const { pending } = JSON.parse(readFileSync(join(recordDir(id), "board", "filing.json"), "utf8")) as { pending: { id: string; request: string } };
     assert.equal((await answerBoard(multi, "file_start")).status, "started");

@@ -31,7 +31,7 @@ function boardPlan(plan: BoardPlan) {
   // Identities (key, project, every accepted dependency) are never clipped; only the reasons and the briefs give way.
   const tasks = plan.tasks.slice(0, 20).map(({ key, project, title, kind, size, difficulty, tags, profile, depends, body }) => ({
     key: keys.get(key)!, project: optionalText(project ?? plan.project, BOARD_PROJECT_BYTES), title: clipText(title, 240),
-    kind: optionalText(kind ?? undefined, 64), size: optionalText(size, 64), difficulty, tags, profile: optionalText(profile, 160),
+    kind: kind ?? undefined, size: optionalText(size, 64), difficulty, tags, profile: optionalText(profile, 160),
     depends: depends.map(key => keys.get(key) ?? key), body: "", body_bytes: Buffer.byteLength(body),
   }));
   const head = { title: clipText(plan.title, 512), project: optionalText(plan.project, BOARD_PROJECT_BYTES) };
