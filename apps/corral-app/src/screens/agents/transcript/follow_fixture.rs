@@ -134,4 +134,9 @@ fn wheel_up_holds_the_reading_offset_during_stream_growth() {
         (after - held).abs() <= 0.5,
         "held content moved from {held} to {after} pt"
     );
+    app.press("id:btn-jump-latest").unwrap();
+    assert!(
+        tail_gap(&mut app) <= 0.5,
+        "Jump must scroll before its button unmounts"
+    );
 }

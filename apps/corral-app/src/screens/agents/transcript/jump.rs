@@ -455,8 +455,10 @@ pub(crate) fn follow(
             known.at_end = true;
             known.left_at = None;
             drop(known);
+            // The press handler's owner is the button we are about to remove. A
+            // deferred command owned by it would disappear along with the button.
+            scroller.scroll_to_end(false);
             at_end.set(true);
-            queue_end(place.clone(), scroller);
         }
     };
     {
