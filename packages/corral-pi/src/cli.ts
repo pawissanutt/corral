@@ -14,7 +14,6 @@ const usage = `Usage:
   corral-pi build --prune [--session <id> [--json]] [--dry-run] [--data-dir <path>]
   corral-pi login [--provider <id>] [--auth-dir <path>]
   corral-pi models [--provider <id>]
-Antigravity (antigravity-cli) is available for explicit login and model discovery only, not sessions.
 Model flags: --model [<provider>/]<id>, --provider <id>, --effort <level>, --aws-profile <name>, --aws-region <region>.
 New terminal chat and Build sessions use a saved startup model or ask you to choose one.\nFor new headless sessions without an available default, pass --model <provider/model>.
 Fallback: configure [fallback.providers] in .corral-next/pi.toml, repeat --fallback <provider>/<model>, or pass --no-fallback.

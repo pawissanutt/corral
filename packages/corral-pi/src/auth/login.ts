@@ -7,7 +7,6 @@ import { type Interface, createInterface } from "node:readline/promises";
 
 import type { AuthEvent, AuthInteraction, AuthPrompt } from "@earendil-works/pi-ai";
 
-import { AGY_PROVIDER, AgyAccountError, loginAgy } from "../agy/account.ts";
 import type { Fetch } from "./types.ts";
 import { CredentialsUnavailable, authDir } from "./paths.ts";
 import { PROVIDERS, type ProviderId, isApiProvider, isProviderId } from "./providers.ts";
@@ -229,20 +228,8 @@ export function runLogin(argv: readonly string[]): void {
   }
   const inline = argv.find(value => value.startsWith("--provider="))?.slice("--provider=".length);
   const provider = arg("--provider") ?? inline ?? "openai-codex";
-  if (provider === AGY_PROVIDER) {
-    if (!(argv.length === 2 && argv[0] === "--provider") && !(argv.length === 1 && inline === AGY_PROVIDER)) {
-      process.stderr.write(`Usage: corral-pi login --provider ${AGY_PROVIDER} (agy manages its own credentials)\n`);
-      process.exit(2);
-    }
-    try { loginAgy(); }
-    catch (error) {
-      process.stderr.write(`corral-pi login: ${error instanceof AgyAccountError ? error.message : "could not start Antigravity login"}\n`);
-      process.exit(1);
-    }
-    return;
-  }
   if (!isProviderId(provider)) {
-    process.stderr.write(`corral-pi login: unknown provider ${provider}; use openai-codex, anthropic, openai, anthropic-api or ${AGY_PROVIDER}\n`);
+    process.stderr.write(`corral-pi login: unknown provider ${provider}; use openai-codex, anthropic, openai or anthropic-api\n`);
     process.exit(2);
   }
   const dir = arg("--auth-dir") ?? authDir();
