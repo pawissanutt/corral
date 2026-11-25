@@ -134,6 +134,7 @@ pub(super) fn row(feed: &Feed, record: &TaskDetail, records: &[TaskDetail]) -> T
             .cloned(),
         dependencies: Some(dependencies),
         resolved_profile: workspace::resolved_profile(feed, &record.task),
+        recovery_session: None,
     }
 }
 

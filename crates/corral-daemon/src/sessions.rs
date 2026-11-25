@@ -511,10 +511,7 @@ pub(crate) fn relaunch(shared: &Shared, id: &str) -> Result<SessionRelaunched> {
     }
     let engine = shared.engine()?;
     let run = run(&engine, id)?;
-    let next = match run.role {
-        Role::Worker => engine.retry(&run.task, Some(&run.profile), false, None)?,
-        Role::Reviewer => engine.review(&run.task, Some(&run.profile))?,
-    };
+    let next = engine.relaunch_run(&run)?;
     shared.publish();
     shared.nudge(None);
     Ok(SessionRelaunched {

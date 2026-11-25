@@ -9,7 +9,6 @@
 
 use corral_types::{SessionRef, SessionStatus, Status};
 
-use crate::model::act;
 use crate::model::agents::{briefed_question, session_line};
 use crate::model::daemon::{Feed, Task};
 use crate::model::next::{NextStep, next_step, session_next_step};
@@ -153,12 +152,10 @@ pub fn decision(feed: &Feed, id: &Id) -> Option<Decision> {
                 .enumerate()
                 .skip(usize::from(reply.is_some()))
                 .map(|(index, next)| {
+                    let (label, press) = work::blocked_step(task, index, next);
                     Button::new(
-                        act::label(&next.op, next.force),
-                        Press::Next {
-                            task: id.clone(),
-                            index,
-                        },
+                        label,
+                        press,
                         if index == 0 && question.is_none() {
                             ButtonKind::Primary
                         } else {

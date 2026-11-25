@@ -592,6 +592,37 @@ fn review_releases_global_and_project_slots_with_worker_still_live() {
 }
 
 #[test]
+fn rejected_review_waits_for_a_worker_slot_before_delivering_notes() {
+    let mut cx = Fixture::new(&[]);
+    cx.engine.config.limits.running = 1;
+    let first = cx.backlog("needs revision");
+    cx.dispatch(&first);
+    cx.done(&first);
+    let second = cx.backlog("occupies released slot");
+    cx.dispatch(&second);
+    let sends = cx.runner.sends().len();
+    cx.engine
+        .verdict(&first, false, Some("fix the draft"))
+        .unwrap();
+    cx.apply(Op::Sync, false);
+    assert_eq!(cx.task(&first).status, Status::Review);
+    assert_eq!(cx.runner.sends().len(), sends);
+    cx.engine.config.limits.running = 2;
+    cx.project().running = Some(1);
+    cx.project().auto_dispatch = Some(true);
+    let third = cx.new_task("another ready task", Status::Ready, Priority::P2, vec![]);
+    cx.apply(Op::Sync, false);
+    assert_eq!(cx.task(&first).status, Status::Review);
+    assert_eq!(cx.runner.sends().len(), sends);
+    cx.done(&second);
+    cx.apply(Op::Sync, false);
+    assert_eq!(cx.task(&first).status, Status::Running);
+    assert_eq!(cx.task(&first).round, 1);
+    assert_eq!(cx.task(&third).status, Status::Ready);
+    assert_eq!(cx.events(&first, EventKind::SentBack).len(), 1);
+}
+
+#[test]
 fn unchanged_head_reuses_green_gate_and_rebase_conflict_sends_back() {
     let cx = Fixture::new(&["true"]);
     let id = cx.backlog("reuses green check");
@@ -702,7 +733,8 @@ fn force_records_only_the_skipped_checks_and_stops_live_sessions() {
     );
     fs::write(forced.worktree.join("file.txt"), "forced change\n").unwrap();
     let submitted = cx.done(&id);
-    assert_eq!(submitted.task.unwrap().status, Status::Running);
+    // Force applies only to the dispatch, not to the later automatic gate repair.
+    assert_eq!(submitted.task.unwrap().status, Status::Review);
     let head = submitted.run.unwrap().head_sha.unwrap();
     cx.runner
         .set_status(forced.session.as_ref().unwrap(), SessionStatus::Working);
@@ -719,7 +751,7 @@ fn force_records_only_the_skipped_checks_and_stops_live_sessions() {
     assert_eq!(cx.events(&id, EventKind::Gate).len(), 1);
     assert_eq!(
         cx.events(&id, EventKind::Forced)[1].detail["skipped"],
-        serde_json::json!(["status rule", "gate"])
+        serde_json::json!(["queued repair", "gate"])
     );
     cx.apply(
         Op::Move {
@@ -803,6 +835,20 @@ fn sync_reconciles_questions_and_gone_sessions_then_dispatches_priority_and_age(
         cx.events(&high_older, EventKind::Dispatched)[0].actor,
         Actor::Auto
     );
+    let lost = cx
+        .engine
+        .store
+        .recovery_run(&cx.task(&running))
+        .unwrap()
+        .unwrap();
+    let draft = lost.worktree.join("unfinished.txt");
+    fs::write(&draft, "uncommitted").unwrap();
+    let replacement = cx.engine.relaunch_run(&lost).unwrap();
+    assert_ne!(replacement.id, lost.id);
+    assert_eq!(replacement.worktree, lost.worktree);
+    assert_eq!(fs::read_to_string(draft).unwrap(), "uncommitted");
+    assert!(cx.engine.relaunch_run(&lost).is_err());
+    assert_eq!(cx.runner.starts().len(), starts.len() + 1);
 }
 
 #[test]

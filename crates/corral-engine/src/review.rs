@@ -262,8 +262,21 @@ impl Engine {
     }
 
     pub(crate) fn review_as(&self, id: &str, profile: Option<&str>, actor: Actor) -> Result<Run> {
+        self.review_selected(id, profile, actor, None)
+    }
+
+    pub(crate) fn review_selected(
+        &self,
+        id: &str,
+        profile: Option<&str>,
+        actor: Actor,
+        selected: Option<&str>,
+    ) -> Result<Run> {
         self.launch_transaction(|store, pending| {
             let mut task = store.require_task(id)?;
+            if let Some(run) = selected {
+                store.require_relaunch_target(&task, Role::Reviewer, run)?;
+            }
             let recovery = task
                 .blocked
                 .as_ref()
@@ -487,6 +500,15 @@ impl Engine {
         let max_rounds = project
             .as_ref()
             .map_or(self.config.defaults.max_rounds, |p| p.max_rounds);
+        if self.worker_slot_full(store, task, project.as_ref())? {
+            if task.status == Status::Review
+                && let SendBack::Automatic { onto } = reason
+            {
+                store.queue_repair(&task.id, notes, onto)?;
+                return Ok(None);
+            }
+            return Err(refuse("no free worker slot for changes", vec![]));
+        }
         let (actor, reset) = match reason {
             SendBack::Requested => (self.actor, true),
             SendBack::Automatic { .. } => (Actor::Auto, false),

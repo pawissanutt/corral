@@ -79,14 +79,17 @@ pub fn next_step(task: &Task) -> Option<NextStep> {
             verb: None,
             yours: false,
         }),
-        Status::Blocked => task.blocked()?.next.first().map(|next| NextStep {
-            label: crate::model::act::label(&next.op, next.force),
-            press: Press::Next {
-                task: task.id.clone(),
-                index: 0,
-            },
-            verb: op_verb(&next.op).map(Verb::slug),
-            yours: true,
+        Status::Blocked => task.blocked()?.next.first().map(|next| {
+            let (label, press) = crate::model::work::blocked_step(task, 0, next);
+            let verb = matches!(press, Press::Next { .. })
+                .then(|| op_verb(&next.op).map(Verb::slug))
+                .flatten();
+            NextStep {
+                label,
+                press,
+                verb,
+                yours: true,
+            }
         }),
         Status::Review if task.row.ready => Some(NextStep::step(
             "Approve",

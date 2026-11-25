@@ -23,6 +23,9 @@ pub struct TaskRow {
     /// Effective limit for this task, including project overrides.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_rounds: Option<u32>,
+    /// Ended run eligible for explicit session.relaunch after session loss.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery_session: Option<String>,
     /// Live reviewer session, even when `run` holds the worker.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "Option<crate::schema_types::Run>")]

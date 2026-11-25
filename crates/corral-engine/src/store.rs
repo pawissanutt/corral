@@ -45,6 +45,9 @@ impl Store {
                 .context("initialize engine schema")?;
         }
         connection
+            .execute_batch(crate::repair_queue::SCHEMA)
+            .context("initialize pending repair queue")?;
+        connection
             .execute_batch(crate::usage::SCHEMA)
             .context("initialize usage table")?;
         let store = Self { connection };

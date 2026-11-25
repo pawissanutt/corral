@@ -137,6 +137,51 @@ pub fn reply_box(task: &daemon::Task) -> Option<ReplyBox> {
     blocked_card(task)?.reply
 }
 
+/// Name the backend's typed replacement step. Missing inventory alone is not proof of loss.
+pub fn blocked_step(
+    task: &daemon::Task,
+    index: usize,
+    next: &corral_types::Next,
+) -> (String, Press) {
+    use corral_types::{Op, Role, Status};
+
+    let replacement = match &next.op {
+        Op::Retry {
+            id, fresh: false, ..
+        } if id == task.id.as_str() => Some((Role::Worker, "Replace worker session")),
+        Op::Review { id, .. } if id == task.id.as_str() => {
+            Some((Role::Reviewer, "Replace reviewer session"))
+        }
+        _ => None,
+    };
+    if let Some(session) = &task.row.recovery_session
+        && let Some((role, label)) = replacement
+        && task.status() == Status::Blocked
+        && !next.force
+        && !task
+            .row
+            .run
+            .iter()
+            .chain(&task.row.reviewer)
+            .any(|run| run.role == role)
+    {
+        return (
+            label.into(),
+            Press::Control {
+                session: Id::new(session),
+                control: crate::model::agents::Control::Relaunch,
+            },
+        );
+    }
+    (
+        act::label(&next.op, next.force),
+        Press::Next {
+            task: task.id.clone(),
+            index,
+        },
+    )
+}
+
 /// The Blocked card of a task: its reason, detail and one button per next step, labelled as
 /// the operation it runs ("Dispatch anyway" for a forced one). A recommended reply is the reply
 /// box instead of a button.
@@ -162,12 +207,10 @@ pub fn blocked_card(task: &daemon::Task) -> Option<BlockedCard> {
             .enumerate()
             .skip(usize::from(reply.is_some()))
             .map(|(index, next)| {
+                let (label, press) = blocked_step(task, index, next);
                 Button::new(
-                    act::label(&next.op, next.force),
-                    Press::Next {
-                        task: task.id.clone(),
-                        index,
-                    },
+                    label,
+                    press,
                     if index == 0 {
                         ButtonKind::Primary
                     } else {

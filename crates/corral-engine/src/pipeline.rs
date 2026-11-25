@@ -99,6 +99,9 @@ impl Engine {
         if task.status != Status::Review {
             return Ok(());
         }
+        if self.advance_queued_repair(id)? {
+            return Ok(());
+        }
         let worker = self.last_worker(&self.store, &task)?;
         let checkout = Checkout::from_run(&worker)?;
         let head = corral_git::rev_sha(&checkout.repo, &checkout.branch_ref())

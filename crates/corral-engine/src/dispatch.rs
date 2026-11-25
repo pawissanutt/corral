@@ -379,8 +379,22 @@ impl Engine {
         fresh: bool,
         note: Option<&str>,
     ) -> Result<Run> {
+        self.retry_selected(id, profile, fresh, note, None)
+    }
+
+    pub(crate) fn retry_selected(
+        &self,
+        id: &str,
+        profile: Option<&str>,
+        fresh: bool,
+        note: Option<&str>,
+        selected: Option<&str>,
+    ) -> Result<Run> {
         self.launch_transaction(|store, pending| {
             let mut task = store.require_task(id)?;
+            if let Some(run) = selected {
+                store.require_relaunch_target(&task, Role::Worker, run)?;
+            }
             let last = self.last_worker(store, &task)?;
             let profile = self
                 .config
@@ -398,6 +412,9 @@ impl Engine {
                     )
                 })?;
             let project = self.project_for(&task)?;
+            if self.worker_slot_full(store, &task, project.as_ref())? {
+                return Err(refuse("no free worker slot for retry", vec![]));
+            }
             let mut checkout = Checkout::from_run(&last)?;
             self.supersede_runs(store, id, |run| run.role == Role::Worker)?;
             self.prepare_checkout(

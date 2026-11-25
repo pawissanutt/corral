@@ -17,6 +17,10 @@ impl Engine {
                 self.sync_error(&run.task, Some(&run.id), "session reconciliation", &error)?;
             }
         }
+        // Give already-requested repairs first chance at newly released slots.
+        for id in self.store.queued_repairs()? {
+            let _ = self.advance(&id);
+        }
         let mut running = self.store.occupied_slots(None)?;
         for task in self.store.list_tasks(&TaskFilter {
             statuses: vec![Status::Ready],
@@ -49,7 +53,7 @@ impl Engine {
         Ok(())
     }
 
-    fn reconcile(&self, observed: &Run) -> Result<()> {
+    pub(crate) fn reconcile(&self, observed: &Run) -> Result<()> {
         let status = if let Some(session) = &observed.session {
             self.session_runner()
                 .status(session)
@@ -89,7 +93,7 @@ impl Engine {
                             &mut task,
                             Some(&run.id),
                             Blocked {
-                                reason: "reviewer session ended without a verdict".into(),
+                                reason: crate::session_recovery::LOST_REVIEWER.into(),
                                 detail: None,
                                 next,
                             },
@@ -118,7 +122,7 @@ impl Engine {
                         &mut task,
                         Some(&run.id),
                         Blocked {
-                            reason: "agent session ended without corral done".into(),
+                            reason: crate::session_recovery::LOST_WORKER.into(),
                             detail: None,
                             next,
                         },

@@ -303,6 +303,36 @@ mod tests {
     }
 
     #[test]
+    fn replacement_session_uses_the_confirmed_run_not_a_task_wide_retry() {
+        let mut task = daemon::bare_task("T-8", "Worker", Status::Blocked, Default::default());
+        let retry = Next::run(Op::Retry {
+            id: task.id.clone(),
+            profile: None,
+            fresh: false,
+            note: None,
+        });
+        task.blocked = Some(Blocked {
+            reason: "agent session ended without corral done".into(),
+            detail: None,
+            next: vec![retry.clone()],
+        });
+        let mut row = daemon::task_row(task);
+        let unknown = daemon::Task::new(row.clone());
+        assert!(matches!(
+            blocked_step(&unknown, 0, &retry).1,
+            Press::Next { .. }
+        ));
+
+        row.recovery_session = Some("T-8_R2".into());
+        let confirmed = daemon::Task::new(row);
+        let step = crate::model::next::next_step(&confirmed).unwrap();
+        let effects = State::default().press(step.press, &daemon::Feed::default(), ENV);
+        assert!(matches!(effects.as_slice(), [Effect::Control {
+            session, control: crate::model::agents::Control::Relaunch, confirmed: false, ..
+        }] if session.as_str() == "T-8_R2"));
+    }
+
+    #[test]
     fn a_blocked_cards_reply_box_sends_its_words_as_the_served_reply_step() {
         let mut task = daemon::bare_task(
             "T-8",

@@ -394,7 +394,12 @@ pub(super) fn task_rows(engine: &Engine, tasks: Vec<Task>) -> Result<Vec<TaskRow
                     id: id.clone(),
                 })
                 .collect();
+            let recovery_session = engine
+                .store
+                .recovery_run(&task)?
+                .map(|r| format!("{}_{}", r.task, r.id));
             Ok(TaskRow {
+                recovery_session,
                 task,
                 run,
                 gate,

@@ -246,6 +246,35 @@ fn pi_worker_lifecycle_and_controls_use_the_socket() {
     assert_eq!(runner.status(&session).unwrap(), SessionStatus::Gone);
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn lost_task_host_is_not_kept_running_by_its_idle_placement() {
+    let fixture = Fixture::new();
+    let dir = fixture.temp.path().join("T-11/R1");
+    fs::create_dir_all(&dir).unwrap();
+    let socket = fixture.socket(&dir);
+    let inner = fixture.placement.start(&spec(&dir, "test-worker")).unwrap();
+    fixture.placement.set_status(&inner, SessionStatus::Idle);
+    let session = SessionRef::Pi {
+        socket: socket.clone(),
+        dir: dir.clone(),
+        inner: Box::new(inner),
+    };
+    let runner = PiRunner::new(&fixture.placement);
+    for (pid, endpoint, expected) in [
+        (std::process::id(), socket.clone(), SessionStatus::Idle),
+        (i32::MAX as u32, dir.join("wrong.sock"), SessionStatus::Idle),
+        (i32::MAX as u32, socket.clone(), SessionStatus::Gone),
+    ] {
+        fs::write(
+            dir.join("session.json"),
+            json!({"id":"T-11/R1", "role":"worker", "pid":pid, "socket":endpoint}).to_string(),
+        )
+        .unwrap();
+        assert_eq!(runner.status(&session).unwrap(), expected);
+    }
+}
+
 #[test]
 fn oversized_legacy_status_proves_liveness_without_claiming_idle_or_gone() {
     let fixture = Fixture::new();

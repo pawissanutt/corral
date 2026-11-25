@@ -67,7 +67,15 @@ impl Engine {
         }
         let next_force = || Next::force(approve_op(id, onto));
         let mut skipped = Vec::new();
-        if !reviewable(&task) {
+        if self.store.has_queued_repair(id)? {
+            if !force {
+                return Err(refuse(
+                    "repair is waiting for a worker slot",
+                    vec![next_force()],
+                ));
+            }
+            skipped.push("queued repair");
+        } else if !reviewable(&task) {
             if !force {
                 let next = if matches!(task.status, Status::Running | Status::Blocked) {
                     next_done(id)

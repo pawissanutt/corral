@@ -10256,6 +10256,13 @@
             "description": "Whether the pipeline appended `ready` for the current review.",
             "type": "boolean"
           },
+          "recovery_session": {
+            "description": "Ended run eligible for explicit session.relaunch after session loss.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "resolved_profile": {
             "description": "Worker profile dispatch would select without an explicit override.",
             "type": [

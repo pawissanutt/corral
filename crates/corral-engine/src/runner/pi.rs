@@ -33,6 +33,8 @@ mod build;
 pub use build::{BuildLaunch, build_session, build_socket, is_build_id, pi_data_root};
 
 mod chat;
+#[cfg(target_os = "linux")]
+mod task_host;
 pub use chat::{ChatLaunch, chat_session};
 
 const VERSION: u32 = 2;
@@ -479,11 +481,27 @@ impl<'a> PiRunner<'a> {
 
     /// Read status and the pause flag from the same observation of the Pi host.
     pub fn observe(&self, session: &SessionRef) -> Result<(SessionStatus, Option<bool>)> {
-        let SessionRef::Pi { socket, inner, .. } = session else {
+        let SessionRef::Pi {
+            socket,
+            inner,
+            dir: _dir,
+        } = session
+        else {
             return Ok((self.inner.status(session)?, None));
         };
         let state: State = match Client::new(socket).request("get_state", json!({})) {
             Ok(state) => state,
+            #[cfg(target_os = "linux")]
+            Err(error)
+                if error.downcast_ref::<io::Error>().is_some_and(|e| {
+                    matches!(
+                        e.kind(),
+                        io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
+                    )
+                }) && task_host::confirmed_absent(_dir, socket) =>
+            {
+                return Ok((SessionStatus::Gone, None));
+            }
             Err(error) if unavailable(&error) => return Ok((self.inner.status(inner)?, None)),
             Err(error) => return Err(error),
         };
