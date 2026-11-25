@@ -65,31 +65,69 @@ pub(crate) fn stage(
     if current == digest {
         return Ok(());
     }
-    let generation = previous
-        .as_ref()
-        .map_or(0, |m| m.generation)
-        .checked_add(1)
-        .context("automation generation exhausted")?;
+    let mut high_generation = previous.as_ref().map_or(0, |m| m.generation);
+    let live = previous.as_ref().filter(|m| m.digest == Some(current));
+    let mut current_config = None;
     let mut rules = BTreeMap::new();
+    let mut changed = Vec::new();
+    let minute = now.as_second().div_euclid(60);
     for id in config.automation.rules.keys() {
         ensure!(safe_id(id), "invalid automation rule ID: {id:?}");
-        let effective = effective(config, id)?;
-        let old = previous
-            .as_ref()
-            .filter(|m| m.digest == Some(current))
-            .and_then(|m| m.rules.get(id));
-        let minute = now.as_second().div_euclid(60);
-        let activation = if let Some(old) = old.filter(|a| a.effective == effective) {
-            old.clone()
-        } else {
+        let spec = effective(config, id)?;
+        let old = live.and_then(|m| m.rules.get(id));
+        if let Some(old) = old.filter(|a| a.effective == spec) {
+            rules.insert(id.clone(), old.clone());
+            continue;
+        }
+
+        let worker = record(&fence.dir.join(format!("{id}.json")))?;
+        if let Some(worker) = worker {
+            high_generation = high_generation.max(worker.generation);
+            // A hand-configured rule may already have a durable cursor, even
+            // without a manifest baseline. Compare against the live config too:
+            // the record might predate an unobserved disable or removal.
+            if old.is_none() && worker.effective == spec {
+                let live_config = current_config.get_or_insert_with(|| {
+                    let text = fs::read_to_string(fence.dir.parent()?.join("corral.toml")).ok()?;
+                    let actual: [u8; 32] = Sha256::digest(text.as_bytes()).into();
+                    if actual != current {
+                        return None;
+                    }
+                    Config::parse(&text).ok()
+                });
+                if live_config
+                    .as_ref()
+                    .and_then(|c| effective(c, id).ok())
+                    .is_some_and(|effective| effective == spec)
+                {
+                    rules.insert(
+                        id.clone(),
+                        Activation {
+                            effective: spec,
+                            generation: worker.generation,
+                            cursor: worker.cursor,
+                            minute: worker.minute,
+                        },
+                    );
+                    continue;
+                }
+            }
+        }
+        changed.push((id, spec, old.map_or(minute, |a| a.minute.max(minute))));
+    }
+    let generation = high_generation
+        .checked_add(1)
+        .context("automation generation exhausted")?;
+    for (id, effective, minute) in changed {
+        rules.insert(
+            id.clone(),
             Activation {
                 effective,
                 generation,
                 cursor,
-                minute: old.map_or(minute, |a| a.minute.max(minute)),
-            }
-        };
-        rules.insert(id.clone(), activation);
+                minute,
+            },
+        );
     }
     let manifest = Manifest {
         digest: Some(digest),
@@ -106,3 +144,7 @@ pub(crate) fn stage(
         &manifest,
     )
 }
+
+#[cfg(test)]
+#[path = "activation_tests.rs"]
+mod tests;
