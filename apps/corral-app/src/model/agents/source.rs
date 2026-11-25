@@ -274,3 +274,17 @@ pub(super) fn scoped<'a>(feed: &'a daemon::Feed, filter: &ProjectFilter) -> Vec<
     });
     rows
 }
+
+impl super::SessionLine {
+    /// The timestamp used by the default Sessions order (zero means unreported).
+    pub fn activity(&self, feed: &daemon::Feed) -> Option<u64> {
+        let id = self.id.as_str();
+        let timestamp = Source {
+            id,
+            run: feed.agents.get(id),
+            chat: feed.assistants.get(id),
+        }
+        .activity();
+        (timestamp != 0).then_some(timestamp)
+    }
+}

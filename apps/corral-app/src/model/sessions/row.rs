@@ -33,6 +33,8 @@ pub struct SessionRow {
     pub context: Option<String>,
     /// How long since it started.
     pub age: Option<String>,
+    pub activity: Option<String>,
+    pub model_id: Option<String>,
     pub quiet: Option<String>,
     pub branch: Option<String>,
     pub next: Option<NextStep>,
@@ -76,7 +78,7 @@ impl SessionRow {
 }
 
 /// When the session started, in Unix seconds: a run's start, a chat's or build's creation.
-fn started(feed: &Feed, id: &str) -> Option<u64> {
+pub(super) fn started(feed: &Feed, id: &str) -> Option<u64> {
     if let Some(run) = feed.agents.get(id) {
         return u64::try_from(run.run.started.as_second()).ok();
     }
@@ -86,7 +88,14 @@ fn started(feed: &Feed, id: &str) -> Option<u64> {
 
 /// Session `id`'s row; none when the daemon lists no such session.
 pub fn row(feed: &Feed, id: &Id, env: Env) -> Option<SessionRow> {
-    let line = session_line(feed, id.as_str())?;
+    let mut row = from_line(feed, session_line(feed, id.as_str())?, env);
+    row.remove =
+        removable(feed, id.as_str()).then(|| crate::model::agents::Action::Remove(id.clone()));
+    Some(row)
+}
+
+pub(super) fn from_line(feed: &Feed, line: SessionLine, env: Env) -> SessionRow {
+    let id = &line.id;
     let facts = Facts::of(feed, id);
     let ui = Ui::default();
     let cx = Cx::new(feed, &ui, id, env, &facts);
@@ -104,7 +113,7 @@ pub fn row(feed: &Feed, id: &Id, env: Env) -> Option<SessionRow> {
         .and_then(|build| build.branch.clone())
         .or_else(|| cx.run.map(|run| run.run.branch.clone()))
         .filter(|branch| !branch.is_empty());
-    Some(SessionRow {
+    SessionRow {
         shown_id: cx.shown_id(),
         role: role_word(&cx.role),
         title: if line.name.is_empty() {
@@ -126,13 +135,17 @@ pub fn row(feed: &Feed, id: &Id, env: Env) -> Option<SessionRow> {
         age: started(feed, id.as_str())
             .filter(|_| feed.now > 0)
             .map(|since| age(Some(since), feed.now)),
+        activity: line
+            .activity(feed)
+            .filter(|_| feed.now > 0)
+            .map(|since| age(Some(since), feed.now)),
+        model_id: cx.model(),
         quiet,
         branch,
         next: session_next_step(&line),
-        remove: removable(feed, id.as_str())
-            .then(|| crate::model::agents::Action::Remove(id.clone())),
+        remove: None,
         line,
-    })
+    }
 }
 
 /// `3 live · $6.17 spent by them`: the sessions whose host runs, and what those that report a

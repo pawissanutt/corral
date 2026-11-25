@@ -53,6 +53,7 @@ pub struct Row {
 pub type RowBuilder = Rc<dyn Fn(&Id) -> Row>;
 /// Builds the inspector's content for the row with this key.
 pub type InspectorBuilder = Rc<dyn Fn(&Id) -> AnyElement>;
+pub type SectionAccessory = Rc<dyn Fn(&Section) -> Option<AnyElement>>;
 
 /// What a list page gives the scaffold.
 pub struct ListPage {
@@ -95,6 +96,16 @@ pub fn list_page(app: AppState, page: ListPage) -> AnyElement {
 /// [`list_page`] with `foot` under the rows, inside the scrolling list: the pager of a paged
 /// section.
 pub fn list_page_with(app: AppState, page: ListPage, foot: Option<AnyElement>) -> AnyElement {
+    list_page_with_sections(app, page, foot, None)
+}
+
+/// A list with optional controls directly under each section heading.
+pub fn list_page_with_sections(
+    app: AppState,
+    page: ListPage,
+    foot: Option<AnyElement>,
+    accessory: Option<SectionAccessory>,
+) -> AnyElement {
     let form = app.form;
     let ListPage {
         key,
@@ -147,10 +158,14 @@ pub fn list_page_with(app: AppState, page: ListPage, foot: Option<AnyElement>) -
             let sections = sections.get();
             let (row, on_key, on_fold) = (Rc::clone(&row), Rc::clone(&on_key), Rc::clone(&on_fold));
             let columns = Rc::clone(&columns);
+            let accessory = accessory.clone();
             untracked(move || {
                 let mut out = Vec::new();
                 for section in &sections {
                     out.push(section_head(app, section, Rc::clone(&on_fold)));
+                    if let Some(control) = accessory.as_ref().and_then(|build| build(section)) {
+                        out.push(control);
+                    }
                     for id in &section.rows {
                         out.push(table_row(
                             app,

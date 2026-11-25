@@ -3,17 +3,21 @@
 //! columns they sit in, the head's summary and the inspector of the selected session. The
 //! session page itself is `model::session`.
 
+mod filter;
 mod inspect;
+mod listing;
+pub use listing::{Listing, Sort, listing};
+
+pub const FILTER_LABEL: &str = "Filter sessions";
+pub const NO_MATCH: &str = "No sessions match this filter.";
 mod row;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
-use crate::model::Id;
-use crate::model::agents::session_lines;
 use crate::model::daemon::{Feed, Link};
-use crate::model::list::{Column, Section};
-use crate::model::projects::Scope;
-use crate::model::status::{SessionState, session_look};
+use crate::model::list::Column;
+#[cfg(test)]
+use crate::model::{Id, list::Section, projects::Scope};
 
 pub use inspect::{Inspect, Latest, inspect, latest};
 pub use row::{SessionRow, row, summary};
@@ -27,10 +31,26 @@ const SOURCES: [&str; 2] = ["agents", "assistant"];
 /// The list's own state: which of the folding sections are open.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct State {
+    pub filter: String,
+    pub sorts: BTreeMap<String, Sort>,
     pub unfolded: BTreeSet<String>,
 }
 
 impl State {
+    pub fn sort(&self, group: &str) -> Sort {
+        self.sorts.get(group).copied().unwrap_or_default()
+    }
+
+    pub fn set_mode(&mut self, mode: &str) {
+        self.filter = filter::Query::without_mode_tokens(&self.filter);
+        if mode != "all" {
+            if !self.filter.is_empty() {
+                self.filter.push(' ');
+            }
+            self.filter.push_str(&format!("mode:{mode}"));
+        }
+    }
+
     /// Opens or closes a folding section.
     pub fn toggle(&mut self, key: &str) {
         if !self.unfolded.remove(key) {
@@ -58,8 +78,11 @@ pub fn columns() -> Vec<Column> {
         Column::fixed("context", "Ctx", 40.0, 4.0)
             .end()
             .gives_way(3),
-        Column::fixed("cost", "Cost", 60.0, 8.0).end().gives_way(4),
-        Column::fixed("age", "Age", 48.0, 6.0).end().gives_way(5),
+        Column::fixed("cost", "Cost", 60.0, 8.0).end(),
+        Column::fixed("activity", "Last activity", 80.0, 8.0)
+            .end()
+            .short("Activity"),
+        Column::fixed("age", "Started", 55.0, 7.0).end(),
         Column::fixed("next", "Next step", 120.0, 13.0)
             .end()
             .short("Next"),
@@ -134,34 +157,10 @@ pub fn standing(feed: &Feed, has_rows: bool) -> Standing {
     }
 }
 
-/// The list's sections: a group per state that has a session, Gone folding.
+#[cfg(test)]
 pub fn sections(feed: &Feed, scope: &Scope, state: &State) -> Vec<Section> {
-    let lines = session_lines(feed, &scope.filter());
-    SessionState::ORDER
-        .into_iter()
-        .filter_map(|group| {
-            let rows: Vec<Id> = lines
-                .iter()
-                .filter(|line| line.state == group)
-                .map(|line| line.id.clone())
-                .collect();
-            let open = state.unfolded.contains(group.slug());
-            let section = Section {
-                key: group.slug().to_owned(),
-                label: group.word().to_owned(),
-                look: Some(session_look(group)),
-                count: rows.len(),
-                note: group.note().map(str::to_owned),
-                fold: group.folds().then_some(open),
-                rows: if group.folds() && !open {
-                    Vec::new()
-                } else {
-                    rows
-                },
-            };
-            section.shown().then_some(section)
-        })
-        .collect()
+    let env = crate::model::health::daemon_env(feed, crate::model::Form::Desktop);
+    listing(feed, scope, state, env, |_| false).sections
 }
 
 #[cfg(test)]
@@ -190,8 +189,89 @@ mod tests {
             .map(|section| (section.key.as_str(), section.count, section.rows.len()))
             .collect();
         assert_eq!(shape, [("blocked", 1, 1), ("gone", 1, 0)]);
+        feed.agents.insert(Id::from("T-3_R1"), {
+            let mut gone = agent("T-3", "R1", Role::Reviewer);
+            gone.status = SessionStatus::Gone;
+            gone
+        });
+        state.filter = "state:gone task:T-2".into();
+        let filtered = sections(&feed, &Scope::All, &state);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].count, 1);
+        assert!(filtered[0].rows.is_empty());
         state.unfolded.insert("gone".into());
-        assert_eq!(sections(&feed, &Scope::All, &state)[1].rows.len(), 1);
+        assert_eq!(
+            sections(&feed, &Scope::All, &state)[0].rows,
+            [Id::from("T-2_R1")]
+        );
+    }
+
+    #[test]
+    fn mode_chips_replace_only_mode_and_count_other_matches() {
+        let mut feed = Feed::default();
+        for (task, role) in [
+            ("T-1", Role::Worker),
+            ("T-2", Role::Reviewer),
+            ("T-3", Role::Worker),
+        ] {
+            let mut run = agent(task, "R1", role);
+            run.status = if task == "T-3" {
+                SessionStatus::Gone
+            } else {
+                SessionStatus::Working
+            };
+            feed.agents.insert(Id::from(format!("{task}_R1")), run);
+        }
+        let env = crate::model::health::daemon_env(&feed, crate::model::Form::Desktop);
+        let mut state = State {
+            filter: "state:working MODE:reviewer".into(),
+            ..State::default()
+        };
+        state.set_mode("worker");
+        let shown = listing(&feed, &Scope::All, &state, env, |_| false);
+        assert_eq!(shown.sections[0].rows, [Id::from("T-1_R1")]);
+        assert_eq!(shown.sections.len(), 1);
+        for mode in ["worker", "reviewer"] {
+            let chip = shown.chips.iter().find(|chip| chip.mode == mode).unwrap();
+            assert_eq!(chip.count, 1);
+            assert_eq!(chip.selected, mode == "worker");
+        }
+        state.set_mode("all");
+        assert_eq!(sections(&feed, &Scope::All, &state)[0].count, 2);
+    }
+
+    #[test]
+    fn section_sort_uses_the_selected_key_without_changing_other_sections() {
+        use crate::model::agents::source_tests::assistant;
+        use corral_protocol::rows::{AssistantKind, AssistantState};
+        let mut feed = Feed::default();
+        for (id, start, activity, cost, name) in [
+            ("A-1", 1, 6, Some(1.0), "Zulu"),
+            ("A-2", 3, 4, None, "Beta"),
+            ("A-3", 2, 5, Some(3.0), "alpha"),
+        ] {
+            let mut chat = assistant(id, AssistantKind::Session);
+            chat.state = AssistantState::Ready;
+            chat.created = Some(format!("2025-01-01T00:00:0{start}Z"));
+            chat.updated = Some(format!("2025-01-01T00:00:0{activity}Z"));
+            chat.cost_usd = cost;
+            chat.title = name.into();
+            feed.assistants.insert(Id::from(id), chat);
+        }
+        let mut state = State::default();
+        for (sort, expected) in [
+            (Sort::Activity, ["A-1", "A-3", "A-2"]),
+            (Sort::Started, ["A-2", "A-3", "A-1"]),
+            (Sort::Cost, ["A-3", "A-1", "A-2"]),
+            (Sort::Name, ["A-3", "A-2", "A-1"]),
+        ] {
+            state.sorts.insert("idle".into(), sort);
+            assert_eq!(
+                sections(&feed, &Scope::All, &state)[0].rows,
+                expected.map(Id::from)
+            );
+            assert_eq!(state.sort("working"), Sort::Activity);
+        }
     }
 
     /// A failed sessions subscription read as an empty list, so the owner was told there were

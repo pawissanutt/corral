@@ -19,11 +19,12 @@ use crate::model::work::Record;
 use crate::model::{Form, Id, Live, sessions};
 use crate::screens::agents::{self, Compact, ask_session, ask_view};
 use crate::state::AppState;
+use crate::ui::composer::copyable_input;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::button::{ButtonKind, button};
 use crate::ui::kit::chip::chip;
 use crate::ui::kit::list::{
-    ListPage, Row, cell_mono, cell_text, cell_title, list_page_with, phone_lines,
+    ListPage, Row, cell_mono, cell_text, cell_title, list_page_with_sections, phone_lines,
 };
 use crate::ui::kit::next::{more_button, next_button};
 use crate::ui::kit::notice::{error, notice};
@@ -34,17 +35,25 @@ use crate::ui::kit::text::{dim, mono, plain};
 use crate::ui::term;
 use crate::ui::tokens::{MEASURE_FORM, Token, color};
 
+/// The same filtered order for the list and its keyboard navigation.
+pub(crate) fn listing(app: AppState) -> sessions::Listing {
+    let scope = app.project_scope();
+    let env = app.env();
+    app.feed.with(|feed| {
+        app.agents.with(|state| {
+            sessions::listing(feed, &scope, &state.list, env, |id| {
+                app.agent_pinned(id.as_str())
+            })
+        })
+    })
+}
+
 /// The Sessions place on every form. A new chat opens its page from wherever it was started
 /// (`AppState::follow_agents` settles the chat operations for the app's life).
 pub fn screen(app: AppState) -> AnyElement {
     let form = app.form;
-    let sections = computed(move || {
-        let scope = app.project_scope();
-        app.feed.with(|feed| {
-            app.agents
-                .with(|state| sessions::sections(feed, &scope, &state.list))
-        })
-    });
+    let shown = computed(move || listing(app));
+    let sections = computed(move || shown.with(|shown| shown.sections.clone()));
     let selected = computed(move || {
         let order = sections.with(|sections| list::order(sections));
         app.nav
@@ -54,34 +63,24 @@ pub fn screen(app: AppState) -> AnyElement {
     // the list shows.
     effect(move || {
         let shown = selected.get();
-        if shown.is_some() && untracked(|| app.selection().session) != shown {
+        if untracked(|| app.selection().session) != shown {
             untracked(|| app.nav.update(|nav| nav.selection.session = shown));
         }
     });
     let standing = computed(move || {
-        let has_rows = !sections.with(Vec::is_empty);
+        let has_rows = shown.with(|shown| shown.had_rows);
         app.feed.with(|feed| sessions::standing(feed, has_rows))
     });
     let notice = computed(move || {
+        if sections.with(Vec::is_empty) && shown.with(|shown| shown.had_rows) {
+            return Some(sessions::NO_MATCH.to_owned());
+        }
         standing.with(|standing| match &standing.fill {
             Some(fill @ (sessions::Fill::Loading | sessions::Fill::Empty)) => Some(fill.words()),
             Some(sessions::Fill::Failed(_)) | None => None,
         })
     });
-    let summary = computed(move || {
-        let env = app.env();
-        let rows: Vec<sessions::SessionRow> = sections.with(|sections| {
-            app.feed.with(|feed| {
-                sections
-                    .iter()
-                    .filter(|section| section.key != SessionState::Gone.slug())
-                    .flat_map(|section| section.rows.iter())
-                    .filter_map(|id| sessions::row(feed, id, env))
-                    .collect()
-            })
-        });
-        sessions::summary(&rows)
-    });
+    let summary = computed(move || shown.with(|shown| shown.summary.clone()));
     let page_head = dynamic(move || {
         let summary = summary.get();
         untracked(move || {
@@ -104,10 +103,11 @@ pub fn screen(app: AppState) -> AnyElement {
     });
     let page_head = view()
         .child(page_head)
+        .child(filter_bar(app, shown))
         .child(stale(app, standing))
         .into_element();
     let columns = sessions::columns();
-    list_page_with(
+    list_page_with_sections(
         app,
         ListPage {
             key: "sessions",
@@ -126,7 +126,83 @@ pub fn screen(app: AppState) -> AnyElement {
             notice,
         },
         Some(failed(app, standing)),
+        Some(Rc::new(move |section| {
+            (section.fold != Some(false)).then(|| sort_bar(app, section.key.clone()))
+        })),
     )
+}
+
+fn filter_bar(app: AppState, shown: Memo<sessions::Listing>) -> AnyElement {
+    let field = copyable_input(app, None, move || {
+        app.agents.with(|state| state.list.filter.clone())
+    })
+    .test_id("field-sessions")
+    .label(sessions::FILTER_LABEL)
+    .placeholder(sessions::FILTER_LABEL)
+    .on_change(move |typed: &str| {
+        app.agents
+            .update(|state| state.list.filter = typed.to_owned())
+    })
+    .w_full()
+    .text_color(color(Token::Ink));
+    let chips = computed(move || shown.with(|shown| shown.chips.clone()));
+    view()
+        .px(if app.form == Form::Terminal {
+            term::cells(1.0)
+        } else {
+            px(16.0)
+        })
+        .child(field)
+        .child(dynamic(move || {
+            let chips = chips.get();
+            view()
+                .flex_row()
+                .flex_wrap()
+                .children(chips.into_iter().map(|chip| {
+                    button(
+                        app,
+                        chip.label,
+                        choice(chip.selected),
+                        format!("seg-mode-{}", chip.mode),
+                        move || app.agents.update(|state| state.list.set_mode(&chip.mode)),
+                    )
+                }))
+                .into_element()
+        }))
+        .into_element()
+}
+
+fn choice(selected: bool) -> ButtonKind {
+    if selected {
+        ButtonKind::Primary
+    } else {
+        ButtonKind::Quiet
+    }
+}
+
+fn sort_bar(app: AppState, group: String) -> AnyElement {
+    dynamic(move || {
+        let sort = app.agents.with(|state| state.list.sort(&group));
+        view()
+            .flex_row()
+            .flex_wrap()
+            .children(sessions::Sort::ALL.into_iter().map(|option| {
+                let group = group.clone();
+                button(
+                    app,
+                    option.label(),
+                    choice(sort == option),
+                    format!("seg-sort-{group}-{}", option.slug()),
+                    move || {
+                        app.agents.update(|state| {
+                            state.list.sorts.insert(group.clone(), option);
+                        })
+                    },
+                )
+            }))
+            .into_element()
+    })
+    .into_element()
 }
 
 /// The line over sessions shown from the last update while their source is stale, a line's
@@ -205,11 +281,19 @@ fn row(app: AppState, id: &Id, columns: &[list::Column]) -> Row {
                         .map(|line| {
                             (
                                 line.title.clone(),
-                                [line.role.clone(), line.doing.clone()]
-                                    .into_iter()
-                                    .filter(|part| !part.is_empty())
-                                    .collect::<Vec<_>>()
-                                    .join(" · "),
+                                [
+                                    line.role.clone(),
+                                    line.doing.clone(),
+                                    app.agents
+                                        .with(|state| {
+                                            state.list.sort(line.line.state.slug()).phone_fact(line)
+                                        })
+                                        .unwrap_or_default(),
+                                ]
+                                .into_iter()
+                                .filter(|part| !part.is_empty())
+                                .collect::<Vec<_>>()
+                                .join(" · "),
                             )
                         })
                         .unwrap_or_default()
@@ -282,6 +366,7 @@ fn cell(
         "model" => fact(|line| line.model.clone(), true),
         "context" => figure(|line| line.context.clone()),
         "cost" => figure(|line| line.cost.clone()),
+        "activity" => figure(|line| line.activity.clone()),
         "age" => figure(|line| line.age.clone()),
         _ => {
             let (shown, record) = (id.to_string(), record.clone());

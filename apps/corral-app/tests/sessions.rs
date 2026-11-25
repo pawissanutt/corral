@@ -511,3 +511,15 @@ fn every_details_section_opens_in_the_sample_preview_on_phone_and_desktop() {
         }
     }
 }
+
+#[test]
+fn typing_a_session_filter_narrows_the_rows() {
+    let mut app = sessions(desktop());
+    app.wait_for("id:agent-T-14_R1").unwrap();
+    app.wait_for("id:agent-B-k3x9").unwrap();
+    app.type_text("id:field-sessions", "mode:build B-k3x9")
+        .unwrap();
+    app.wait_for_gone("id:agent-T-14_R1", Duration::from_secs(5))
+        .unwrap();
+    app.wait_for("id:agent-B-k3x9").unwrap();
+}
