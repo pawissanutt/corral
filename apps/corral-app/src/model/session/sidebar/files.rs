@@ -135,7 +135,7 @@ fn row(cx: &Cx<'_>, at: usize, file: &ChangedFile) -> SideFile {
         removed,
         other,
         label,
-        action: Action::Changes(ChangesAction::Open {
+        action: Action::Changes(ChangesAction::OpenOwn {
             session: cx.id.clone(),
             path: file.path.clone(),
         }),
@@ -146,6 +146,22 @@ fn served<'a>(cx: &Cx<'a>, target: &DetailRef) -> Option<&'a SessionChanges> {
     match cx.feed.detail(target)?.body()? {
         DetailBody::SessionChanges(changes) => Some(changes),
         _ => None,
+    }
+}
+
+/// The section's header count, from the same read as its totals and preview: `167 files
+/// changed`. Before that read arrives, or when it failed, the host's state brief counts them
+/// (`changes::summary`), whose comparison can differ (a task run's candidate).
+pub(super) fn summary(cx: &Cx<'_>, target: &DetailRef) -> String {
+    match served(cx, target) {
+        Some(changes) if changes.error.is_none() => {
+            match u64::from(changes.total).max(changes.files.len() as u64) {
+                0 => "no changes yet".into(),
+                1 => "1 file changed".into(),
+                n => format!("{n} files changed"),
+            }
+        }
+        _ => super::super::changes::summary(cx),
     }
 }
 
@@ -307,6 +323,10 @@ mod tests {
         };
         let ui = Ui::default();
         let cx = Cx::new(&feed, &ui, &id, daemon_env(&feed, Form::Desktop), &facts);
+
+        // The host's state brief counts nothing here (a task run's would count its candidate):
+        // the header follows the read the totals come from.
+        assert_eq!(super::summary(&cx, &target), "167 files changed");
 
         let folded = files_tab(&cx, &target, false);
         assert!(folded.rows.is_empty());

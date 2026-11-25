@@ -102,6 +102,13 @@ pub enum ChangesAction {
         session: Id,
         path: String,
     },
+    /// Open the Changes tab on this file in the session's own comparison and repository, as
+    /// Details lists it: another comparison, repository, author or filter chosen in the tab could
+    /// leave the file out or serve another patch for the same path.
+    OpenOwn {
+        session: Id,
+        path: String,
+    },
     /// Make this file and hunk current (`usize::MAX`: its last hunk).
     Select {
         session: Id,
@@ -763,6 +770,14 @@ pub(super) fn act(state: &mut State, action: ChangesAction, feed: &Feed) -> Vec<
             changes.file = Some(path);
             changes.hunk = 0;
             effects
+        }
+        ChangesAction::OpenOwn { session, path } => {
+            let ui = state.ui_mut(&session);
+            ui.changes = ChangesUi {
+                more: ui.changes.more,
+                ..ChangesUi::EMPTY
+            };
+            act(state, ChangesAction::Open { session, path }, feed)
         }
         ChangesAction::Select {
             session,

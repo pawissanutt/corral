@@ -303,7 +303,7 @@ fn context_summary(cx: &Cx<'_>) -> (String, Hue) {
 fn summary(cx: &Cx<'_>, section: Section) -> (String, Hue) {
     match section {
         Section::Task => (task::summary(cx), Hue::Neutral),
-        Section::Changes => (changes::summary(cx), Hue::Neutral),
+        Section::Changes => (files::summary(cx, &changes::target(cx)), Hue::Neutral),
         Section::Agents => at_work(cx),
         Section::Plan => plan_summary(cx),
         Section::Usage => (usage::summary(cx), Hue::Neutral),

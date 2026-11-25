@@ -231,7 +231,9 @@ pub fn page_for(action: &super::session::Action) -> Option<super::Live> {
     let session = match action {
         Action::Tab { session, .. }
         | Action::Sub { session, .. }
-        | Action::Changes(ChangesAction::Open { session, .. })
+        | Action::Changes(
+            ChangesAction::Open { session, .. } | ChangesAction::OpenOwn { session, .. },
+        )
         | Action::Files(FilesAction::Open { session, .. })
         | Action::Sidebar(
             SidebarAction::Agent { session, .. }

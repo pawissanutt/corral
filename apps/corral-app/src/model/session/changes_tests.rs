@@ -207,3 +207,38 @@ fn an_outside_edit_is_flagged_on_its_file() {
         .expect("the scoped edit is listed");
     assert!(inside.flag.is_none());
 }
+
+/// Details previews the session's own comparison: a row pressed after the tab was switched to
+/// Staged in another repository with a filter asked for that view's patch of the path, which
+/// the preview never listed.
+#[test]
+fn a_details_row_opens_its_file_in_the_session_comparison() {
+    let feed = Feed::default();
+    let mut state = State::default();
+    let id = Id::from(SESSION);
+    for action in [
+        ChangesAction::Compare {
+            session: id.clone(),
+            comparison: ChangesComparison::Staged,
+        },
+        ChangesAction::Scope {
+            session: id.clone(),
+            scope: Some("vendor/lib".into()),
+        },
+        ChangesAction::Filter {
+            session: id.clone(),
+            text: "zzz".into(),
+        },
+        ChangesAction::OpenOwn {
+            session: id.clone(),
+            path: "src/a.rs".into(),
+        },
+    ] {
+        state.act(Action::Changes(action), &feed);
+    }
+    let changes = &state.ui(SESSION).changes;
+    assert_eq!(changes.comparison, None);
+    assert_eq!(changes.scope, None);
+    assert!(changes.filter.is_empty());
+    assert_eq!(changes.file.as_deref(), Some("src/a.rs"));
+}
