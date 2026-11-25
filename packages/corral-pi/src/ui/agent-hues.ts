@@ -12,3 +12,12 @@ export function agentColor(hue: number): string {
   const size = hues.length, index = ((Math.trunc(hue) % size) + size) % size;
   return hues[index] ?? "";
 }
+
+let hueOf: (id: string) => number | undefined = () => undefined;
+/** Where an agent id's hue comes from; the host sets it once, before the transcript draws. */
+export function setAgentHueSource(source: (id: string) => number | undefined): void { hueOf = source; }
+/** ANSI foreground for agent `id`, or undefined when it is not a child this session knows. */
+export function agentIdColor(id: string): string | undefined {
+  const hue = hueOf(id);
+  return hue === undefined ? undefined : agentColor(hue);
+}

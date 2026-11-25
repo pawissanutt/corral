@@ -3,11 +3,14 @@
 // not write in one of these exact shapes returns undefined and Pi draws its ordinary bubble. Presentation only: the
 // model receives the delivered text unchanged, and the full text is one click or Ctrl+O away, clipped by visual rows.
 // The worker's and reviewer's kickoffs are parsed in host-envelopes.ts. An `ask_user` answer keeps the owner's bubble
-// in a cleaner form: `you answered`, the question muted on one row, then the answer.
+// in a cleaner form: `you answered`, the question muted on one row, then the answer. A message another agent sent is
+// that agent's card (agent-message.ts), and a long owner message keeps Pi's bubble, folded.
 import {
   truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component, type TuiMouseEvent, type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
 import { corralPromptRow } from "./host-envelopes.ts";
+import { AgentMessageCard, classifyAgentNote } from "./agent-message.ts";
+import { agentIdColor } from "./agent-hues.ts";
 import { PANEL_BUBBLE, PANEL_ERROR, PANEL_MUTED, PANEL_SUCCESS, PANEL_TEXT, PANEL_WARNING, RESET, plainLabel } from "./panels-view.ts";
 
 /** `✓` done, `✗` failed, `!` unknown or warning, `○` a neutral event. */
@@ -256,14 +259,53 @@ export class AnswerBubble implements Component {
   }
 }
 
+/** A folded owner bubble keeps this many rows; one with at most FOLD_FROM rows is drawn whole. */
+const FOLDED_BUBBLE_ROWS = 12, FOLD_FROM = 14;
+
+/** Pi's own bubble for a long owner message, folded to its first 12 rows until a click or Ctrl+O opens it. */
+export class FoldedBubble implements Component {
+  private expanded = false;
+  private foldable = false;
+  constructor(readonly inner: Component) {}
+  setExpanded(expanded: boolean): void {
+    this.expanded = expanded;
+    (this.inner as { setExpanded?: (expanded: boolean) => void }).setExpanded?.(expanded);
+  }
+  invalidate(): void { this.inner.invalidate(); }
+  handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    if (this.foldable && event.type === "click" && event.button === "left") {
+      this.expanded = !this.expanded;
+      return { handled: true };
+    }
+    return this.inner.handleMouse?.(event);
+  }
+  render(width: number): string[] {
+    const rows = this.inner.render(width);
+    this.foldable = rows.length > FOLD_FROM;
+    if (this.expanded || !this.foldable) return [...rows];
+    const outer = Math.max(1, Math.min(width - 1, BUBBLE));
+    const words = truncateToWidth(`… ${rows.length - FOLDED_BUBBLE_ROWS} more rows`, Math.max(1, outer - 1), "…");
+    const pad = " ".repeat(Math.max(0, outer - 1 - visibleWidth(words)));
+    return [...rows.slice(0, FOLDED_BUBBLE_ROWS), " " + PANEL_BUBBLE + PANEL_MUTED + " " + words + PANEL_BUBBLE + pad + RESET];
+  }
+}
+
+/** An owner message longer than this is drawn folded. */
+const LONG_LINES = 16, LONG_CHARS = 1600;
+
 /**
- * The presentation of a user-role message: the cleaned owner bubble for an `ask_user` answer, quiet rows for a host
- * notice, or undefined so Pi draws its own bubble.
+ * The presentation of a user-role message: the cleaned owner bubble for an `ask_user` answer, the sender's card for a
+ * message another agent sent, quiet rows for a host notice, Pi's bubble folded for a long owner message, or undefined
+ * so Pi draws its own bubble.
  */
-export function presentHostNotice(text: string): Component | undefined {
+export function presentHostNotice(text: string, bubble?: (text: string) => Component): Component | undefined {
   // An answer is the owner's even when its text quotes a host shape, so it is read first.
   const answers = classifyOwnerInput(text);
   if (answers) return new AnswerBubble(answers);
+  const agent = classifyAgentNote(text);
+  if (agent) return new AgentMessageCard(agent, agentIdColor(agent.kind === "peer" ? agent.from : agent.id));
   const notice = classifyHostNotice(text);
-  return notice ? new HostNoticeRows(notice) : undefined;
+  if (notice) return new HostNoticeRows(notice);
+  if (bubble && (text.split("\n").length > LONG_LINES || text.length > LONG_CHARS)) return new FoldedBubble(bubble(text));
+  return undefined;
 }

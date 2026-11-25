@@ -46,6 +46,7 @@ import { sessionCost } from "./usage-model.ts";
 import { BuildController, childQuestionCard } from "./build/build-controller.ts";
 import { BUILD_BOARD_ENTRY, BUILD_EXIT_ENTRY, BUILD_FINISH_ENTRY, buildEntryRenderer, type BuildEntry } from "./build/build-entries.ts";
 import { choiceRows, PASTE_START } from "./build/choice-dock.ts";
+import { ComposerPaste, IMAGE_MARKER, StagedImages, type PasteBase } from "./composer-attach.ts";
 import { childIdOf, type BuildCardSource } from "./build/contract.ts";
 import { steerable } from "./build/fleet-rows.ts";
 import { QuestionDock, questionsKey, type QuestionSource } from "./owner-questions.ts";
@@ -55,6 +56,8 @@ import { AttentionSignal } from "./attention.ts";
 import { noticeGlyph, toastFrame } from "./toast.ts";
 
 export interface NativePanelsOptions {
+  /** Whether the selected model takes image input; without it images are never staged. */
+  readonly imageInput?: () => { readonly accepts: boolean; readonly model: string };
   readonly planDocument?: () => PlanDocument | undefined;
   readonly openPlanDocument?: () => void;
   readonly build?: BuildUi;
@@ -183,6 +186,17 @@ export class NativePanels implements PanelSurface {
   private releaseLive: (() => void) | undefined;
   private nativeAction: ((id: "app.model.select" | "app.thinking.cycle") => void) | undefined;
   private nativeKeys: ((id: "app.model.select" | "app.thinking.cycle") => string) | undefined;
+  /** The keys of Pi's clipboard paste (app.clipboard.pasteImage), read from the composer's keybindings once it exists. */
+  private nativePasteKeys: () => readonly string[] = () => ["ctrl+v"];
+  /** Images pasted into the draft, sent with the message that marks them. */
+  readonly stagedImages = new StagedImages();
+  private pasteRouter: ComposerPaste | undefined;
+  private get composerPaste(): ComposerPaste {
+    return this.pasteRouter ??= new ComposerPaste({
+      images: this.stagedImages, imageInput: () => this.options.imageInput?.() ?? { accepts: false, model: "This host" },
+      notice: (text, tone) => this.workbench.notice(text, tone), pasteKeys: () => this.nativePasteKeys(),
+    });
+  }
   private terminal: PanelTerminal | undefined;
   private ui: ExtensionUIContext | undefined;
   private requestRender: ((force?: boolean) => void) | undefined;
@@ -932,6 +946,9 @@ export class NativePanels implements PanelSurface {
             if (build?.target() && !this.isShowingAutocomplete()) {
               const text = this.getText();
               if (keys.getKeys("tui.input.submit").some(key => matchesKey(data, key)) && text.trim() && !text.trimStart().startsWith("/")) {
+                if (owner.stagedImages.count > 0 && new RegExp(IMAGE_MARKER.source).test(text)) {
+                  owner.workbench.notice("Images go to the parent only; choose the parent as the receiver to send them", "warning"); return;
+                }
                 void build.submit(text); return;
               }
               if (keys.getKeys("app.message.followUp").some(key => matchesKey(data, key))) {
@@ -943,7 +960,19 @@ export class NativePanels implements PanelSurface {
                 && keys.getKeys("tui.input.submit").some(key => matchesKey(data, key))) {
               owner.workbench.setView("conversation"); owner.workbench.focused = false;
             }
+            // Pastes: an image or image file becomes `[Image #n]`, long text folds (composer-attach.ts).
+            if (owner.composerPaste.handle(data, this.pasteBase())) return;
             super.handleInput(data);
+          }
+          insertTextAtCursor(text: string): void {
+            if (!owner.composerPaste.inserted(text, this.pasteBase())) super.insertTextAtCursor(text);
+          }
+          /** The stock editor's own operations, past these overrides. */
+          private pasteBase(): PasteBase {
+            return {
+              input: data => super.handleInput(data), insert: text => super.insertTextAtCursor(text),
+              clipboard: () => this.onPasteImage?.(), text: () => this.getText(), cursor: () => this.getCursor(), lines: () => this.getLines(),
+            };
           }
           protected renderTopBorder(width: number, hidden: number): string {
             this.hiddenAbove = hidden;
@@ -990,6 +1019,7 @@ export class NativePanels implements PanelSurface {
         owner.nativeAction = id => editor.dispatchNative(id);
         owner.updateDensity = () => editor.setPaddingX(editor.inset);
         owner.nativeKeys = id => keys.getKeys(id).map(key => keyLabel(key)).join(", ");
+        owner.nativePasteKeys = () => keys.getKeys("app.clipboard.pasteImage");
         owner.editorFocused = () => editor.focused;
         owner.requestRender = force => tui.requestRender(force);
         owner.tui = tui;
@@ -1044,9 +1074,18 @@ export class NativePanels implements PanelSurface {
       this.refresh();
     });
     // Input from any source (editor, bridge submit_input, extensions) shows its turn in Chat.
-    pi.on("input", () => {
+    pi.on("input", event => {
       if (this.workbench.view !== "conversation") { this.workbench.setView("conversation"); this.workbench.focused = false; this.refresh(); }
-      return { action: "continue" };
+      // The owner's staged images go with the message they are marked in (a prompt, a steer or a follow-up).
+      if (event.source !== "interactive" || this.stagedImages.count === 0) return { action: "continue" as const };
+      const taken = this.stagedImages.take(event.text);
+      if (taken.dropped) {
+        const one = taken.dropped === 1;
+        this.workbench.notice(`${taken.dropped} ${one ? "image was" : "images were"} not sent: ${one ? "its marker was" : "their markers were"} removed`, "warning");
+      }
+      return taken.images.length
+        ? { action: "transform" as const, text: taken.text, images: [...(event.images ?? []), ...taken.images] }
+        : { action: "continue" as const };
     });
     pi.on("agent_start", () => { observe(() => this.activity.agentStart()); });
     pi.on("agent_end", () => { observe(() => this.activity.agentEnd()); });

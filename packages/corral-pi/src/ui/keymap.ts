@@ -91,8 +91,14 @@ const PI_DEFAULTS: Readonly<Record<string, string>> = {
   "app.message.dequeue": "alt+up", "app.tools.expand": "ctrl+o", "app.model.select": "ctrl+l", "app.thinking.cycle": "shift+tab",
   "app.thinking.toggle": "ctrl+t", "app.model.cycleForward": "ctrl+p", "app.model.cycleBackward": "shift+ctrl+p",
   "app.clear": "ctrl+c", "app.exit": "ctrl+d", "tui.altScreen.pageUp": "pageUp", "tui.altScreen.pageDown": "pageDown",
-  "tui.altScreen.top": "ctrl+home", "tui.altScreen.bottom": "ctrl+end",
+  "tui.altScreen.top": "ctrl+home", "tui.altScreen.bottom": "ctrl+end", "app.clipboard.pasteImage": "ctrl+v",
 };
+/** The paste key named to the owner: Ctrl+V whenever it is one of Pi's clipboard-paste keys (WSL lists Alt+V first). */
+export function pasteKey(): string | undefined {
+  const keys = getKeybindings();
+  if (keys.getDefinition("app.clipboard.pasteImage" as Keybinding) && keys.getKeys("app.clipboard.pasteImage" as Keybinding).includes("ctrl+v" as KeyId)) return "ctrl+v";
+  return piKey("app.clipboard.pasteImage");
+}
 /** First configured key via getKeybindings(); undefined when the user unbound it. */
 export function piKey(id: string): string | undefined {
   const keys = getKeybindings();
@@ -411,6 +417,7 @@ export function keyGroups(mode: {
       pi("app.thinking.cycle", "Cycle the effort"),
       pi("app.thinking.toggle", "Show or hide thinking"),
       pi("app.tools.expand", "Expand or collapse tool output"),
+      pasteKey() !== undefined && info(keyLabel(pasteKey()!), "Paste: an image or image file attaches at the cursor as [Image #n]; long text folds to [paste #n]"),
       // Pi runs a draft that starts with `!` or `!!` in the owner's shell; the composer title says where its output goes.
       info("!cmd", build ? "Run cmd in your shell; its output goes to the parent (while the parent receives)" : "Run cmd in your shell; its output goes to the agent"),
       info("!!cmd", build ? "Run cmd in your shell; its output stays here (while the parent receives)" : "Run cmd in your shell; its output stays here"),

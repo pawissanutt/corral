@@ -6,6 +6,7 @@
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text, type Component } from "@earendil-works/pi-tui";
 
+import { LIVE_CHILD_STATES } from "../build/types.ts";
 import { helperConversationId } from "../extensions/subagent/conversation.ts";
 import type { CorralToolSpec } from "../roles/types.ts";
 import type { PanelView } from "./panels.ts";
@@ -383,9 +384,102 @@ function buildControl(verb: string, flag: string, refused: RegExp, missed: strin
   };
 }
 
+/** An agent tool's outcome: its details, or the JSON of its text (a Code Mode child carries only text). */
+function agentOutcome(call: CallInput): Fields {
+  const details = fields(call.result?.details);
+  if (record(details.message)) return details;
+  try { return fields(JSON.parse(resultText(call.result))); } catch { return details; }
+}
+
+const UNANSWERED: Readonly<Record<string, string>> = {
+  timeout: "no answer · timed out", would_deadlock: "no answer · would deadlock", recipient_finished: "no answer · it finished",
+};
+
+/** `agent_message` (src/extensions/fleet/tools.ts): who it went to, and what became of it. */
+const agentMessagePresenter: Presenter = call => {
+  const to = str(call.args.to), text = str(call.args.text) ?? "", replyTo = int(call.args.reply_to);
+  const target = to ? (to === "all" ? "all agents" : to) + (replyTo !== undefined ? ` #${replyTo}` : "") : undefined;
+  const live = runningState(call);
+  const base = { ...(target ? { target } : {}) };
+  if (live) {
+    return {
+      ...base, state: live, verb: replyTo !== undefined ? "Replying to" : "Messaging",
+      ...(call.args.wait_reply === true && live === "running" ? { outcome: "waiting for a reply" } : {}),
+      ...(text ? { body: proseBody(text, live === "writing") } : {}),
+    };
+  }
+  const verb = replyTo !== undefined ? "Replied to" : "Messaged";
+  const outcome = agentOutcome(call), message = fields(outcome.message);
+  const delivery = str(message.delivery), reply = str(outcome.reply), report = str(outcome.report), unanswered = str(outcome.unanswered);
+  if (call.isError || delivery === "undeliverable") {
+    return { ...base, state: "failed", verb, outcome: "not delivered", outcomeTone: "error", body: reasonBody(resultText(call.result).trim()) };
+  }
+  const [state, said]: [RowState, string] = delivery === "queued" ? ["ok", "queued · read when it starts"]
+    : delivery === "answered_from_report" ? ["ok", "it had finished · its report came back"]
+    : reply !== undefined ? ["ok", "answered"]
+    : unanswered !== undefined ? ["unknown", UNANSWERED[unanswered] ?? `no answer · ${words(unanswered)}`]
+    : ["ok", "delivered"];
+  const shown = reply ?? report ?? text;
+  const prose = "**Sent**\n\n" + text + (reply ? "\n\n**Reply**\n\n" + reply : report ? "\n\n**Report**\n\n" + report : "");
+  return {
+    ...base, state, verb, outcome: said,
+    ...(shown ? { body: proseBody(shown, false) } : {}),
+    ...(text ? { expanded: expandedView({ prose }) } : {}),
+  };
+};
+
+/** Rows of an agent_wait listing children, before `… n more`. */
+const WAIT_ROWS = 6;
+
+/** `agent_wait`: the children it collected, one row each. */
+const agentWaitPresenter: Presenter = call => {
+  const ids = list(call.args.ids).map(str).filter((id): id is string => id !== undefined);
+  const target = ids.length ? ids.join(", ") : "every live agent";
+  const live = runningState(call);
+  if (live) return { state: live, verb: "Waiting for", target };
+  const details = fields(call.result?.details), text = resultText(call.result);
+  const children = list(details.children).map(fields);
+  const stateOf = (child: Fields) => str(child.state) ?? "unknown";
+  const isLive = (child: Fields) => (LIVE_CHILD_STATES as readonly string[]).includes(stateOf(child));
+  const done = children.filter(child => stateOf(child) === "done").length;
+  const failed = children.filter(child => ["failed", "cancelled"].includes(stateOf(child))).length;
+  const running = children.filter(isLive).length, settled = children.length - running;
+  const parts = children.length === 0 ? ["none to collect"] : [
+    settled ? `${settled} settled` : "", done ? `✓${done}` : "", failed ? `✗${failed}` : "", running ? `${running} still running` : "",
+  ].filter(Boolean);
+  if (details.interrupted === true) parts.push("new input arrived");
+  const rows: BodyLine[] = children.slice(0, WAIT_ROWS).map(child => {
+    const state = stateOf(child), bad = state === "failed" || state === "cancelled";
+    const first = (str(child.report) ?? "").split("\n").find(line => line.trim());
+    return { text: `${state === "done" ? "✓" : bad ? "✗" : "○"} ${str(child.id) ?? "?"} · ${state}${first ? ` · ${first.trim()}` : ""}`,
+      tone: bad ? "error" : "muted", wrap: { max: 1 } };
+  });
+  if (children.length > WAIT_ROWS) rows.push({ text: `… ${children.length - WAIT_ROWS} more`, tone: "muted" });
+  return {
+    state: call.isError || (children.length > 0 && failed === children.length) ? "failed" : "ok",
+    verb: "Collected", target, outcome: parts.join(" · "),
+    ...(rows.length ? { body: rows } : {}), ...(text.trim() ? { expanded: expandedView({ prose: text }) } : {}),
+  };
+};
+
+/** `agent_roster`: how many agents there are and how many are live. */
+const agentRosterPresenter: Presenter = call => {
+  const live = runningState(call);
+  if (live) return { state: live, verb: "Listing agents" };
+  const text = resultText(call.result);
+  const rows = text.split("\n").map(line => line.split(" | ")).filter(fields => fields.length >= 3);
+  const running = rows.filter(fields => fields[2] === "live" || (LIVE_CHILD_STATES as readonly string[]).includes(fields[2]!)).length;
+  return {
+    state: call.isError ? "failed" : "ok", verb: "Listed agents", outcome: `${plural(rows.length, "agent")} · ${running} live`,
+    ...(text.trim() ? { expanded: expandedView({ prose: "```\n" + text + "\n```" }) } : {}),
+  };
+};
+
 const OTHER: Readonly<Record<string, Presenter>> = {
   corral_expert: expertPresenter,
-  agent_message: buildControl("Steered", "delivered", /no message delivered/i, "not delivered"),
+  agent_message: agentMessagePresenter,
+  agent_wait: agentWaitPresenter,
+  agent_roster: agentRosterPresenter,
   agent_cancel: buildControl("Cancelled", "cancelled", /nothing cancelled/i, "not cancelled"),
 };
 
@@ -396,7 +490,7 @@ export function corralPresenter(name: string, deps: CorralDeps = {}): Presenter 
   return OTHER[name];
 }
 
-/** Every `corral_*` tool, `agent_message` and `agent_cancel`. Build cards keep their own renderers. */
+/** Every `corral_*` tool and the agent tools (`agent_message`, `agent_wait`, `agent_roster`, `agent_cancel`). Build cards keep their own renderers. */
 export const corralPresenters: PresenterModule = {
   presenter: (name, deps) => corralPresenter(name, deps),
 };

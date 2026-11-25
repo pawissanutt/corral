@@ -28,6 +28,7 @@ import { guardTerminalStop } from "./terminal-stop.ts";
 import { errorPresenter } from "../ui/error-copy.ts";
 import { repaintTranscript } from "../ui/transcript-repaint.ts";
 import { presentHostNotice } from "../ui/host-notices.ts";
+import { setAgentHueSource } from "../ui/agent-hues.ts";
 import { RemoteOwner } from "./remote-owner.ts";
 import { installRemote } from "./remote/index.ts";
 import { SessionRecord } from "./session-record.ts";
@@ -337,6 +338,7 @@ async function runSession(config: HostConfig, overrides: HostOverrides, events: 
   const { ProcessTerminal } = await import("@earendil-works/pi-tui");
   const physicalTerminal = new ProcessTerminal();
   terminalDrain = () => physicalTerminal.drainInput(1000);
+  setAgentHueSource(id => session.agentHue(id));
   terminal = new sdk.InteractiveMode(session.runtime, {
     // corral resumes sessions with its own commands; Pi's `pi --session …` line would name a command that does not work here.
     ...(codeHandoff ? { onTerminalCommand: (text: string) => session.handleCodeCommand(text) } : {}),

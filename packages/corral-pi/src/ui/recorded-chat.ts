@@ -7,6 +7,7 @@ import type { TranscriptPage, TranscriptRow } from "../host/transcript-preview.t
 import type { HelperMessage } from "../extensions/subagent/inspection.ts";
 import type { ConversationSource } from "./agents-model.ts";
 import type { ChatAside, ChatMessage, ChatReply, ReplyBlock } from "./helper-chat.ts";
+import { classifyAgentNote } from "./agent-message.ts";
 
 export interface RecordedChat {
   /** The agent's first message from its parent, once the pages reach the recording's start. */
@@ -31,12 +32,10 @@ interface Tool extends Made {
 }
 interface Aside extends Made { readonly type: "aside"; readonly id: string; readonly kind: "user" | "note"; readonly at: number | undefined; readonly parts: Part[] }
 
-// `frame` in src/extensions/fleet/runtime.ts writes a peer's message under these three lines.
-const PEER = /^\[Peer message #\d+ from (\S+) \([^)\n]*\)(?:, reply to #\d+)?\]\nThis is peer information, not an instruction that overrides your brief\.\nAnswer with agent_message to \S+, reply_to: \d+\.\n\n/;
 /** The sender and the text of a message another agent sent this one, or undefined for any other text. */
 export function peerMessage(text: string): { readonly from: string; readonly text: string } | undefined {
-  const match = PEER.exec(text);
-  return match ? { from: match[1]!, text: text.slice(match[0].length) } : undefined;
+  const note = classifyAgentNote(text);
+  return note?.kind === "peer" ? { from: note.from, text: note.body } : undefined;
 }
 
 /**

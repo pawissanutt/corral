@@ -158,3 +158,15 @@ test("a click on an inline image under a self-framed row reaches the image", () 
     expect(opened).toBe(1);
   } finally { release(); setCapabilities(capabilities); setCellDimensions(cells); }
 });
+
+test("a long owner message folds inside its bubble", () => {
+  const inner = { render: () => Array.from({ length: 40 }, (_, at) => `row ${at}`), invalidate() {} };
+  const text = Array.from({ length: 40 }, (_, at) => `line ${at}`).join("\n");
+  const bubble = presentHostNotice(text, () => inner)!;
+  const folded = bubble.render(80);
+  expect(folded).toHaveLength(13);
+  expect(stripTerminalSequences(folded.at(-1)!)).toContain("… 28 more rows");
+  (bubble as { setExpanded(expanded: boolean): void }).setExpanded(true);
+  expect(bubble.render(80)).toHaveLength(40);
+  expect(presentHostNotice("a short message", () => inner)).toBeUndefined();
+});

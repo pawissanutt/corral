@@ -625,6 +625,7 @@ export class HostSession {
       : options.client.configured ? options.client.workspaceRoot : undefined;
     this.panels = options.ui === "plain" ? undefined : new NativePanels({
       ...ownerDialogs,
+      imageInput: () => ({ accepts: this.session.model?.input.includes("image") ?? false, model: this.session.model?.id ?? "The selected model" }),
       modelFavorites: this.modelFavorites,
       personal: readPersonalPreferences(),
       settings: terminalSettings(options.identity.role, startupRoot, options.client.executable, { modelsPath: this.buildModelsPath }),
@@ -2350,6 +2351,12 @@ export class HostSession {
     } finally {
       this.rewinding = false;
     }
+  }
+
+  /** A fleet child's hue (its index in the fleet, as childHue gives it), or undefined. */
+  agentHue(id: string): number | undefined {
+    const index = (this.buildControls?.fleet ?? this.fleet)?.snapshot().children.findIndex(child => child.id === id) ?? -1;
+    return index < 0 ? undefined : index;
   }
 
   private fleetChanged(): void {

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import { BridgeRefusal } from "../bridge/protocol.ts";
 import { sha256Hex } from "../tools/corral.ts";
+import { sniffImageType } from "../tools/image-type.ts";
 
 export interface OwnerAttachment {
   id: string;
@@ -48,15 +49,6 @@ export function parseOwnerAttachments(value: unknown): OwnerAttachment[] {
     } else bad("unsupported attachment kind");
   }
   return value as OwnerAttachment[];
-}
-
-function imageType(bytes: Buffer): string | undefined {
-  if (bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return "image/png";
-  if (bytes.length >= 3 && bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255) return "image/jpeg";
-  const head = bytes.toString("latin1", 0, 12);
-  if (bytes.length >= 6 && (head.startsWith("GIF87a") || head.startsWith("GIF89a"))) return "image/gif";
-  if (bytes.length >= 12 && head.startsWith("RIFF") && head.slice(8, 12) === "WEBP") return "image/webp";
-  return undefined;
 }
 
 // Descriptor-relative paths retain both directories across renames. O_NOFOLLOW applies to
@@ -104,7 +96,7 @@ export function loadOwnerAttachments(runtimeDir: string, list: readonly OwnerAtt
       }
       const bytes = readAttachment(directory!, item);
       if (item.kind === "image") {
-        if (imageType(bytes) !== item.media_type) bad(`${item.id} image magic does not match its media type`);
+        if (sniffImageType(bytes) !== item.media_type) bad(`${item.id} image magic does not match its media type`);
         images.push({ type: "image", data: bytes.toString("base64"), mimeType: item.media_type! });
         lines.push(`${item.id} image ${JSON.stringify(item.name)} ${item.media_type} ${item.bytes} bytes sha256:${item.sha256} (attached image ${images.length})`);
       } else {

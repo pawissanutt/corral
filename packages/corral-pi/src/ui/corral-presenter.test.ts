@@ -92,9 +92,11 @@ test("prose streams its newest rows while the arguments are written", () => {
   expect(text).not.toContain("Line 0 of");
 });
 
-test("a steer that was not delivered reads as not delivered", () => {
-  const reply = { content: [{ type: "text" as const, text: "Child api is not running; no message delivered." }], details: { delivered: false } };
-  const model = present(call("agent_message", { id: "api", text: "Use the existing type." }, reply));
-  expect(model.state).toBe("failed");
-  expect(model.outcome).toBe("not delivered");
+test("an agent message names its recipient and reads its delivery", () => {
+  const outcome = (delivery: string) => ({ message: { seq: 1, at: 0, from: "parent", to: "api", text: "Use the existing type.", delivery } });
+  const sent = (delivery: string) => ({ content: [{ type: "text" as const, text: JSON.stringify(outcome(delivery)) }], details: outcome(delivery) });
+  const args = { to: "api", text: "Use the existing type." };
+  expect(present(call("agent_message", args, sent("delivered")))).toMatchObject({ state: "ok", verb: "Messaged", target: "api", outcome: "delivered" });
+  const refused = present({ ...call("agent_message", args, sent("undeliverable")), isError: true });
+  expect(refused).toMatchObject({ state: "failed", target: "api", outcome: "not delivered" });
 });
