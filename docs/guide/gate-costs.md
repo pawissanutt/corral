@@ -134,7 +134,6 @@ files and cfg/metadata consumers on native dependency upgrades, especially the
 versioned ring `links` key, the OpenSSL version/cfg/conf profile, and curl's
 static/http2/ssl contract. Never persist these overrides in Cargo config or use
 them for builds/tests; real builds still require the platform's native toolchain.
-See also the original [T-956 ring audit](../records/T-956-darwin-ring.md).
 
 ## Host nightly slow lane
 

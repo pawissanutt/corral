@@ -3,7 +3,7 @@
 Question: does upstream Pi (pinned 1.3.0, hosted by Bun) reach Claude through the owner's Anthropic
 Pro/Max OAuth login, and does that usage bill the **subscription** or **extra usage**? GO only with
 positive evidence of subscription coverage. NO-GO keeps the refusal of anthropic-vendor corral-pi
-profiles. The result is recorded in `docs/records/pi-native-claude-route.md`.
+profiles. The result is recorded in `docs/records/pi-native-claude-route.md` (Git history).
 
 Budget (recorded on T-306 by the owner): at most 20 requests and 50K output tokens, $0 API. The probe
 plans two requests (a plain reply and a tool call, `max_tokens` 128) and the guard hard-caps each

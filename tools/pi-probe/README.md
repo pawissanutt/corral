@@ -4,7 +4,7 @@ These tools re-prove T-136's six native criteria (terminal control, busy input,
 cancellation, lifecycle receipts, session ownership, restricted tools) for the
 exact Pi release in `pins.json`, hosted by **Bun**. They have no production
 entry point and change no Corral default. Results: `bun-go.json`, recorded in
-`docs/records/pi-native-compatibility.md`.
+`docs/records/pi-native-compatibility.md` (Git history).
 
 ## Bun runtime, launch and lock
 

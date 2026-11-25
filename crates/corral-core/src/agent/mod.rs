@@ -1,7 +1,6 @@
 //! corral-pi agent host records (T-252): versioned shapes stored through the Store API, the
 //! pure liveness and fence predicate shared by every final transaction, and the container
-//! closure predicate. Every shape, bound and storage class is listed in
-//! docs/records/pi-native-records.md for T-253, which owns their schema and migration.
+//! closure predicate. T-253 owns their schema and migration.
 
 mod auxiliary;
 mod browser;

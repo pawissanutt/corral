@@ -626,7 +626,7 @@ pub struct Run {
     /// Review autopilot sub-state; None until the autopilot picks the finished run up.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub autopilot: Option<AutopilotState>,
-    /// corral-pi host binding and receipts (docs/records/pi-native-records.md); also on review children.
+    /// corral-pi host binding and receipts; also on review children.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_host: Option<Box<crate::agent::AgentRunState>>,
 }

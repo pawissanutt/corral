@@ -14,7 +14,7 @@ The owner's verdict on a better TUI: not enough. Every driver below was confirme
 
 | Driver | Evidence |
 |---|---|
-| Work stalls with no board open | Sync runs only in the board, a herdr hook, or `corral sync --watch`. `docs/records/pm-runtime-redesign.md` records 4 stalls of 4 to 8.6 h ended only by the owner asking. |
+| Work stalls with no board open | Sync runs only in the board, a herdr hook, or `corral sync --watch`. `docs/records/pm-runtime-redesign.md` (Git history) records 4 stalls of 4 to 8.6 h ended only by the owner asking. |
 | Owner cannot act away from the desk | No surface outside a herdr pane on the host. |
 | Terminal cells limit understanding | "Visualization is not there": no graph, timeline, real diff review, rendered artifacts. |
 | Questions arrive without context | The owner cannot decide from what a PM or worker question shows today. |

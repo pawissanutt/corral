@@ -19,7 +19,7 @@ impl Drop for Server {
 
 fn fixture() -> Value {
     serde_json::from_str::<Vec<Value>>(include_str!(
-        "../../../../../../docs/records/T-208-claude-capture/delivered-user.json"
+        "../../../../tests/fixtures/claude-capture/delivered-user.json"
     ))
     .unwrap()
     .remove(0)
@@ -28,7 +28,7 @@ fn fixture() -> Value {
 /// Use the captured wrapper, independent of the production reader's constants.
 fn wrapped(payload: &str) -> String {
     let frame: Value = serde_json::from_str(include_str!(
-        "../../../../../../docs/records/T-208-claude-capture/frame.json"
+        "../../../../tests/fixtures/claude-capture/frame.json"
     ))
     .unwrap();
     let capture = fixture();
@@ -41,7 +41,7 @@ fn wrapped(payload: &str) -> String {
 #[test]
 fn only_validated_version_and_peer_protocol_are_ready() {
     let mut session: Session = serde_json::from_str(include_str!(
-        "../../../../../../docs/records/T-208-claude-capture/session.json"
+        "../../../../tests/fixtures/claude-capture/session.json"
     ))
     .unwrap();
     assert!(session.verified());

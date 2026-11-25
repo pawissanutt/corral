@@ -1,6 +1,6 @@
 # October 23, 2026 Bun re-proof ledger (T-298)
 
-Results and the lock review are in `docs/records/pi-native-compatibility.md`.
+Results and the lock review are in `docs/records/pi-native-compatibility.md` (Git history).
 The machine record is `bun-go.json`. Every command below ran from the worktree
 root with Bun 1.4.2, and `node`, `npm` and `npx` shimmed to exit 127.
 

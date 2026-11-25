@@ -130,5 +130,3 @@ Publish only sanitized counts and evidence references in the operational attesta
 Rollback preserves both data trees: revert the integration/code and explicitly return
 to the prior harness if needed. There is no reverse sync or automatic writeback.
 Manually review Corral changes before any later re-import.
-
-Rehearsal and operational status: [migration record](../records/T-634-memory-migration.md).

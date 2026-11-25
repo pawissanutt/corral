@@ -1,5 +1,5 @@
 //! Claude's cross-session inbox. Validated only on Linux, Claude Code 2.1.304,
-//! peerProtocol 1 (docs/records/T-208-claude-capture). No terminal fallback on refusal.
+//! peerProtocol 1 (captured in tests/fixtures/claude-capture). No terminal fallback on refusal.
 mod policy;
 mod process;
 #[cfg(all(test, target_os = "linux"))]

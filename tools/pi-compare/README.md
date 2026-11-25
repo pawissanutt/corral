@@ -22,7 +22,7 @@ failure); exit 1 means the input could not be parsed or measured.
 
 The T-313 six-pair workflow parser below is not reused to turn a tiny capability smoke into
 an experimental pass. The separate early checkpoint is documented in
-`docs/records/pi-native-capabilities.md` (repository root). Static raw profiles come from
+`docs/records/pi-native-capabilities.md` (Git history) (repository root). Static raw profiles come from
 `packages/corral-pi/test/usage-baseline.test.ts`; `usage-smoke.test.ts` tests admission controls
 without inference. All five roles have static records, with unshipped native planning roles
 explicitly not runnable rather than zero-cost successes.
@@ -39,7 +39,7 @@ the reviewer standard arm was not run. That partial smoke is not a workflow comp
 
 ## Final standard capability profile (T-579)
 
-The final record is in `docs/records/pi-native-capabilities.md`. It measures current host
+The final record is in `docs/records/pi-native-capabilities.md` (Git history). It measures current host
 prompt/schema overhead for all five roles, separately from this tool's historical T-313
 workflow pass criteria. The live cohort is a **capability-cost smoke**, not a workflow
 comparison. No tool is executed by the live requests; static MCP activation and auxiliary

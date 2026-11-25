@@ -23,7 +23,7 @@ pub const SKILL_MARKER: &str =
     "<!-- managed by `corral skill install`; local edits are overwritten -->";
 
 pub const MODEL_SELECTION_VERSION: &str = "pm-model-selection-v1";
-pub const MODEL_SELECTION_PROCEDURE: &str = include_str!("../../../docs/pm/model-selection.md");
+pub const MODEL_SELECTION_PROCEDURE: &str = include_str!("../assets/pm-model-selection.md");
 
 /// The corral verbs for agents that plan and inspect work (not dispatched runs), with what each is for.
 pub const VERBS: &[(&str, &str)] = &[

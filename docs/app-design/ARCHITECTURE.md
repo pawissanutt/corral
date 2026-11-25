@@ -16,7 +16,7 @@ are refused without independent spending authority.
 Citation legend. Corral paths are relative to `/home/pawis/miti-workspace/corral` as read on 2026-11-11:
 `core/` = `crates/corral-core/src/`, `ops/` = `crates/corral-ops/src/`, `herdr/` = `crates/corral-herdr/src/`,
 `cli/` = `crates/corral/src/`, `tui/` = `crates/corral-tui/src/`, `pi/` = `packages/corral-pi/src/`,
-`redesign` = `docs/records/pm-runtime-redesign.md`, `research/` = `/home/pawis/corral-board-opus/plan-research/`
+`redesign` = `docs/records/pm-runtime-redesign.md` (Git history), `research/` = `/home/pawis/corral-board-opus/plan-research/`
 (prior research, spot-checked). External: `nsh:<page>` = `https://nsh.dev/<page>.md`,
 `hc:<file>` = `https://github.com/herdrdev/herdr-core/blob/master/<file>` (both read 2026-11-11).
 `[INFERENCE]` marks anything not verified in a source. New names (crates, records, keys) are proposals.
@@ -158,7 +158,7 @@ for the verbs agents need to finish work (`done`, `gate`, answering a question).
 156 leaf verbs, 27 administer the host and stay local, and the 15 that read the caller's worktree, `git` or
 files keep that part local until worktrees on another machine are designed (section 7). Measurements taken
 first showed the slowness itself was repeated derivation, not store contention; see corral
-`docs/records/daemon-first.md`.
+`docs/records/daemon-first.md` (Git history).
 
 ### `corrald` lifecycle
 
@@ -913,7 +913,7 @@ and the classic board's read-back from a reader thread (method `read`, capabilit
 followed by data frames; reused while under 10 s old and no change other than read-lease bookkeeping has
 reached the store; a client is served only with the daemon's own executable path and build identity; every
 failure falls back to computing in the caller). Opt-in timing records exist for every process and pass. The
-command router is not started. Numbers and remaining costs: corral `docs/records/daemon-first.md`.
+command router is not started. Numbers and remaining costs: corral `docs/records/daemon-first.md` (Git history).
 
 Daemon-first, second round (2026-11-13, corral `main` at `b01b2313`, installed): the command router is built
 and on. `cmd.submit` and `cmd.result` (capability `cmd.v1`) carry 79 control verbs; the daemon runs the same
@@ -926,7 +926,7 @@ announces it on topic `classic` (capability `classic.v1`) and serves it as read 
 pass can skip steps whose inputs did not change; `[daemon] pass = "incremental" | "audit" | "full"` selects
 the mode, and the owner's workspace runs `audit` (full passes that report what the rules would have missed)
 until it has been watched under PM activity. Numbers, incidents and what is unverified: corral
-`docs/records/daemon-first.md`, section "Second round".
+`docs/records/daemon-first.md` (Git history), section "Second round".
 
 Differences from sections 4 and 5 that the app must know:
 

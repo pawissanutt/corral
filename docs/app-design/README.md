@@ -19,7 +19,7 @@ Imported from `/home/pawis/corral-app-design/` into branch `app-daemon-integrati
 
 The imported proposal remains historical; later owner corrections and implementation notes are maintained here. Originals remain in the external directory. The old architecture backup, Impeccable metadata and screenshot captures were not imported. Screenshot inventories describe the original directory; the runnable mockup is a visual reference, not a capability inventory. App theme corrections are mirrored into its CSS.
 
-Corral's current [daemon guide](../guide/daemon.md), [daemon-first implementation record](../records/daemon-first.md), app [README](../../apps/corral-app/README.md), repo guidance and source describe shipped behavior. They take precedence over historical claims that a component is built or missing; owner requirements still govern the product target. Keep future integration decisions here in the repository rather than relying on edits to the external copy.
+Corral's current [daemon guide](../guide/daemon.md), daemon-first implementation record (in Git history as `docs/records/daemon-first.md`), app [README](../../apps/corral-app/README.md), repo guidance and source describe shipped behavior. They take precedence over historical claims that a component is built or missing; owner requirements still govern the product target. Keep future integration decisions here in the repository rather than relying on edits to the external copy.
 
 ## Implementation status
 

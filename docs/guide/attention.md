@@ -264,9 +264,3 @@ the receipt's reader cursor and joins only the question condition of that key an
 was open at the source event's time.
 Lost review rounds sum `released_review_runs` of escalations whose reason begins
 `integration preflight error`.
-
-See [attention evaluation](../records/attention-evaluation.md) for the offline
-scenario results and the live operational protocol.
-
-See [attention record contracts](../records/attention-records.md) for the stored
-shapes and bounded owner-inbox projection.

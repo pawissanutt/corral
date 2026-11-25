@@ -28,7 +28,7 @@
     "queueSkipAttachments": true,
     "userType": "external",
     "entrypoint": "cli",
-    "cwd": "/home/pawis/miti-workspace/corral/.worktrees/T-208/.evidence/claude-capture/worktree",
+    "cwd": "/home/owner/main-workspace/corral/.worktrees/T-208/.evidence/claude-capture/worktree",
     "sessionId": "e40e5d00-5b42-4f74-94a4-fb0c2aa8e906",
     "version": "2.1.304",
     "gitBranch": "HEAD"

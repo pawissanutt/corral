@@ -1,6 +1,5 @@
 //! Pin the start identity, not the work: variable-width nonces are read repeatedly.
-//! The current sites and reused reads are independently traced in
-//! docs/records/T-758-nonce-model.md; T-337-R2-nonce-model.md records the prior model.
+//! The current sites and reused reads were traced independently for T-758; T-337 R2 holds the prior model.
 //! These are derivatives, not history budgets.
 use super::action_budget::{measure, unattributed};
 use super::action_budget_fixture::{Kind, Variant, build, settle};
