@@ -166,7 +166,7 @@ test("a long owner message folds inside its bubble", () => {
   const folded = bubble.render(80);
   expect(folded).toHaveLength(13);
   expect(stripTerminalSequences(folded.at(-1)!)).toContain("… 28 more rows");
-  (bubble as { setExpanded(expanded: boolean): void }).setExpanded(true);
+  (bubble as unknown as { setExpanded(expanded: boolean): void }).setExpanded(true);
   expect(bubble.render(80)).toHaveLength(40);
   expect(presentHostNotice("a short message", () => inner)).toBeUndefined();
 });

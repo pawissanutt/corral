@@ -647,7 +647,11 @@ export class HostSession {
       get fleetControl() { return options.build ? undefined : host.fleet; },
       queueControl: {
         enabled: () => this.queue.controlEnabled,
-        edit: key => this.queue.edit(key),
+        edit: async key => {
+          // An item's images come back staged with its words, so a resend still carries them.
+          const images = this.queue.imagesOf(key), text = await this.queue.edit(key);
+          return text !== undefined && images.length && this.panels ? this.panels.stagedImages.restage(text, images) : text;
+        },
         remove: key => this.queue.remove(key),
         move: (key, delta) => this.queue.move(key, delta),
       },

@@ -949,7 +949,8 @@ export class NativePanels implements PanelSurface {
                 if (owner.stagedImages.count > 0 && new RegExp(IMAGE_MARKER.source).test(text)) {
                   owner.workbench.notice("Images go to the parent only; choose the parent as the receiver to send them", "warning"); return;
                 }
-                void build.submit(text); return;
+                // The child gets what was pasted, not pi-tui's `[paste #n …]` placeholders (Pi's submit expands them too).
+                void build.submit(this.getExpandedText()); return;
               }
               if (keys.getKeys("app.message.followUp").some(key => matchesKey(data, key))) {
                 owner.workbench.notice("Only the parent takes queued follow-ups", "warning"); return;

@@ -96,8 +96,11 @@ pub(super) fn keep_draft(app: AppState, id: Id) {
 }
 
 /// Writes `text` as the session's saved draft unless it already is. An untouched composer never
-/// writes, and so never reports a missing device outbox before pairing.
+/// writes, and so never reports a missing device outbox before pairing. Folded pastes are kept
+/// in memory only, so the saved copy carries their text in place of each `[paste #k …]` marker:
+/// a draft brought back after a restart still sends what was pasted.
 fn keep(app: AppState, id: &Id, text: String) {
+    let text = app.expand_pastes(id, &text);
     let kept = app
         .feed
         .with_untracked(|feed| feed.drafts.get(id.as_str()).cloned());

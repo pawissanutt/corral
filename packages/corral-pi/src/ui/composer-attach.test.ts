@@ -57,3 +57,14 @@ test("removed markers are not sent and the rest renumber", () => {
   expect(taken.dropped).toBe(1);
   expect(images.count).toBe(0);
 });
+
+test("a queued message pulled back to the draft keeps its images", () => {
+  const images = new StagedImages();
+  const image = (data: string): ImageContent => ({ type: "image", data, mimeType: "image/png" });
+  images.stage(image("draft"), "draft");
+  const text = images.restage("see [Image #2] then [Image #1]", [image("first"), image("second")]);
+  expect(text).toBe("see [Image #2] then [Image #3]");
+  const taken = images.take(`[Image #1] ${text}`);
+  expect(taken.images.map(image => image.data)).toEqual(["draft", "second", "first"]);
+  expect(taken.dropped).toBe(0);
+});

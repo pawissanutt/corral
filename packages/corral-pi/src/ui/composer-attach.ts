@@ -128,6 +128,19 @@ export class StagedImages {
     return { text: renamed, images, dropped };
   }
   clear(): void { this.staged.clear(); this.next = 0; }
+  /**
+   * Stages again the images of a queued message pulled back into the draft. Its text marks them `[Image #1]` to
+   * `[Image #k]` in the order they were sent, so each marker is renumbered to its image's new staging number.
+   */
+  restage(text: string, images: readonly ImageContent[]): string {
+    const markers = new Map<number, string>();
+    return text.replace(IMAGE_MARKER, (marker, n: string) => {
+      const at = Number(n), image = images[at - 1];
+      if (!image) return marker;
+      if (!markers.has(at)) markers.set(at, this.stage(image, `image ${at}`));
+      return markers.get(at)!;
+    });
+  }
 }
 
 /** The stock editor's own operations, which ComposerPaste calls instead of the composer's overrides. */

@@ -1,5 +1,6 @@
 // Pi owns queue mutations; this is a live view and a bounded index of just-started inputs.
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { ImageContent } from "@earendil-works/pi-ai";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { QueuedItem } from "./queue-control.ts";
 import type { BusyPolicy, SessionInput } from "../bridge/protocol.ts";
@@ -227,6 +228,13 @@ export class HostQueue {
   async edit(key: string): Promise<string | undefined> {
     const item = this.editable(key);
     return item && await this.remove(key) ? item.text : undefined;
+  }
+
+  /** The images queued item `key` carries, in order: an edit restages them, or its `[Image #n]` markers would send nothing. */
+  imagesOf(key: string): ImageContent[] {
+    const message = this.queued.get(key)?.message;
+    const content = message && "content" in message ? message.content : undefined;
+    return Array.isArray(content) ? content.filter((part): part is ImageContent => part?.type === "image") : [];
   }
 
   moveOwner(key: string, delta: -1 | 1): boolean {

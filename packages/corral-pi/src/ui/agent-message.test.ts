@@ -11,7 +11,7 @@ const PEER = "[Peer message #3 from api (slice)]\nThis is peer information, not 
 
 const rows = (text: string, width = 100) => {
   const card = presentHostNotice(text);
-  expect(card).toBeInstanceOf(AgentMessageCard);
+  expect(card instanceof AgentMessageCard).toBeTrue();
   return card!.render(width).map(row => stripTerminalSequences(row));
 };
 
