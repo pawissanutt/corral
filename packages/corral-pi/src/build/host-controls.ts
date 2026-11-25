@@ -48,7 +48,7 @@ export function createBuildControls(options: BuildControlsOptions): BuildControl
   let journal: BuildJournal | undefined;
   const runner: ChildRunner = options.runner ?? { run(...args) {
     sdkRunner ??= createSdkRunner({ ...options, models: options.models(), localTools: options.localTools(),
-      buildWorktree: !context.session.here && context.session.repository !== false,
+      buildReport: true, buildWorktree: !context.session.here && context.session.repository !== false,
       ...(context.session.bare ? { shellRefusal: (command: string) => buildShellRefusal(command, true) } : {}) });
     return sdkRunner.run(...args);
   } };
@@ -87,7 +87,7 @@ export function createBuildControls(options: BuildControlsOptions): BuildControl
   const trustedCode = context.session.trustedCode === true;
   const workspaceProject = !!session.workspaceRoot && !!session.project;
   const board = context.session.bare || (trustedCode && !workspaceProject) ? undefined : createBoard({ context, run, tmpDir: join(context.dir, "board"), changed: options.changed, now: options.now });
-  const fleetDefinitions = fleetTools(fleet, undefined, options.wake, "build");
+  const fleetDefinitions = fleetTools(fleet, undefined, options.wake, "build", context.settings.delegation?.mode === "proactive");
   const task = fleetDefinitions.find(tool => tool.name === "task")!;
   const start = task.execute;
   const previousIds = new Set(buildJournal.record().slices.map(child => child.id));

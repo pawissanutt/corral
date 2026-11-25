@@ -35,12 +35,16 @@ export function parseBuildProfiles(profiles: unknown): BuildProfile[] {
       || (profile?.description !== undefined && typeof profile.description !== "string")) {
       throw new Error(`Invalid Build child profile ${name}: expected a provider/model and optional effort and description`);
     }
+    const role = profile?.role;
+    if (role !== undefined && (typeof role !== "string" || !role.trim() || role.length > 2_000)) {
+      throw new Error(`Invalid Build child profile ${name}: role must be nonblank text up to 2,000 characters`);
+    }
     const tier = profile?.service_tier;
     if (tier !== undefined && tier !== "default" && (tier !== "priority" || provider !== "openai-codex")) {
       throw new Error(`Invalid Build child profile ${name}: service_tier must be default or, for openai-codex, priority`);
     }
     return { name, model: profile!.model!, effort: profile!.effort, description: profile!.description,
-      ...(tier === "priority" ? { serviceTier: tier } : {}) };
+      ...(role !== undefined ? { role } : {}), ...(tier === "priority" ? { serviceTier: tier } : {}) };
   });
 }
 

@@ -16,6 +16,7 @@ import type { HelperInspection } from "../subagent/inspection.ts";
 import { createSdkRunner, type ChildHandle, type ChildRunner } from "./child.ts";
 import type { FallbackSettings } from "../../host/fallback-settings.ts";
 import { resolveModel, resolveProfiles, type ResolvedModel } from "./profiles.ts";
+import { validateWriterWave } from "./writer-wave.ts";
 import { formatChildReport } from "./tools.ts";
 /** The runtime needs no build exit, board, launcher or Git metadata. */
 export interface FleetContext {
@@ -93,6 +94,21 @@ interface ReplyWait {
 }
 const STATE_CHAR = { queued: "q", running: "r", needs: "n", done: "d", failed: "f", cancelled: "c" } as const;
 function live(entry: Entry): boolean { return entry.value.state === "queued" || entry.value.state === "running" || entry.value.state === "needs"; }
+
+/** Compose only explicit Build handoff fields; a legacy brief stays byte-for-byte intact. */
+function assignment(brief: string, context?: string, role?: string, accept?: string): string {
+  if (context === undefined && role === undefined && accept === undefined) return brief;
+  const sections: string[] = [];
+  for (const [label, value, max] of [["Shared context", context, 8192], ["Profile role", role, 2000],
+    ["Assignment", brief, 32768], ["Acceptance check", accept, 2000]] as const) {
+    if (value === undefined) continue;
+    if (typeof value !== "string" || value.length > max) throw new Error(`${label} must be a string of at most ${max} characters`);
+    sections.push(`${label}:\n${value}`);
+  }
+  const result = sections.join("\n\n");
+  if (result.length > 32768) throw new Error("Combined assignment exceeds 32,768 characters");
+  return result;
+}
 
 /** One FIFO over ready slices; dependency waiters never consume a running slot. */
 export class FleetRuntime implements FleetControl {
@@ -219,7 +235,7 @@ export class FleetRuntime implements FleetControl {
         report: entry.researchReport ?? { status: "failed", stopReason: entry.value.error?.includes("timeout") ? "timeout" : "cancelled" } };
     } finally { signal?.removeEventListener("abort", cancel); }
   }
-  async wait(ids: readonly string[], signal?: AbortSignal): Promise<readonly ChildSnapshot[]> {
+  async wait(ids: readonly string[], signal?: AbortSignal, until: "all" | "any" = "all"): Promise<readonly ChildSnapshot[]> {
     const entries = [...new Set(ids)].map(id => {
       const entry = this.entries.get(id);
       if (!entry) throw new Error(`Unknown child: ${id}`);
@@ -231,6 +247,18 @@ export class FleetRuntime implements FleetControl {
     signal?.addEventListener("abort", abort, { once: true });
     try {
       if (signal?.aborted) abort();
+      if (until === "any") {
+        // Another concurrent collector may consume a tie before this wait resumes.
+        while (true) {
+          const eligible = entries.filter(entry => !entry.delivered && !entry.collected);
+          const ready = eligible.filter(entry => entry.complete);
+          if (ready.length || !eligible.length || signal?.aborted) {
+            for (const entry of ready) entry.collected = true;
+            return Object.freeze(ready.map(entry => this.copy(entry)));
+          }
+          await Promise.race([aborted.promise, ...eligible.map(entry => entry.settled.promise)]);
+        }
+      }
       await Promise.race([Promise.all(entries.map(entry => entry.settled.promise)), aborted.promise]);
       for (const entry of entries) if (entry.complete) entry.collected = true;
       return Object.freeze(entries.map(entry => this.copy(entry)));
@@ -322,7 +350,8 @@ export class FleetRuntime implements FleetControl {
   }
 
   async start(call: string, specs: readonly ChildSpec[], _signal?: AbortSignal,
-    execution?: { readonly request: string; readonly research: ResearchOptions; readonly blocking: boolean }): Promise<readonly ChildSnapshot[]> {
+    execution?: { readonly request: string; readonly research: ResearchOptions; readonly blocking: boolean },
+    build?: { readonly context?: string; readonly proactive: boolean }): Promise<readonly ChildSnapshot[]> {
     if (this.closed) throw new Error("Fleet is closed");
     if (specs.length > MAX_CHILDREN_PER_CALL) throw new Error(`A task call supports at most ${MAX_CHILDREN_PER_CALL} children`);
     const batch = new Map<string, ChildSpec>();
@@ -354,12 +383,20 @@ export class FleetRuntime implements FleetControl {
     };
     for (const id of batch.keys()) visit(id);
     // All validation precedes recording children, invoking observers or starting work.
+    const declarations = specs.map(input => {
+      const allowed = this.options.allowedKinds ?? ["slice", "explore", "review"];
+      const kind: ChildKind = input.kind ?? (allowed.includes("slice") ? "slice" : "explore");
+      return { ...input, kind, after: [...input.after ?? []],
+        brief: build ? assignment(input.brief, build.context, models.get(input.id)!.role, input.accept) : input.brief };
+    });
+    if (build?.proactive) validateWriterWave([...this.entries.values()].map(entry => ({ ...entry.value,
+      // Cancellation becomes visible before the runner has finished cleaning up.
+      state: !entry.complete && entry.value.state === "cancelled" ? "running" : entry.value.state })), declarations);
+    const incoming = declarations.map(spec => ({ ...spec, owns: spec.owns.map(path => this.path(path)) }));
     const at = this.now();
     if (specs.length && this.startedAt === undefined) this.startedAt = at;
     const added: Entry[] = [];
-    for (const input of specs) {
-      const allowed = this.options.allowedKinds ?? ["slice", "explore", "review"];
-      const spec = { ...input, kind: input.kind ?? (allowed.includes("slice") ? "slice" : "explore"), owns: input.owns.map(path => this.path(path)), after: [...input.after ?? []] };
+    for (const spec of incoming) {
       const model = models.get(spec.id)!;
       const history = new AuxiliaryHistory(() => {}, this.now);
       history.begin(spec.id, "explore", model.model, spec.brief);

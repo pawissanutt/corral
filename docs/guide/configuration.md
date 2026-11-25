@@ -153,6 +153,7 @@ max_parallel = 3
 model = "openai-codex/gpt-6.1-sol"
 effort = "medium"
 description = "Read-only execution-path tracing"
+role = "Trace the active call path; cite file and line for the enforcing check and note unresolved branches."
 
 [build.delegation]
 mode = "proactive"
@@ -169,7 +170,12 @@ kind = "slice"
 profile = "default"
 ```
 
-Each child profile names a `provider/id`; `effort` and `description` are optional.
+Each child profile names a `provider/id`. `description` helps the parent choose; optional
+`role` supplies guidance for children launched by the Build `task` tool (nonblank inline
+text, up to 2,000 characters). It does not change the host-generated `build_review` brief
+or grant tools, expand ownership, or override host restrictions. The composed Build
+assignment (role, shared context, brief and acceptance check) must fit the existing
+32,768-character brief limit. `effort` is optional.
 The provider must be known to Corral and approved for the host. For a Build `explore`
 child on `openai-codex`, its profile can also set `service_tier = "priority"` (Fast).
 Omitting the tier or setting it to `"default"` leaves requests on the normal tier.

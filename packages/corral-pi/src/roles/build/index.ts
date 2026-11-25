@@ -19,7 +19,7 @@ function delegationFacts(settings: BuildSettings): string[] {
     "",
     `Mode: ${mode}`,
     mode === "proactive"
-      ? "Start substantial independent slices early once interfaces and disjoint owned paths are clear. Delegate bounded read-only exploration early when it reduces context, latency or decision risk. Apply this even with no routes or named profiles."
+      ? "Scope only enough to settle shared decisions. Dispatch ready independent outputs early in one task call before investigating each yourself. Use bounded read-only exploration for unknowns while doing known work. Give every child an acceptance check and every writer exclusive paths. Keep integration with the parent; use findings as they arrive and wait only when blocked. Keep coupled edits and known-file lookups inline. This applies even without routes or named profiles."
       : "Split work into parallel children when there are substantial independent slices with separable files and a clear interface. Use read-only children for substantial independent research when it is useful.",
     "",
     "Ordered routes (first clearly applicable match per assignment):",

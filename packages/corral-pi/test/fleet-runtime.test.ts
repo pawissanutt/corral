@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { Type } from "typebox";
 import type * as Sdk from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ModelRuntime, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import type { BuildContext, ChildKind, ChildSpec } from "../src/build/types.ts";
+import type { BuildContext, BuildProfile, ChildKind, ChildSpec } from "../src/build/types.ts";
+import { fleetTools } from "../src/extensions/fleet/tools.ts";
 import { FleetRuntime } from "../src/extensions/fleet/runtime.ts";
 import { createSdkRunner, type ChildHandle, type ChildHooks, type ChildRunner } from "../src/extensions/fleet/child.ts";
 import { resolveModel, resolveProfiles } from "../src/extensions/fleet/profiles.ts";
@@ -35,16 +36,17 @@ class FakeRunner implements ChildRunner {
   finish(id: string, failed?: string): void { this.children.get(id)!.finish({ report: `Report from ${id}`, failed }); }
 }
 const spec = (id: string, overrides: Partial<ChildSpec> = {}): ChildSpec => ({ id, title: id, brief: `Implement ${id}`, owns: ["src"], ...overrides });
-function fixture(maxParallel = 2) {
+function fixture(maxParallel = 2, profiles: BuildProfile[] = []) {
   const runner = new FakeRunner();
   let now = 1000;
   let notifications = 0;
-  const context: BuildContext = { dir: "/data/build/test", corral: "corral", settings: { maxParallel, exitPolicy: "none", profiles: [] },
+  const delivered: string[] = [];
+  const context: BuildContext = { dir: "/data/build/test", corral: "corral", settings: { maxParallel, exitPolicy: "none", profiles },
     session: { version: 1, id: "B-test", name: "test", created: "", updated: "", repoRoot: "/repo", worktree: "/repo/.worktrees/build-test", branch: "build/test", base: null, here: false } };
   const runtime = new FleetRuntime({ sdk: {} as typeof Sdk, models: { getModels: () => [] } as unknown as ModelRuntime,
     approved: ["approved"], parent: { provider: "approved", model: "parent", effort: "high" }, context, agentDir: "/data/agent", localTools: [],
-    runner, deliverToParent() {}, now: () => now, changed: () => { notifications++; } });
-  return { runtime, runner, context, advance(ms: number) { now += ms; }, notifications: () => notifications };
+    runner, deliverToParent(text) { delivered.push(text); }, now: () => now, changed: () => { notifications++; } });
+  return { runtime, runner, context, delivered, advance(ms: number) { now += ms; }, notifications: () => notifications };
 }
 async function flush(): Promise<void> { for (let i = 0; i < 8; i++) await Promise.resolve(); }
 
@@ -221,7 +223,8 @@ async function childGuard(kind: ChildKind = "slice"): Promise<Guard> {
       return {};
     },
     async createAgentSessionFromServices() {
-      return { session: { messages: [], subscribe: () => () => {}, async bindExtensions() {}, async prompt() {},
+      return { session: { messages: [], agent: { streamFunction() { throw new Error("Guard tests never contact a model"); } },
+        subscribe: () => () => {}, async bindExtensions() {}, async prompt() {},
         getLastAssistantText: () => "", getSessionStats: () => ({ tokens: { input: 0, output: 0 }, cost: 0 }),
         getContextUsage: () => undefined, dispose() {} } };
     },
@@ -330,4 +333,79 @@ test("agent_wait collects a cancelled child's final report and usage without an 
     expect(stopped!.report).toBe("Final cleanup report");
     expect(stopped!.usage).toEqual({ input: 100, output: 200, turns: 1 });
   } finally { runner.finish("stopping"); runner.finish("other"); await collected; await runtime.close(); }
+});
+
+test("Build task snapshots the selected role, batch context, brief and acceptance", async () => {
+  const profile = { name: "special", model: "approved/special", role: "Report evidence" };
+  const { runtime } = fixture(2, [profile]);
+  const task = fleetTools(runtime, undefined, undefined, "build", true).find(t => t.name === "task")!;
+  try {
+    await task.execute("batch", { context: "Shared constraints", agents: [
+      spec("a", { profile: "special", accept: "Show result" }), spec("b", { owns: ["tests"] }),
+    ] }, undefined, undefined, {} as never);
+    profile.role = "new role";
+    const [a, b] = runtime.snapshot().children;
+    for (const text of ["Report evidence", "Shared constraints", "Implement a", "Show result"]) expect(a!.brief).toContain(text);
+    expect(b!.brief).toContain("Shared constraints"); expect(b!.brief).not.toContain("Report evidence");
+    await task.execute("legacy", { agents: [spec("legacy", { kind: "explore", owns: [] })] }, undefined, undefined, {} as never);
+    expect(runtime.snapshot().children[2]!.brief).toBe("Implement legacy");
+  } finally { await runtime.close(); }
+});
+
+test("Build rejects invalid assignments and proactive writer collisions before recording any sibling", async () => {
+  const { runtime, notifications, runner, context } = fixture(2, [{ name: "invalid", model: "approved/m", role: "x".repeat(2001) }]);
+  const start = (last: Partial<ChildSpec>, context?: string) => runtime.start("batch", [spec("a"), spec("b", { owns: ["other"], ...last })],
+    undefined, undefined, { proactive: true, context });
+  try {
+    await expect(start({}, "x".repeat(8193))).rejects.toThrow(/context/i);
+    await expect(start({ accept: "x".repeat(2001) })).rejects.toThrow(/acceptance/i);
+    await expect(start({ profile: "invalid" })).rejects.toThrow(/role/i);
+    await expect(start({ brief: "x".repeat(32768) }, "goal")).rejects.toThrow(/combined/i);
+    await expect(start({ owns: [join(context.session.worktree, "other")] })).rejects.toThrow(/repository-relative/);
+    await expect(start({ owns: ["test/../src/nested.ts"] })).rejects.toThrow(/conflict/i);
+    expect(runtime.snapshot().children).toHaveLength(0); expect(runner.order).toEqual([]); expect(notifications()).toBe(0);
+  } finally { await runtime.close(); }
+});
+
+test("wait any consumes ties (including failure) and releases the remaining child for delivery", async () => {
+  const { runtime, runner, delivered } = fixture(3);
+  try {
+    const ids = ["a", "b", "c"];
+    await runtime.start("batch", ids.map(id => spec(id)));
+    const first = runtime.wait(ids, undefined, "any");
+    const overlapping = runtime.wait(["a", "b"], undefined, "any");
+    runner.finish("a"); runner.finish("b", "provider failed");
+    const reports = [...await first, ...await overlapping];
+    expect(reports.map(c => [c.id, c.state])).toEqual([["a", "done"], ["b", "failed"]]);
+    expect(await runtime.wait(["a", "b"], undefined, "any")).toEqual([]);
+    runner.finish("c"); await flush();
+    expect(delivered).toHaveLength(1); expect(delivered[0]).toContain("Report from c");
+    expect(await runtime.wait(ids, undefined, "any")).toEqual([]);
+  } finally { await runtime.close(); }
+});
+
+test("interrupted wait any returns no live snapshots and leaves later report delivery intact", async () => {
+  const { runtime, runner, delivered } = fixture();
+  try {
+    await runtime.start("batch", [spec("a")]);
+    const stop = new AbortController();
+    const waiting = runtime.wait(["a"], stop.signal, "any"); stop.abort();
+    expect(await waiting).toEqual([]);
+    expect(runner.children.get("a")!.signal.aborted).toBe(false);
+    runner.finish("a"); await flush(); expect(delivered).toHaveLength(1);
+  } finally { await runtime.close(); }
+});
+
+test("a cancelled writer retains its paths until cleanup settles", async () => {
+  const { runtime, runner } = fixture(2);
+  runner.finishOnAbort = false;
+  try {
+    await runtime.start("original", [spec("original")]);
+    runtime.cancel("original");
+    const replace = () => runtime.start("next", [spec("next")], undefined, undefined, { proactive: true });
+    await expect(replace()).rejects.toThrow(/conflict/i);
+    expect(runner.order).toEqual(["original"]);
+    runner.finish("original"); await runtime.wait(["original"]);
+    await replace(); runner.finish("next");
+  } finally { runner.finishOnAbort = true; runner.finish("original"); await runtime.close(); }
 });

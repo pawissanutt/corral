@@ -38,7 +38,7 @@ export function agentCommunicationTools(control: AgentCommunication): ToolDefini
 }
 /** Model-callable controls only; exit and board decisions remain owner-only. */
 export function fleetTools(runtime: FleetRuntime, allowedKinds: readonly ChildKind[] = ["slice", "explore", "review"], wake?: InputWake,
-  guidance: "generic" | "build" = "generic"): ToolDefinition[] {
+  guidance: "generic" | "build" = "generic", proactive = false): ToolDefinition[] {
   const communication = agentCommunicationTools({ message: (to, text, options) => runtime.message("parent", to, text, options), roster: () => runtime.rosterText() });
   if (!allowedKinds.length) return communication;
   return [
@@ -49,6 +49,7 @@ export function fleetTools(runtime: FleetRuntime, allowedKinds: readonly ChildKi
         + "Returns ids and states immediately. Reports arrive as messages; agent_wait can collect them explicitly. Children cannot delegate or write Git state.",
       promptSnippet: "Start independent implementation, exploration or review children without blocking",
       promptGuidelines: [
+        ...(guidance === "build" && proactive ? ["When multiple independent outputs are ready, dispatch them together with shared context, exclusive writer paths and a per-child acceptance check. Keep integration for the parent."] : []),
         ...(guidance === "build" ? [
           "For Build implementation and bounded read-only exploration, follow the effective Build delegation policy. Pass a matching route's exact kind and profile to task; use the default profile for unmatched assignments. Report unavailable routes instead of substituting another profile.",
           "Give implementation children non-overlapping owned files; use kind explore and owns: [] for read-only work. Include full requirements and expected checks or evidence; children inherit none of your conversation.",
@@ -59,19 +60,20 @@ export function fleetTools(runtime: FleetRuntime, allowedKinds: readonly ChildKi
         ]),
         "Collect and reconcile every child report and outside-ownership edit before claiming completion. Do not run shared checks while children are still editing. Children grant no review or board authority.",
       ],
-      parameters: Type.Object({ agents: Type.Array(Type.Object({
+      parameters: Type.Object({ ...(guidance === "build" ? { context: Type.Optional(Type.String({ maxLength: 8192 })) } : {}), agents: Type.Array(Type.Object({
         id: Type.String({ pattern: "^[a-z][a-z0-9-]{0,31}$" }), title: Type.String({ minLength: 1 }),
         kind: Type.Optional(Type.Union(allowedKinds.map(kind => Type.Literal(kind)))),
         brief: Type.String({ minLength: 1, maxLength: 32768 }), owns: Type.Array(Type.String()),
+        ...(guidance === "build" ? { accept: Type.Optional(Type.String({ maxLength: 2000 })) } : {}),
         profile: Type.Optional(Type.String()), after: Type.Optional(Type.Array(Type.String())),
       }, { additionalProperties: false }), { minItems: 1, maxItems: MAX_CHILDREN_PER_CALL }) }, { additionalProperties: false }),
-      async execute(id, params: { agents: ChildSpec[] }, signal) {
+      async execute(id, params: { agents: ChildSpec[]; context?: string }, signal) {
         const agents = params.agents.map(agent => {
           const kind = agent.kind ?? (allowedKinds.includes("slice") ? "slice" : "explore");
           if (!allowedKinds.includes(kind)) throw new Error(`Child kind "${kind}" is not allowed`);
           return { ...agent, kind };
         });
-        const children = await runtime.start(id, agents, signal);
+        const children = await runtime.start(id, agents, signal, undefined, guidance === "build" ? { proactive, context: params.context } : undefined);
         const text = children.map(child => `## ${child.id}: ${child.state}`).join("\n") + "\n\nReports arrive as messages. Use agent_wait to collect reports explicitly.";
         return { content: [{ type: "text", text }], details: { children } };
       },
@@ -80,15 +82,17 @@ export function fleetTools(runtime: FleetRuntime, allowedKinds: readonly ChildKi
     {
       name: "agent_wait", label: "Collect child reports",
       description: "Wait for named children (default: every live child) to settle, or until the timeout. Newly queued input ends the wait early. "
+        + (guidance === "build" ? "Use until:any to collect the first available unconsumed reports without waiting for the others. " : "")
         + "Returned settlements are collected and are not delivered again as messages.",
-      parameters: Type.Object({ ids: Type.Optional(Type.Array(Type.String())), timeout_secs: Type.Optional(Type.Number({ minimum: 0, maximum: 3600 })) }, { additionalProperties: false }),
-      async execute(id, params: { ids?: string[]; timeout_secs?: number }, signal) {
+      parameters: Type.Object({ ...(guidance === "build" ? { until: Type.Optional(Type.Union([Type.Literal("all"), Type.Literal("any")])) } : {}), ids: Type.Optional(Type.Array(Type.String())), timeout_secs: Type.Optional(Type.Number({ minimum: 0, maximum: 3600 })) }, { additionalProperties: false }),
+      async execute(id, params: { ids?: string[]; timeout_secs?: number; until?: "any" | "all" }, signal) {
         const timeout = AbortSignal.timeout(Math.ceil((params.timeout_secs ?? 600) * 1000));
         const wait = wakeableWait(wake, "agent_wait", id, signal);
-        const children = await runtime.wait(params.ids ?? runtime.snapshot().children.filter(child => LIVE_CHILD_STATES.includes(child.state)).map(child => child.id),
-          wait.signal ? AbortSignal.any([wait.signal, timeout]) : timeout);
-        const interrupted = wait.interrupted() && children.some(child => LIVE_CHILD_STATES.includes(child.state));
-        const reports = children.map(formatChildReport).join("\n\n") || "No children to collect.";
+        const until = guidance === "build" ? params.until ?? "all" : "all";
+        const ids = params.ids ?? runtime.snapshot().children.filter(child => until === "any" || LIVE_CHILD_STATES.includes(child.state)).map(child => child.id);
+        const children = await runtime.wait(ids, wait.signal ? AbortSignal.any([wait.signal, timeout]) : timeout, until);
+        const interrupted = wait.interrupted() && (until === "any" ? !children.length : children.some(child => LIVE_CHILD_STATES.includes(child.state)));
+        const reports = children.map(formatChildReport).join("\n\n") || (until === "any" ? "No newly settled reports." : "No children to collect.");
         return { content: [{ type: "text", text: interrupted ? `${INPUT_QUEUED_NOTICE}\n\n${reports}` : reports }],
           details: { children, ...(interrupted ? { interrupted: true } : {}) } };
       },

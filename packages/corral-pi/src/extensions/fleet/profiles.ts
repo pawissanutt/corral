@@ -2,6 +2,7 @@ import type { BuildProfile, BuildSettings } from "../../build/types.ts";
 
 export interface ResolvedModel {
   readonly profile: string;
+  readonly role?: string;
   readonly provider: string;
   readonly model: string;
   readonly effort?: string;
@@ -29,5 +30,5 @@ export function resolveModel(choice: string | undefined, profiles: readonly Buil
   // Profile model IDs may already carry the provider prefix.
   const model = profile && id.startsWith(`${provider}/`) ? id.slice(provider.length + 1) : id;
   return { profile: profile?.name ?? value, provider, model, effort: profile?.effort,
-    ...(profile?.serviceTier ? { serviceTier: profile.serviceTier } : {}) };
+    ...(profile?.role ? { role: profile.role } : {}), ...(profile?.serviceTier ? { serviceTier: profile.serviceTier } : {}) };
 }

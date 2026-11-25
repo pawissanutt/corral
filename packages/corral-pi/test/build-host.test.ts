@@ -73,7 +73,8 @@ test("Build route settings retain order and reject invalid fields and profile re
   const route = '[[build.delegation.routes]]\nmatch = "Trace calls crossing two package boundaries"\nkind = "explore"\nprofile = "fern"\n';
   const second = '[[build.delegation.routes]]\nmatch = "Implement an independent migration"\nkind = "slice"\nprofile = "default"\nstrategy = "prefer_child"\n';
   const parse = () => parseBuildFlags([], "/assets", { CORRAL_NEXT_ROOT: root }, root).launch.settings;
-  writePiConfig(root, profile + route + second);
+  writePiConfig(root, profile + 'role = "Cite affected callers"\n' + route + second);
+  expect(parse().profiles[0]?.role).toBe("Cite affected callers");
   expect(parse().delegation).toEqual({ mode: "standard", routes: [
     { match: "Trace calls crossing two package boundaries", kind: "explore", profile: "fern", strategy: "when_delegating" },
     { match: "Implement an independent migration", kind: "slice", profile: "default", strategy: "prefer_child" },
@@ -82,6 +83,7 @@ test("Build route settings retain order and reject invalid fields and profile re
     ['[build.delegation]\nmode = "automatic"', "mode"],
     ['[build]\ndelegation = true', "delegation"],
     ['[build.delegation]\nroutes = "invalid"', "routes"],
+    [profile + `role = "${"x".repeat(2001)}"`, "role"],
     [profile + route.replace('kind = "explore"', 'kind = "review"'), "kind"],
     [profile + route.replace('match = "Trace calls crossing two package boundaries"', 'match = "  "'), "match"],
     [profile + route.replace('profile = "fern"\n', ''), "profile"],

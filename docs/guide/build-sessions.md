@@ -90,6 +90,15 @@ interprets the routes and calls `task`; the host does not automatically start ch
 If a configured route is unavailable, the parent reports it rather than substituting a
 profile, and only continues inline when allowed.
 
+In proactive mode the parent settles shared decisions, then dispatches ready outputs together
+before investigating each itself. A `task` batch can supply `context` once (up to 8,192
+characters) and an `accept` check per child (up to 2,000). For example, share the exact
+API response type between UI and backend writers, but give each a separate check.
+Overlapping writer declarations are refused in proactive mode unless ordered by `after`;
+a dependency on the *meaning* of a finding needs parent inspection, not just `after`.
+Use `agent_wait` with `until: "any"` when one child result can unblock work. Omit `until`
+for the existing wait-all behavior. A child report is evidence, not verification.
+
 The parent keeps trivial or tightly coupled work inline, assigns each writer distinct
 owned files, and integrates and checks child results. Delegation does not change approval
 or spending limits, independent review, or who chooses the exit. Cancelling a child leaves

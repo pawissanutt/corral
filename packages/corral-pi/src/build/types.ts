@@ -21,6 +21,7 @@ export const EXIT_POLICIES: readonly ExitPolicy[] = ["review", "gate", "none"];
 
 /** A named model choice for a child agent. `model` is `<provider>/<id>`; the provider may differ from the parent's. */
 export interface BuildProfile {
+  readonly role?: string;
   readonly name: string;
   readonly model: string;
   readonly effort?: string;
@@ -147,6 +148,8 @@ export type ChildKind = "slice" | "explore" | "review";
 
 /** One slice the parent hands to a child. */
 export interface ChildSpec {
+  /** Optional Build assignment acceptance check. */
+  readonly accept?: string;
   /** Absent means `slice`. */
   readonly kind?: ChildKind;
   /** Lowercase slug, unique within the session: `host-slots`. */
