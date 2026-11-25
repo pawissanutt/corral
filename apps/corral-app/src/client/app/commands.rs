@@ -164,6 +164,10 @@ impl AppState {
                 self.cancel_html(&id);
                 vec![]
             }
+            ClientRequest::ArtifactHead { target, on } => {
+                self.artifact_head(feed, &target, on);
+                vec![]
+            }
             ClientRequest::SaveArtifact(request) => self.save_artifact(request),
             ClientRequest::CancelSave(id) => {
                 self.cancel_save(&id);

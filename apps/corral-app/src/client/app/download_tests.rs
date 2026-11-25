@@ -158,6 +158,13 @@ fn a_large_text_artifact_previews_its_head_without_reading_the_rest() {
     let target = DetailRef::Artifact {
         reference: "T-1:2".into(),
     };
+    app.request(
+        feed,
+        ClientRequest::ArtifactHead {
+            target: target.clone(),
+            on: true,
+        },
+    );
     let mut outgoing = app.request(
         feed,
         ClientRequest::Detail {

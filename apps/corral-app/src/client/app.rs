@@ -154,6 +154,8 @@ pub(super) struct AppState {
     uploads: BTreeMap<String, uploads::Upload>,
     html: Option<html::HtmlTransfer>,
     save: Option<download::SaveTransfer>,
+    /// Artifact details the finder shows, whose reads stop at the preview's head.
+    artifact_heads: BTreeSet<String>,
 }
 impl AppState {
     pub fn new() -> Self {
@@ -185,6 +187,7 @@ impl AppState {
             uploads: BTreeMap::new(),
             html: None,
             save: None,
+            artifact_heads: BTreeSet::new(),
         }
     }
     pub fn welcomed(&mut self, feed: Signal<Feed>, welcome: &wire::Welcome) {

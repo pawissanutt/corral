@@ -39,9 +39,9 @@ fn boxed(save: NativeSave) -> SaveOutput {
 
 pub(super) struct NativeSave {
     file: NamedTempFile,
-    /// The path chosen in the dialog, which the owner agreed to replace; else none, and the
-    /// file takes the first free name in `folder`.
-    chosen: Option<PathBuf>,
+    /// The path chosen in the dialog, and whether a file stood there when the owner agreed to
+    /// replace it; else none, and the file takes the first free name in `folder`.
+    chosen: Option<(PathBuf, bool)>,
     folder: PathBuf,
     name: String,
 }
@@ -57,14 +57,20 @@ impl NativeSave {
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .ok_or("The chosen path has no file name.")?;
-        Self::open(folder, name, Some(path))
+        // The dialog asked before replacing a file there now, and only that one.
+        let replace = path.exists();
+        Self::open(folder, name, Some((path, replace)))
     }
 
     fn downloads(name: &str) -> Result<Self, String> {
         Self::open(downloads_folder()?, name.to_owned(), None)
     }
 
-    fn open(folder: PathBuf, name: String, chosen: Option<PathBuf>) -> Result<Self, String> {
+    fn open(
+        folder: PathBuf,
+        name: String,
+        chosen: Option<(PathBuf, bool)>,
+    ) -> Result<Self, String> {
         let file = tempfile::Builder::new()
             .prefix(".corral-download-")
             .tempfile_in(&folder)
@@ -82,10 +88,20 @@ impl NativeSave {
             .flush()
             .and_then(|()| self.file.as_file().sync_all())
             .map_err(|error| format!("Could not write the file: {error}"))?;
-        if let Some(path) = self.chosen {
-            self.file
-                .persist(&path)
-                .map_err(|error| format!("Could not save {}: {}", path.display(), error.error))?;
+        if let Some((path, replace)) = self.chosen {
+            // A file that appeared at a new path during the download was not agreed to.
+            let placed = if replace {
+                self.file
+                    .persist(&path)
+                    .map(drop)
+                    .map_err(|error| error.error)
+            } else {
+                self.file
+                    .persist_noclobber(&path)
+                    .map(drop)
+                    .map_err(|error| error.error)
+            };
+            placed.map_err(|error| format!("Could not save {}: {error}", path.display()))?;
             return Ok(format!("to {}", path.display()));
         }
         let mut file = self.file;

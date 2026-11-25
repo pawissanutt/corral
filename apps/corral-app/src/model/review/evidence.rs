@@ -76,6 +76,12 @@ fn content(feed: &Feed, reference: &str, env: Env) -> ArtifactContent {
                 "A terminal cannot draw images; open this candidate in the desktop or web app to see it.",
             );
         }
+        // Incomplete bytes would draw a broken picture.
+        if page.truncated {
+            return ArtifactContent::Unsupported(
+                "This image is larger than the app draws; Download in Activity › Artifacts saves it.",
+            );
+        }
         ArtifactContent::Image {
             uri: format!("data:{media};base64,{}", page.content),
             truncated: page.truncated,

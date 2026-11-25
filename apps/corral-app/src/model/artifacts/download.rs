@@ -44,12 +44,12 @@ const RESERVED: [&str; 22] = [
     "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8",
     "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
 ];
-/// Characters of a suggested name at most.
-const NAME_CHARS: usize = 120;
+/// Bytes of a suggested name at most, under every platform's file name limit (255 bytes).
+const NAME_BYTES: usize = 180;
 
 /// A file name safe on every platform the app saves on, from the artifact's title: its last path
 /// segment, with separators, control and reserved characters replaced, no leading dot, at most
-/// [`NAME_CHARS`] characters keeping the extension; else one from its reference.
+/// [`NAME_BYTES`] bytes keeping the extension; else one from its reference.
 pub fn file_name(artifact: &Artifact) -> String {
     let title = artifact
         .title
@@ -85,16 +85,15 @@ pub fn file_name(artifact: &Artifact) -> String {
 }
 
 fn shorten(name: &str) -> String {
-    if name.chars().count() <= NAME_CHARS {
+    if name.len() <= NAME_BYTES {
         return name.to_owned();
     }
     let extension = name
         .rsplit_once('.')
         .map(|(_, extension)| extension)
-        .filter(|extension| (1..=16).contains(&extension.chars().count()));
-    let room = NAME_CHARS - extension.map_or(0, |extension| extension.chars().count() + 1);
-    let stem: String = name.chars().take(room).collect();
-    let stem = stem.trim_end_matches(['.', ' ']);
+        .filter(|extension| (1..=16).contains(&extension.len()));
+    let room = NAME_BYTES - extension.map_or(0, |extension| extension.len() + 1);
+    let stem = name[..name.floor_char_boundary(room)].trim_end_matches(['.', ' ']);
     match extension {
         Some(extension) => format!("{stem}.{extension}"),
         None => stem.to_owned(),
@@ -130,8 +129,8 @@ mod tests {
         assert_eq!(named("a:b?c*.log"), "a_b_c_.log");
         assert_eq!(named(".."), "T-12-3");
         assert_eq!(named("CON.txt"), "T-12-3-CON.txt");
-        let long = named(&format!("{}.diff", "x".repeat(300)));
-        assert_eq!(long.chars().count(), NAME_CHARS);
+        let long = named(&format!("{}.diff", "😀".repeat(90)));
+        assert!(long.len() <= NAME_BYTES);
         assert!(long.ends_with(".diff"));
     }
 }

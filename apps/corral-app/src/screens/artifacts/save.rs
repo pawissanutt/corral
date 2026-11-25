@@ -6,6 +6,8 @@
 //!
 //! test ids: "btn-download-artifact", "btn-cancel-download", "artifact-download".
 
+use std::{cell::RefCell, rc::Rc};
+
 use nsh_core::prelude::*;
 
 use crate::client::download::{SaveArtifact, SaveOutput};
@@ -30,12 +32,24 @@ mod native;
 pub(super) struct Downloads {
     reference: Signal<Option<String>>,
     status: Signal<Saving>,
+    // The cleanup callback also holds this slot: signals may already be gone at disposal.
+    reading: Signal<Rc<RefCell<Option<String>>>>,
 }
 
 pub(super) fn downloads() -> Downloads {
+    let reading = Rc::new(RefCell::new(None));
+    let held = reading.clone();
+    // The client notices a gone status only when the next page arrives; leaving the finder
+    // tells it now, so the transfer and its temporary file end at once.
+    cleanup(move || {
+        if let Some(id) = held.take() {
+            _ = requests::send(ClientRequest::CancelSave(id));
+        }
+    });
     Downloads {
         reference: signal(None),
         status: signal(Saving::Idle),
+        reading: signal(reading),
     }
 }
 
@@ -138,6 +152,9 @@ fn start(app: AppState, downloads: Downloads, save: Save) {
                 return;
             }
             let id = requests::new_id();
+            if let Some(reading) = downloads.reading.try_get() {
+                reading.replace(Some(id.clone()));
+            }
             status.set(Saving::Reading {
                 id: id.clone(),
                 percent: 0,
@@ -218,15 +235,18 @@ mod web {
                 .ok()
                 .and_then(|()| link.dyn_into::<HtmlElement>().ok())
                 .map(|link| link.click());
-            // The browser reads the URL after the click returns; it is retired a minute later.
-            if window
-                .set_timeout_with_callback_and_timeout_and_arguments_0(&revoke, 60_000)
-                .is_err()
-            {
+            if started.is_none() {
                 let _ = revoke.call0(&JsValue::UNDEFINED);
+                return Err("Could not start the browser download.".into());
             }
-            started.ok_or("Could not start the browser download.")?;
-            Ok(format!("as {} to the browser's downloads", self.name))
+            // The browser reads the URL after the click returns, so it is retired a minute
+            // later; without a timer it stays until the page goes.
+            let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(&revoke, 60_000);
+            // A page is not told when the browser's download completes.
+            Ok(format!(
+                "as {}: handed to the browser's downloads",
+                self.name
+            ))
         }
     }
 

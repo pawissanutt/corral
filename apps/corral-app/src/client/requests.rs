@@ -56,6 +56,12 @@ pub enum ClientRequest {
     OpenHtml(super::html::OpenHtml),
     CancelHtml(String),
     TranscriptStep(crate::model::daemon::ReaderIntent),
+    /// Local: the artifact finder shows `target`, so a read of it stops at the preview's head
+    /// (`on`), or no longer does, and a head read for it alone is dropped (`!on`).
+    ArtifactHead {
+        target: corral_protocol::detail::DetailRef,
+        on: bool,
+    },
     SaveArtifact(super::download::SaveArtifact),
     CancelSave(String),
     /// Local, paired registration of a mounted view away from the transcript's end.

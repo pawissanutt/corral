@@ -16,6 +16,9 @@ use nsh_core::element::color as for_appearance;
 use nsh_core::keymap::When;
 use nsh_core::prelude::*;
 
+use corral_protocol::detail::DetailRef;
+
+use crate::client::requests::{self, ClientRequest};
 use crate::model::artifacts::{
     self, Action, FIELD_LABEL, HINT, LOAD_MORE, LOADING, LOADING_MORE, More, PLACEHOLDER, Page,
     RETRY, Row, SHOW, SUBTITLE, Status, TITLE, Walk,
@@ -103,9 +106,35 @@ fn keep_loaded(app: AppState, page: Memo<Page>) {
                 .map(|shown| shown.read.clone())
         })
     });
-    effect(move || {
-        if let Some(reference) = shown.get() {
-            untracked(|| app.load(artifacts::content_target(&reference)));
+    // The shown artifact is read only to its head; one no longer shown gives its head up, so a
+    // view that needs all of it (a review's gate log) reads it whole.
+    let headed: std::rc::Rc<std::cell::RefCell<Option<DetailRef>>> = Default::default();
+    let head = move |target: DetailRef, on: bool| {
+        _ = requests::send(ClientRequest::ArtifactHead { target, on });
+    };
+    {
+        let headed = headed.clone();
+        effect(move || {
+            let target = shown
+                .get()
+                .map(|reference| artifacts::content_target(&reference));
+            let previous = headed.replace(target.clone());
+            untracked(|| {
+                if let Some(previous) =
+                    previous.filter(|previous| Some(previous) != target.as_ref())
+                {
+                    head(previous, false);
+                }
+                if let Some(target) = target {
+                    head(target.clone(), true);
+                    app.load(target);
+                }
+            });
+        });
+    }
+    cleanup(move || {
+        if let Some(target) = headed.take() {
+            head(target, false);
         }
     });
     let more = computed(move || {

@@ -351,8 +351,8 @@ impl AppState {
         }
         let next = page.next.clone();
         let held = self.detail_pages.get(&key).map_or(0, Vec::len);
-        // An artifact is shown from its head: past its preview bound the pages held so far
-        // are published, still marked truncated, rather than the whole artifact being read.
+        // An artifact past the device's bound shows the pages held so far, still marked
+        // truncated, rather than nothing; the finder's stops sooner, at the preview's head.
         let artifact = matches!(request.target, DetailRef::Artifact { .. });
         if !self.count_detail_page(&key, &page, held) {
             if artifact && held > 0 {
@@ -367,7 +367,7 @@ impl AppState {
         let text = matches!(&page.body, Some(DetailBody::Artifact(part)) if part.encoding == ArtifactEncoding::Text);
         let pages = self.detail_pages.entry(key.clone()).or_default();
         pages.push(page);
-        let previewed = artifact
+        let previewed = self.artifact_heads.contains(&key)
             && text
             && self.detail_bytes.get(&key).copied().unwrap_or_default() >= ARTIFACT_TEXT_PREVIEW;
         if let Some(next) = next.filter(|_| !previewed) {
@@ -595,6 +595,27 @@ impl AppState {
         }
         self.trim_retained(feed);
     }
+    /// Marks `target` as one the finder shows from its head, or no longer; a head read for the
+    /// finder alone is then dropped, so a view that needs all of the artifact reads it again.
+    pub(super) fn artifact_head(&mut self, feed: Signal<Feed>, target: &DetailRef, on: bool) {
+        let key = detail_key(target);
+        if on {
+            self.artifact_heads.insert(key);
+            return;
+        }
+        if !self.artifact_heads.remove(&key) {
+            return;
+        }
+        let head = feed.with_untracked(|feed| {
+            feed.details.get(&key).is_some_and(|cache| {
+                cache.loading || cache.pages.last().is_some_and(|page| page.next.is_some())
+            })
+        });
+        if head {
+            self.evict_detail(feed, &key);
+        }
+    }
+
     pub(super) fn refresh_details(&mut self, feed: Signal<Feed>) -> Vec<Outgoing> {
         let targets = feed.with_untracked(|feed| {
             feed.details
