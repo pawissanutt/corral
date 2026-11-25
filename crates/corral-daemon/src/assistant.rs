@@ -26,6 +26,7 @@ use serde_json::json;
 use crate::{builds, sessions, state::Shared, views::NotFound};
 
 pub(crate) mod attachments;
+pub(crate) mod automation;
 
 #[derive(Default)]
 pub(crate) struct Service {
@@ -40,6 +41,8 @@ struct Meta {
     profile: String,
     task: Option<String>,
     ended: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    automation: Option<automation::Binding>,
 }
 
 struct Chat {
@@ -176,6 +179,7 @@ impl Chat {
 
     fn start(&self, shared: &Shared, config: &Config) -> Result<SessionRef> {
         ensure!(!self.meta.ended, "chat has ended");
+        let automation = automation::launch_policy(self, config)?;
         let (harness, profile) = profile(config, &self.meta.profile)?;
         let project = self
             .meta
@@ -184,7 +188,7 @@ impl Chat {
             .map(|task| -> Result<_> { Ok(shared.engine()?.store.require_task(task)?.project) })
             .transpose()?
             .flatten();
-        let (session, _) =
+        let (session, hello) =
             PiRunner::new(shared.chat_placement().as_ref()).start_chat(ChatLaunch {
                 workspace: shared.root(),
                 dir: &self.dir,
@@ -193,7 +197,12 @@ impl Chat {
                 profile,
                 task: self.meta.task.as_deref(),
                 project: project.as_deref(),
+                automation,
             })?;
+        ensure!(
+            hello.session_id == self.id(),
+            "Pi socket answers for a different chat session"
+        );
         shared.publish();
         Ok(session)
     }
@@ -264,6 +273,17 @@ pub(crate) fn configured(shared: &Shared) -> Result<bool> {
             == Some("pi"))
 }
 
+fn load_config(shared: &Shared) -> Result<Config> {
+    Config::load(&shared.root().join(crate::STATE_DIR).join("corral.toml"))
+}
+
+fn owner_config(shared: &Shared, scope: &str) -> Result<Config> {
+    if lookup(shared, scope)?.is_some_and(|chat| chat.meta.automation.is_some()) {
+        return load_config(shared);
+    }
+    config(shared)
+}
+
 fn config(shared: &Shared) -> Result<Config> {
     if !configured(shared)? {
         return Err(refuse(
@@ -271,7 +291,7 @@ fn config(shared: &Shared) -> Result<Config> {
             vec![],
         ));
     }
-    Config::load(&shared.root().join(crate::STATE_DIR).join("corral.toml"))
+    load_config(shared)
 }
 
 fn profile<'a>(
@@ -325,7 +345,13 @@ fn default_profile(config: &Config) -> &str {
     }
 }
 
-fn create(shared: &Shared, quick: bool, task: Option<String>, profile: String) -> Result<Chat> {
+fn create(
+    shared: &Shared,
+    quick: bool,
+    task: Option<String>,
+    profile: String,
+    automation: Option<automation::Binding>,
+) -> Result<Chat> {
     if let Some(task) = &task {
         shared.engine()?.store.require_task(task)?;
     }
@@ -345,6 +371,7 @@ fn create(shared: &Shared, quick: bool, task: Option<String>, profile: String) -
                         profile,
                         task,
                         ended: false,
+                        automation,
                     },
                 };
                 chat.save()?;
@@ -360,8 +387,20 @@ fn create(shared: &Shared, quick: bool, task: Option<String>, profile: String) -
 fn current(shared: &Shared, config: &Config, scope: &str) -> Result<Chat> {
     match lookup(shared, scope)? {
         Some(chat) if !chat.meta.ended => Ok(chat),
-        Some(chat) => create(shared, chat.meta.quick, chat.meta.task, chat.meta.profile),
-        None if scope == QUICK_THREAD => create(shared, true, None, default_profile(config).into()),
+        Some(chat) if chat.meta.automation.is_some() => Err(refuse(
+            "automation chat ended; the rule will allocate a new chat when it fires",
+            vec![],
+        )),
+        Some(chat) => create(
+            shared,
+            chat.meta.quick,
+            chat.meta.task,
+            chat.meta.profile,
+            None,
+        ),
+        None if scope == QUICK_THREAD => {
+            create(shared, true, None, default_profile(config).into(), None)
+        }
         None => Err(NotFound("chat session not found").into()),
     }
 }
@@ -453,6 +492,8 @@ impl Chat {
             },
             title: if chat.meta.quick {
                 "Quick thread".into()
+            } else if let Some(binding) = &chat.meta.automation {
+                format!("Automation: {}", binding.rule)
             } else {
                 format!("Chat {}", chat.number)
             },
@@ -493,8 +534,9 @@ pub(crate) fn input_entry_id(session: &str, request_id: &str) -> String {
 }
 
 fn start_on_send(shared: &Shared, scope: &str) -> Result<(Chat, SessionRef)> {
-    let config = config(shared)?;
+    let config = owner_config(shared, scope)?;
     let chat = current(shared, &config, scope)?;
+    automation::require_resumed(&chat)?;
     let session = chat.start(shared, &config)?;
     Ok((chat, session))
 }
@@ -519,8 +561,9 @@ pub(crate) fn warm(shared: &Shared, request: AssistantWarm) -> Result<()> {
         .mutation
         .lock()
         .unwrap_or_else(|error| error.into_inner());
-    let config = config(shared)?;
+    let config = owner_config(shared, &request.thread)?;
     let chat = current(shared, &config, &request.thread)?;
+    automation::require_resumed(&chat)?;
     chat.start(shared, &config)?;
     Ok(())
 }
@@ -531,7 +574,9 @@ pub(crate) fn terminate(shared: &Shared, id: &str) -> Result<()> {
         .mutation
         .lock()
         .unwrap_or_else(|error| error.into_inner());
-    require(shared, id)?.stop(shared)
+    let mut chat = require(shared, id)?;
+    automation::set_stopped(shared, &mut chat, true)?;
+    chat.stop(shared)
 }
 
 pub(crate) fn relaunch(shared: &Shared, id: &str) -> Result<SessionRelaunched> {
@@ -540,14 +585,15 @@ pub(crate) fn relaunch(shared: &Shared, id: &str) -> Result<SessionRelaunched> {
         .mutation
         .lock()
         .unwrap_or_else(|error| error.into_inner());
-    let chat = require(shared, id)?;
+    let mut chat = require(shared, id)?;
     if chat.meta.ended {
         return Err(refuse(
             "chat thread ended; send a message to start a new session",
             vec![],
         ));
     }
-    chat.start(shared, &config(shared)?)?;
+    chat.start(shared, &owner_config(shared, id)?)?;
+    automation::set_stopped(shared, &mut chat, false)?;
     Ok(SessionRelaunched { id: chat.id() })
 }
 
@@ -565,7 +611,7 @@ pub(crate) fn session(shared: &Shared, operation: AssistantSessionOp) -> Result<
             let config = config(shared)?;
             let choice = choice.unwrap_or_else(|| default_profile(&config).into());
             profile(&config, &choice)?;
-            let chat = create(shared, false, task, choice)?;
+            let chat = create(shared, false, task, choice, None)?;
             chat.start(shared, &config)?;
             chat.row(shared)
         }
@@ -591,10 +637,16 @@ pub(crate) fn session(shared: &Shared, operation: AssistantSessionOp) -> Result<
                 .mutation
                 .lock()
                 .unwrap_or_else(|error| error.into_inner());
-            let config = config(shared)?;
+            let config = owner_config(shared, &thread)?;
             profile(&config, &choice)?;
             let mut chat = current(shared, &config, &thread)?;
             if chat.meta.profile != choice {
+                if chat.meta.automation.is_some() {
+                    return Err(refuse(
+                        "change the automation agent profile in corral.toml",
+                        vec![],
+                    ));
+                }
                 let active = chat.resolve(shared)?.session;
                 let mut restart = false;
                 if let Some(session) = &active {
