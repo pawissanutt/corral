@@ -20,5 +20,5 @@
 │                      ││ 18:12 · T-885 review P2 approve · pi-sol             ┃
 │                      ││ 17:40 · T-854 checkpoint 2 captured                  │
 │                      ││ 16:40 · T-852 held · external op started             │
-╰─ pawis-desktop ──────╯╰──────────────────────────────────────────────────────╯
+╰─ owner-desktop ──────╯╰──────────────────────────────────────────────────────╯
   i  Inbox  n  Now  .   p   a   r   t   u   ,  Settings │  /  Ask  ^K  Go to

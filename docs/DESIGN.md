@@ -22,7 +22,7 @@ Goals:
 Non-goals (v1): a custom chat UI (the PM agent is a normal agent pane), a terminal runtime
 (herdr is the runtime), multi-user features, a web UI, automatic merging without confirmation.
 
-Audience: the owner first (tuned to `miti-workspace`), kept generic enough to publish later.
+Audience: the owner first (tuned to `main-workspace`), kept generic enough to publish later.
 
 ## 2. Decisions
 
@@ -133,7 +133,7 @@ read it with `corral artifact show`.
 
 ```toml
 [workspace]
-root = "/home/pawis/miti-workspace"
+root = "/home/owner/main-workspace"
 
 [limits]
 running = 2                 # global WIP limit

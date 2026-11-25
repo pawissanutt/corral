@@ -68,8 +68,8 @@ configured project when available, or can specify a task or project with `to`. W
 project or bound task, provide `to`. To revise a report, edit the working file and attach it again with the
 previous reference in `replaces`; this publishes a new row without changing the old
 one. Plan mode refuses `corral_artifact` calls while planning or awaiting plan review. See
-[corral-pi](corral-pi.md#attaching-artifacts) for tool parameters and
-[the artifact reference](classic/cli.md#corral-artifact) for library and list behavior.
+[corral-pi](corral-pi.md#attaching-artifacts) for tool parameters, or use
+`corral-next artifact --help` for CLI operations.
 
 ## Delegation
 

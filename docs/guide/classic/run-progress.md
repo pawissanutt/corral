@@ -108,7 +108,7 @@ position or wording. `criteria` stores IDs registered by `corral criteria
 register` in the task's canonical acceptance manifest; unknown IDs are rejected.
 An empty list means no criterion link. Progress does not register or satisfy
 criteria. Readback's `criteria` and `show --json`'s `criteria_progress` join each
-canonical criterion to its linked steps (including their states) and T-052
+canonical criterion to its linked steps (including their states) and
 evidence records, retaining receipt identity and artifact references.
 
 Phase IDs must be unique and nonempty; step IDs must be unique and nonempty

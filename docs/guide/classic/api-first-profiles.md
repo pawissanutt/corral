@@ -23,7 +23,7 @@ corral agent login --provider anthropic-api --status
 
 Never paste a key into configuration, command arguments, logs or screenshots. For automation,
 use `--key-file /path/to/protected-key-file` with an owner-owned regular `0600` file, not a
-literal key argument. See [metered API keys](../corral-pi.md#metered-api-keys).
+literal key argument. See [metered API keys](../corral-pi.md#providers).
 
 ## 2. Configure a separate profile
 
@@ -137,7 +137,7 @@ API-first admission applies to canonically bound native roles, including daemon 
 and workspace Build sessions. Build keeps its ordinary worktree, off-board tools and exit
 workflow; its workspace ledger tracks metered parent, child and compaction requests without
 enforcing an allowance. Resume fences the previous host and retains consumed and
-uncertain reservations. See [Build sessions](../build-sessions.md#named-profiles-and-metered-apis)
+uncertain reservations. See [Build sessions](../build-sessions.md#start)
 for preset routing. Bare sessions (`corral pi --bare --profile <api-profile>`) also accept
 API profiles; they have no corral ledger, so their API usage is not recorded. Non-workspace
 `--build` sessions still refuse API profiles.
@@ -155,6 +155,6 @@ Paid summary profiles remain separately restricted.
 - **Frozen route changed:** a paid session resumes only on its original profile and exact
   API route (connection, model, effort). Approval or allowance edits do not block resume.
 
-Existing subscription profiles and [quota-triggered paid continuation](../corral-pi.md#paid-continuation-after-subscription-quota)
+Existing subscription profiles and [quota-triggered paid continuation](../corral-pi.md#quota-fallback-and-api-usage)
 keep their existing configuration and behavior. This guide does not authorize any live
 configuration changes or paid verification requests.

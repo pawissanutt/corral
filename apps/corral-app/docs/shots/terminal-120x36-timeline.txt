@@ -32,5 +32,5 @@
 │                              ││                     reached the phone at 12:10.                                      │
 │                              ││ 19:12–now    T-868  question open 3h; the worker kept producing until 21:40, then    │
 │                              ││                     idled.                                                           │
-╰─ This device pawis-desktop ──╯╰──────────────────────────────────────────────────────────────────────────────────────╯
+╰─ This device owner-desktop ──╯╰──────────────────────────────────────────────────────────────────────────────────────╯
   i  Inbox  n  Now  .  Changes  p  Plans  a  Agents  r  Review  t  Timeline  u  Usage  ,  Settings │  /  Ask  ^K  Go to

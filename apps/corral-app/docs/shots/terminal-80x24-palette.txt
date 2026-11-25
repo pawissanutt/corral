@@ -20,5 +20,5 @@
 │                      ││ T-890 pm-bounded-read-contract                       │
 │                      ││ T-894 api-connections                                │
 │                      ││ T-871 annotation-service · session                   │
-╰─ pawis-desktop ──────╯╰──────────────────────────────────────────────────────╯
+╰─ owner-desktop ──────╯╰──────────────────────────────────────────────────────╯
   j…  move  En… open  Tab  tab │  i   n   .   p   a   r   t   u   ,  │  /   ^K

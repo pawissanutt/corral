@@ -20,5 +20,5 @@
 │    Assistant         ││ │ │   Both sides derive it from the key         │ │  │
 │    Autopilot &…      ││ │ │   exchange; a mismatch means someone is in  │ │  │
 │    General           ││ │ │   the middle.                               │ │  │
-╰─ pawis-desktop ──────╯╰──────────────────────────────────────────────────────╯
+╰─ owner-desktop ──────╯╰──────────────────────────────────────────────────────╯
   i  Inbox  n  Now  .   p   a   r   t   u   ,  Settings │  /  Ask  ^K  Go to

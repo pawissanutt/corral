@@ -44,7 +44,7 @@
           <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" style="height:28px" data-act="goto" data-to="question">Open handover · decide</button><span class="dim" style="font-size:12px;align-self:center">2 options · worker recommends 1</span></div></div>
         <p>I can implement the ledger and other controls independently while awaiting this decision.</p></div></div>
       <div class="tm"><span class="av w">W</span><div><div class="hd"><b>worker T-868</b> · 19:40</div>${tool("Edit", "packages/corral-pi/src/bridge/queue.ts", "+88 −3")}${tool("Bash", "bun run --bun typecheck", "ok 11.0s")}</div></div>
-      <div class="tm"><span class="av o">Y</span><div><div class="hd"><b>you</b> · 21:58 · <span class="mono">via=app:pawis-iphone</span></div><p>Does option 1 change anything in rich mode?</p></div></div>
+      <div class="tm"><span class="av o">Y</span><div><div class="hd"><b>you</b> · 21:58 · <span class="mono">via=app:owner-iphone</span></div><p>Does option 1 change anything in rich mode?</p></div></div>
       <div class="tm"><span class="av w">W</span><div><div class="hd"><b>worker T-868</b> · 21:59</div><p>No. Rich mode stays read-only/count-only; neither option restores there.</p><p class="dim" style="font-size:12px">idle since 21:40 · waiting on T-868/R1/Q1</p></div></div>
       <div class="illus" style="padding:4px 24px 16px">Transcript illustrative; the question, its options and the tool targets are real.</div></div>`;
   }
@@ -61,7 +61,7 @@
   1. Restore only pane-origin input; leave Corral/extension items queued
   2. Retain restore-all; journal removals, resubmit as new pane input
 
-<span class="w8">owner (app:pawis-iphone):</span> Does option 1 change anything in rich mode?
+<span class="w8">owner (app:owner-iphone):</span> Does option 1 change anything in rich mode?
 <span class="b">●</span> No. Rich mode stays read-only/count-only; neither option restores there.
 
 <span class="w8">queued  0 steering · 0 follow-ups · queued, not execution</span>
@@ -79,7 +79,7 @@
       const view = S.sessionView === "terminal"
         ? (() => { const legacy = id === "T-854"; return `<div style="display:flex;flex-direction:column;flex:1;min-height:0"><div class="termbar"><span>${legacy ? "Herdr TUI (legacy)" : "herdr-core"} · ${t.pane || "w12C:p2"} · 140×46</span><span>${legacy ? "snapshot · refreshed 20s ago · no live stream on the legacy runtime" : "live stream · scrollback 1,000"}</span><span style="margin-left:auto">${legacy ? "read-only snapshot" : "keys go to the agent's pane as owner input · actor=owner"}</span></div><div class="bigterm" data-scroll="term">${bigTerm(id)}</div></div>`; })()
         : `<div class="cols" style="grid-template-columns:minmax(0,1fr) 280px;flex:1;min-height:0"><div style="display:flex;flex-direction:column;min-height:0"><div class="scroll" style="flex:1" data-scroll="tx">${transcript(S, id)}</div>
-            <div class="composer"><div class="box"><textarea placeholder="Message worker ${id}…" aria-label="Reply to agent"></textarea><button class="btn" data-act="toast" data-msg="Sent to ${id} via corral send · actor=owner via=app:pawis-desktop">${ic("send")}Send</button></div><div class="hint"><span>Sends with <span class="mono">corral send ${id}</span> · arrives as owner input</span><span>Answering the open question happens on its handover sheet</span></div></div></div>
+            <div class="composer"><div class="box"><textarea placeholder="Message worker ${id}…" aria-label="Reply to agent"></textarea><button class="btn" data-act="toast" data-msg="Sent to ${id} via corral send · actor=owner via=app:owner-desktop">${ic("send")}Send</button></div><div class="hint"><span>Sends with <span class="mono">corral send ${id}</span> · arrives as owner input</span><span>Answering the open question happens on its handover sheet</span></div></div></div>
             <div class="pane side-col" style="padding:14px 16px"><div class="h3" style="margin-top:0">Run</div><dl class="kv"><dt>Task</dt><dd><span class="mono">${id}</span> ${esc(t.title)}</dd><dt>Rail</dt><dd>${rail(t.rail)}</dd><dt>Agent</dt><dd>${t.agent || "pi-sol xhigh"}</dd><dt>Runtime</dt><dd>herdr-core · <span class="mono">${t.pane || "—"}</span></dd><dt>Machine</dt><dd>workstation</dd><dt>Started</dt><dd>${t.started || "—"}</dd></dl>
             <div class="h3">Steps</div><ul class="steps">${(t.steps || []).map(([k, s]) => `<li class="${k}">${mk(k, true)}<span>${esc(s)}</span></li>`).join("")}</ul></div></div>`;
       return `${connBanner()}<div class="pagehead"><button class="btn quiet" data-act="goto" data-to="agents">${ic("back")}Agents</button><h1><span class="mono dim" style="font-weight:500">${id}</span> ${esc(t.title)}</h1><span class="sub">worker R1 · ${t.agent || ""}</span><span class="acts"><span class="dim" style="font-size:12px"><span class="kbd">\`</span> switch</span>${sessHeader(S, id)}</span></div>
@@ -93,7 +93,7 @@
         : transcript(S, id, true).replace(/class="tm"/g, 'class="tm" style="padding:8px 16px"'));
       const decide = term
         ? `<div style="display:flex;gap:6px;width:100%;font-family:var(--mono);font-size:13px">${["Esc", "Tab", "Ctrl", "↑", "↓", "⏎"].map((k) => `<button class="pbtn ghost" style="flex:1;padding:0;font-size:13px;min-height:40px">${k}</button>`).join("")}</div>`
-        : `<div class="reply" style="margin:0;flex:1"><textarea placeholder="Message worker ${id}…" style="font-size:15px"></textarea><button class="pbtn" style="min-height:36px;padding:0 12px" data-act="toast" data-msg="Sent · via=app:pawis-iphone">${ic("send")}</button></div>`;
+        : `<div class="reply" style="margin:0;flex:1"><textarea placeholder="Message worker ${id}…" style="font-size:15px"></textarea><button class="pbtn" style="min-height:36px;padding:0 12px" data-act="toast" data-msg="Sent · via=app:owner-iphone">${ic("send")}</button></div>`;
       return { title: `${id} session`, backLabel: "Back", body, decide, right: `<button data-act="set" data-k="sessionView" data-v="${term ? "transcript" : "terminal"}" aria-label="Switch view">${ic(term ? "chat" : "term")}</button>` };
     },
   };

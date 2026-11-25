@@ -148,4 +148,4 @@ The current database store uses the schema fence described in [storage](storage.
 Older/legacy stores require the explicit supported migration before mutation; preview
 never upgrades a store or edits its fence. Unsupported readers/writers fail closed.
 Do not edit task exports, schema markers or policy files to impersonate recovery.
-This feature does not authorize recovery of live historical T-102 data.
+This feature does not authorize recovery of live data from the historical recovery incident.

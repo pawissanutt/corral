@@ -14,7 +14,7 @@
   function situation(S, phone) {
     const st = qState(S);
     const stamp = st === "elsewhere" ? `<div class="notice ok" style="margin-top:12px"><span class="stamp">ANSWERED ELSEWHERE</span><span>Answered on the <b>PM pane</b> at ${Q.answeredElsewhere.at} with option 1 · <span class="mono">via=pm-pane</span>. This copy is read-only; one answer wins across devices and the PM pane.</span></div>`
-      : st === "mine" ? `<div class="notice ok" style="margin-top:12px"><span class="stamp">ANSWERED</span><span>By you at 22:12 with option ${S.q.choice + 1} · <span class="mono">actor=owner via=app:${S.frame === "phone" ? "pawis-iphone" : "pawis-desktop"}</span>. Other devices and the PM pane now show it answered.</span></div>`
+      : st === "mine" ? `<div class="notice ok" style="margin-top:12px"><span class="stamp">ANSWERED</span><span>By you at 22:12 with option ${S.q.choice + 1} · <span class="mono">actor=owner via=app:${S.frame === "phone" ? "owner-iphone" : "owner-desktop"}</span>. Other devices and the PM pane now show it answered.</span></div>`
       : st === "queued" ? `<div class="notice warn" style="margin-top:12px"><span class="stamp void">QUEUED</span><span>Option ${S.q.choice + 1} waits on this device. It sends when corrald is reachable, only if rev 2 is still current; otherwise it comes back to you.</span></div>` : "";
     if (phone) return `<p class="lede">${esc(Q.text)}</p><div class="h3" style="margin:14px 0 6px">Waiting on this answer</div>${waitsHtml()}${stamp}`;
     return `<div style="display:grid;grid-template-columns:minmax(0,1fr) 290px;gap:22px"><p class="lede">${esc(Q.text)}</p><div><div class="h3" style="margin-top:2px">Waiting on this answer</div>${waitsHtml()}</div></div>${stamp}`;
@@ -91,7 +91,7 @@
     const label = off ? `Queue answer · ${n}` : `Answer · ${n}`;
     if (phone) return `<button class="pbtn ghost" data-act="thread">${ic("chat")}Ask worker</button><button class="pbtn wide" data-act="answer">${label}</button>`;
     return `<button class="btn" data-act="answer">${label}<span class="kbd">Ctrl ↵</span></button><button class="btn ghost" data-act="toast" data-msg="Focus moved to the thread reply box">Ask the worker</button><button class="btn quiet" data-act="toast" data-msg="Opened in the PM conversation">Discuss with PM</button>
-      <span class="attr">${off ? `Offline: answers queue with their revision; plan accepts and grants refuse.` : `Runs <span class="mono">corral question answer --owner ${Q.key} --rev 2</span>`}<br><span class="mono">actor=owner · via=app:pawis-desktop</span></span>`;
+      <span class="attr">${off ? `Offline: answers queue with their revision; plan accepts and grants refuse.` : `Runs <span class="mono">corral question answer --owner ${Q.key} --rev 2</span>`}<br><span class="mono">actor=owner · via=app:owner-desktop</span></span>`;
   }
 
   function qhead(S, phone) {
@@ -227,7 +227,7 @@
       if (qState(S) !== "open") return;
       const off = offline(S);
       S.q.state = off ? "queued" : "mine";
-      toast(off ? `Queued: ${Q.key} · option ${S.q.choice + 1} · sends on reconnect if rev 2 is current` : `Answered ${Q.key} · option ${S.q.choice + 1} · actor=owner via=app:${S.frame === "phone" ? "pawis-iphone" : "pawis-desktop"}`);
+      toast(off ? `Queued: ${Q.key} · option ${S.q.choice + 1} · sends on reconnect if rev 2 is current` : `Answered ${Q.key} · option ${S.q.choice + 1} · actor=owner via=app:${S.frame === "phone" ? "owner-iphone" : "owner-desktop"}`);
     },
     thread: () => { S.sheet = { title: "Thread · worker T-868", body: () => thread(S, true) }; render(); },
     "next-q": () => { S.plan = "T-885"; if (S.frame === "phone") { S.ptab = "plans"; S.pstack = [{ page: "plan" }]; render(); } else nav("plans"); },
@@ -349,8 +349,8 @@
   // ---------- Changes ----------
   SCREENS.changes = {
     desk(S) {
-      return `${connBanner()}<div class="pagehead"><h1>Changes</h1><span class="sub">since this device's last visit ${D.LAST_VISIT} · 12 events · seen-cursor is per device: your phone read these at 21:30, the ▲ marks here stay</span><span class="acts"><div class="seg"><button aria-pressed="true">All</button><button>Needs you</button><button>Verdicts</button><button>Runs</button></div><button class="btn ghost" data-act="toast" data-msg="Seen-cursor moved to 22:12 for pawis-desktop only">Mark seen</button></span></div>
-        <div class="pane stalefx" data-scroll="changes"><div class="feed" style="max-width:900px">${feed(S)}<div class="seenline">your last visit · ${D.LAST_VISIT} · seen-cursor for pawis-desktop</div>
+      return `${connBanner()}<div class="pagehead"><h1>Changes</h1><span class="sub">since this device's last visit ${D.LAST_VISIT} · 12 events · seen-cursor is per device: your phone read these at 21:30, the ▲ marks here stay</span><span class="acts"><div class="seg"><button aria-pressed="true">All</button><button>Needs you</button><button>Verdicts</button><button>Runs</button></div><button class="btn ghost" data-act="toast" data-msg="Seen-cursor moved to 22:12 for owner-desktop only">Mark seen</button></span></div>
+        <div class="pane stalefx" data-scroll="changes"><div class="feed" style="max-width:900px">${feed(S)}<div class="seenline">your last visit · ${D.LAST_VISIT} · seen-cursor for owner-desktop</div>
         ${["18:12 T-885 review P2 approve · pi-sol", "17:40 T-854 checkpoint 2 captured", "16:40 T-852 held · external op started"].map((x) => { const [t, id, ...r] = x.split(" "); return `<div class="ev"><span class="t">${t}</span>${mk("na")}<span class="i">${id}</span><span class="x dim">${esc(r.join(" "))}</span></div>`; }).join("")}</div>
         <div class="illus" style="padding:8px 16px">Events after 18:40 are real snapshot changes; the three before the line and 21:59 are illustrative.</div></div>`;
     },

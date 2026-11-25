@@ -8,8 +8,8 @@
     ["Confirm here", "Only a trusted surface can confirm. The new device then appears below and can be revoked any time."],
   ];
   const stepsHtml = (S) => `<ol class="steps4">${STEPS.map(([t, d], i) => `<li class="${i < S.pair ? "done" : i === S.pair ? "on" : ""}"><span class="n">${i < S.pair ? "✓" : i + 1}</span><span><b>${t}</b><div class="d">${d}</div></span></li>`).join("")}</ol>`;
-  const payload = `<table class="qtable" style="margin-top:12px"><tr><td class="dim">daemon key</td><td class="mono">ed25519 · 7F3A 91C2 · 0E5B D4A8</td></tr><tr><td class="dim">reach hints</td><td class="mono">loopback · lan 192.168.1.20:7419 · tailscale workstation.tail · relay relay.pawis.dev</td></tr><tr><td class="dim">token</td><td class="mono">one-time · expires 22:17</td></tr></table>`;
-  const confirmBox = (phone) => `<div class="notice warn" style="margin-top:14px;align-items:center;${phone ? "flex-wrap:wrap" : ""}"><span><b>pawis-ipad</b> wants to pair · iPadOS · via direct · lan<br><span class="dim">Code on that device:</span> <span class="code6" style="font-size:${phone ? 24 : 22}px">482 913</span></span><span style="margin-left:auto;display:flex;gap:8px"><button class="${phone ? "pbtn" : "btn"}" data-act="pair-confirm">Codes match · confirm</button><button class="${phone ? "pbtn ghost" : "btn ghost"}" data-act="pair-reject">Reject</button></span></div>`;
+  const payload = `<table class="qtable" style="margin-top:12px"><tr><td class="dim">daemon key</td><td class="mono">ed25519 · 7F3A 91C2 · 0E5B D4A8</td></tr><tr><td class="dim">reach hints</td><td class="mono">loopback · lan 192.168.1.20:7419 · tailscale workstation.tail · relay relay.owner.dev</td></tr><tr><td class="dim">token</td><td class="mono">one-time · expires 22:17</td></tr></table>`;
+  const confirmBox = (phone) => `<div class="notice warn" style="margin-top:14px;align-items:center;${phone ? "flex-wrap:wrap" : ""}"><span><b>owner-ipad</b> wants to pair · iPadOS · via direct · lan<br><span class="dim">Code on that device:</span> <span class="code6" style="font-size:${phone ? 24 : 22}px">482 913</span></span><span style="margin-left:auto;display:flex;gap:8px"><button class="${phone ? "pbtn" : "btn"}" data-act="pair-confirm">Codes match · confirm</button><button class="${phone ? "pbtn ghost" : "btn ghost"}" data-act="pair-reject">Reject</button></span></div>`;
   function devicesTable(phone) {
     // Devices that may instruct (D17): desktop, phone, terminal from pairing; web may ask and file only until turned on.
     const act = (d) => (/web/.test(d.platform) ? "ask and file only" : "yes");
@@ -25,7 +25,7 @@
       healthy: [["corrald", "healthy · up 6d 3h · rev 418 207"], ["transport", "Unix socket /run/user/1000/corrald.sock · direct · loopback"], ["ssh", "an SSH bridge (ssh workstation corral daemon connect) also shows as direct · loopback, marked via ssh here"], ["herdr-core", "ok · 0.1 · 6 panes supervised · live terminal streams"], ["herdr-tui", "ok · legacy · 1 run (T-854) · terminal is a refreshed snapshot"], ["PM", "live · generation 14"], ["stores", "receipts 9 812 / 16 384 · rollover at 90%"]],
       degraded: [["corrald", "degraded · sync stalled 4m · last pass 22:08"], ["other reasons", "lock dispatch held 95s by pid N · unsupervised · relay unreachable"], ["transport", "direct · loopback"], ["herdr-core", "ok"], ["herdr-tui", "ok"], ["PM", "relaunching · generation 15 starting"]],
       down: [["corrald", "down since 22:09 · exit 101 · service manager restarting (2/5)"], ["transport", "socket refused · direct · loopback"], ["herdr-core", "unreachable (supervised by corrald)"], ["herdr-tui", "unreachable"], ["PM", "absent"], ["board", "last projection rev 418 199 at 22:08 · marked stale"]],
-      relay: [["corrald", "healthy"], ["transport", "relay · e2e · relay.pawis.dev · X25519 session, rotated 21:40"], ["relay sees", "packet sizes and timing; never content, ids or titles"], ["push", "content-free wake; text built on the phone"], ["latency", "180 ms round trip"]],
+      relay: [["corrald", "healthy"], ["transport", "relay · e2e · relay.owner.dev · X25519 session, rotated 21:40"], ["relay sees", "packet sizes and timing; never content, ids or titles"], ["push", "content-free wake; text built on the phone"], ["latency", "180 ms round trip"]],
       offline: [["corrald", "unknown · last healthy 22:08"], ["transport", "offline · last sync 22:08"], ["local queue", "1 answer with a checkable expectation · 1 chat message"], ["refused", "plan accept, approvals, grants, pairing"], ["board", "read-only · rev 418 199"]],
     }[S.health];
     const qtable = `<table class="qtable">${ACTIONSQ.map(([a, k, why]) => `<tr><td>${a}</td><td><span class="chip ${k === "queued" ? "held" : "fail"}">${k}</span></td><td class="dim">${why}</td></tr>`).join("")}</table>`;
@@ -51,7 +51,7 @@
       const subs = [["devices", "Devices"], ["machines", "Machines"], ["connection", "Connection"], ["notifications", "Notifications"], ["assistant", "Assistant"], ["autopilot", "Autopilot & grants"], ["general", "General"]];
       let body = "";
       if (S.setSub === "devices") body = `<h2 style="margin:0 0 4px;font-size:16px">Devices</h2><p class="dim" style="margin:0 0 14px">One owner, many devices. Each device signs its actions; revoking one ends its sessions at once.</p>
-        <div class="pairflow"><div><div class="qr">${qr()}</div><div class="illus" style="margin-top:6px">QR illustrative, not scannable</div></div><div>${stepsHtml(S)}${S.pair >= 2 && S.pair < 4 ? confirmBox() : ""}${S.pair === 4 ? `<div class="notice ok" style="margin-top:14px"><b>pawis-ipad paired.</b>&nbsp;Signs as <span class="mono">via=app:pawis-ipad</span>; reach direct · lan.</div>` : ""}${payload}
+        <div class="pairflow"><div><div class="qr">${qr()}</div><div class="illus" style="margin-top:6px">QR illustrative, not scannable</div></div><div>${stepsHtml(S)}${S.pair >= 2 && S.pair < 4 ? confirmBox() : ""}${S.pair === 4 ? `<div class="notice ok" style="margin-top:14px"><b>owner-ipad paired.</b>&nbsp;Signs as <span class="mono">via=app:owner-ipad</span>; reach direct · lan.</div>` : ""}${payload}
           <div style="display:flex;gap:8px;margin-top:12px">${S.pair > 0 ? `<button class="btn quiet" data-act="pair-step" data-d="-1">Back a step</button>` : ""}${S.pair < 3 ? `<button class="btn ghost" data-act="pair-step" data-d="1">Next step (demo)</button>` : ""}</div></div></div>
         ${devicesTable()}`;
       else if (S.setSub === "machines") body = `<h2 style="margin:0 0 12px;font-size:16px">Machines</h2>${machines()}`;
@@ -77,12 +77,12 @@
   SCREENS.connection = SCREENS.settings;
   Object.assign(ACTIONS, {
     "pair-step": (d) => { S.pair = Math.max(0, Math.min(4, S.pair + +d.d)); render(); },
-    "pair-confirm": () => { S.pair = 4; toast("Paired pawis-ipad · actions will carry via=app:pawis-ipad"); },
+    "pair-confirm": () => { S.pair = 4; toast("Paired owner-ipad · actions will carry via=app:owner-ipad"); },
     "pair-reject": () => { S.pair = 0; toast("Pairing rejected · token burned"); },
     revoke: (d) => ACTIONS.confirm({ kind: "revoke", n: d.n }),
     "set-sub": (d) => { S.pstack.push({ page: "settings", sub: d.sub }); render(); },
     "pair-sheet": () => { S.sheet = { title: "Pair a device", body: () => `<div style="display:grid;justify-items:center;gap:10px"><div class="qr">${qr()}</div><div class="illus">QR illustrative</div></div>${stepsHtml(S)}` }; render(); },
     "scan-sheet": () => { S.sheet = { title: "Join corral", body: () => `<div style="aspect-ratio:1;border-radius:16px;background:oklch(0.2 0.01 240);display:grid;place-items:center;position:relative;overflow:hidden"><div style="width:62%;aspect-ratio:1;border-radius:14px;box-shadow:0 0 0 2000px oklch(0 0 0 / .35), inset 0 0 0 3px white"></div><span style="position:absolute;bottom:12px;color:white;font-size:13px">Point at the QR on a trusted surface</span></div>
-        <div style="margin-top:16px;text-align:center"><div class="dim" style="font-size:14px">After scanning, this phone shows</div><div class="code6" style="margin:6px 0">482 913</div><div style="font-size:14px">Confirm the same code on <b>pawis-desktop</b>.</div><div class="illus" style="margin-top:8px">camera view needs a native component (not in NSH)</div></div>` }; render(); },
+        <div style="margin-top:16px;text-align:center"><div class="dim" style="font-size:14px">After scanning, this phone shows</div><div class="code6" style="margin:6px 0">482 913</div><div style="font-size:14px">Confirm the same code on <b>owner-desktop</b>.</div><div class="illus" style="margin-top:8px">camera view needs a native component (not in NSH)</div></div>` }; render(); },
   });
 })();

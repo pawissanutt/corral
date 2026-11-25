@@ -157,7 +157,7 @@ function sidebar(){
   const order={needs:0,review:1,running:2};
   live.sort((a,b)=>order[a.status]-order[b.status]);
   const cur=sel();
-  let s=`<h4>SPACES</h4><div class="it ${S.screen!=='agent'&&S.screen!=='pm'?'cur':''}">▸ miti-workspace <span class="dim">board</span></div><div class="it ${S.screen==='pm'?'cur':''}">▸ corral <span class="dim">PM</span></div>`;
+  let s=`<h4>SPACES</h4><div class="it ${S.screen!=='agent'&&S.screen!=='pm'?'cur':''}">▸ main-workspace <span class="dim">board</span></div><div class="it ${S.screen==='pm'?'cur':''}">▸ corral <span class="dim">PM</span></div>`;
   live.filter(t=>t.status!=='review').forEach(t=>{s+=`<div class="it ${S.screen==='agent'&&cur&&cur.id===t.id?'cur':''}">▸ ${proj(t.project.replace('mitimind-',''))} <span class="dim">${t.id}</span></div>`;});
   s+=`<h4 style="margin-top:10px">AGENTS <span class="dim" style="letter-spacing:0">· view: corral</span></h4>`;
   live.forEach(t=>{s+=`<div class="it">${ico(t)} ${ag(t.agent)} <span class="dim">${t.id}</span> ${h(t.title)}</div>`;});
@@ -167,7 +167,7 @@ function sidebar(){
 function topbar(){
   const n=tasks.filter(t=>t.status==='needs').length,r=tasks.filter(t=>t.status==='running').length,v=tasks.filter(t=>t.status==='review').length;
   const where={board:'board',detail:'board › '+(sel()||{}).id,review:'board › review '+(sel()||{}).id,agent:'agent '+(sel()||{}).id,pm:'corral PM'}[S.screen];
-  return `<div class="hbar"><span class="brand">herdr</span><span class="on">miti-workspace</span><span>› ${h(where)}</span><span class="sp"></span><span class="ye">▲${n}</span><span class="bl">⟳${r}</span><span class="gr">◆${v}</span><span>14:32</span></div>`;
+  return `<div class="hbar"><span class="brand">herdr</span><span class="on">main-workspace</span><span>› ${h(where)}</span><span class="sp"></span><span class="ye">▲${n}</span><span class="bl">⟳${r}</span><span class="gr">◆${v}</span><span>14:32</span></div>`;
 }
 function footer(){
   const k=(a,b)=>`<span><kbd>${a}</kbd> ${b}</span>`;
@@ -204,7 +204,7 @@ function card(t,selected){
 function board(){
   const cs=visCols();const cur=sel();
   const n=tasks.filter(t=>t.status==='needs').length,v=tasks.filter(t=>t.status==='review').length;
-  let head=`<div class="bhead"><span class="t">corral</span><span class="dim">miti-workspace · all projects</span><span class="ye">▲ ${n} needs you</span><span class="${used()>=SLOTS?'or':'bl'}">⟳ ${used()}/${SLOTS} slots</span><span class="gr">◆ ${v} review</span><span class="dim">⏳ ${queued()} queued</span><span style="margin-left:auto" class="dim">${S.ideas?'<span class="cy">[i] ideas only</span>':'[i] ideas'}  ${S.showDone?'<span class="cy">[D] done</span>':'[D] done'}</span></div>`;
+  let head=`<div class="bhead"><span class="t">corral</span><span class="dim">main-workspace · all projects</span><span class="ye">▲ ${n} needs you</span><span class="${used()>=SLOTS?'or':'bl'}">⟳ ${used()}/${SLOTS} slots</span><span class="gr">◆ ${v} review</span><span class="dim">⏳ ${queued()} queued</span><span style="margin-left:auto" class="dim">${S.ideas?'<span class="cy">[i] ideas only</span>':'[i] ideas'}  ${S.showDone?'<span class="cy">[D] done</span>':'[D] done'}</span></div>`;
   let cols=`<div class="cols" style="grid-template-columns:repeat(${cs.length},minmax(0,1fr))">`;
   cs.forEach(([k,name],ci)=>{
     const l=colTasks(k);

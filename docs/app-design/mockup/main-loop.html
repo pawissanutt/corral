@@ -509,7 +509,7 @@ button.srow:hover{background:var(--hover)}
 <div class="app" id="app">
   <header class="titlebar">
     <span class="brand"><svg class="i"><use href="#i-logo"/></svg>Corral</span>
-    <span class="mono path">~/miti-workspace/corral</span>
+    <span class="mono path">~/main-workspace/corral</span>
     <span class="hl" id="health" tabindex="0" data-tip="corrald healthy · herdr-core ok · herdr-tui ok · PM live · reached directly over loopback"><i></i>healthy</span>
     <span class="sp"></span>
     <time class="mono" id="clock"></time>
@@ -532,7 +532,7 @@ button.srow:hover{background:var(--hover)}
     <span class="nav off" aria-disabled="true" data-tip="Unchanged; not part of this proposal"><svg class="i"><use href="#i-usage"/></svg><span class="lbl">Usage</span><kbd>u</kbd></span>
     <span class="nav off" aria-disabled="true" data-tip="Unchanged; not part of this proposal"><svg class="i"><use href="#i-settings"/></svg><span class="lbl">Settings</span><kbd>,</kbd></span>
     <div id="side-projects"></div>
-    <div class="dev" data-tip="This device. Actions sign as via=app:pawis-desktop."><b>pawis-desktop</b></div>
+    <div class="dev" data-tip="This device. Actions sign as via=app:owner-desktop."><b>owner-desktop</b></div>
   </nav>
 
   <main id="view" aria-live="off"></main>
@@ -751,9 +751,9 @@ if(innerWidth<=1180)S.agent=null;
 
 /* ---------- projects (projects.v1): one workspace, several projects, one scope per screen ---------- */
 const PROJ=[
-  {id:"corral",tag:"co",path:"~/miti-workspace/corral",pm:true,auto:true,open:40,running:2,queued:14,parked:22},
-  {id:"mitigraph",tag:"mg",path:"~/miti-workspace/mitigraph",pm:true,auto:false,open:21,running:2,queued:8,parked:10},
-  {id:"mitiplay",tag:"mp",path:"~/miti-workspace/mitiplay",pm:false,auto:false,open:0,running:0,queued:0,parked:0},
+  {id:"corral",tag:"co",path:"~/main-workspace/corral",pm:true,auto:true,open:40,running:2,queued:14,parked:22},
+  {id:"mitigraph",tag:"mg",path:"~/main-workspace/mitigraph",pm:true,auto:false,open:21,running:2,queued:8,parked:10},
+  {id:"mitiplay",tag:"mp",path:"~/main-workspace/mitiplay",pm:false,auto:false,open:0,running:0,queued:0,parked:0},
 ];
 const PMAP={"T-868":"corral","T-890":"corral","T-867":"corral","T-869":"corral","T-852":"corral","T-885":"corral","T-870":"corral","T-893":"corral","T-385":"corral","T-866":"corral","T-864":"corral","T-848":"corral",
   "T-894":"mitigraph","T-871":"mitigraph","T-854":"mitigraph","T-898":"mitigraph","T-874":"mitigraph","T-862":"mitigraph","T-859":"mitigraph","T-857":"mitigraph"};

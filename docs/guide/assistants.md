@@ -56,7 +56,7 @@ scope: it is not bound to a project and has no board authority of its own.
 Outside a workspace, `corral pi` prints a one-line notice that no corral workspace was found
 and starts a bare build; `--pm`, `--assistant`, `--resume A-<n>`, `--task` and `--over-cap` there
 refuse `not_in_workspace`. `--build` needs a Git repository; bare sessions can be resumed
-outside one. Build sessions are described in the [corral-pi guide](corral-pi.md#starting-pi-yourself-corral-pi).
+outside one. Build sessions are described in the [Build sessions guide](build-sessions.md#start).
 
 ### The launcher
 
@@ -433,11 +433,11 @@ Changed source/current generation, evidence, task/driver, admission version or a
 preview pin requires a fresh preview. Reconciliation is never `handoff_drain`: normal
 handoff still requires its actual current-host attestation and all other authority checks.
 
-For the A-77 incident, any future owner application additionally requires reviewed,
-landed, deployed compatible CLI/host assets and a fresh exact A-77/T-924 preview. T-855's
+For the historical reconciliation incident, any owner application additionally requires reviewed,
+landed, deployed compatible CLI/host assets and a fresh preview for the exact session and task. The
 startup repair is an independent reviewed/deployed prerequisite for a later restart;
 this service does not restart anything. Original takeover approval, history and scratch
-remain intact. T-924 keeps its two spent repairs and only its separately approved extra
+remain intact. The affected task keeps its two spent repairs and only its separately approved extra
 third cycle. Missing historical MCP/LSP proof may legitimately leave handoff blocked.
 
 ## Cost
@@ -714,7 +714,7 @@ free text; chat can explain the decision but must not be its only actionable sur
 instructions need no redundant approval. Deferred questions (`nonBlocking: true`) return a pending
 ID immediately; `/questions`, Ctrl+Shift+Q, or the pending-question widget reopens their choices.
 Continue independent work, but keep dependent Todo steps waiting on that ID. See
-[owner choice questions](corral-pi.md#owner-choice-questions) for recovery and cancellation.
+[owner choice questions](classic/questions.md#owner-decisions) for recovery and cancellation.
 Dialog answers carry an owner input ID and can be cited like pane-typed input. Corral checks
 only that the cited input is from this session, not that its words prove the exact action.
 The journal keeps the newest 64 entries.

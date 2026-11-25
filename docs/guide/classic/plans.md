@@ -69,7 +69,7 @@ read-only Pi roles. The planner writes `plan.md` through a typed tool and submit
 through the same submission service. The plan reviewer records its verdict for its bound
 attempt only, so it can never accept a plan for the owner. With `role_enabled` off for a
 role (preset `strict`), its native launch is refused; it never falls back to another
-harness. See [corral-pi agents](../corral-pi.md#the-planner-and-plan-reviewer-roles).
+harness.
 
 ## Owner recovery
 
@@ -99,7 +99,7 @@ Later review callbacks can record their verdicts but cannot revive the cancelled
 execution. Autopilot keeps it terminal; starting another planner requires an
 explicit `dispatch --plan`, which creates a new design-run history entry.
 
-For the T-048 stale-D1 recovery, after the new binary is landed and installed:
+For the historical stale-planner recovery, after installing the binary with cancellation support:
 `corral plan cancel T-048`. This cancels only D1; P1-P3 and P3's pending owner
 acceptance remain intact. The command must target D1's owning herdr session.
 
@@ -254,7 +254,7 @@ gate. Final aggregate verification and main landing checks still apply. Review m
 or for missing justification, ownership or full-gate scheduling.
 
 **Anti-pattern: storage-v2.** More than 300 commits accumulated on one long-lived branch; main
-integration required two multi-day merges (T-337 and T-741), and the full gate was not run on the
+integration required two multi-day merges, and the full gate was not run on the
 branch until cutover. Do not repeat that delivery shape. Prefer bounded, compatible waves that
 reach green main throughout; if an integration exception is justified, schedule main sync and
 full verification at every wave boundary, not just at the end.

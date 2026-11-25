@@ -9,16 +9,14 @@ workspace to obtain acceptance evidence. Do not install a candidate over the own
 binary during rehearsal.
 
 See [storage](storage.md) for the command/state matrix, roots and retention, and
-[load sandbox](../load-sandbox.md) for mandatory stress isolation. The approved design
-is T-253 P9, sections 12–14. A quick member gate is not cutover acceptance; the Plan's
+[load sandbox](../load-sandbox.md) for mandatory stress isolation. A quick member gate is not cutover acceptance; the Plan's
 full verification is a separate PM operation.
 
 ## Offline proof first
 
 Prerequisites: Bash, Python 3.12+ with PyYAML, zstd, strace, Git, Rust and Podman with
 cgroups v2. The stress image defaults to `docker.io/library/rust:1.94-trixie`.
-Keep the pinned inputs outside `.corral`, normally at
-`$HOME/.local/share/corral-bench/t253-2026-10-22/`:
+Keep the pinned inputs outside `.corral` and pass that directory as `--fixtures`:
 
 | Input | SHA-256 |
 |---|---|
@@ -41,7 +39,7 @@ cargo build --release -p corral \
 cp target/release/corral .evidence/corral-barrier
 python3 -I scripts/test_storage_bench.py --after .evidence/corral-measure
 scripts/storage-bench.sh --after .evidence/corral-measure \
-  --barrier-binary .evidence/corral-barrier --rehearse \
+  --barrier-binary .evidence/corral-barrier --fixtures /path/to/pinned-inputs --rehearse \
   --projects /path/to/project-container --out /path/to/new-proof-directory
 scripts/storage-stress.sh .evidence/storage-stress
 scripts/check-docs.sh
@@ -89,7 +87,7 @@ The runner verifies archive/binary hashes before use, then:
    pre-apply result, append a v1 comment, reapply, check storage and find that
    comment. Assert restored fence/no journal and no D/M/Q after rollback; only D
    after reapply (D=`db`, M=`db.migrating`, Q=`db.discard`).
-8. Raw dry-run must report exactly T-125 R1, T-203 R1 and T-251/T-252/T-253 D1.
+8. Raw dry-run must report exactly the five task/run blockers checked by the fixture runner.
    Apply must refuse, preserving legacy file bytes, journal absence and fence.
 
 Independent acceptance failures are retained in `equivalence.json`, `medians.json`
@@ -111,7 +109,7 @@ blocked check, never permission for a host stress fallback.
 Do not start until offline proof and Plan verification are accepted. Keep a
 separate terminal and the old binary available throughout the rollback window.
 
-1. Pause all dispatch before accepting the T-253 tracker. Drain coding, reviews,
+1. Pause all dispatch before cutover. Drain coding, reviews,
    planning, reservations, submitting authorizations and live gate markers. A lost
    gate is history, not a synthetic pass or fail. Run the **new candidate** with
    `corral migrate --dry-run --json`; it must list no blockers. Never manufacture

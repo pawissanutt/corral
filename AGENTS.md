@@ -8,16 +8,18 @@ herdr CLI shapes (captured from herdr 0.9.3): docs/herdr-cli.md.
 
 | Crate | Owns |
 |---|---|
-| crates/corral-core | task model, `.corral/` file store (markdown + YAML frontmatter), config, events log |
+| crates/corral-types | data shared unchanged by the engine, the CLI and the wire protocol |
+| crates/corral-git | git subprocess helpers (argv only): worktrees, diffs, merges |
 | crates/corral-herdr | typed wrapper over the `herdr` CLI (JSON output) |
-| crates/corral-git | git subprocess helpers: worktrees, diffs, merges |
-| crates/corral-ops | application services shared by CLI and TUI (dispatch, sync, review, artifacts, PM) |
-| crates/corral-protocol | framed daemon RPC, shared wire types and BoardView DTOs |
-| crates/corral-daemon | workspace loop lease, sync/maintenance threads, local daemon server and health |
-| crates/corral-tui | ratatui board and screens |
-| crates/corral | the `corral` binary: clap CLI wiring, herdr plugin manifest in `plugin/` |
+| crates/corral-facts | built-in system map facts read from committed Git objects |
+| crates/corral-engine | the task engine: SQLite store whose operations share transactions with their events, config, runners |
+| crates/corral-protocol | wire contract shared by the daemon and its clients |
+| crates/corral-daemon | local owner RPC server over the engine (the `corrald-next` binary) |
+| crates/corral-next | the `corral-next` binary: clap CLI over the engine |
 
-Dependencies flow corral -> {daemon, tui, ops} -> {core, herdr, git, protocol}; daemon -> ops. Leaf crates never depend on each other.
+Dependencies flow corral-next -> {engine, protocol}; daemon -> {engine, facts, herdr, protocol, types}; engine -> {facts, git, herdr, types}; protocol and facts -> types. `corral-types`, `corral-git` and `corral-herdr` depend on no other crate here.
+
+The classic engine (`crates/corral`, `crates/corral-core`, `crates/corral-ops`, `crates/corral-tui`) is excluded from the workspace in `Cargo.toml` and does not compile against the current protocol and daemon. Its source stays for reference until it is deleted.
 
 `apps/corral-app/` is the Corral app (NSH, Rust): its own Cargo workspace and toolchain (rustc 1.97),
 not a workspace member, and not built or tested by `scripts/gate.sh`. It depends on

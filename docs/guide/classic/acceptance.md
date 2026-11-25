@@ -3,7 +3,7 @@
 > **Classic CLI.** This guide documents the classic `corral` CLI and board (v0.4.0), which `install.sh --legacy`
 > installs. The current engine is `corral-next` with the Corral app: see the [guide index](../README.md).
 
-Gate and review records now identify the task, run, unique gate attempt, candidate
+Gate and review records identify the task, run, unique gate attempt, candidate
 HEAD and tree, current integration base, original dispatch base, task specification,
 effective review/guard policy and verification inputs. Each command has an exit
 code and byte range in the attempt's combined log; the record contains its SHA-256.
@@ -54,15 +54,15 @@ sources, Clippy, `cargo nextest run --workspace` and separate
 `cargo build -p corral` and `scripts/check-docs.sh target/debug/corral`. Each step
 prints a header; the first failure reports its step and exits nonzero. All
 commands inherit null stdin. Gate identity exports are preserved, not unset
-around tests: test harnesses isolate their own subprocess environments (T-053).
+around tests: test harnesses isolate their own subprocess environments.
 Run `python3 scripts/test_gate.py` and `python3 scripts/test_gate_select.py` for
 temporary-fixture regression checks.
 Install cargo-nextest before running the gate. The default nextest profile in
 `.config/nextest.toml` uses 12 test slots, serializes live fixtures sharing the
 private herdr server, and reports ordinary slowness at 10 seconds. The gate's candidate-bound
 runner classifies candidate changes against the integration base and reports timing for
-T-766 gardening. All time thresholds (per-test, tier and quiet-load accounting) are
-report-only here; enforcement is deferred to T-776. Actual assertions still fail. Explicit measured
+test maintenance. All time thresholds (per-test, tier and quiet-load accounting) are
+report-only and never fail a gate. Actual assertions still fail. Explicit measured
 integration/torture exceptions keep their original 30s report-only guards, not extra
 full-tier exclusions. Retries are disabled. Runtime caps, fixed membership, path-scoped
 lanes and nightly scheduling are detailed in [gate cost policy](../gate-costs.md). Run the gate inside the private plugin-free environment:

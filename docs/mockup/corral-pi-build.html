@@ -880,7 +880,7 @@ const nfiles=k=>liveFiles().filter(f=>f.who.includes(k.id)).length;
    when the notice fits whole. Row 2 (context, muted, clipped) shows whenever the terminal has 28 rows, at every width. */
 function headHTML(){
   NIH=false;
-  if(S.view==='launch')return `<div class="row"><span class="ac b">corral / pi</span><span class="mu el">~/miti-workspace/mitiplay</span></div>`;
+  if(S.view==='launch')return `<div class="row"><span class="ac b">corral / pi</span><span class="mu el">~/main-workspace/mitiplay</span></div>`;
   const inner=COLS-3;let title,chip='',chipS='',chipA='',stPlain,stHTML,row2;
   if(S.role==='worker'){
     title=(tiny()?'':'corral / ')+'T-950 · R2';chip='⚑ 3 decisions';chipS='⚑ 3';chipA='inbox';

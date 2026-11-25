@@ -82,11 +82,11 @@ It needs no runtime dependency on an agent installation.
 These values were extracted from the actual installed catalogs on
 October 15, 2026, not inferred from model names:
 
-- omp: `/home/pawis/.bun/install/global/node_modules/@oh-my-pi/pi-catalog/src/models.json`,
+- omp: `/home/owner/.bun/install/global/node_modules/@oh-my-pi/pi-catalog/src/models.json`,
   provider keys `anthropic`, `openai`, and `openai-codex`.
-  The installed `/home/pawis/.omp/agent/models.db` also contains materialized
+  The installed `/home/owner/.omp/agent/models.db` also contains materialized
   provider records in `model_cache`.
-- OmO: `/home/pawis/.omo/agent/runtime/0b0c6ca88f3a3632-f176205d0bda/node_modules/@earendil-works/pi-ai/dist/models.generated.js`.
+- OmO: `/home/owner/.omo/agent/runtime/0b0c6ca88f3a3632-f176205d0bda/node_modules/@earendil-works/pi-ai/dist/models.generated.js`.
   This registry imports `providers/{anthropic,openai,chatgpt-subscription}.models.js`,
   which read `providers/data/{anthropic,openai,chatgpt-subscription}.json`.
   Rates are in each model's `cost.{input,output,cacheRead,cacheWrite}`.
@@ -121,7 +121,7 @@ model and `serviceTier` to `priority`, but copy its base `cost` fields.
 Those fields alone do not price Fast runs correctly. The installed omp
 harness explicitly applies a **2x API priority premium to all four cost
 fields** in
-`/home/pawis/.bun/install/global/node_modules/@oh-my-pi/pi-ai/src/providers/openai-shared.ts`
+`/home/owner/.bun/install/global/node_modules/@oh-my-pi/pi-ai/src/providers/openai-shared.ts`
 (`getOpenAIResponsesServiceTierCostMultiplier` and
 `applyOpenAIResponsesServiceTierCost`). The Fast rows above include that
 premium, rather than repeating the unadjusted catalog fields.

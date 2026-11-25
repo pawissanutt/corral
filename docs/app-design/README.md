@@ -4,7 +4,7 @@ The [app connection contract](CONNECTION-CONTRACT.md) describes the implemented 
 
 The app now wires typed reads and engine operations across its current destinations, including the one chat composer. This is implementation status, not a claim that every private journey or the full gate has passed.
 
-Imported from `/home/pawis/corral-app-design/` into branch `app-daemon-integration`, based on Corral commit `6f91ec1175e1ac1edc5ff5a568dd6620e4de824b`. This is a design handoff and next-step recommendation, not an implementation task contract or authorization to run agents, change automation, or install services.
+Imported from `/home/owner/corral-app-design/` into branch `app-daemon-integration`, based on Corral commit `6f91ec1175e1ac1edc5ff5a568dd6620e4de824b`. This is a design handoff and next-step recommendation, not an implementation task contract or authorization to run agents, change automation, or install services.
 
 ## Contents and authority
 

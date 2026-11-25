@@ -100,7 +100,7 @@ window.D = (() => {
       { at: "R1 · log", who: "worker", text: "Native Alt+Up and Esc restore only pane text at 52x24 and 140x46; external identities and draft preserved." },
     ],
     thread: [
-      { who: "you", via: "app:pawis-iphone", at: "21:58", text: "Does option 1 change anything in rich mode?", illus: true },
+      { who: "you", via: "app:owner-iphone", at: "21:58", text: "Does option 1 change anything in rich mode?", illus: true },
       { who: "worker T-868", at: "21:59", text: "No. Rich mode stays read-only/count-only; neither option restores there.", illus: true },
     ],
     answeredElsewhere: { at: "22:14", where: "PM pane", via: "pm-pane", option: 0 },
@@ -215,9 +215,9 @@ window.D = (() => {
   };
 
   const DEVICES = [
-    { name: "pawis-desktop", platform: "Linux · desktop app", seen: "now", reach: "direct · loopback", self: true },
-    { name: "pawis-iphone", platform: "iOS 19 · app", seen: "14m ago", reach: "relay · e2e" },
-    { name: "pawis-laptop", platform: "Firefox · web client", seen: "2d ago", reach: "direct · tailscale" },
+    { name: "owner-desktop", platform: "Linux · desktop app", seen: "now", reach: "direct · loopback", self: true },
+    { name: "owner-iphone", platform: "iOS 19 · app", seen: "14m ago", reach: "relay · e2e" },
+    { name: "owner-laptop", platform: "Firefox · web client", seen: "2d ago", reach: "direct · tailscale" },
     { name: "terminal", platform: "corral app --tui · terminal target", seen: "5h ago", reach: "direct · loopback" },
   ];
 

@@ -1313,7 +1313,7 @@ root, a project, its `.worktrees` or each other. A violation names both paths an
 ```toml
 [storage]
 transcript_retention_days = 30
-scratch_root = "/home/me/miti-workspace/.scratch"
+scratch_root = "/home/me/main-workspace/.scratch"
 ```
 
 ## pm
@@ -1410,7 +1410,7 @@ todo = false
 ```
 
 Settings are resolved once per generation and again on explicit resume. See
-[corral-pi capabilities](corral-pi.md#capabilities) for the catalog and recovery behavior.
+[Capabilities](assistants.md#capabilities) for the catalog and recovery behavior.
 
 ### pm.cache_key (experiment, opt-in)
 

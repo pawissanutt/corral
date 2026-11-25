@@ -13,10 +13,10 @@ and [app guide](../../apps/corral-app/README.md). In particular, `assistant.summ
 is now canonical, effective at the next assistant-host start; paid-API summary profiles
 are refused without independent spending authority.
 
-Citation legend. Corral paths are relative to `/home/pawis/miti-workspace/corral` as read on 2026-11-11:
+Citation legend. Corral paths are relative to `/home/owner/main-workspace/corral` as read on 2026-11-11:
 `core/` = `crates/corral-core/src/`, `ops/` = `crates/corral-ops/src/`, `herdr/` = `crates/corral-herdr/src/`,
 `cli/` = `crates/corral/src/`, `tui/` = `crates/corral-tui/src/`, `pi/` = `packages/corral-pi/src/`,
-`redesign` = `docs/records/pm-runtime-redesign.md` (Git history), `research/` = `/home/pawis/corral-board-opus/plan-research/`
+`redesign` = `docs/records/pm-runtime-redesign.md` (Git history), `research/` = `/home/owner/corral-board-opus/plan-research/`
 (prior research, spot-checked). External: `nsh:<page>` = `https://nsh.dev/<page>.md`,
 `hc:<file>` = `https://github.com/herdrdev/herdr-core/blob/master/<file>` (both read 2026-11-11).
 `[INFERENCE]` marks anything not verified in a source. New names (crates, records, keys) are proposals.
@@ -481,7 +481,7 @@ store/key names and bounds.
 
 ```mermaid
 sequenceDiagram
-  participant P as Phone (app:pawis-phone)
+  participant P as Phone (app:owner-phone)
   participant K as Desktop (app:studio)
   participant D as corrald
   participant S as Store
@@ -493,11 +493,11 @@ sequenceDiagram
   D->>S: answer --owner --rev 2 (second)
   S-->>D: stale_revision
   D-->>P: cmd.result{a1, done, rev:3}
-  D-->>K: cmd.result{b7, conflict{current_rev:3, via:"app:pawis-phone", at}}
+  D-->>K: cmd.result{b7, conflict{current_rev:3, via:"app:owner-phone", at}}
   D-->>P: sub.delta inbox: Q2 answered
-  D-->>K: sub.delta inbox: Q2 answered by app:pawis-phone
+  D-->>K: sub.delta inbox: Q2 answered by app:owner-phone
   D->>H: bridge "questions": Q2 rev 3 answered (no model turn)
-  Note over H: pane dialog closes as "answered on pawis-phone"
+  Note over H: pane dialog closes as "answered on owner-phone"
 ```
 
 The store already gives the guarantee: every question action names the revision and a stale one is refused
@@ -741,9 +741,9 @@ agreed at pairing). No task id, title or text. The app syncs over the encrypted 
 | Share sheet | Not documented; the docs cover URL schemes only (`ACTION_VIEW`, `CFBundleURLTypes`). An iOS share extension and an Android `ACTION_SEND` filter are native targets of the host apps. | `nsh:modules/nsh` |
 | Maturity | 0.5.0, Apache-2.0, breaking changes between minor releases [INFERENCE: version from the scout's read of the repository] | |
 | Gaps found while building the mockup | No graph element: the plan graph is custom layout on `Canvas`. `DiffView` lists "review annotations" (`nsh:llms.txt`) but the element page shows no slot for threaded comment rows between hunks: spike before Phase 4. `TabBar` badges and `Sheet` detents are undocumented. Biometric or PIN confirmation and QR scanning need native shims. Hatched timeline fills likely need `Canvas`, not `Plot` [INFERENCE]. | `mockup/DESIGN.md` |
-| Toolchain (observed while scaffolding `miti-workspace/corral-app`, 2026-11-12) | NSH 0.5.0 crates refuse rustc below 1.97 (`nsh-core@0.5.0 requires rustc 1.97`); corral pins 1.94. The app therefore carries its own `rust-toolchain.toml` and cannot be built by the corral workspace's toolchain, which fits "outside `default-members`, own gate lane" (section 3) but rules out one shared `cargo` invocation. `corral-client` must keep an MSRV of 1.94 if `corrald` or the CLI ever link it. | build output, `corral-app/rust-toolchain.toml` |
+| Toolchain (observed while scaffolding `main-workspace/corral-app`, 2026-11-12) | NSH 0.5.0 crates refuse rustc below 1.97 (`nsh-core@0.5.0 requires rustc 1.97`); corral pins 1.94. The app therefore carries its own `rust-toolchain.toml` and cannot be built by the corral workspace's toolchain, which fits "outside `default-members`, own gate lane" (section 3) but rules out one shared `cargo` invocation. `corral-client` must keep an MSRV of 1.94 if `corrald` or the CLI ever link it. | build output, `corral-app/rust-toolchain.toml` |
 | Build prerequisites (observed) | Web: the `wasm32-unknown-unknown` target plus `clang` and `llvm-ar` (zstd is compiled from C). Linux window: GTK 4.14 development packages; the template links `nsh-platform-linux` into the library crate, so without them even the web and headless builds fail until the platform crates are feature-gated. Headless, terminal (in-memory) and web test runs need neither. | build output, `corral-app/Cargo.toml`, `corral-app/.cargo/config.toml` |
-| Findings from the shell build (2026-11-12) | The shell exists as `miti-workspace/corral-app` (sibling project, not yet under `apps/`). What it showed: web idiom is decided by pointer and hover media queries, not width; a font file registers as one weight, so static faces are shipped per weight; the system `TabBar` cannot be driven by the headless test driver and takes no room in phone browsers, so the phone shell also draws its own tabs; `DockAreaLayout` has no public JSON form; component builders take no test id; prelude names `color` and `Overlay` collide with app names. Full list with sources: `corral-app/docs/NSH-NOTES.md`. | observed |
+| Findings from the shell build (2026-11-12) | The shell exists as `main-workspace/corral-app` (sibling project, not yet under `apps/`). What it showed: web idiom is decided by pointer and hover media queries, not width; a font file registers as one weight, so static faces are shipped per weight; the system `TabBar` cannot be driven by the headless test driver and takes no room in phone browsers, so the phone shell also draws its own tabs; `DockAreaLayout` has no public JSON form; component builders take no test id; prelude names `color` and `Overlay` collide with app names. Full list with sources: `corral-app/docs/NSH-NOTES.md`. | observed |
 
 ### Decision: Rust-only app over a sans-IO Rust client core
 
@@ -890,7 +890,7 @@ projection of 191 open tasks is built in under a second and `corral list --view`
 `corral pm brief` takes about 13 s.
 
 Live on the owner's machine since 2026-11-12 16:20 UTC: branch `corrald` is merged to corral `main`, the unit
-`corrald@st-102a13cc075bda04.service` owns the loop, the earlier `corral-sync.service` is removed and the
+`corrald@st-0123456789abcdef.service` owns the loop, the earlier `corral-sync.service` is removed and the
 classic board runs as a viewer. Measured there: first pass after start about 70 s under host load, later
 passes about 10 s; the daemon answered `healthy · herdr-tui ok · PM live`. One defect found live and fixed:
 the board nudged on every periodic tick, which defeated the daemon's pacing (31% of a core); periodic ticks
@@ -898,7 +898,7 @@ now only read back. Not yet exercised live: PM recovery by the daemon and a rebo
 
 First app slice (2026-11-12, corral branch `corral-app`): the app moved into the corral repository as
 `apps/corral-app/` (its own Cargo workspace and toolchain, as section 3 planned; the sibling checkout
-`/home/pawis/miti-workspace/corral-app` is superseded). A native build started with `CORRAL_SOCKET` set
+`/home/owner/main-workspace/corral-app` is superseded). A native build started with `CORRAL_SOCKET` set
 (`corral daemon socket` prints the path) opens in a third data state, `DataState::Daemon`: a blocking
 session over the Unix socket (`src/client/`, on `corral-protocol`) feeds owned model data
 (`src/model/daemon.rs`), and the health strip, the Now list and the selected task's row facts are live.
@@ -1178,7 +1178,7 @@ What filing in the quick thread costs, and what bounds it:
 
 | Cost | Bound |
 |---|---|
-| Context: each filed idea adds the message, one tool call, a result of at most about 2 KiB and the reply [INFERENCE: roughly 1 to 3 thousand tokens, not measured] | The op returns candidates, never a board listing (`corral list --json` is 353 KB for 190 tasks, `/home/pawis/corral-board-opus/DESIGN.md:118`); compaction at `compact_at_tokens`; session roll (13.4) |
+| Context: each filed idea adds the message, one tool call, a result of at most about 2 KiB and the reply [INFERENCE: roughly 1 to 3 thousand tokens, not measured] | The op returns candidates, never a board listing (`corral list --json` is 353 KB for 190 tasks, `/home/owner/corral-board-opus/DESIGN.md:118`); compaction at `compact_at_tokens`; session roll (13.4) |
 | Ideas that need reading code or docs to write criteria | The contract tells the assistant to delegate to the read-only `explore` child (`subagents` is on in the standard and full presets, `docs/guide/assistants.md:171`). Children "do not inherit your conversation", have no shell, MCP or recursion, and return findings capped at 32,768 characters (`pi/extensions/subagent/index.ts:16-23`); the instruction asks for a short summary. |
 | Serialisation: one host, so a filing turn delays the next question | Messages queue as follow-ups and are answered in order; the composer never blocks; a burst of shares is processed one by one |
 | The filing itself cannot be delegated | Children have no shell and no corral ops (`pi/roles/common/execution.ts:31-35`), so the parent calls `idea_file` |

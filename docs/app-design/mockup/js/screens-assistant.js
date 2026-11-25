@@ -6,7 +6,7 @@
 //       timings, costs, PMI ids, filed ids T-899..T-905, sessions, refusal texts, paths, the shared page.
 (() => {
   const { esc, ic, mk, illus } = U;
-  const dev = () => (S.frame === "phone" ? "pawis-iphone" : "pawis-desktop");
+  const dev = () => (S.frame === "phone" ? "owner-iphone" : "owner-desktop");
   const off = () => ["offline", "down"].includes(S.health);
   const L = (label, act, extra = "") => `<a class="ln2" data-act="${act}" ${extra}>${esc(label)}</a>`;
   const task = (id) => L(id, "open-task", `data-id="${id}"`);
@@ -36,9 +36,9 @@
 
   // Ideas the assistant filed from chat (owner words verbatim; everything else written by the assistant).
   const FILED = {
-    "T-901": { at: "22:04", dev: "pawis-desktop", words: "review diffs need an inline comment box tied to the candidate SHA", title: "Review: inline comments bound to the candidate SHA", labels: ["review", "ui"], related: "T-874", criteria: ["A comment on a diff line records the candidate SHA it was written against.", "A newer candidate shows the comment as stale, not deleted.", "Comments appear in the Review screen on desktop and phone."], dup: "asked first: close to T-874; you chose to file separately (related link kept)" },
-    "T-902": { at: "22:10", dev: "pawis-iphone", words: "board: show the PM inbox count in the title bar", title: "Board: PM inbox count in the title bar", labels: ["board", "pm"], criteria: ["The title bar shows open PM inbox items as a count next to the health line.", "The count updates within one sync pass."], dup: "checked: nothing close" },
-    "T-903": { at: "22:11", dev: "pawis-desktop", words: "we should cache gate receipts so a base move doesn't force a full re-gate", title: "Gate: reuse receipts for unchanged crates after a base move", labels: ["gate", "performance"], criteria: ["A re-gate after a base move that touches no crate in the candidate's write scope reuses the earlier receipts and records why.", "A base move that touches any crate in scope runs the full tier.", "The new gate receipt names every reused receipt id."], dup: "checked: T-852 shares the trigger, not the fix" },
+    "T-901": { at: "22:04", dev: "owner-desktop", words: "review diffs need an inline comment box tied to the candidate SHA", title: "Review: inline comments bound to the candidate SHA", labels: ["review", "ui"], related: "T-874", criteria: ["A comment on a diff line records the candidate SHA it was written against.", "A newer candidate shows the comment as stale, not deleted.", "Comments appear in the Review screen on desktop and phone."], dup: "asked first: close to T-874; you chose to file separately (related link kept)" },
+    "T-902": { at: "22:10", dev: "owner-iphone", words: "board: show the PM inbox count in the title bar", title: "Board: PM inbox count in the title bar", labels: ["board", "pm"], criteria: ["The title bar shows open PM inbox items as a count next to the health line.", "The count updates within one sync pass."], dup: "checked: nothing close" },
+    "T-903": { at: "22:11", dev: "owner-desktop", words: "we should cache gate receipts so a base move doesn't force a full re-gate", title: "Gate: reuse receipts for unchanged crates after a base move", labels: ["gate", "performance"], criteria: ["A re-gate after a base move that touches no crate in the candidate's write scope reuses the earlier receipts and records why.", "A base move that touches any crate in scope runs the full tier.", "The new gate receipt names every reused receipt id."], dup: "checked: T-852 shares the trigger, not the fix" },
   };
   // [id, title, when, source session]. One row comes from a pane session (corral pi) to show the source.
   const FILED_LIST = [["T-903", FILED["T-903"].title, "22:11", "A-7 · quick thread"], ["T-902", FILED["T-902"].title, "22:10", "A-7 · quick thread"], ["T-874", "merged · comment on Pi review annotations", "22:04", "A-7 · quick thread"], ["T-899", "PM read view lists assistant inbox items", "yesterday", "A-17 · pane w9A:p1 (corral pi)"]];
@@ -60,7 +60,7 @@
     const clsTxt = cls === "run" ? "runs on your instruction" : cls === "off" ? "this device may ask and file only" : cls === "late" ? "late · cannot instruct" : "confirm on this device";
     const why = opt.why ? `<span class="dim">${esc(opt.why)}</span>` : "";
     const rc = outcome === "waiting" ? `<div class="rcpt wait"><span class="stamp void">WAITING ON YOU</span><span>Nothing runs until you confirm here; Decline records a <b>declined</b> receipt.</span><span class="acts"><button class="btn" data-act="confirm" data-kind="${opt.kind}">Confirm on this device</button><button class="btn ghost" data-act="toast" data-msg="Declined · receipt recorded · nothing changed">Decline</button></span></div>`
-      : outcome === "off" ? `<div class="rcpt"><span>Nothing ran. <span class="mono">pawis-laptop</span> is a web client: it may ask and file, not instruct. Say it from the desktop, phone or terminal, or turn instructing on for it in Settings › Devices.</span></div>`
+      : outcome === "off" ? `<div class="rcpt"><span>Nothing ran. <span class="mono">owner-laptop</span> is a web client: it may ask and file, not instruct. Say it from the desktop, phone or terminal, or turn instructing on for it in Settings › Devices.</span></div>`
       : outcome === "late" ? `<div class="rcpt"><span>Nothing ran. You typed this at ${opt.typed}; it reached corrald at ${opt.delivered}, more than 15 min later, so it cannot instruct. Say it again to act.</span></div>`
       : `<div class="rcpt ${outcome}"><span class="stamp ${outcome === "executed" ? "" : outcome === "refused" ? "bad" : "void"}">${outcome.toUpperCase()}</span><span class="mono">${esc(opt.excerpt || "")}</span></div>`;
     return `<div class="actcard"><div class="ah"><span class="dim">Owner action</span><span class="chip ${cls === "confirm" ? "you" : ""}">${clsTxt}</span>${why}<span class="mono dim" style="margin-left:auto">cites ${input}</span></div>
@@ -79,9 +79,9 @@
       <div class="dim" style="font-size:11.5px">added by assistant A-7 from your message · nothing new filed</div></div>`;
   const promptTimer = `<div class="dim" style="font-size:11.5px;margin-top:6px">The tool waited 120 s, then deferred; this prompt stays answerable here and in Inbox until 22:05 tomorrow. One answer wins.</div>`;
   const perm = () => `<div class="permcard"><div class="hd"><span class="dot c-you"></span><b>assistant wants to write</b> · edit · 22:05 <span class="chip you" style="margin-left:auto">waiting on you</span></div>
-    <div class="mono" style="font-size:12px;margin:4px 0">~/miti-workspace/notes/corral-log.md · replacement 1 · +6 lines</div>
+    <div class="mono" style="font-size:12px;margin:4px 0">~/main-workspace/notes/corral-log.md · replacement 1 · +6 lines</div>
     <div class="diff" style="font-size:11px;margin:6px 0"><div class="ln add"><span></span><span>41</span><span class="s">+</span><span class="code">## 2026-11-07 night</span></div><div class="ln add"><span></span><span>42</span><span class="s">+</span><span class="code">- T-867 stale on 5949a4b (base moved), re-gate queued</span></div><div class="ln add"><span></span><span>43</span><span class="s">+</span><span class="code">- T-870 waits on T-868/R1/Q1</span></div></div>
-    <div class="permbtns"><button class="btn" data-act="toast" data-msg="Allowed once · permission input recorded">Allow once</button><button class="btn ghost" data-act="toast" data-msg="${S.frame === "phone" ? "Face ID confirmed · allowed" : "Allowed"} for 1 hour on ~/miti-workspace/notes">Allow for 1 hour</button><button class="btn ghost" data-act="toast" data-msg="${S.frame === "phone" ? "Face ID confirmed · allowed" : "Allowed"} for this session on ~/miti-workspace/notes">Allow for this session</button><button class="btn danger" data-act="toast" data-msg="Denied · recorded · not asked again this turn">Deny</button></div>
+    <div class="permbtns"><button class="btn" data-act="toast" data-msg="Allowed once · permission input recorded">Allow once</button><button class="btn ghost" data-act="toast" data-msg="${S.frame === "phone" ? "Face ID confirmed · allowed" : "Allowed"} for 1 hour on ~/main-workspace/notes">Allow for 1 hour</button><button class="btn ghost" data-act="toast" data-msg="${S.frame === "phone" ? "Face ID confirmed · allowed" : "Allowed"} for this session on ~/main-workspace/notes">Allow for this session</button><button class="btn danger" data-act="toast" data-msg="Denied · recorded · not asked again this turn">Deny</button></div>
     <div class="dim" style="font-size:11.5px;margin-top:4px">On a phone, the two standing grants ask for Face ID or PIN first; Allow once and Deny do not.</div>
     <div class="illus" style="margin-top:4px">path and preview illustrative</div></div>`;
 
@@ -133,26 +133,26 @@
     const q = S.lastQ || BOTH_Q;
     return `<div class="tx qthread">
       <div class="sumrow">${mk("na")} earlier conversation summarized · A-6 → A-7 · 14 messages, 3 filed, 2 owner actions <a class="ln2" data-act="toast" data-msg="A-6 transcript opened (read-only)">A-6 transcript</a></div>
-      ${me("21:31", "pawis-desktop", "queue T-873")}
+      ${me("21:31", "owner-desktop", "queue T-873")}
       ${asst("21:31", actCard("corral queue add T-873", "run", "A-7/g2/i14", "executed", { excerpt: "T-873 annotation-pi-host-api queued · after T-871" }))}
-      ${pm("21:44", "pawis-iphone", "Hold T-852's re-gate until the external op finishes.", "PM replied", "PMI-118", ["21:46", "Already held (held · external op). I re-gate when the op ends and tell you if it fails again."])}
-      ${me("21:47", "pawis-iphone", "why is T-852 held? park it till the op is done", "late · cannot instruct", " · typed 21:20 offline")}
+      ${pm("21:44", "owner-iphone", "Hold T-852's re-gate until the external op finishes.", "PM replied", "PMI-118", ["21:46", "Already held (held · external op). I re-gate when the op ends and tell you if it fails again."])}
+      ${me("21:47", "owner-iphone", "why is T-852 held? park it till the op is done", "late · cannot instruct", " · typed 21:20 offline")}
       ${asst("21:47", `<p>${task("T-852")} is <b>held · external op</b>: the op started 19:28 and Corral re-gates when it ends. It has spent $43 over 2 rounds.</p>` + actCard("corral attention park T-852", "late", "A-7/g2/i15", "late", { typed: "21:20", delivered: "21:47" }))}
-      ${pm("21:50", "pawis-desktop", "After T-890 lands, admit T-891 before T-895.", "delivered", "PMI-119")}
-      ${me("21:52", "pawis-laptop", "queue T-872")}
+      ${pm("21:50", "owner-desktop", "After T-890 lands, admit T-891 before T-895.", "delivered", "PMI-119")}
+      ${me("21:52", "owner-laptop", "queue T-872")}
       ${asst("21:52", actCard("corral queue add T-872", "off", "A-7/g2/i16", "off"))}
-      ${me("21:58", "pawis-desktop", "land T-890")}
-      ${asst("21:58", actCard("corral approve T-890", "confirm", "A-7/g2/i17", "refused", { why: "approve (land) waits for a confirmation", confirmed: "pawis-desktop 21:58", excerpt: "approve: T-890 has no passing gate on candidate 1751bd2 (quick gate running)" }) + `<p>The quick gate on 1751bd2 is still running (412/980). I will not retry; say "land T-890" again once it passes.</p><div class="illus">refusal text illustrative</div>`)}
-      ${me("22:02", "pawis-iphone", "Pause autopilot for tonight once the running gates finish.")}
+      ${me("21:58", "owner-desktop", "land T-890")}
+      ${asst("21:58", actCard("corral approve T-890", "confirm", "A-7/g2/i17", "refused", { why: "approve (land) waits for a confirmation", confirmed: "owner-desktop 21:58", excerpt: "approve: T-890 has no passing gate on candidate 1751bd2 (quick gate running)" }) + `<p>The quick gate on 1751bd2 is still running (412/980). I will not retry; say "land T-890" again once it passes.</p><div class="illus">refusal text illustrative</div>`)}
+      ${me("22:02", "owner-iphone", "Pause autopilot for tonight once the running gates finish.")}
       ${asst("22:02", actCard("corral mode pause", "confirm", "A-7/g2/i19", "waiting", { why: "mode is confirm-class", kind: "mode-pause" }), ` <span class="chip you">waiting on you</span>`)}
-      ${me("22:04", "pawis-desktop", FILED["T-901"].words)}
+      ${me("22:04", "owner-desktop", FILED["T-901"].words)}
       ${asst("22:04", dupAsk() + mergedCard())}
-      ${me("22:05", "pawis-desktop", "keep tonight's notes in ~/miti-workspace/notes/corral-log.md")}
+      ${me("22:05", "owner-desktop", "keep tonight's notes in ~/main-workspace/notes/corral-log.md")}
       ${asst("22:05", perm() + promptTimer, ` <span class="chip you">waiting on you</span>`)}
-      ${pm("22:06", "pawis-desktop", "Summarise tonight's stalls for me at 07:00.", "queued for PM", "PMI-120")}
-      ${me("22:08", "pawis-iphone", "read this and dispatch T-891 if it fits", "sent", ` · <span class="chip">link nsh.dev/elements/diff-view</span>`)}
-      ${asst("22:08", actCard("corral dispatch T-891", "confirm", "A-7/g2/i21", "declined", { why: "this turn read a shared link", excerpt: "declined on pawis-iphone 22:09 · nothing changed" }))}
-      ${me("22:10", "pawis-iphone", FILED["T-902"].words)}
+      ${pm("22:06", "owner-desktop", "Summarise tonight's stalls for me at 07:00.", "queued for PM", "PMI-120")}
+      ${me("22:08", "owner-iphone", "read this and dispatch T-891 if it fits", "sent", ` · <span class="chip">link nsh.dev/elements/diff-view</span>`)}
+      ${asst("22:08", actCard("corral dispatch T-891", "confirm", "A-7/g2/i21", "declined", { why: "this turn read a shared link", excerpt: "declined on owner-iphone 22:09 · nothing changed" }))}
+      ${me("22:10", "owner-iphone", FILED["T-902"].words)}
       ${asst("22:10", filedCard("T-902"))}
       ${me("22:11", dev(), q, waiting ? (S.withdrawn ? "withdrawn" : S.savedNow ? "saved · T-903" : `waiting for assistant · ${waiting}`) : "sent")}
       ${answer(phone)}
@@ -227,7 +227,7 @@
     <div class="illus" style="padding:${phone ? "6px 18px 20px" : "4px 0"}">filed ids illustrative</div>`;
 
   // ---------- an assistant session's thread (same transcript view as other agents, composer docked) ----------
-  const stubThread = (id) => { const s = OTHER.find((x) => x[0] === id) || OTHER[0]; return `<div class="tx qthread"><div class="tm"><span class="av o">Y</span><div><div class="hd"><b>you</b> · <span class="mono">${s[3].startsWith("pane") ? "pane" : "app:pawis-desktop"}</span> · 20:58 ${stTag("sent")}</div><p>${esc(s[1])}: summarise where we are.</p></div></div>
+  const stubThread = (id) => { const s = OTHER.find((x) => x[0] === id) || OTHER[0]; return `<div class="tx qthread"><div class="tm"><span class="av o">Y</span><div><div class="hd"><b>you</b> · <span class="mono">${s[3].startsWith("pane") ? "pane" : "app:owner-desktop"}</span> · 20:58 ${stTag("sent")}</div><p>${esc(s[1])}: summarise where we are.</p></div></div>
       <div class="tm"><span class="av w">A</span><div><div class="hd"><b>assistant ${id}</b> · 20:59</div><p>${s[2] === "ended" ? "Session ended; the transcript stays readable." : "Working through it; I'll post what I find here."}</p><div class="illus">transcript illustrative</div></div></div></div>`; };
   const sessFacts = (id) => { const s = id === "A-7" ? ["A-7", "Quick thread", "live", "runs: daemon", "—", 1.12, 0] : OTHER.find((x) => x[0] === id) || OTHER[0];
     return `<div class="h3" style="margin-top:0">Session</div><dl class="kv"><dt>Id</dt><dd class="mono">${s[0]}</dd><dt>State</dt><dd>${id === "A-7" ? "live · since 14:02" : sessState(s[2], s[0])}</dd><dt>Where</dt><dd>${esc(s[3])}</dd><dt>Profile</dt><dd>${id === "A-7" || s[3] === "runs: daemon" ? `${esc(model())} <span class="dim">· switch in the composer</span>` : "pi-sol xhigh"}</dd><dt>Cost</dt><dd>$${s[5].toFixed(2)} today</dd><dt>Scratch</dt><dd>${s[6]}</dd></dl>
@@ -260,7 +260,7 @@
     const val = hk === "typing" ? "why is T-867 sta" : hk === "filed" ? "board: show the PM inbox count in the title bar" : "why is T-867 stale? we should cache gate receipts so this stops happening";
     const result = hk === "typing" ? "" : `<div class="hkres col"><div class="dim" style="font-size:11.5px">assistant A-7 · ${hk === "filed" ? "filed" : "answered and filed"} · this ask $0.02</div>${hk === "filed" ? `<div class="hkfiled"><span class="chip ok">filed · T-902</span><span class="ftitle">Board: PM inbox count in the title bar</span><span class="dim">your words kept as written · duplicates checked: nothing close</span></div>` : ans + filed}<div class="crow"><span class="dim">Reply continues the quick thread</span><span class="grow"></span><button class="btn quiet" data-act="hk-open">Open in Corral</button></div></div>`;
     return `<div class="hkdesk win10 ${S.theme === "light" ? "lt" : ""}" role="application" aria-label="Windows desktop with the Corral Ask window">
-      <div class="wsterm"><div class="wstabs"><span class="wstab on">pawis@workstation: ~/miti-workspace/corral</span><span class="wstab">+</span><span class="grow"></span><span>–</span><span>□</span><span>✕</span></div><div class="bigterm" style="font-size:12px;padding:12px 14px">$ corral ask "why is T-867 stale?"
+      <div class="wsterm"><div class="wstabs"><span class="wstab on">owner@workstation: ~/main-workspace/corral</span><span class="wstab">+</span><span class="grow"></span><span>–</span><span>□</span><span>✕</span></div><div class="bigterm" style="font-size:12px;padding:12px 14px">$ corral ask "why is T-867 stale?"
 <span class="w8">quick thread A-7 · assistant · answering</span>
 T-867 is stale because the base moved: its gate ran on
 candidate 5949a4b, then main moved at 22:05, so that verdict
@@ -304,7 +304,7 @@ $ <span class="cur"></span></div></div>
         ${status}
         ${delivered ? "" : `<div class="attcard">${ic("review")}<span><b>DiffView · Native Shell</b><span class="dim mono" style="display:block;font-size:12px">https://nsh.dev/elements/diff-view</span></span><button aria-label="Remove attachment">${ic("close")}</button></div>`}
         ${outbox || delivered ? "" : `<textarea id="ask-input" data-bind="ask" rows="3" placeholder="Add a caption (optional)" style="width:100%;margin-top:10px"></textarea>
-        <div class="dim" style="font-size:12.5px">Lands in the quick thread · with no caption the assistant files it · <span class="mono">via=app:pawis-iphone</span></div>`}
+        <div class="dim" style="font-size:12.5px">Lands in the quick thread · with no caption the assistant files it · <span class="mono">via=app:owner-iphone</span></div>`}
       </div>${outbox || delivered ? "" : keyboard()}</div>`;
   }
 
@@ -360,7 +360,7 @@ $ <span class="cur"></span></div></div>
     },
     // Inbox: the assistant's pending prompts count in Needs you.
     inboxItems: () => [
-      { k: "perm", lead: "Assistant A-7 asks", id: "write permission", title: "Write ~/miti-workspace/notes/corral-log.md (+6 lines)?", meta: "Allow once · 1 hour · session · Deny", age: "7m" },
+      { k: "perm", lead: "Assistant A-7 asks", id: "write permission", title: "Write ~/main-workspace/notes/corral-log.md (+6 lines)?", meta: "Allow once · 1 hour · session · Deny", age: "7m" },
       { k: "conf", lead: "Assistant A-7 waits", id: "corral mode pause", title: "Confirm on this device: pause autopilot for tonight", meta: "confirm on this device · mode", age: "10m" },
     ],
     inboxPane: (k) => `<div class="qhead"><div class="meta"><span class="chip you">needs you</span><span>from the quick thread · A-7 · you were not in the thread</span></div><h1>${k === "perm" ? "Assistant wants to write a file" : "Confirm corral mode pause"}</h1></div>

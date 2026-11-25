@@ -667,9 +667,9 @@ the board lock, including recovery of an interrupted automatic launch.
 An eligible Idea has a nonempty Acceptance or Acceptance criteria section, size at most M
 (or unset), no effective plan requirement, no `owner-only` label, and completed dependencies.
 Set labels at creation with `corral new "Owner scope" --idea --label owner-only`.
-Declared write scopes and T-064's historical likely-file inference predict overlap with active
-tasks in the same project. Conflicting Ideas are excluded. When paths cannot be inferred,
-the shortlist explicitly says the overlap check was skipped. Ranking uses priority, age,
+Declared write scopes determine overlap with active tasks in the same project.
+Conflicting Ideas are excluded. The shortlist reports a skipped check when the Idea has
+no declared write scope, or an incomplete check when an active task lacks a scope. Ranking uses priority, age,
 low conflict risk, and task ID for a stable tie break; eligibility is recalculated after each
 new run.
 
@@ -685,8 +685,7 @@ shows the effective settings, daily count, and recent decision inputs even while
 policy is paused or in Assist. The daemon (or board/plugin hooks without one) provides periodic evaluation; no PM model
 is needed to keep the policy running. `queue pause` stops automatic admission too.
 
-T-099 owns this dispatch/promotion policy. T-019's remaining scope is daily digests and reversible
-revert commits; it must not implement a second scheduler.
+Daily digests and reversible revert commits do not schedule dispatch or promotion.
 
 ## The watchdog: stuck commands
 
@@ -784,7 +783,7 @@ A replayed receipt prompts nothing, and a failed delivery keeps the receipt and 
 Receipt delivery uncertainty survives terminal activity and restart; corral never resends a
 command or launches another worker because a wait completed. Receipts are immutable.
 Unknown delivery requires inspection and, if necessary, an explicit owner reply rather than an
-automatic resend. All declarations leave the T-033 watchdog and its confirmed, identity-checked
+automatic resend. All declarations leave the watchdog and its confirmed, identity-checked
 recovery path intact: a wait is never permission to suppress a stuck diagnostic or kill a process.
 
 ### Parked runs and red-main fixes

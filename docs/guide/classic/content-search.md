@@ -13,7 +13,7 @@ corral artifact show T-070:R1:01234567-test.log --lines 20-35
 corral search --reindex
 ```
 
-Without content flags, search retains T-047's task-result format and includes cached artifact
+Without content flags, search uses the task-result format and includes cached artifact
 and review text in the board search snapshot. The artifact finder uses the same artifact
 content cache, including compressed bodies, and streams overflow content when needed; its
 task restriction, literal text, kind/tier filters, raw fold and sort controls still apply.
@@ -26,7 +26,7 @@ can be passed directly to `artifact show`. Line numbers are one-based and relati
 document, not rendered Markdown. A title-only hit starts at line 1.
 
 Content queries AND case-insensitive text terms and quoted phrases; a leading `-` excludes a term.
-The shared T-047 parser handles task metadata and `test:`, `error:`, `verdict:`. These last fields
+The shared query parser handles task metadata and `test:`, `error:`, `verdict:`. These last fields
 match classified source lines, not arbitrary mentions on unrelated lines. Classification and
 matching excerpts remain line-wide even when a marker and term occur in different streaming
 chunks; the marker may come before or after the term. Content `kind:`, `since:`

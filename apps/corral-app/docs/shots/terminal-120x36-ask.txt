@@ -32,5 +32,5 @@
 │                              ││   contracts                              ││                                          │
 │                              ││ ✓ Shared bounded projection + CLI/native ││ Screenshot  Link  File             Send  │
 │                              ││   adapters                               ││                                          │
-╰─ This device pawis-desktop ──╯╰───────────────────────────────────────────┴──────────────────────────────────────────╯
+╰─ This device owner-desktop ──╯╰───────────────────────────────────────────┴──────────────────────────────────────────╯
   j k  move  Enter  open  Tab  tab │  i  Inbox  n  Now  .   p   a  Agents  r   t   u   ,  Settings │  /  Ask  ^K  Go to

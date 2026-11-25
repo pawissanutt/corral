@@ -39,8 +39,7 @@ corral-pi also has a separate six-skill pack (`frontend`, `visual-qa`, `programm
 `debugging`, `git-master`, `simplify-and-cleanup`), installed with
 `corral skill install --harness corral-pi` or `corral agent install` into
 `~/.corral/skills/corral-pi`. This harness target installs the pack, not extra role-skill copies. It stays outside OmO's discovery roots; do not put these copies in
-shared directories. See [corral-pi skills](../corral-pi.md#curated-corral-pi-skill-pack) for loading,
-opt-outs and extensions. The same managed-file refresh rules apply.
+shared directories. The same managed-file refresh rules apply.
 
 ## Versions and refresh
 

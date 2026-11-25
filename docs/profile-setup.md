@@ -84,7 +84,7 @@ Its approved providers and metered candidate cost must satisfy that policy. The 
 list must contain exactly one approved same-vendor API candidate after the subscription
 source; its connection and model are explicit. The template's `fallback: null` does not
 enable this behavior. Setup itself grants no spending authority, and credentials are not
-approval. See [paid continuation](guide/corral-pi.md#paid-continuation-after-subscription-quota)
+approval. See [paid continuation](guide/corral-pi.md#quota-fallback-and-api-usage)
 for triggers, pauses and rollback.
 
 <!-- Byte-equal to `corral setup template`; a test enforces it. -->

@@ -1117,13 +1117,13 @@ function shell(view){
   const nav = (k, label, key, extra="") => `<a class="nav${top===k?" on":""}" href="#${k}">${ic(k)}<span class="lbl">${label}</span>${extra}<kbd>${key}</kbd></a>`;
   const scope = S.scope==="all" ? "All projects" : S.scope;
   const d = new Date();
-  return `<header class="titlebar"><button class="tfold" data-a="fold" aria-label="Fold the sidebar" title="Fold the sidebar (Ctrl B)">${ic("panel")}</button><span class="brand">${mark("ready")}<span>Corral</span></span><button class="tscope" data-a="scope">${ic("folder")}${h(scope)}</button><span class="path">~/miti-workspace</span><span class="hl"><i></i>healthy</span><span class="sp"></span>
+  return `<header class="titlebar"><button class="tfold" data-a="fold" aria-label="Fold the sidebar" title="Fold the sidebar (Ctrl B)">${ic("panel")}</button><span class="brand">${mark("ready")}<span>Corral</span></span><button class="tscope" data-a="scope">${ic("folder")}${h(scope)}</button><span class="path">~/main-workspace</span><span class="hl"><i></i>healthy</span><span class="sp"></span>
       <span class="when">${d.toDateString().slice(0,10)} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}</span><span class="sample">sample</span><a class="tgear" href="#settings" aria-label="Settings">${ic("gear")}</a></header>
     <nav class="side"><button class="scope" data-a="scope">${ic("folder")}<span class="lbl">${h(scope)}<small>${S.scope==="all"?Object.keys(PROJECTS).length+" projects":"project in scope"}</small></span>${ic("down")}</button>
       ${nav("home","Home","h",needs?`<span class="cnt">${needs}</span>`:"")}${nav("tasks","Tasks","t")}${nav("sessions","Sessions","s")}${nav("activity","Activity","a")}
       ${top==="activity" ? ASUB.map(a => `<a class="nav sub${(r.rest[0]||"feed")===a[0]?" on":""}" href="#activity/${a[0]}">${a[1]}</a>`).join("") : ""}
       <span class="sp"></span><button class="nav" data-a="pal">${ic("search")}<span class="lbl">Go to…</span><kbd>^K</kbd></button><a class="nav${top==="settings"?" on":""}" href="#settings">${ic("gear")}<span class="lbl">Settings</span><kbd>,</kbd></a>
-      <div class="dev">pawis-desktop · paired</div></nav>
+      <div class="dev">owner-desktop · paired</div></nav>
     <main id="view">${view}</main>
     <nav class="tabbar">${[["home","Home"],["tasks","Tasks"],["sessions","Sessions"],["activity","Activity"]].map(t => `<a class="${top===t[0]?"on":""}" href="#${t[0]}">${ic(t[0])}${t[1]}${t[0]==="home"&&needs?`<span class="cnt">${needs}</span>`:""}</a>`).join("")}</nav>`;
 }

@@ -3,7 +3,7 @@
 > **Classic CLI.** This guide documents the classic `corral` CLI and board (v0.4.0), which `install.sh --legacy`
 > installs. The current engine is `corral-next` with the Corral app: see the [guide index](../README.md).
 
-A corral-pi worker or reviewer (plan T-252) never waits on screen text for an answer. It asks
+A corral-pi worker or reviewer never waits on screen text for an answer. It asks
 through `corral agent call --op ask`, and corral stores the question on the asking run or review
 child. The PM triages it by key and revision, and the owner decides anything the PM may not.
 OmO runs keep their native question handling; this page covers corral-pi runs only.

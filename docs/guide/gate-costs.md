@@ -33,15 +33,14 @@ must remove its own one-line entry when its fix lands.
 Plan verification keeps every suite and both optional lanes. Missing/older context is also
 conservative. `gate_lanes.py` maps the slow catalog to owning paths; unmapped catalog entries
 run, never silently disappear. Its Bun catalog `PI_SLOW` lists each slow Pi test with its reason
-(currently `a cancelled call stops its browser and removes its profile`, "T-768: load-sensitive
+(currently `a cancelled call stops its browser and removes its profile`, "load-sensitive
 live browser cancellation") and `PI_SLOW_OWNERS` (the browser extension, its test file, and the `exits.ts` and `wait.ts` test
 support files it waits through). The
 Pi lane passes `CORRAL_PI_SLOW` (0 in quick; in full, 1 only when an owner changed; 1 in plan
 verify), and a catalog test skips when it is 0. Shared dependency/store/Git/herdr changes restore all torture
 coverage. Quick's explicit declared tests can opt into slow tests.
 
-**Owner's relaxed T-761 scope:** every time threshold is report-only. Enforcement belongs
-to **T-776**, not this candidate. The per-test10s reference, quick180s/full600s runtime
+Every time threshold is report-only. The per-test10s reference, quick180s/full600s runtime
 references, quiet-load accounting and added-suite30s reference print observations and
 never replace a command's exit status. Assertions, compilation, lint and actual command
 failures still fail normally; there are no retries-to-green.
@@ -62,7 +61,7 @@ After each nextest run, `gate_case.py` reads its JUnit report and records per-te
 observations and candidate body/attribute changes against the integration base; no wrapper
 process runs per test. Load/core comes from the once-per-second samples the test phase
 records. The log and `.evidence/<attempt>-existing-test-costs.md` retain the
-T-766 gardening input; attach that report without changing the committed candidate. Native
+timing data for test maintenance; attach that report without changing the committed candidate. Native
 nextest reports at10s; documented integrations retain their pre-existing30s report-only
 guards, with reasons. These are not additional full-tier exclusions.
 
@@ -157,14 +156,13 @@ them for builds/tests; real builds still require the platform's native toolchain
 
 The PM installs a cron entry **after landing**, choosing the monitoring task and host paths.
 No worker should install a crontab or run an unauthorized slow tier to validate this setup.
-Example for this host (03:15 local time):
+Example cron entry (03:15 local time):
 
 ```cron
-15 3 * * * cd /home/pawis/miti-workspace/corral && mkdir -p .evidence && nice -n 19 ionice -c 3 /usr/bin/python3 scripts/slow_lane.py --root /home/pawis/miti-workspace --corral /home/pawis/.cargo/bin/corral --report-task T-761 >>.evidence/slow-cron.log 2>&1
+15 3 * * * cd /home/owner/main-workspace/corral && mkdir -p .evidence && nice -n 19 ionice -c 3 /usr/bin/python3 scripts/slow_lane.py --root /home/owner/main-workspace --corral /home/owner/.cargo/bin/corral --report-task T-761 >>.evidence/slow-cron.log 2>&1
 ```
 
 No GitHub schedule is installed. An owning-module full-gate failure already returns to its
 candidate task/worker with the receipt; the nightly lane additionally files deduplicated
 root-cause tasks for any slow failures it observes. No retries-to-green in either path.
-Mutation sampling and monthly gardening/flake triage are separate follow-up work, not extra
-per-gate checks.
+Mutation sampling and monthly test maintenance and flake triage are not per-gate checks.

@@ -4,33 +4,33 @@ In plan mode the agent does not implement. It reads the code, asks you about the
 only you can decide, and writes a plan. You review the plan and choose how it runs, or send
 it back with feedback.
 
-Plan mode is available in Build sessions and in chat. Task workers use
-[plan runs](classic/plans.md) instead.
+Plan mode is available in Build, Code and chat sessions.
 
 ## Start planning
 
 | Where | How |
 |---|---|
 | Terminal | `/plan`, or `/plan <request>` to enter and send the request in one step |
-| Launch | `corral-pi build --plan` or `corral-pi chat --plan` |
+| Launch | `corral-pi build --plan`, `corral-pi code --plan` or `corral-pi chat --plan` |
 | App | **Enter plan mode** in the session's actions, or type `/plan` |
 
 The composer title shows `PLAN` while the agent is planning and `PLAN · review` while a
 submitted plan is waiting for you. `/plan` again leaves plan mode during planning; `/plan off`
 leaves from any phase. You cannot enter or leave while a turn is running: stop the turn first.
 
-`/todo` still shows the session's task list. `/plan` no longer does.
+Use `/todo` to show the session's task list.
 
 ## While the agent plans
 
-- The host refuses `edit` and `write` everywhere except the plan file, and refuses to start
-  children that write. `explore` and `review` children still run.
+- The host refuses `edit` and `write` everywhere except the plan file, which also becomes
+  read-only while awaiting review. Plan mode refuses `corral_artifact` and limits new `task`
+  children to the `explore` and `review` kinds.
 - Shell commands are not blocked by plan mode. The agent is told to run only read-only
   commands; your `bash_rules` apply as usual. Plan mode is not a sandbox.
 - The agent asks its questions through the normal question dialog. Each one should offer a
   recommended option.
-- The plan is one Markdown file in the session's own directory, outside the worktree. It is
-  never part of your branch.
+- Write the draft to `plan.md` in the session's state directory, not to the branch. The
+  `plan_submit` tool accepts a nonempty draft of up to 256 KiB.
 
 ## Review the plan
 

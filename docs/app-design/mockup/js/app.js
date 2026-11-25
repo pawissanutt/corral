@@ -46,7 +46,7 @@ function deskShell(inner) {
   return `<div class="win ${["down", "offline"].includes(S.health) ? "is-stale" : ""}" role="application" aria-label="Corral desktop">
     <div class="titlebar">
       <span class="app"><svg class="ic brand" aria-hidden="true"><use href="#i-brand"/></svg>Corral</span>
-      <span class="ws">~/miti-workspace/corral</span>
+      <span class="ws">~/main-workspace/corral</span>
       ${U.healthDesk(S)}
       <span class="tb-right">
         <button class="reach" data-act="goto" data-to="settings" data-sub="connection" title="Reach path">${S.health === "relay" ? U.ic("lock") : ""}${U.esc(h.reach)}</button>
@@ -62,7 +62,7 @@ function deskShell(inner) {
         <button class="palette-hint" data-act="palette">${U.ic("search")}<span>Go to, answer, open…</span><span class="kbd">Ctrl K</span></button>
         ${nav}
         <div class="grow"></div>
-        <div class="foot"><span>This device <b>pawis-desktop</b></span><span>Actions sign as <span class="mono">via=app:pawis-desktop</span></span></div>
+        <div class="foot"><span>This device <b>owner-desktop</b></span><span>Actions sign as <span class="mono">via=app:owner-desktop</span></span></div>
       </nav>
       <main class="main">${inner}</main>
     </div>
@@ -113,7 +113,7 @@ const RISK = {
 };
 function confirmDialog(phone) {
   const c = RISK[S.confirm.kind], who = S.confirm.n ? ` ${U.esc(S.confirm.n)}` : "";
-  const via = phone ? "pawis-iphone" : "pawis-desktop";
+  const via = phone ? "owner-iphone" : "owner-desktop";
   const preview = `<div class="h3" style="margin-top:4px">Exact effect</div><ul class="steps">${c.effect.map((e) => `<li>${U.mk("na")}<span>${U.esc(e)}</span></li>`).join("")}</ul><div class="mono dim" style="font-size:11.5px">${U.esc(c.cmd)}${who} · actor=owner · via=app:${via} · challenge expires in 60 s</div>`;
   if (phone) return `<div class="psheet-scrim" data-act="confirm-no"></div><div class="psheet" role="dialog" aria-label="${U.esc(c.title)}"><div class="grab"></div><div class="sh-h">${U.esc(c.title)}${who}</div><div class="sh-b">${preview}
     <div style="display:grid;justify-items:center;gap:8px;margin:18px 0 6px"><div style="width:64px;height:64px;border-radius:16px;box-shadow:inset 0 0 0 2px var(--ink-2);display:grid;place-items:center">${U.ic("lock")}</div><span class="dim" style="font-size:14px">Confirm with Face ID, or enter your PIN</span></div>
@@ -275,7 +275,7 @@ Object.assign(window.ACTIONS, {
     S.confirm = { kind: d.kind, n: d.n }; render();
   },
   "confirm-no": () => { S.confirm = null; render(); },
-  "confirm-yes": () => { const c = RISK[S.confirm.kind], n = S.confirm.n; S.confirm = null; toast(`${U.esc(c.ok)}${n ? " · " + U.esc(n) : ""} · actor=owner via=app:${S.frame === "phone" ? "pawis-iphone" : "pawis-desktop"}`); },
+  "confirm-yes": () => { const c = RISK[S.confirm.kind], n = S.confirm.n; S.confirm = null; toast(`${U.esc(c.ok)}${n ? " · " + U.esc(n) : ""} · actor=owner via=app:${S.frame === "phone" ? "owner-iphone" : "owner-desktop"}`); },
 });
 
 const KEYMAP = { i: "inbox", n: "now", ".": "changes", p: "plans", a: "agents", r: "review", t: "timeline", u: "usage", ",": "settings" };
@@ -359,7 +359,7 @@ document.getElementById("sb-share").addEventListener("click", () => { S.frame = 
     else if (p.startsWith("edit=")) S.edit = p.slice(5);
     else if (p === "savednow") S.savedNow = true;
     else if (p === "withdrawn") S.withdrawn = true;
-    else if (p.startsWith("sent=")) { const k = p.slice(5); S.sent = [{ text: k === "queuedpm" ? "hold T-894 if its gate fails twice" : "remind me to look at T-852's op log first thing tomorrow", dev: S.frame === "phone" ? "pawis-iphone" : "pawis-desktop", pm: k === "queuedpm", state: { queued: "queued on this device", queuedpm: "queued on this device", waiting: "waiting for assistant · host down", sent: "sent" }[k] }]; }
+    else if (p.startsWith("sent=")) { const k = p.slice(5); S.sent = [{ text: k === "queuedpm" ? "hold T-894 if its gate fails twice" : "remind me to look at T-852's op log first thing tomorrow", dev: S.frame === "phone" ? "owner-iphone" : "owner-desktop", pm: k === "queuedpm", state: { queued: "queued on this device", queuedpm: "queued on this device", waiting: "waiting for assistant · host down", sent: "sent" }[k] }]; }
     else if (p.startsWith("hk=")) S.hk = p.slice(3);
     else if (p === "share" || p.startsWith("share=")) S.share = p.includes("=") ? p.slice(6) : "sheet";
     else if (p.startsWith("athread=")) { S.athread = p.slice(8); p = "athread"; }

@@ -71,10 +71,9 @@ Malformed applicable entries fail launch rather than silently disappearing.
 
 This is explicit curation, not an automatic import, sync service, or source deletion.
 The coding child supplies synthetic rehearsal, an inventory template and a sanitized
-report only. Per the owner answer to T-647/R2/Q1 (revision 2), real inventory/import,
-projection checks and umbrella memory commits are a separate owner-approved PM
-operational step after this task lands, not evidence for this implementation run.
-The PM performs private workspace writes through the new memory service. Do not
+report only. Real inventory/import, projection checks and umbrella memory commits
+are a separate owner-approved PM operation, not implementation acceptance evidence.
+The PM performs private workspace writes through the memory service. Do not
 declare operational cutover complete on rehearsal or a green gate alone.
 
 1. Select the current workspace and corral OmO memory repositories explicitly.

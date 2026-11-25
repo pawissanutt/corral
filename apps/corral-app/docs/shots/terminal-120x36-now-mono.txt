@@ -32,5 +32,5 @@
 │                              ││ 19:31 ▶ T-890 worker started · pi-sol…    │  live  PM                             PM │
 │                              ││ 19:12 ✓ T-893 you accepted plan T-885 P2… │ supervisor · generation 14               │
 │                              ││                                           │ waiting · next wake on T-894 gate        │
-╰─ This device pawis-desktop ──╯╰───────────────────────────────────────────┴──────────────────────────────────────────╯
+╰─ This device owner-desktop ──╯╰───────────────────────────────────────────┴──────────────────────────────────────────╯
   j k  move  Enter  open  Tab  tab │  i  Inbox  n  Now  .   p   a  Agents  r   t   u   ,  Settings │  /  Ask  ^K  Go to

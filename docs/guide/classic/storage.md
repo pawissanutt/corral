@@ -6,8 +6,7 @@
 corral keeps every record in one SQLite database under `.corral/db/`. Evidence bytes sit beside
 it in a content-addressed blob store, and short-lived working files go to separate scratch and
 cache roots. This page covers the on-disk layout, the `[storage]` settings, the contracts
-contributors code against, and the `migrate`, `storage` and `export` commands. Design authority is
-the approved plan T-253@P9, sections 1-12 and 18.
+contributors code against, and the `migrate`, `storage` and `export` commands.
 
 The database is the only authority for every task field, title, body and acceptance included.
 corral doesn't write a mirror of `tasks/*.md` or `events.jsonl`. When you need files, ask for them

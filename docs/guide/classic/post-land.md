@@ -24,26 +24,26 @@ example uses the docs fixture's project name `app`; configure
 ```toml
 [[projects.app.post_land]]
 name = "check"
-argv = ["/home/pawis/.cargo/bin/cargo", "check", "--workspace", "--all-targets"]
+argv = ["/home/owner/.cargo/bin/cargo", "check", "--workspace", "--all-targets"]
 cwd = "."
-env = { HOME = "/home/pawis", PATH = "/home/pawis/.cargo/bin:/usr/bin:/bin", RUSTC_WRAPPER = "" }
+env = { HOME = "/home/owner", PATH = "/home/owner/.cargo/bin:/usr/bin:/bin", RUSTC_WRAPPER = "" }
 timeout_secs = 1800
 max_attempts = 3
 
 [[projects.app.post_land]]
 name = "install"
-argv = ["/home/pawis/.cargo/bin/cargo", "install", "--locked", "--path", "crates/corral"]
+argv = ["/home/owner/.cargo/bin/cargo", "install", "--locked", "--path", "crates/corral"]
 cwd = "."
-env = { HOME = "/home/pawis", PATH = "/home/pawis/.cargo/bin:/usr/bin:/bin", RUSTC_WRAPPER = "" }
+env = { HOME = "/home/owner", PATH = "/home/owner/.cargo/bin:/usr/bin:/bin", RUSTC_WRAPPER = "" }
 timeout_secs = 1800
 max_attempts = 3
-identity = { binary = "/home/pawis/.cargo/bin/corral", args = ["build-identity"], expected_stdout = "{sha}" }
+identity = { binary = "/home/owner/.cargo/bin/corral", args = ["build-identity"], expected_stdout = "{sha}" }
 
 [[projects.app.post_land]]
 name = "smoke"
-argv = ["/home/pawis/.cargo/bin/corral", "--help"]
+argv = ["/home/owner/.cargo/bin/corral", "--help"]
 cwd = "."
-env = { HOME = "/home/pawis", PATH = "/home/pawis/.cargo/bin:/usr/bin:/bin" }
+env = { HOME = "/home/owner", PATH = "/home/owner/.cargo/bin:/usr/bin:/bin" }
 timeout_secs = 30
 max_attempts = 3
 ```

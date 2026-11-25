@@ -69,7 +69,7 @@ Populate identities from the current catalog, not the illustrative values below:
 alternative must be another eligible profile and requires a nonempty distinction.
 Use null for both alternative fields when no relevant overlap exists. Review-role
 and PM-role saves are unsupported; reviewer integration needs trusted attempt,
-candidate and policy context supplied separately by T-154.
+candidate and policy context.
 
 Save returns the validated receipt. Identical current redelivery is idempotent;
 conflicting IDs, stale revisions, unsupported configuration and ineligible choices

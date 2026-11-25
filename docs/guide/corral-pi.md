@@ -19,10 +19,10 @@ package's locked dependencies (`bun install --frozen-lockfile`).
 ```text
 corral-pi run --dir <run-dir> [--socket <path>] [--prompt-file <path>] [--corral <path>] [model flags]
 corral-pi chat [--new | --dir <chat-dir>] [--plan] [--socket <path>] [--corral <path>] [model flags]
-corral-pi code [--plan] [--name <name>] [--profile <name>] [--data-dir <path>] [model flags]
-corral-pi code --resume <id> [--data-dir <path>]
+corral-pi code [--data-dir <path>] [--id <id>] [--name <name>] [--profile <name>] [--plan] [--socket <path>] [--corral <path>] [--headless] [model flags]
+corral-pi code --resume <id> [--data-dir <path>] [--socket <path>] [--corral <path>] [--headless] [--no-fallback]
 corral-pi build [--project <name>] [--data-dir <path>] [--id <id>] [--name <name>] [--profile <name>] [--here] [--plan] [--socket <path>] [--corral <path>] [--headless] [model flags]
-corral-pi build --resume <id> [--data-dir <path>] [--socket <path>] [--corral <path>] [--headless]
+corral-pi build --resume <id> [--data-dir <path>] [--socket <path>] [--corral <path>] [--headless] [--no-fallback]
 corral-pi build --prune [--session <id> [--json]] [--dry-run] [--data-dir <path>]
 corral-pi login [--provider <id>] [--auth-dir <path>] [--key-file <path>]
 corral-pi models [--provider <id>]
@@ -32,7 +32,7 @@ Model flags are `--model [<provider>/]<id>`, `--provider <id>`,
 `--effort <level>`, `--aws-profile <name>`, `--aws-region <region>`,
 repeatable `--fallback <provider>/<model>` and `--no-fallback`. Supply both AWS flags together.
 Sessions also accept `--project <name>` and `--headless`; non-interactive
-launches are headless by default. `--plan` starts chat or Build in
+launches are headless by default. `--plan` starts chat, Build or Code in
 [plan mode](plan-mode.md). For build defaults and cleanup, see
 [Build sessions](build-sessions.md).
 
@@ -229,8 +229,7 @@ The destination defaults to the bound task, then the session's project; if neith
 available, supply `to`. Plan mode refuses `corral_artifact` calls.
 
 Run prompts list the task's current reference and report artifacts, and reviewer
-prompts also list evidence. See [artifact kinds and revisions](classic/cli.md#corral-artifact)
-for the library, filtering and CLI rules.
+prompts also list evidence. Use `corral-next artifact --help` for CLI operations.
 
 Workspace memory is ordinary Markdown under `.corral-next/memory/`. The roles are
 told where it lives; an assistant can edit the files with normal file tools.
@@ -246,14 +245,9 @@ detail lists can have continuation cursors. Corral uses the socket for input and
 controls; the daemon uses it for live text. There is no per-launch secret or
 message receipt.
 
-When upgrading from a Pi host that reports `get_state (response_too_large)`,
-update both Corral and Pi (`just upgrade` from a [source checkout](classic/install.md#contributors)).
-Restarting the daemon alone does not replace running Pi processes. On the updated
-engine you can retry a refused changes verdict on a still-live old worker without
-stopping the run or losing its transcript: the refusal proves the host is alive, but does not
-say whether it is idle or working. Status reconciliation for that host remains
-unavailable until its next normal launch with the updated Pi. Do not stop or
-retry the task just to record its pending verdict.
+A `get_state (response_too_large)` refusal proves the host is alive, but does not
+say whether it is idle or working. The engine can retry delivery of a changes
+verdict to that host without stopping the run or replacing its transcript.
 
 **Cancel** stops the current turn without ending the session. **Pause** also holds
 automated input such as gate notes. **Resume** delivers that input in order, as does
