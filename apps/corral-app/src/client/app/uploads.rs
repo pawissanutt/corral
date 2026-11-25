@@ -83,11 +83,6 @@ impl AppState {
                 "attachment_unsupported",
                 "corrald does not accept attachments; upgrade corral",
             ))
-        } else if self.uploads.len() >= DEVICE_UPLOADS_MAX {
-            Some(failure(
-                "attachment_quota",
-                "At most eight unattached uploads are allowed.",
-            ))
         } else {
             validate_bytes(&kind, &name, &media_type, data).err()
         };
@@ -308,27 +303,7 @@ impl AppState {
         if feed.with_untracked(|feed| feed.uploads.contains_key(request.upload.as_str())) {
             return vec![];
         }
-        let error = if !self.ready {
-            Some(offline())
-        } else if self.uploads.len()
-            + feed.with_untracked(|feed| {
-                feed.uploads
-                    .iter()
-                    .filter(|(id, state)| {
-                        state.status == UploadStatus::Uploading
-                            && !self.uploads.contains_key(id.as_str())
-                    })
-                    .count()
-            })
-            >= DEVICE_UPLOADS_MAX
-        {
-            Some(failure(
-                "attachment_quota",
-                "At most eight unattached uploads are allowed.",
-            ))
-        } else {
-            None
-        };
+        let error = (!self.ready).then(offline);
         feed.update(|feed| {
             feed.uploads.insert(
                 Id::from(&request.upload),
@@ -581,6 +556,53 @@ mod tests {
             .is_err()
         );
     }
+    #[test]
+    fn more_than_eight_uploads_queue_and_finish_with_bounded_concurrency() {
+        let runtime = nsh_core::element::Runtime::default();
+        let _entered = runtime.enter();
+        let feed = signal(Feed {
+            capabilities: [ASSISTANT_ATTACH_V1.to_owned()].into(),
+            ..Feed::default()
+        });
+        let mut app = AppState::new();
+        app.ready = true;
+        let mut outgoing = Vec::new();
+        for n in 0..9 {
+            outgoing.extend(app.attach_bytes(
+                feed,
+                format!("upload-{n}"),
+                AttachmentKind::File,
+                format!("file-{n}.txt"),
+                "text/plain".into(),
+                Bytes::Local(vec![b'x']),
+            ));
+        }
+        assert_eq!(outgoing.len(), 2);
+        while let Some((method, params, tag)) = outgoing.pop() {
+            let ready = method == ATTACHMENT_PUT;
+            let ack = UploadAck {
+                upload: params["upload"].as_str().unwrap().to_owned(),
+                received: u64::from(ready),
+                bytes: 1,
+                ready,
+                replayed: false,
+            };
+            outgoing.extend(
+                app.upload_reply(feed, method, tag, params, Ok(value(ack)), None)
+                    .unwrap(),
+            );
+            assert!(outgoing.len() <= 2);
+        }
+        feed.with_untracked(|feed| {
+            assert_eq!(feed.uploads.len(), 9);
+            assert!(
+                feed.uploads
+                    .values()
+                    .all(|item| item.status == UploadStatus::Ready)
+            );
+        });
+    }
+
     #[test]
     fn reconnect_resumes_same_identity_with_two_uploads_and_one_chunk_each() {
         let mut app = AppState::new();

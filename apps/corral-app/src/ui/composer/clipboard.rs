@@ -8,9 +8,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use corral_protocol::attachment::{
-    ATTACHMENT_IMAGE_MAX, ATTACHMENT_TEXT_MAX, ATTACHMENTS_PER_MESSAGE,
-};
+use corral_protocol::attachment::{ATTACHMENT_IMAGE_MAX, ATTACHMENT_TEXT_MAX};
 use nsh_core::{PasteEvent, PastedFile};
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use rustix::io::Errno;
@@ -205,9 +203,6 @@ fn file_list(mime: &str, bytes: &[u8]) -> Vec<String> {
             let uri = format!("file://{path}");
             if !uris.contains(&uri) {
                 uris.push(uri);
-                if uris.len() == ATTACHMENTS_PER_MESSAGE {
-                    break;
-                }
             }
         }
     }
@@ -312,6 +307,12 @@ mod tests {
         .unwrap();
         assert_eq!(file.uris, ["file:///tmp/a%20b"]);
         assert!(file.text.is_empty() && file.files.is_empty());
+    }
+
+    #[test]
+    fn a_file_list_preserves_more_than_four_local_files() {
+        let uris: Vec<_> = (0..5).map(|n| format!("file:///tmp/{n}.txt")).collect();
+        assert_eq!(file_list(URI_LIST, uris.join("\n").as_bytes()), uris);
     }
 
     #[test]

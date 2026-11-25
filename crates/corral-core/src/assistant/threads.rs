@@ -1,10 +1,11 @@
 //! Durable app conversations. Each message and idempotency key is a separate Store record;
 //! thread heads contain only scalar counters and a bounded unfinished-message index.
-use super::attachments::{self, ATTACHMENTS_MAX};
+use super::attachments;
 use crate::Store;
 use crate::blob_ref::BlobRef;
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 const HEADS: &str = "app-thread-heads";
 const MESSAGES: &str = "app-thread-messages";
@@ -174,10 +175,6 @@ impl Store {
             message.context.len() <= 4,
             "at most four context references"
         );
-        ensure!(
-            message.attachments.len() <= ATTACHMENTS_MAX && uploads.len() <= ATTACHMENTS_MAX,
-            "invalid_params: at most four attachments"
-        );
         // Only inline links and unresolved upload placeholders enter from callers.
         for attachment in &message.attachments {
             if attachment.kind == "upload" {
@@ -238,22 +235,20 @@ impl Store {
         };
         self.records_transaction(|| {
             let mut taken = self.take_app_uploads(&message.device, uploads)?;
+            let mut claims: HashMap<_, _> = uploads
+                .iter()
+                .map(|(id, _)| id.as_str())
+                .zip(&mut taken)
+                .collect();
             for attachment in &mut message.attachments {
                 if attachment.kind == "upload" {
-                    let index = taken
-                        .iter()
-                        .position(|(id, _)| id == &attachment.id)
+                    *attachment = claims
+                        .remove(attachment.id.as_str())
+                        .and_then(Option::take)
                         .context("attachment_unknown: missing upload reference")?;
-                    *attachment = taken.remove(index).1;
                 }
             }
-            message
-                .attachments
-                .extend(taken.into_iter().map(|(_, attachment)| attachment));
-            ensure!(
-                message.attachments.len() <= ATTACHMENTS_MAX,
-                "invalid_params: at most four attachments"
-            );
+            message.attachments.extend(taken.into_iter().flatten());
             for (index, attachment) in message.attachments.iter_mut().enumerate() {
                 attachment.id = format!("a{}", index + 1);
             }
@@ -335,8 +330,7 @@ impl Store {
             "message identity is immutable"
         );
         ensure!(
-            message.attachments == immutable_attachments
-                && message.attachments.len() <= ATTACHMENTS_MAX,
+            message.attachments == immutable_attachments,
             "message attachments are immutable"
         );
         ensure!(

@@ -7,7 +7,7 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use corral_protocol::assistant::SendAttachment;
 use corral_protocol::attachment::{
     ASSISTANT_ATTACH_V1, ATTACHMENT_IMAGE_MAX, ATTACHMENT_NAME_MAX, ATTACHMENT_TEXT_MAX,
-    ATTACHMENT_URL_MAX, ATTACHMENTS_PER_MESSAGE, AttachmentFact, AttachmentKind,
+    ATTACHMENT_URL_MAX, AttachmentFact, AttachmentKind,
 };
 use corral_protocol::detail::{ArtifactEncoding, DetailBody, DetailGet, DetailRef};
 
@@ -164,7 +164,6 @@ pub fn refusal_words(error: &ClientError) -> String {
         "local_read_failed" => "this device could not read it",
         "attachment_type_unsupported" => "corrald does not accept this type",
         "attachment_too_large" => "over corrald's size limit",
-        "attachment_quota" => "upload quota reached (8 waiting, or 64 MiB today)",
         "attachment_expired" => "the upload expired; attach it again",
         "digest_mismatch" => "the upload did not arrive intact",
         "offline" | "disconnected" => "corrald was not reachable",
@@ -235,18 +234,15 @@ fn staged_chip(item: &Staged, feed: &Feed) -> StagedChip {
 /// stage through the same upload.
 pub fn tray(feed: &Feed, staged: &[Staged], text_blank: bool) -> Tray {
     let capable = feed.capable(ASSISTANT_ATTACH_V1);
-    let full = staged.len() >= ATTACHMENTS_PER_MESSAGE;
     let up = feed.link == Link::Up;
     let mut file = button("File", Action::Attach(PickKind::File));
-    file.enabled = capable && !full && up;
+    file.enabled = capable && up;
     let note = if !capable {
         Some(if feed.capabilities.is_empty() {
             "attachments wait for a connection to corrald".to_owned()
         } else {
             "this corrald does not accept attachments; upgrade corral".to_owned()
         })
-    } else if full {
-        Some(format!("{ATTACHMENTS_PER_MESSAGE} attachments per message"))
     } else if !up {
         Some("files upload while corrald is reachable".into())
     } else {
@@ -296,11 +292,6 @@ pub fn tray(feed: &Feed, staged: &[Staged], text_blank: bool) -> Tray {
 
 /// The refs one send carries, in staging order: every upload must be ready.
 pub fn send_refs(staged: &[Staged], feed: &Feed) -> Result<Vec<SendAttachment>, String> {
-    if staged.len() > ATTACHMENTS_PER_MESSAGE {
-        return Err(format!(
-            "Not sent: {ATTACHMENTS_PER_MESSAGE} attachments per message."
-        ));
-    }
     staged
         .iter()
         .map(|item| match item {

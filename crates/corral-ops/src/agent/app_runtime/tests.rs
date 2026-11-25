@@ -63,6 +63,37 @@ fn keyed_send_preserves_original_words_and_rejects_payload_reuse() {
 }
 
 #[test]
+fn more_than_four_references_reach_runtime_materialization_in_order() {
+    use corral_protocol::assistant::SendAttachment;
+
+    let fx = crate::agent::test_support::fx();
+    let head = fx.ctx.store.app_thread("quick").unwrap();
+    let requests: Vec<_> = (1..=10)
+        .map(|n| SendAttachment::Link {
+            url: format!("https://example.com/{n}"),
+            title: None,
+        })
+        .collect();
+    let (references, uploads) = attachments::references(&requests).unwrap();
+    let mut outgoing = message(&head.session, "Read these links".into());
+    outgoing.attachments = references;
+    let (saved, _) = fx
+        .ctx
+        .store
+        .append_app_message(outgoing, "digest", &uploads)
+        .unwrap();
+    let delivery = attachments::materialize(&fx.ctx, &head.session, 1, &saved).unwrap();
+    assert_eq!(delivery.metadata.len(), requests.len());
+    for (n, item) in (1..).zip(&delivery.metadata) {
+        assert_eq!(item["id"], serde_json::json!(format!("a{n}")));
+        assert_eq!(
+            item["url"],
+            serde_json::json!(format!("https://example.com/{n}"))
+        );
+    }
+}
+
+#[test]
 fn escaped_and_multibyte_text_pages_progress_without_losing_bytes() {
     let fx = crate::agent::test_support::fx();
     let head = fx.ctx.store.app_thread("quick").unwrap();

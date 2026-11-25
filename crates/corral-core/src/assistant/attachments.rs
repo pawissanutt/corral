@@ -1,4 +1,4 @@
-//! Device-owned bounded uploads. Lock order: app-threads, then app-attachments.
+//! Device-owned uploads with per-file validation. Lock order: app-threads, then app-attachments.
 //! Ready blobs are referenced here until a message takes the reference in one transaction.
 use super::threads::Attachment;
 use crate::{
@@ -11,12 +11,9 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const ATTACHMENTS_MAX: usize = 4;
 pub const ATTACHMENT_CHUNK: usize = 36 * 1024;
 const IMAGE_MAX: u64 = 2 * 1024 * 1024;
 const TEXT_MAX: u64 = 64 * 1024;
-const UPLOADS_MAX: usize = 8;
-const DAY_MAX: u64 = 64 * 1024 * 1024;
 const TTL: i64 = 24 * 60 * 60;
 pub(crate) const UPLOADS: &str = "app-attachment-uploads";
 const PARTS: &str = "app-attachment-parts";
@@ -36,8 +33,7 @@ pub struct Upload {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DeviceUploads {
     pub uploads: BTreeMap<String, Upload>,
-    pub day: String,
-    pub day_bytes: u64,
+    // Obsolete day/day_bytes fields in persisted records are ignored by serde.
     // Retain chunk hashes after raw parts are deleted, for final-put replay.
     #[serde(default)]
     chunks: BTreeMap<String, Vec<String>>,
@@ -57,9 +53,6 @@ pub(crate) fn key(value: &str) -> bool {
 }
 fn part_key(device: &str, upload: &str, n: u64) -> String {
     format!("{device}/{upload}/{n:04}")
-}
-fn day(now: jiff::Timestamp) -> String {
-    (now.as_second().div_euclid(TTL)).to_string()
 }
 fn expired(upload: &Upload, now: jiff::Timestamp) -> bool {
     upload
@@ -144,7 +137,7 @@ impl Store {
         let mut state = self
             .record::<DeviceUploads>(UPLOADS, device)?
             .unwrap_or_default();
-        // Clean this device without any area scan, even when the quota is full.
+        // Clean expired uploads for this device without scanning other devices.
         self.prune_app_uploads(device, &mut state, now, false)?;
         if let Some(prior) = state.uploads.get(upload) {
             ensure!(
@@ -157,16 +150,6 @@ impl Store {
             );
             return Ok((prior.clone(), true));
         }
-        if state.day != day(now) {
-            state.day = day(now);
-            state.day_bytes = 0;
-        }
-        ensure!(
-            state.uploads.len() < UPLOADS_MAX
-                && new.bytes <= DAY_MAX.saturating_sub(state.day_bytes),
-            "attachment_quota"
-        );
-        state.day_bytes += new.bytes;
         new.created = now.to_string();
         new.received = 0;
         new.blob = None;
@@ -332,11 +315,11 @@ impl Store {
             for row in found.items {
                 let mut state: DeviceUploads =
                     serde_json::from_value(row.doc).context("decoding device uploads")?;
-                let revoked = !live_device(&row.key);
-                self.prune_app_uploads(&row.key, &mut state, now, revoked)?;
-                // Keep today's quota even when every upload was consumed/discarded.
-                if state.uploads.is_empty() && (state.day != day(now) || revoked) {
+                if state.uploads.is_empty() {
+                    // Older versions retained empty rows for quota accounting.
                     self.delete_record(UPLOADS, &row.key)?;
+                } else {
+                    self.prune_app_uploads(&row.key, &mut state, now, !live_device(&row.key))?;
                 }
             }
             match found.next {
@@ -357,6 +340,14 @@ impl Store {
         })
     }
 
+    fn save_app_uploads(&self, device: &str, state: &DeviceUploads) -> Result<()> {
+        if state.uploads.is_empty() {
+            self.delete_record(UPLOADS, device)
+        } else {
+            self.save_record(UPLOADS, device, state)
+        }
+    }
+
     fn remove_app_upload(
         &self,
         device: &str,
@@ -369,7 +360,7 @@ impl Store {
         state.chunks.remove(upload);
         self.records_transaction(|| {
             self.remove_app_parts(device, upload, item.bytes)?;
-            self.save_record(UPLOADS, device, state)
+            self.save_app_uploads(device, state)
         })
     }
 
@@ -393,15 +384,12 @@ impl Store {
     }
 
     /// Called with both attachment/thread locks held, inside the message transaction.
+    /// Returns one occupied slot per reference in the original order, for placeholder resolution.
     pub(crate) fn take_app_uploads(
         &self,
         device: &str,
         refs: &[(String, String)],
-    ) -> Result<Vec<(String, Attachment)>> {
-        ensure!(
-            refs.len() <= ATTACHMENTS_MAX,
-            "invalid_params: too many attachments"
-        );
+    ) -> Result<Vec<Option<Attachment>>> {
         if refs.is_empty() {
             return Ok(Vec::new());
         }
@@ -430,23 +418,18 @@ impl Store {
             );
             state.chunks.remove(id);
             self.remove_app_parts(device, id, item.bytes)?;
-            taken.push((
-                id.clone(),
-                Attachment {
-                    id: String::new(),
-                    kind: item.kind,
-                    name: item.name,
-                    media_type: Some(item.media_type),
-                    bytes: item.bytes,
-                    sha256: Some(item.sha256),
-                    blob: item.blob,
-                    url: None,
-                },
-            ));
+            taken.push(Some(Attachment {
+                id: String::new(),
+                kind: item.kind,
+                name: item.name,
+                media_type: Some(item.media_type),
+                bytes: item.bytes,
+                sha256: Some(item.sha256),
+                blob: item.blob,
+                url: None,
+            }));
         }
-        if !refs.is_empty() {
-            self.save_record(UPLOADS, device, &state)?;
-        }
+        self.save_app_uploads(device, &state)?;
         Ok(taken)
     }
 }

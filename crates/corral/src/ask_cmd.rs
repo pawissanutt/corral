@@ -28,16 +28,11 @@ pub fn run(start: &Path, args: AskArgs, entry: &crate::entry::Entry) -> Result<(
         use corral_protocol::assistant::{
             AskTarget, AssistantSend, MESSAGE_TEXT_MAX, QUICK_THREAD,
         };
-        use corral_protocol::attachment::ATTACHMENTS_PER_MESSAGE;
         use std::io::Read;
 
         ensure!(
             !args.pm || args.file.is_empty(),
             "PM messages do not support attachments"
-        );
-        ensure!(
-            args.file.len() <= ATTACHMENTS_PER_MESSAGE,
-            "at most {ATTACHMENTS_PER_MESSAGE} attachments are supported"
         );
         let text = if args.text == "-" {
             let mut text = String::new();

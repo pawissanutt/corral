@@ -273,8 +273,7 @@ fn validate(request: &DetailGet) -> Result<()> {
         }
         DetailRef::Attachment { entry, id } => {
             bounded(entry, 256)?;
-            bounded(id, 2)?;
-            if !matches!(id.as_str(), "a1" | "a2" | "a3" | "a4") {
+            if !corral_protocol::attachment::is_attachment_label(id) {
                 bail!("invalid attachment id");
             }
         }

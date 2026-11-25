@@ -1,4 +1,4 @@
-//! Authenticated, bounded uploads and digest-addressed generation-local delivery files.
+//! Authenticated uploads with per-file bounds and digest-addressed delivery files.
 use super::{AuthenticatedDevice, input, valid_key};
 use crate::Ctx;
 use anyhow::{Context, Result, bail, ensure};
@@ -9,6 +9,7 @@ use corral_core::assistant::{
 use corral_protocol::assistant::SendAttachment;
 use corral_protocol::attachment::*;
 use serde_json::{Value, json};
+use std::collections::HashSet;
 
 fn authorize(ctx: &Ctx, device: &AuthenticatedDevice) -> Result<()> {
     input::recheck_authority(&ctx.store, &device.id, false)?;
@@ -149,19 +150,14 @@ pub fn discard(ctx: &Ctx, device: &AuthenticatedDevice, request: &AttachmentDisc
 type References = (Vec<Attachment>, Vec<(String, String)>);
 
 pub(super) fn references(requests: &[SendAttachment]) -> Result<References> {
-    ensure!(
-        requests.len() <= ATTACHMENTS_PER_MESSAGE,
-        "invalid_params: too many attachments"
-    );
     let mut attachments = Vec::with_capacity(requests.len());
     let mut uploads = Vec::new();
+    let mut seen = HashSet::new();
     for request in requests {
         attachments.push(match request {
             SendAttachment::Upload { upload, sha256 } => {
                 ensure!(
-                    valid_key(upload)
-                        && digest(sha256)
-                        && !uploads.iter().any(|(id, _)| id == upload),
+                    valid_key(upload) && digest(sha256) && seen.insert(upload.as_str()),
                     "invalid_params: invalid upload reference"
                 );
                 uploads.push((upload.clone(), sha256.clone()));
@@ -233,10 +229,6 @@ pub(super) fn materialize(
         #[cfg(unix)]
         names: Vec::new(),
     };
-    ensure!(
-        message.attachments.len() <= ATTACHMENTS_PER_MESSAGE,
-        "too many stored attachments"
-    );
     for attachment in &message.attachments {
         if attachment.kind != "link" {
             #[cfg(unix)]

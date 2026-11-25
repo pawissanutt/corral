@@ -100,8 +100,7 @@ pub struct Composer {
     pub project_chip: Option<ContextChip>,
     /// Upload, waiting or failed attachment line above the composer.
     pub status: Option<Rich>,
-    /// Screenshot, Link and File. They attach for real and are dimmed only for a missing
-    /// capability, the link (uploads) or a full message.
+    /// Attachment controls, dimmed when uploads are unsupported or disconnected.
     pub attachments: Vec<Button>,
     /// What is staged for the next message, in the context chip's anatomy.
     pub staged: Vec<StagedChip>,

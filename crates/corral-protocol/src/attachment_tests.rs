@@ -1,4 +1,14 @@
-use crate::session_host::SessionSend;
+use crate::{attachment::is_attachment_label, session_host::SessionSend};
+
+#[test]
+fn attachment_labels_allow_legacy_and_larger_indices() {
+    for label in ["a1", "a4", "a5", "a42"] {
+        assert!(is_attachment_label(label), "{label}");
+    }
+    for label in ["a", "a0", "a01", "a+1", "a١", "a1x", "b1"] {
+        assert!(!is_attachment_label(label), "{label}");
+    }
+}
 
 #[test]
 fn absent_attachments_preserve_canonical_text_only_payload() {

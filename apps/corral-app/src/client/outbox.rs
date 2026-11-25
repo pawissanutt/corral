@@ -282,7 +282,6 @@ pub(super) fn valid_message(request: &SessionSend) -> bool {
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || b"._:-".contains(&byte))
         && request.text.len() <= MESSAGE_TEXT_MAX
-        && request.attachments.len() <= ATTACHMENTS_PER_MESSAGE
         && request.attachments.iter().all(|item| match item {
             SendAttachment::Upload { upload, sha256 } => {
                 !upload.is_empty()

@@ -650,7 +650,7 @@ fn a_refused_launch_reports_the_hosts_two_lines_and_leaves_no_directory() {
 }
 
 #[test]
-fn an_acknowledged_send_is_served_under_the_acknowledged_id() {
+fn an_acknowledged_send_with_attachments_is_served_under_the_acknowledged_id() {
     let fixture = Fixture::new();
     let host = terminal(&fixture, "B-send", Script::default());
     let socket = fixture.unix_server();
@@ -658,11 +658,14 @@ fn an_acknowledged_send_is_served_under_the_acknowledged_id() {
         &socket,
         vec![wire::BUILD_V1.into(), wire::app::SESSION_STATE_V1.into()],
     );
+    let attachments: Vec<_> = (1..=12)
+        .map(|index| json!({"kind": "link", "url": format!("https://example.org/notes/{index}"), "title": "Notes"}))
+        .collect();
     let ack: SessionSent = owner.ok(
         SESSION_SEND,
         json!({
             "id": "B-send", "cmd_id": "app-id:1", "text": "", "policy": "follow_up", "typed_at": AT,
-            "attachments": [{"kind": "link", "url": "https://example.org/notes", "title": "Notes"}],
+            "attachments": attachments,
         }),
     );
     assert_eq!(ack.session, "B-send");
@@ -679,10 +682,11 @@ fn an_acknowledged_send_is_served_under_the_acknowledged_id() {
     assert_eq!(input.origin, InputOrigin::Owner);
     assert_eq!(input.typed_at.as_deref(), Some(AT));
     assert_eq!(input.device.as_deref(), Some("local"));
-    assert_eq!(
-        message.attachments[0].url.as_deref(),
-        Some("https://example.org/notes")
-    );
+    assert_eq!(message.attachments.len(), attachments.len());
+    for (offset, (fact, sent)) in message.attachments.iter().zip(&attachments).enumerate() {
+        assert_eq!(fact.id, format!("a{}", offset + 1));
+        assert_eq!(fact.url.as_deref(), sent["url"].as_str());
+    }
     assert_eq!(
         host.state.lock().unwrap().requests[0].1["busy_policy"],
         "follow_up"

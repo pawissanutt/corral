@@ -214,6 +214,28 @@ struct SelectedItem {
 
 type Selection = (SessionMessage, Vec<SelectedItem>);
 
+fn header_cost(message: &mut SessionMessage) -> Result<usize> {
+    entries::bound_header(message);
+    let attachments = std::mem::take(&mut message.attachments);
+    let mut cost = json_len(message)? + 1;
+    for fact in attachments {
+        let extra = json_len(&fact)?
+            + if message.attachments.is_empty() {
+                r#",\"attachments\":[]"#.len()
+            } else {
+                1
+            };
+        // Keep room for at least one item and the page's array brackets. Any facts
+        // not shown in the structured preview remain in the recorded text item.
+        if cost + extra + CONTINUED_BYTES + 2 > PAGE_BYTES {
+            break;
+        }
+        message.attachments.push(fact);
+        cost += extra;
+    }
+    Ok(cost)
+}
+
 pub(super) struct Page {
     pub(super) messages: Vec<SessionMessage>,
     pub(super) older: Option<String>,
@@ -301,8 +323,7 @@ pub(super) fn page(
                 skip <= all.len(),
                 "invalid: transcript item cursor is beyond the record"
             );
-            entries::bound_header(&mut message);
-            let mut cost = json_len(&message)? + 1;
+            let mut cost = header_cost(&mut message)?;
             let mut items = Vec::new();
             let count = all.len();
             for (index, value) in all.into_iter().enumerate().rev().skip(skip) {

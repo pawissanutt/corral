@@ -107,14 +107,16 @@ fn readback_is_message_owned_chunked_and_digest_bound() -> Result<()> {
                 "id": entry, "session": "A-001", "seq": 1, "cmd_id": "send", "device": "one",
                 "name": "owner", "target": "assistant", "text": "typed", "typed_at": super::now(),
                 "at": super::now(), "state": "sent", "context": [], "rev": 1,
-                "attachments": [{"id":"a1", "kind":"file", "name":"log.txt", "bytes":bytes.len(),
-                    "sha256":digest, "blob":blob, "media_type":"text/plain"}]
+                "attachments": ["a1", "a10"].map(|id| json!({
+                    "id": id, "kind":"file", "name":"log.txt", "bytes":bytes.len(),
+                    "sha256":digest, "blob":blob, "media_type":"text/plain"
+                }))
             })
         })?;
     let mut request = DetailGet {
         target: DetailRef::Attachment {
             entry: entry.into(),
-            id: "a1".into(),
+            id: "a10".into(),
         },
         etag: None,
         page: None,
@@ -140,15 +142,24 @@ fn readback_is_message_owned_chunked_and_digest_bound() -> Result<()> {
         super::artifacts::base64(&bytes[ATTACHMENT_CHUNK..])
     );
     request.target = DetailRef::Attachment {
-        entry: "A-001/M2".into(),
+        entry: entry.into(),
         id: "a1".into(),
+    };
+    assert!(
+        super::read(&ctx, &request).is_err(),
+        "page token is bound to a10"
+    );
+    request.page = None;
+    assert_eq!(super::read(&ctx, &request)?.etag, digest);
+    request.target = DetailRef::Attachment {
+        entry: "A-001/M2".into(),
+        id: "a10".into(),
     };
     assert!(super::read(&ctx, &request).is_err());
     request.target = DetailRef::Attachment {
         entry: entry.into(),
         id: "a2".into(),
     };
-    request.page = None;
     assert!(super::read(&ctx, &request).is_err());
     Ok(())
 }

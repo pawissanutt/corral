@@ -24,11 +24,11 @@ const label = (value: unknown, max: number): value is string => typeof value ===
 function bad(reason: string): never { throw new BridgeRefusal("bad_attachment", reason); }
 
 export function parseOwnerAttachments(value: unknown): OwnerAttachment[] {
-  if (!Array.isArray(value) || value.length > 4) bad("attachments must be an array of at most four items");
+  if (!Array.isArray(value)) bad("attachments must be an array");
   const ids = new Set<string>();
   for (const item of value) {
     if (!object(item) || Object.keys(item).some(key => !Object.hasOwn(KEYS, key))) bad("invalid attachment metadata keys");
-    if (typeof item.id !== "string" || !/^a[1-4]$/.test(item.id) || ids.has(item.id)) bad("attachment IDs must be distinct a1-a4");
+    if (typeof item.id !== "string" || !/^a[1-9][0-9]*$/.test(item.id) || ids.has(item.id)) bad("attachment IDs must be distinct positive-numbered labels");
     ids.add(item.id);
     if (!label(item.name, 160)) bad("attachment name must be at most 160 bytes without controls");
     if (item.kind === "link") {

@@ -8,10 +8,10 @@
 //! Each session keeps its own staged items, so what is staged on one session page never goes
 //! with another session's message.
 
-use corral_protocol::attachment::{ATTACHMENTS_PER_MESSAGE, AttachmentKind};
+use corral_protocol::attachment::{ATTACHMENT_IMAGE_MAX, AttachmentKind};
 use nsh_core::file_dialog::FileFilter;
 use nsh_core::image::ImageData;
-use nsh_core::picker::{FilePickRequest, PickRequest, PickedFile};
+use nsh_core::picker::{FilePickRequest, PickRequest, PickedStatus};
 use nsh_core::prelude::*;
 
 use super::AppState;
@@ -60,11 +60,6 @@ impl AppState {
         });
     }
 
-    fn staged_count(&self, session: &Id) -> usize {
-        self.ask_staged
-            .with_untracked(|staged| staged.get(session).map_or(0, Vec::len))
-    }
-
     fn stage(&self, session: &Id, item: Staged) {
         self.ask_staged
             .update(|staged| staged.entry(session.clone()).or_default().push(item));
@@ -74,11 +69,10 @@ impl AppState {
     /// and web, the path field in a terminal. Refused visibly when corrald cannot take an upload
     /// now.
     pub fn attach(&self, session: &Id, pick: PickKind) {
-        if let Some(refusal) = self.upload_refusal(session) {
+        if let Some(refusal) = self.upload_refusal() {
             self.toast(refusal);
             return;
         }
-        let room = ATTACHMENTS_PER_MESSAGE.saturating_sub(self.staged_count(session));
         if self.form == Form::Terminal {
             // NSH's terminal host answers no picker; the owner names a file on this device.
             self.open_attach_field(session, AttachField::Path(pick));
@@ -92,12 +86,12 @@ impl AppState {
                 pick_images(request)
             }
             PickKind::File => pick_files(
-                FilePickRequest::new(room > 1, u32::try_from(room).unwrap_or(1)).filter(
-                    FileFilter::new(
+                FilePickRequest::new(true, 0)
+                    .max_size(ATTACHMENT_IMAGE_MAX)
+                    .filter(FileFilter::new(
                         "Images and text files",
                         IMAGE_EXTENSIONS.into_iter().chain(TEXT_EXTENSIONS),
-                    ),
-                ),
+                    )),
             ),
         };
         let app = *self;
@@ -111,10 +105,20 @@ impl AppState {
                     app.toast("Not attached: the data source changed while the picker was open.");
                     return;
                 }
-                let files = files
-                    .into_iter()
-                    .map(|file: PickedFile| (file.name, file.mime, file.data));
-                let refusals = app.stage_files(&session, pick, files);
+                let mut too_large = Vec::new();
+                let files = files.into_iter().filter_map(|file| {
+                    if file.status == PickedStatus::TooLarge {
+                        too_large.push(format!(
+                            "{} not attached: too large ({} max)",
+                            assistant::bounded_name(&file.name),
+                            assistant::byte_size(ATTACHMENT_IMAGE_MAX)
+                        ));
+                        return None;
+                    }
+                    Some((file.name, file.mime, file.data))
+                });
+                let mut refusals = app.stage_files(&session, pick, files);
+                refusals.extend(too_large);
                 app.toast_refusals(refusals);
             });
         });
@@ -127,7 +131,7 @@ impl AppState {
     /// upload now.
     pub fn paste(&self, session: &Id, paste: &PasteEvent) -> Vec<String> {
         let before = self.staged_images(session);
-        if let Some(refusal) = self.upload_refusal(session) {
+        if let Some(refusal) = self.upload_refusal() {
             self.toast(refusal);
             return Vec::new();
         }
@@ -295,8 +299,8 @@ impl AppState {
         }
     }
 
-    /// Why an upload for `session` cannot start now, if it cannot.
-    fn upload_refusal(&self, session: &Id) -> Option<String> {
+    /// Why an upload cannot start now, if it cannot.
+    fn upload_refusal(&self) -> Option<String> {
         if self.fixture() {
             return Some(
                 "The fixture preview attaches nothing; connect to corrald to attach.".into(),
@@ -312,10 +316,6 @@ impl AppState {
                 Some(
                     "Not attached: images and files upload only while corrald is reachable.".into(),
                 )
-            } else if self.staged_count(session) >= ATTACHMENTS_PER_MESSAGE {
-                Some(format!(
-                    "Not attached: {ATTACHMENTS_PER_MESSAGE} attachments per message."
-                ))
             } else {
                 None
             }
@@ -333,12 +333,6 @@ impl AppState {
     ) -> Vec<String> {
         let mut refusals = Vec::new();
         for (name, mime, data) in files {
-            if self.staged_count(session) >= ATTACHMENTS_PER_MESSAGE {
-                refusals.push(format!(
-                    "{name} not attached: {ATTACHMENTS_PER_MESSAGE} attachments per message"
-                ));
-                continue;
-            }
             let classified = match assistant::classify(pick, &name, &mime, data.bytes()) {
                 Ok(classified) => classified,
                 Err(why) => {
@@ -347,7 +341,7 @@ impl AppState {
                 }
             };
             // A system picker can return after the user selected the isolated preview.
-            if let Some(why) = self.upload_refusal(session) {
+            if let Some(why) = self.upload_refusal() {
                 refusals.push(why);
                 break;
             }
@@ -382,21 +376,12 @@ impl AppState {
         if let Some(colon) = url.find(':') {
             url.replace_range(..colon, &url[..colon].to_ascii_lowercase());
         }
-        let mut full = false;
         self.ask_staged.update(|staged| {
             let staged = staged.entry(session.clone()).or_default();
-            if staged.iter().any(|item| item.key() == url) {
-                return;
+            if !staged.iter().any(|item| item.key() == url) {
+                staged.push(Staged::Link { url });
             }
-            if staged.len() >= ATTACHMENTS_PER_MESSAGE {
-                full = true;
-                return;
-            }
-            staged.push(Staged::Link { url: url.clone() });
         });
-        if full {
-            return Err(format!("{ATTACHMENTS_PER_MESSAGE} attachments per message"));
-        }
         Ok(())
     }
 
@@ -412,7 +397,7 @@ impl AppState {
         if base.is_empty() || base == "." || base == ".." {
             return Err("name a file, not a folder".into());
         }
-        if let Some(refusal) = self.upload_refusal(session) {
+        if let Some(refusal) = self.upload_refusal() {
             return Err(refusal);
         }
         // The client checks a path against its kind's bound before it reads it, so File names

@@ -301,8 +301,7 @@ impl AppState {
             self.refuse_send(
                 feed,
                 &request,
-                "a message needs words or an attachment, and every attachment uploaded (four at most)"
-                    .into(),
+                "a message needs words or a valid attachment, and uploads must be ready".into(),
             );
             return vec![];
         }
@@ -407,6 +406,59 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_message_with_more_than_four_attachments_is_kept_and_sent_in_order() {
+        use crate::model::assistant::{Staged, send_refs, tray};
+
+        let runtime = nsh_core::element::Runtime::default();
+        let _entered = runtime.enter();
+        let feed = signal(Feed {
+            link: Link::Up,
+            capabilities: [ASSISTANT_ATTACH_V1.to_owned()].into(),
+            ..Feed::default()
+        });
+        let staged: Vec<_> = (0..5)
+            .map(|n| Staged::Link {
+                url: format!("https://example.com/{n}"),
+            })
+            .collect();
+        let attachments = feed.with_untracked(|feed| {
+            let tray = tray(feed, &staged, false);
+            assert!(tray.buttons[0].enabled);
+            assert!(!tray.holds_send);
+            assert_eq!(tray.chips.len(), staged.len());
+            send_refs(&staged, feed).unwrap()
+        });
+        assert!(attachments.iter().zip(&staged).all(|(sent, item)| {
+            matches!(sent, SendAttachment::Link { url, .. } if url == item.key())
+        }));
+        assert_eq!(attachments.len(), staged.len());
+
+        let mut app = AppState::new();
+        app.ready = true;
+        app.outbox = Some(Outbox::load("many-attachments", "device").unwrap());
+        let request = SessionSend {
+            id: "quick".into(),
+            cmd_id: "many-attachments".into(),
+            text: "please consider these".into(),
+            policy: corral_protocol::session_state::SendPolicy::FollowUp,
+            to: None,
+            typed_at: None,
+            attachments,
+        };
+        let outgoing = app.request(feed, ClientRequest::SessionSend(request.clone()));
+        assert_eq!(
+            outgoing,
+            vec![out(
+                SESSION_SEND,
+                value(&request),
+                Some(request.cmd_id.clone())
+            )]
+        );
+        let saved = Outbox::load("many-attachments", "device").unwrap();
+        assert_eq!(saved.saved.messages[&request.cmd_id].request, request);
+    }
 
     /// A full outbox refuses the message before anything is retired: the saved draft stays,
     /// nothing is kept, and the send's operation says why, so its words go back to the draft.
