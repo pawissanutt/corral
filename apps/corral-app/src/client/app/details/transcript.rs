@@ -9,7 +9,7 @@ use corral_protocol::rpc::ErrorCode;
 /// until the reader explicitly returns to the newest page.
 pub(super) const HISTORY_CHANGED: &str = "history_changed";
 
-fn session(page: &DetailReply) -> Option<&SessionPage> {
+pub(in crate::client::app) fn session(page: &DetailReply) -> Option<&SessionPage> {
     match &page.body {
         Some(DetailBody::Session(body)) => Some(body),
         _ => None,
@@ -18,7 +18,7 @@ fn session(page: &DetailReply) -> Option<&SessionPage> {
 
 /// Pages arrive newest first, each in chronological order. The older page may end with
 /// the beginning of a record whose remainder is at the start of the newer page.
-fn prepend(newer: &mut SessionPage, mut older: SessionPage) {
+pub(in crate::client::app) fn prepend(newer: &mut SessionPage, mut older: SessionPage) {
     if let (Some(first), Some(last)) = (newer.messages.first_mut(), older.messages.last_mut())
         && !first.id.is_empty()
         && first.id == last.id
@@ -194,7 +194,7 @@ impl AppState {
                     .map_or(0, |cache| cache.pages.len())
             })
         };
-        let active = matches!(&request.target, DetailRef::Session { id } if self.transcript_readers.contains_key(id));
+        let active = matches!(&request.target, DetailRef::Session { id } if self.shared_transcript_reading(id));
         let restarted = self.detail_restarts.contains_key(key);
         let auto_depth = self.transcript_auto_depth.contains(key);
         // Explicit scrollback stays loaded. An active view also protects its first page,
@@ -203,7 +203,7 @@ impl AppState {
         let reading_history = depth > 0 && (active || restarted || (depth > 1 && !auto_depth));
         // A full replacement cannot fit if we already walk farther than the budget. An
         // exhausted new chain can still replace it if it covers all the anchors.
-        if reading_history && next.is_some() && depth > MAX_PAGES {
+        if reading_history && next.is_some() && depth > self.reader_limit() {
             return self.transcript_history_changed(feed, key, &id);
         }
         if !walking && !reading_history && !chain.is_empty() {
@@ -226,7 +226,25 @@ impl AppState {
         }
         let held = chain.len();
         let prior_bytes = self.detail_bytes.get(key).copied().unwrap_or(0);
-        if !self.count_detail_page(key, &page, held) {
+        let resident = if walking {
+            feed.with_untracked(|feed| {
+                feed.details.get(key).map_or((0, 0), |cache| {
+                    (
+                        cache.pages.len(),
+                        cache.pages.iter().map(cache::bytes).sum::<usize>(),
+                    )
+                })
+            })
+        } else {
+            (0, 0)
+        };
+        if held + resident.0 >= self.reader_limit()
+            || prior_bytes
+                .saturating_add(resident.1)
+                .saturating_add(cache::bytes(&page))
+                > MAX_DETAIL_BYTES
+            || !self.count_detail_page(key, &page, held)
+        {
             if held > 0 {
                 return self.transcript_history_changed(feed, key, &id);
             }
@@ -254,7 +272,7 @@ impl AppState {
                 })
             })
         {
-            if pages.len() == MAX_PAGES {
+            if pages.len() == self.reader_limit() {
                 return self.transcript_history_changed(feed, key, &id);
             }
             self.detail_pages.insert(key.into(), pages);
@@ -438,6 +456,9 @@ impl AppState {
                 operation.error = None;
             }
         });
+        if matches!(target, DetailRef::Session { id } if id == QUICK_THREAD) {
+            self.retire_quick_readers(feed);
+        }
         self.touch_detail(feed, target);
         self.trim_retained(feed);
     }
@@ -445,4 +466,4 @@ impl AppState {
 
 #[cfg(test)]
 #[path = "transcript_tests.rs"]
-mod tests;
+pub(in crate::client::app) mod tests;

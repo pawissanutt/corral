@@ -10,6 +10,8 @@ mod rows;
 mod scopes;
 mod session_items;
 mod terminal;
+#[path = "app/details/transcript_window.rs"]
+mod transcript_window;
 mod uploads;
 use super::{
     core::{Event, topic_key},
@@ -121,6 +123,10 @@ pub(super) struct AppState {
     terminal_scopes: BTreeMap<String, usize>,
     offline: super::offline::Cache,
     retained: cache::RetainedCache,
+    #[cfg(test)]
+    test_reader_limit: Option<usize>,
+    shared_holders: BTreeMap<u64, String>,
+    reader_windows: BTreeMap<u64, transcript_window::Window>,
     detail_inflight: BTreeMap<String, String>,
     detail_pages: BTreeMap<String, Vec<DetailReply>>,
     detail_bytes: BTreeMap<String, usize>,
@@ -153,6 +159,10 @@ impl AppState {
             retained: cache::RetainedCache::default(),
             terminal_scopes: BTreeMap::new(),
             offline: super::offline::Cache::default(),
+            #[cfg(test)]
+            test_reader_limit: None,
+            shared_holders: BTreeMap::new(),
+            reader_windows: BTreeMap::new(),
             detail_inflight: BTreeMap::new(),
             detail_pages: BTreeMap::new(),
             detail_bytes: BTreeMap::new(),
@@ -172,6 +182,7 @@ impl AppState {
     }
     pub fn welcomed(&mut self, feed: Signal<Feed>, welcome: &wire::Welcome) {
         self.interrupt_html();
+        self.interrupt_readers(feed);
         self.ready = false;
         feed.update(|feed| {
             feed.mark_stale();
@@ -181,6 +192,7 @@ impl AppState {
     }
     pub fn disconnected(&mut self, feed: Signal<Feed>) {
         self.interrupt_html();
+        self.interrupt_readers(feed);
         self.ready = false;
         self.changes_inflight = false;
         self.device_walk = None;
@@ -218,6 +230,8 @@ impl AppState {
             self.session_scopes.clear();
             self.terminal_scopes.clear();
             self.transcript_readers.clear();
+            self.reader_windows.clear();
+            self.shared_holders.clear();
             self.transcript_auto_depth.clear();
             self.uploads.clear();
             self.item_fetches.clear();
@@ -233,6 +247,7 @@ impl AppState {
                 feed.usage = None;
                 feed.settings = None;
                 feed.details.clear();
+                feed.transcript_windows.clear();
                 feed.items.clear();
                 feed.live.clear();
                 // A registry listed after this connection's welcome already belongs to the new
@@ -496,6 +511,13 @@ impl AppState {
                     .get(id)
                     .is_some_and(|upload| upload.accepts(tag))
             }),
+            DETAIL_GET
+                if tag
+                    .as_deref()
+                    .is_some_and(|tag| tag.starts_with(transcript_window::PREFIX)) =>
+            {
+                tag.as_deref().is_some_and(|tag| self.reader_accepts(tag))
+            }
             DETAIL_GET
                 if tag
                     .as_deref()

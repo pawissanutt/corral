@@ -1,6 +1,10 @@
 use super::*;
 
-fn page(etag: &str, rows: &[(&str, &[&str])], older: Option<&str>) -> Value {
+pub(in crate::client::app) fn page(
+    etag: &str,
+    rows: &[(&str, &[&str])],
+    older: Option<&str>,
+) -> Value {
     value(DetailReply {
         etag: etag.into(),
         as_of: "now".into(),
@@ -174,6 +178,7 @@ fn mounted_readers_protect_a_rolling_first_page_until_the_last_release() {
             app.request(
                 feed,
                 ClientRequest::TranscriptReading {
+                    holder: 1,
                     scope: scope.into(),
                     active,
                 }
@@ -767,8 +772,9 @@ fn an_unreconciled_snapshot_survives_the_page_cap_until_explicit_latest() {
     );
     let before = shown(feed);
     let mut get = read(&mut app, feed, None);
-    for row in (1..=MAX_PAGES).rev() {
-        let cursor = (row < MAX_PAGES).then(|| format!("v2:{row}"));
+    let limit = app.reader_limit();
+    for row in (1..=limit).rev() {
+        let cursor = (row < limit).then(|| format!("v2:{row}"));
         get = reply(
             &mut app,
             feed,

@@ -1,7 +1,7 @@
 use super::*;
 
 const MAX_PAGES: usize = 256;
-const MAX_DETAIL_BYTES: usize = 8 * 1024 * 1024;
+pub(super) const MAX_DETAIL_BYTES: usize = 8 * 1024 * 1024;
 /// How many times in a row a detail that changed between two of its pages is read again from
 /// its first page before it is reported stale with the conflict.
 const MAX_RESTARTS: u8 = 3;
@@ -9,7 +9,7 @@ const CHANGED: &str =
     "Detail changed while its pages were loading; refresh to fetch a current snapshot.";
 
 mod parts;
-mod transcript;
+pub(super) mod transcript;
 mod walked;
 
 pub(super) use parts::PART_NAMES;
@@ -33,24 +33,49 @@ impl AppState {
             *count -= 1;
             if *count == 0 {
                 self.transcript_readers.remove(&scope);
+                self.release_shared_depth(feed, &scope);
                 self.trim_retained(feed);
             }
         }
     }
 
+    fn release_shared_depth(&mut self, feed: Signal<Feed>, scope: &str) {
+        let target = DetailRef::Session {
+            id: scope.to_owned(),
+        };
+        let key = detail_key(&target);
+        let changed = feed.with_untracked(|f| {
+            f.details
+                .get(&key)
+                .is_some_and(|c| c.pages.len() > 1 && !c.loading && c.error.is_none())
+        });
+        if !changed {
+            return;
+        }
+        feed.update(|f| {
+            if let Some(cache) = f.details.get_mut(&key) {
+                cache.pages.truncate(1);
+                cache.merged = cache.pages.first().and_then(|p| p.body.clone());
+                cache.transcript_seams = Default::default();
+            }
+        });
+        self.transcript_auto_depth.remove(&key);
+        self.touch_detail(feed, &target);
+    }
+
     pub(super) fn transcript_tail(&mut self, feed: Signal<Feed>, scope: String) -> Vec<Outgoing> {
-        if !self.ready || self.transcript_readers.contains_key(&scope) {
+        if !self.ready || self.shared_transcript_reading(&scope) {
             return vec![];
         }
+        self.release_shared_depth(feed, &scope);
         let target = DetailRef::Session { id: scope };
         let key = detail_key(&target);
         let blocked = feed.with_untracked(|feed| {
             feed.details.get(&key).is_some_and(|cache| {
-                (cache.pages.len() == 1 || self.transcript_auto_depth.contains(&key))
-                    && cache
-                        .error
-                        .as_ref()
-                        .is_some_and(|error| error.code == transcript::HISTORY_CHANGED)
+                cache
+                    .error
+                    .as_ref()
+                    .is_some_and(|error| error.code == transcript::HISTORY_CHANGED)
             })
         });
         if !blocked {
@@ -257,6 +282,9 @@ impl AppState {
         let Some(id) = tag else {
             return Err("detail reply has no correlation identity".into());
         };
+        if id.starts_with(transcript_window::PREFIX) {
+            return Ok(self.reader_reply(feed, &id, request, outcome));
+        }
         if self.detail_inflight.get(&key) != Some(&id) {
             return Ok(vec![]);
         }
