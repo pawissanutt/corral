@@ -1,5 +1,9 @@
 use super::*;
 
+#[cfg(test)]
+#[path = "head_race_tests.rs"]
+mod head_race_tests;
+
 impl AppState {
     /// Install the head verified by this reader. Other shared readers may still need
     /// their old snapshot: detach them in the same publication before switching it.
@@ -9,6 +13,7 @@ impl AppState {
         intent: &ReaderIntent,
         cache: DetailCache,
         explicit: bool,
+        reread: Option<u64>,
     ) -> Vec<Outgoing> {
         let holder = intent.holder;
         let target = cache.target.clone();
@@ -37,7 +42,15 @@ impl AppState {
                                 .is_some_and(|c| c.pages.len() < cache.pages.len()))
                         || shared.as_ref().is_some_and(|c| c.error.is_some()))
             });
+        let live_reread =
+            feed.with_untracked(|f| f.live.get(intent.scope.as_str()).map(|live| live.reread));
+        let shared_reread = self.detail_reread.get(&key).copied();
+        let mut refresh = live_reread > reread && live_reread > shared_reread;
         if replace {
+            // A shared conditional reply was sent against the previous cache. Retire
+            // its tag before swapping caches, but replay any work this head did not cover.
+            refresh |= shared_reread > reread;
+            refresh |= self.transcript_deferred.remove(&key);
             for &other in &protected {
                 self.reader_windows.insert(
                     other,
@@ -53,7 +66,7 @@ impl AppState {
             self.detail_restarts.remove(&key);
             self.detail_bytes.remove(&key);
             self.detail_pages.remove(&key);
-            let reread = self.detail_reread.remove(&key);
+            self.detail_reread.remove(&key);
             feed.update(|f| {
                 if let Some(mut before) = shared {
                     before.loading = false;
@@ -88,6 +101,10 @@ impl AppState {
             );
         }
         self.close_reader(feed, holder);
-        vec![]
+        if refresh {
+            self.refresh_transcript_part(feed, target)
+        } else {
+            vec![]
+        }
     }
 }
