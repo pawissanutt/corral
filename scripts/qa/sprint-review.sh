@@ -37,8 +37,8 @@ cli new "Owner source idea" --idea
 cli new "Combined implementation"
 cli idea T-003 merge --into T-004 --reason "Same outcome" --owner-ok
 cli new "Full specification" --idea --body "Two behaviors"
-refuse idea T-005 narrow --body-file "$REPO/docs/guide/comments.md" --reason "One behavior"
-cli idea T-005 narrow --body-file "$REPO/docs/guide/comments.md" --reason "One behavior" --owner-ok
+refuse idea T-005 narrow --body-file "$REPO/docs/guide/classic/comments.md" --reason "One behavior"
+cli idea T-005 narrow --body-file "$REPO/docs/guide/classic/comments.md" --reason "One behavior" --owner-ok
 cli review-sprint --json | tee "$CORRAL_TEST_HERDR_ROOT/report.json"
 python3 -I -c '
 import json, sys

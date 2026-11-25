@@ -51,12 +51,12 @@ per-concern try-locks: `autopilot-<id>` (`ops/autopilot.rs:109-112`), `pm-events
 `Store` facade, one `Operation` per logical write (25 variants, `core/backend/operation.rs:640-666`),
 `StoreBackend::apply` (`core/backend.rs:36-51`), one `BEGIN IMMEDIATE` SQLite transaction with logical
 preconditions (`core/sqlite/mod.rs:4-8`). Each commit gets a `ChangeSeq` with touched scopes
-(`core/backend/rows.rs:471-477`, `docs/guide/storage.md:172-174`). Events carry `actor` and `via`
+(`core/backend/rows.rs:471-477`, `docs/guide/classic/storage.md:172-174`). Events carry `actor` and `via`
 (`core/attribution.rs:136-144`).
 
 | Lock | Kind | Used for | Source |
 |---|---|---|---|
-| `.corral/lock/store` | shared flock for every opener, exclusive for migrate/rollback/finalize; opener waits 2 s | maintenance exclusion only | `core/store/db.rs:3-7,34`, `docs/guide/storage.md:178-185` |
+| `.corral/lock/store` | shared flock for every opener, exclusive for migrate/rollback/finalize; opener waits 2 s | maintenance exclusion only | `core/store/db.rs:3-7,34`, `docs/guide/classic/storage.md:178-185` |
 | `lock/dispatch.lock` (the "board writer lock") | blocking exclusive flock, no timeout | every task and config read-modify-write | `core/store.rs:156-173,597-665` |
 | `lock/<task>.lock` | blocking exclusive | per-task read-modify-write | `core/store.rs:616-618` |
 | `lock/agent-pm.lock`, `pm-inbox.lock`, `config.lock`, ... | blocking exclusive | record families | `core/agent/pm_state.rs:114-115`, `core/pm_inbox.rs:456`, `core/config_events.rs:292` |
@@ -88,7 +88,7 @@ thread-scoped actor override (`core/attribution.rs:98-105`). `via` values today:
 | Pi PM receives no board events (`pm.push_events = false`; pane paste fails) | `redesign:51-60` |
 | Caps that end a long-lived PM: receipts 16,384 (`core/agent/records.rs:12`), generations 64 (`core/agent/records.rs:13`, `ops/agent/admission.rs:476-480`), bridge input keys 4,096 (`pi/bridge/protocol.ts:10`, `pi/bridge/server.ts:137-140`), budget requests 16,384 when a limit is set (`core/agent/budget.rs:73-74`) | `redesign:99-109` |
 | PM `ask_user` questions live only in the Pi session journal, "not a second board-question store" | `docs/guide/corral-pi.md:142-157` |
-| No quick way in: an assistant needs a herdr pane (`not_in_herdr`), capture is a board popup, and a host without a terminal has no owner UI | `ops/agent/pi.rs:69-80`, `docs/guide/tui.md:398-402`, `pi/host/ask-user.ts:126` |
+| No quick way in: an assistant needs a herdr pane (`not_in_herdr`), capture is a board popup, and a host without a terminal has no owner UI | `ops/agent/pi.rs:69-80`, `docs/guide/classic/tui.md:398-402`, `pi/host/ask-user.ts:126` |
 
 ---
 
@@ -139,7 +139,7 @@ writing through `Store` exactly as today.
 
 | Reason | Evidence |
 |---|---|
-| The store is already safe for several writer processes | "correctness never depends on SQLite having a single writer" (`core/sqlite/mod.rs:6-8`); every read-modify-write takes `dispatch.lock` and the task lock (`core/store.rs:612-625`); stale preconditions return `Conflict` (`docs/guide/storage.md:164-166`) |
+| The store is already safe for several writer processes | "correctness never depends on SQLite having a single writer" (`core/sqlite/mod.rs:6-8`); every read-modify-write takes `dispatch.lock` and the task lock (`core/store.rs:612-625`); stale preconditions return `Conflict` (`docs/guide/classic/storage.md:164-166`) |
 | What is unsafe is several loop drivers, not several writers | drivers need per-concern try-locks today (`ops/autopilot.rs:109`), and the Oct 31 stall was a hook holding a lock for an hour (`redesign:252-253`) |
 | Agents and the PM must keep working when the daemon is down or upgrading (R5) | `corral done`, `corral agent call`, `corral question answer` are plain store writes |
 | Attribution is derived from the calling process (env, cwd, pane) | `cli/entry.rs:42-92,162-176`; proxying verbs through the daemon would have to forward and trust all of it |
@@ -176,7 +176,7 @@ first showed the slowness itself was repeated derivation, not store contention; 
 | Upgrade | The existing replaced-binary latch (`ops/sync.rs:120-122`, `tui/app/worker.rs:19-21`) makes the daemon finish its pass and exit 75; the service manager restarts the new binary. Clients reconnect and renegotiate. Coherent install = `corral daemon stop --drain`, install, start. |
 | Crash | Lease released by the kernel, unit restarts in 2 s, projection rebuilt, clients resync by cursor. |
 | Heartbeat | `<runtime-dir>/heartbeat` touched each pass (no store write). A `daemon/state` record is written only on transitions (started, degraded reason, recovered, stopped), so the change feed stays quiet. |
-| Lock watchdog | A thread reports `degraded · lock dispatch held 95s by pid N (argv)` from `lock/store.holders/` (`docs/guide/storage.md:181-182`); required by `redesign:252-253`. |
+| Lock watchdog | A thread reports `degraded · lock dispatch held 95s by pid N (argv)` from `lock/store.holders/` (`docs/guide/classic/storage.md:181-182`); required by `redesign:252-253`. |
 | Assistant hosts | The daemon supervises pane-less assistant hosts (the quick thread and sessions opened from the app) as plain child processes (section 13.2). Stop and upgrade drain them with bridge `shutdown`; after a crash, leftover hosts are fenced and stopped, not re-adopted. |
 
 ### Health line
@@ -192,7 +192,7 @@ first showed the slowness itself was repeated derivation, not store contention; 
 | Today | After | Phase |
 |---|---|---|
 | Board worker runs `sync_with_attention` every 2 to 60 s (`tui/app/sync_step.rs:5-15`) | Daemon loop thread. Classic board becomes a viewer: nudge, then read back. | 1 |
-| Board maintenance thread (`maintain_database`, WAL checkpoint every 2 s, `docs/guide/storage.md:36`) | Daemon maintenance thread | 1 |
+| Board maintenance thread (`maintain_database`, WAL checkpoint every 2 s, `docs/guide/classic/storage.md:36`) | Daemon maintenance thread | 1 |
 | `corral hook` runs a coalesced full sync | `corral hook` sends `nudge{source:"hook"}` and exits without opening the store. During the Phase 1 cutover only, it keeps the legacy pass (under the lease) when no daemon is installed. | 1 |
 | `corral sync --watch` | Removed; prints a pointer to `corral daemon run`. | 1 |
 | `pm act` runs a full workspace sync inline (`redesign:527-528`) | Nudge and bounded wait for the pass; with no daemon the action is recorded and the verb says nothing will advance | 1 |
@@ -201,7 +201,7 @@ first showed the slowness itself was repeated derivation, not store contention; 
 | Owner notice through `herdr notification show` (`ops/owner_notice.rs:307`) | Daemon notifier with producers: local desktop, herdr (legacy), push | 5 |
 | Keyed async reads, skeletons (planned for `board-next`) | Daemon reader pool plus client cache | 2 |
 | `corral pi` supervises an assistant host in the owner's pane (`ops/agent/pi.rs:231-240`) | Unchanged for pane sessions. The daemon supervises pane-less hosts for the quick thread and app sessions (section 13). | 2 |
-| Capture popup on the board (`docs/guide/tui.md:398-402`) | A message in the composer **Ask**, which the assistant files (section 13.5), the share sheet, or `corral new --idea`; the popup goes with `corral-tui` | 2 |
+| Capture popup on the board (`docs/guide/classic/tui.md:398-402`) | A message in the composer **Ask**, which the assistant files (section 13.5), the share sheet, or `corral new --idea`; the popup goes with `corral-tui` | 2 |
 
 ### `corral <verb>` with and without a daemon
 
@@ -283,7 +283,7 @@ and `docs/herdr-cli.md` once no open ref names a Herdr TUI socket.
 
 | Field | Type | Source today |
 |---|---|---|
-| `id`, `title`, `project`, `plan`, `goal` (80 chars) | ids, strings | `TaskHead` (`docs/guide/storage.md:211-215`), `parent` (`core/backend/rows.rs:46`), `ApprovedScope.goal` (`core/plan.rs:93-95`) |
+| `id`, `title`, `project`, `plan`, `goal` (80 chars) | ids, strings | `TaskHead` (`docs/guide/classic/storage.md:211-215`), `parent` (`core/backend/rows.rs:46`), `ApprovedScope.goal` (`core/plan.rs:93-95`) |
 | `group` | `needs_you \| verifying \| producing \| queued \| held \| parked` | derived: attention (`ops/attention.rs:263`), status, hold, park |
 | `rail[4]` | `{glyph: ✓ ◐ ✗ ◌ ○ ·, sha7, at}` for run, gate, review, land | run outcome, `GateRecord` (`core/model.rs:247`), `ReviewRecord` (`core/model.rs:308`), `AutoStage` (`core/model.rs:367`); `◌` when the record's SHA is not the current candidate |
 | `now` | `{code, text ≤ 60, since}` | `run.progress` (`core/model.rs:509`), stage, wait reason. Vocabulary from the board proposal: `needs you`, `gating`, `reviewing`, `landing`, `queued · after <id>`, `held · <reason>`; never bare `ready` or `blocked` |
@@ -314,13 +314,13 @@ Event-to-change mapping lives in `ops/boardview/changes.rs` as one table: event 
 template, group affected. Verified kinds it must cover: `gate_started`, `gate`, `verdict`, `approved`,
 `done`, `needs_me`, `stuck`, `blocked`, `escalated`, `question_*`, `commented`, `annotation_*`,
 `automation_blocked`, `automation_resumed`, `operating_policy_confirmed`, and the condition kinds
-`queued`, `dispatch_failed`, `landing_stale`, `autopilot_error` (`docs/guide/events.md:18-23,49-51,108-124,
+`queued`, `dispatch_failed`, `landing_stale`, `autopilot_error` (`docs/guide/classic/events.md:18-23,49-51,108-124,
 140-147,217-221`). Unmapped kinds are class `other`, hidden by default, never dropped.
 
 ### Bounded work
 
 - Fold cost is O(change entries since the last fold); rebuild is O(open heads). Neither reads history rows.
-- Rows read heads, projections, facts and keyed rows only (the `hot` class, `docs/guide/storage.md:274`).
+- Rows read heads, projections, facts and keyed rows only (the `hot` class, `docs/guide/classic/storage.md:274`).
 - Proof follows `AGENTS.md:34-35`: exact work counters equal at two small history sizes, for fold, rebuild,
   Changes page and each lazy reader.
 - Lazy detail is served by a daemon reader pool (4 interactive, 1 background), coalesced by key, cancelled
@@ -331,10 +331,10 @@ template, group affected. Verified kinds it must cover: `gate_started`, `gate`, 
 | View | Exists today | New |
 |---|---|---|
 | Plan graph (R18) | `Task.depends_on` (`core/model.rs:797`), `TaskHeader.edges` (`core/backend/rows.rs:48-49`), `plan_progress` (`ops/tracker.rs:60,181`) | `detail.get{plan}` returns members with dependency layers (no layer or depth computation exists in `ops/tracker.rs`; `research/data-sources.md:104-106`) and each member's `rail` from its `BoardRow` |
-| Run timeline (R19) | `Run.started/ended` (`core/model.rs:558-560`), gate and review records, `timeline()` (`ops/timeline.rs:134`), condition runs (`docs/guide/events.md:106-117`), `idle_no_report` (`ops/sync.rs:47-49`) | Reader `timeline.range{from,to}`: spans `{task, run, agent, machine, phase, from, to}` from an `events` time-window read. No new record. Stalls = heartbeat gaps from `daemon/state` plus `attention_overdue`. |
+| Run timeline (R19) | `Run.started/ended` (`core/model.rs:558-560`), gate and review records, `timeline()` (`ops/timeline.rs:134`), condition runs (`docs/guide/classic/events.md:106-117`), `idle_no_report` (`ops/sync.rs:47-49`) | Reader `timeline.range{from,to}`: spans `{task, run, agent, machine, phase, from, to}` from an `events` time-window read. No new record. Stalls = heartbeat gaps from `daemon/state` plus `attention_overdue`. |
 | Agent wall (R20) | `PaneInfo` (`herdr/lib.rs:62-72`), run binding, Pi `get_state` (`docs/guide/corral-pi.md:1422-1423`) | `AgentRow{session, role, task, run, runtime, machine, status, now_line, since}`; `machine` is new (section 7) |
 | Usage (R21) | `UsageEntry` with connection, billing, model, tokens, reported and estimated USD (`core/usage.rs:37-60`); `AvailabilityClass::QuotaExhausted{reset_at}` (`core/availability.rs:140-156`) | Records `usage-buckets`, `quota-observations`; config `[usage.limits]` (section 12) |
-| Code review (R22) | `ReviewPacket` with `ObjectRef{base, head, diff_file}` (`ops/review_packet.rs:50,216-219`), annotation events (`docs/guide/events.md:49-53`), `Artifact` (`core/model.rs:698`), `Operation::Verdict` | `detail.get{review}`: unified patch per file with a size cap and truncation flag, annotation threads, artifact list; screenshots as blob streams. NSH `DiffView` takes a `patch` (`nsh:elements/diff-view`). |
+| Code review (R22) | `ReviewPacket` with `ObjectRef{base, head, diff_file}` (`ops/review_packet.rs:50,216-219`), annotation events (`docs/guide/classic/events.md:49-53`), `Artifact` (`core/model.rs:698`), `Operation::Verdict` | `detail.get{review}`: unified patch per file with a size cap and truncation flag, annotation threads, artifact list; screenshots as blob streams. NSH `DiffView` takes a `patch` (`nsh:elements/diff-view`). |
 | Goal burn-up (R23) | `ApprovedScope.goal` and acceptance (`core/plan.rs:93-95`), `PlanProgress.counts` (`ops/tracker.rs:31-38`), `approved` landings | Record `burnup-buckets`: `(scope = plan or project, day) -> {total, landed, criteria_covered}`, appended by the fold when membership or landed count changes; one off-path backfill from events |
 
 ---
@@ -460,7 +460,7 @@ store/key names and bounds.
 | `conflict{current_rev, by, via, at}` | Stale `expect` (store `Conflict`, `stale_revision`) | Show who won; never auto-retry with a new revision |
 | `refused{code, reason}` | Policy refusal; `code` is the CLI's refusal code unchanged (`question_closed`, `out_of_scope`, ...) | Show reason |
 | `confirm_required{challenge}` | Fresh local confirmation needed | Run the confirm flow |
-| `busy{retry_after_ms}` | Store `ApplyError::Busy` (`docs/guide/storage.md:150-151`) | Retry same `cmd_id` |
+| `busy{retry_after_ms}` | Store `ApplyError::Busy` (`docs/guide/classic/storage.md:150-151`) | Retry same `cmd_id` |
 | `unavailable{reason}` | Runtime unreachable, PM absent, loop degraded | Show health; retry same `cmd_id` later |
 | `expired` | Command older than its `expires_at` | Surface in Inbox |
 | `internal` | Bug | Report with correlation id |
@@ -501,10 +501,10 @@ sequenceDiagram
 ```
 
 The store already gives the guarantee: every question action names the revision and a stale one is refused
-(`docs/guide/questions.md:16-18`); the answer and its inbox message commit together
-(`docs/guide/questions.md:89-92`); the host is told over the bridge (`docs/guide/corral-pi.md:1288-1291`).
+(`docs/guide/classic/questions.md:16-18`); the answer and its inbox message commit together
+(`docs/guide/classic/questions.md:89-92`); the host is told over the bridge (`docs/guide/corral-pi.md:1288-1291`).
 The app must not turn the loser into a supersede. Supersede is a separate, explicit owner command with
-`expect:{rev:3}` (`docs/guide/questions.md:106-108`).
+`expect:{rev:3}` (`docs/guide/classic/questions.md:106-108`).
 
 **C. High-risk command with fresh confirmation.**
 
@@ -523,15 +523,15 @@ The app must not turn the loser into a supersede. Supersede is a separate, expli
 
 | Requirement | Where it comes from today | Missing | New record or field | Who attaches it |
 |---|---|---|---|---|
-| R12 options with consequences | `AgentQuestion.options` (≤ 6 strings), `recommendation` (`core/agent/question.rs:156-159`, `docs/guide/questions.md:50-58`); PM cards carry a closed `PmAction` (`ops/pm_workset.rs:75`, `ops/pm_decisions.rs:21-25`) | No consequence per option | `options_v2: Vec<{label, next, unblocks[], cost}>` on `AgentQuestion` (version bump) | Asker contract: `next` is required per option and `ask` refuses without it. Daemon derives `unblocks` (reverse `depends_on`) and `cost` (for known action classes, from the task's own run history). For `PmDecision` cards the daemon derives all three from the action kind. |
+| R12 options with consequences | `AgentQuestion.options` (≤ 6 strings), `recommendation` (`core/agent/question.rs:156-159`, `docs/guide/classic/questions.md:50-58`); PM cards carry a closed `PmAction` (`ops/pm_workset.rs:75`, `ops/pm_decisions.rs:21-25`) | No consequence per option | `options_v2: Vec<{label, next, unblocks[], cost}>` on `AgentQuestion` (version bump) | Asker contract: `next` is required per option and `ask` refuses without it. Daemon derives `unblocks` (reverse `depends_on`) and `cost` (for known action classes, from the task's own run history). For `PmDecision` cards the daemon derives all three from the action kind. |
 | R13 place | Goal via `parent` and `ApprovedScope.goal` (`core/plan.rs:93-95`); graph via `depends_on` (`core/model.rs:797`); blocked run state | Nothing stored is missing | None: `detail.get{question}` composes `{goal, plan position, waiting_on_answer[]}` at read time | Daemon derivation |
-| R14 evidence inline | `context_refs` (≤ 16 strings of 256 bytes, opaque, `docs/guide/questions.md:56`); `blocked_excerpt` on NeedsMe (`ops/sync.rs:38-40`) | No typed, resolvable evidence refs | Ref grammar added to `context_refs`: `diff:<task>/<run>@<sha>#<path>:<l1>-<l2>`, `file:<path>@<sha>#<l1>-<l2>`, `gate:<task>/<run>/<attempt>#tail=<n>`, `artifact:<task>#<path>` | Asker contract: at least one typed ref for `technical_choice` and `permission`. Daemon resolves refs to bounded blocks (hunk, excerpt, log tail, image blob). Fallback when the asker gave none: last gate log tail, else the blocked excerpt. |
-| R15 thread | None before answering. Closest: task comments with `--send` (`docs/guide/events.md:3-5`), PM triage notes | A follow-up channel on the question | `followups: Vec<{by, text, at, message_id}>` (≤ 8) on the question; message kind `question_followup` reserved in the asker's inbox in the same commit, as answers are (`docs/guide/questions.md:89-92`); asker replies with `ask{reply_to}` | Owner writes from the app or `corral question followup`. Asker contract: a follow-up is not an answer; reply, keep waiting. Each entry bumps the revision. |
-| R16 history | Tried: runs, `ChangesRound` (`core/model.rs:342`), gate attempts, checkpoint decisions. Owner decisions: answered questions, `pm-decisions` records (`ops/pm_decisions.rs:19-25`), operating confirmations (`docs/guide/events.md:219`) | No cross-task index of owner decisions | Record area `owner-decisions`: `{id, at, source, task, project, kind, summary, answer, via}`, appended in the same commit as the answer | Daemon and ops derivation. "Related" = same task, then same plan, then same project and kind; at most 5 shown. |
+| R14 evidence inline | `context_refs` (≤ 16 strings of 256 bytes, opaque, `docs/guide/classic/questions.md:56`); `blocked_excerpt` on NeedsMe (`ops/sync.rs:38-40`) | No typed, resolvable evidence refs | Ref grammar added to `context_refs`: `diff:<task>/<run>@<sha>#<path>:<l1>-<l2>`, `file:<path>@<sha>#<l1>-<l2>`, `gate:<task>/<run>/<attempt>#tail=<n>`, `artifact:<task>#<path>` | Asker contract: at least one typed ref for `technical_choice` and `permission`. Daemon resolves refs to bounded blocks (hunk, excerpt, log tail, image blob). Fallback when the asker gave none: last gate log tail, else the blocked excerpt. |
+| R15 thread | None before answering. Closest: task comments with `--send` (`docs/guide/classic/events.md:3-5`), PM triage notes | A follow-up channel on the question | `followups: Vec<{by, text, at, message_id}>` (≤ 8) on the question; message kind `question_followup` reserved in the asker's inbox in the same commit, as answers are (`docs/guide/classic/questions.md:89-92`); asker replies with `ask{reply_to}` | Owner writes from the app or `corral question followup`. Asker contract: a follow-up is not an answer; reply, keep waiting. Each entry bumps the revision. |
+| R16 history | Tried: runs, `ChangesRound` (`core/model.rs:342`), gate attempts, checkpoint decisions. Owner decisions: answered questions, `pm-decisions` records (`ops/pm_decisions.rs:19-25`), operating confirmations (`docs/guide/classic/events.md:219`) | No cross-task index of owner decisions | Record area `owner-decisions`: `{id, at, source, task, project, kind, summary, answer, via}`, appended in the same commit as the answer | Daemon and ops derivation. "Related" = same task, then same plan, then same project and kind; at most 5 shown. |
 | R17 PM asks | `ask_user` deferred questions live in the Pi session journal (`docs/guide/corral-pi.md:142-157`); OmO PM questions are read from a harness transcript of up to 32 MiB (`ops/pm_questions.rs:1,16,109`) | No canonical record, so two surfaces cannot race safely | `AgentQuestion` on the PM or assistant container, key `PM/<scope>/Q<n>` or `A-<n>/Q<n>`, opened by a new host op `owner_ask` | Asker (host) mirrors every deferred question. Answers become corral-first: the pane dialog and the app both submit with `--rev`; the loser sees "answered on <device>". OmO PMs keep today's transcript path and are shown read-only with "answer in pane". |
 
 All new fields are bounded like the existing ones and refused, not truncated, when over
-(`docs/guide/questions.md:48-58`). One screen = one `detail.get{question}` response of at most 60 KiB plus
+(`docs/guide/classic/questions.md:48-58`). One screen = one `detail.get{question}` response of at most 60 KiB plus
 blob streams for images.
 
 ---
@@ -713,7 +713,7 @@ agreed at pairing). No task id, title or text. The app syncs over the encrypted 
 | Topic | Design |
 |---|---|
 | Kinds (R11) | `[daemon.push] kinds = ["needs_you", "plan_awaiting_acceptance", "stuck", "escalated", "daemon_unhealthy"]`, overridable per device. Available and off by default: `assistant_answered` (R34), sent when a turn ends and no device has that thread open. Assistant questions and prompts use `needs_you`. Filtering happens in the daemon; the relay never sees the kind. |
-| Producer | Push is one more producer in the existing notification accounting (`notification_claimed`, `owner_notified`, `owner_notify_failed`, `docs/guide/events.md:206-209`), next to the herdr notifier, so the attention ladder counts it. At most one push per device, collapse key and minute. |
+| Producer | Push is one more producer in the existing notification accounting (`notification_claimed`, `owner_notified`, `owner_notify_failed`, `docs/guide/classic/events.md:206-209`), next to the herdr notifier, so the attention ladder counts it. At most one push per device, collapse key and minute. |
 | APNs and FCM credentials | They belong to whoever published the app build. `corral-relay --push-gateway <url>` lets a self-hosted relay forward content-free requests to the publisher's gateway; a self-hoster who builds the app sets `--apns-key` and `--fcm-key` directly. |
 | Hosting footprint | One static binary behind any TLS terminator; 1 vCPU and 256 MB is ample for one owner [INFERENCE]; state is one small file; no database, no accounts. `--allow <relay_id>` restricts a private relay to listed daemons. Limits: connections and bytes per relay id, idle timeout. |
 | Self-host | `corral-relay` plus `[daemon.relay] url`. The QR carries the relay URL, so devices need no configuration. |
@@ -957,7 +957,7 @@ because the launch's own hello needs a receipt. About 88% of PM receipts are bud
 | Bridge input keys | 4,096 per generation | The daemon counts its submissions per generation and rolls at 75%; an `input_limit` refusal is treated as "roll now", then the refused wake is delivered (`redesign:344-347`). App replies (`session.reply`) use `cmd_id` as the input key, so retries do not consume keys. | No wake is lost to `input_limit`. |
 | Budget requests | 16,384 per container, only when a limit is set | Gauge in health (`degraded · budget ledger 90%`). Enabling a hard limit in Settings shows days-to-cap and is refused when folding is unavailable. Folding stays deferred with the redesign's conditions (`redesign:348-350`). | No silent stall; unbounded while no limit is set, which is today's configuration. |
 | Assistant containers (quick thread) | The same 16,384 receipts and 64 generations; no reclaim exists for assistants and append refuses at the cap (`ops/agent/receipts.rs:53-59`) | Session roll at 48 generations, 75% of receipts or 30 days, at a barrier; end-before-check and the hello reserve apply; a message that meets a cap rolls first (section 13.4) | The quick thread is never refused at a cap and needs no one-way archive. |
-| Daemon's own stores | `app-commands` 2,048 per device; `devices` 32; `device-cursors` one per device; `owner-decisions` 4,096 newest; `thread-entries` 512 per session, never evicting an undelivered message; `owner-prompts` 64 pending per session, 24 h each; usage and burn-up buckets by retention window; change feed 7 days (`docs/guide/storage.md:172-174`) | Evict oldest settled; a feed gap triggers a projection rebuild, never a failure | The daemon adds no cap that can stop it. |
+| Daemon's own stores | `app-commands` 2,048 per device; `devices` 32; `device-cursors` one per device; `owner-decisions` 4,096 newest; `thread-entries` 512 per session, never evicting an undelivered message; `owner-prompts` 64 pending per session, 24 h each; usage and burn-up buckets by retention window; change feed 7 days (`docs/guide/classic/storage.md:172-174`) | Evict oldest settled; a feed gap triggers a projection rebuild, never a failure | The daemon adds no cap that can stop it. |
 
 Rollback note carried over: generation retirement is one-way from its first run (`redesign:424-425`).
 
@@ -1014,9 +1014,9 @@ sharpened, not renamed: the assistant files through a typed File-class tool, not
 | Owner input | Only text typed into the pane (`source === "interactive"`) is journaled, by the host, before the model sees it. Bridge input never is. Sources `pane`, `dialog`, `confirmation`, `permission`; 16 KiB; newest 64 | `pi/host/session.ts:1203-1215,1248-1271`, `core/assistant.rs:21-23,145-155`, `ops/agent/ops/owner_input.rs:50-97` |
 | Bridge input | 8 KiB per input; `/resume` over the bridge is rejected `owner_only_command` | `pi/bridge/protocol.ts:7`, `pi/host/session.ts:1609` |
 | Answer stream | Host events are coarse (turn start and end, denials), in a ring of 512 events of at most 8 KiB; Pi's in-process stream has text deltas | `pi/bridge/events.ts:5,38`, `pi/extensions/subagent/session.ts:24-27` |
-| Filing an Idea | `corral new --idea` and the board capture popup. From an assistant shell `corral new` for an Idea is a File-class command, and the task record still says origin `owner` (the CLI default); the contract tells the model to file "only on the owner's request", which nothing enforces | `cli/main.rs:258-267`, `docs/guide/assistants.md:190-192,539,556-559`, `docs/guide/tui.md:398-402` |
-| Owner-intent rule | For origin `owner` only: any change of title or body, and any drop, decline, merge or defer, needs a recorded `owner_decision` for that revision (`--owner-ok`). Other origins return early. `Origin::Assistant` exists and is set today only by co-work finish | `core/origin.rs:10-16,79-148`, `ops/assistant/scratch/finish.rs:614`, `docs/guide/sprint-review.md:60-74` |
-| Message to the PM | PM inbox item from `owner` or `assistant:A-<n>`, with a retry key; a Pi PM gets `pm_inbox_wake`; an outcome notice goes only to an assistant author | `core/pm_inbox.rs:35,187,212-214,428-433`, `docs/guide/pm.md:110-158` |
+| Filing an Idea | `corral new --idea` and the board capture popup. From an assistant shell `corral new` for an Idea is a File-class command, and the task record still says origin `owner` (the CLI default); the contract tells the model to file "only on the owner's request", which nothing enforces | `cli/main.rs:258-267`, `docs/guide/assistants.md:190-192,539,556-559`, `docs/guide/classic/tui.md:398-402` |
+| Owner-intent rule | For origin `owner` only: any change of title or body, and any drop, decline, merge or defer, needs a recorded `owner_decision` for that revision (`--owner-ok`). Other origins return early. `Origin::Assistant` exists and is set today only by co-work finish | `core/origin.rs:10-16,79-148`, `ops/assistant/scratch/finish.rs:614`, `docs/guide/classic/sprint-review.md:60-74` |
+| Message to the PM | PM inbox item from `owner` or `assistant:A-<n>`, with a retry key; a Pi PM gets `pm_inbox_wake`; an outcome notice goes only to an assistant author | `core/pm_inbox.rs:35,187,212-214,428-433`, `docs/guide/classic/pm.md:110-158` |
 | Caps | An assistant container holds ordinary generations and receipts; reclaim exists only for the PM; append refuses at the cap | `docs/guide/assistants.md:292-296`, `ops/agent/receipts.rs:53-75`, `ops/agent/admission.rs:476-480` |
 
 ### 13.2 Host without a pane
@@ -1041,7 +1041,7 @@ away" holds for pane and runtime sessions.
 | Claim | The daemon holds the existing session claim while it runs a host, so `corral pi --resume A-<n>` in a pane refuses `assistant_alive` (`docs/guide/assistants.md:146-147`). One live host per session (R31). |
 | Pane sessions in the app | Listed in Agents with transcript, questions and prompts. Text input is refused until the owner takes the session over: `assistant.session{op:"take_over"}` is today's resume (fence, next generation, `docs/guide/assistants.md:148-153`), which needs the pane host stopped first. |
 | Daemon stop or upgrade | Drain sends bridge `shutdown`; sessions are suspended, not ended (`docs/guide/assistants.md:133-139`). Each restart costs one generation per live host. |
-| Daemon crash | On start the daemon fences every generation it hosted and stops any leftover process; under systemd the unit's control group has already ended it [INFERENCE]. The owner's messages are in the thread. A message whose turn was cut shows the failure with an explicit resend, never a blind replay (the rule for interrupted sends, `docs/guide/events.md:239-240`). |
+| Daemon crash | On start the daemon fences every generation it hosted and stops any leftover process; under systemd the unit's control group has already ended it [INFERENCE]. The owner's messages are in the thread. A message whose turn was cut shows the failure with an explicit resend, never a blind replay (the rule for interrupted sends, `docs/guide/classic/events.md:239-240`). |
 
 | Admission check today | For a daemon-hosted launch |
 |---|---|
@@ -1190,9 +1190,9 @@ Attribution and the owner-intent rule:
 | `origin` | `assistant` (existing value, `core/origin.rs:10-16`) | `owner` |
 | Events | actor `assistant`, via `assistant:A-<n>` as File commands already record (`docs/guide/assistants.md:556-557`), detail `owner_input` | actor `owner`, via `app:<device-name>` or `cli` |
 | Owner's words | `owner_request`, write-once: no operation by any actor changes it | The title and body are his words |
-| Edit of title or body | Not an owner specification: the rule returns early for a non-owner origin (`core/origin.rs:80-82`), so the owner's Edit a minute later needs no `owner-ok`. | Unchanged: every replacement needs the explicit owner decision (`core/origin.rs:103-109`). In the app, the owner's own Edit command is that decision and the router records it, as `--owner-ok` does (`docs/guide/sprint-review.md:74`). |
+| Edit of title or body | Not an owner specification: the rule returns early for a non-owner origin (`core/origin.rs:80-82`), so the owner's Edit a minute later needs no `owner-ok`. | Unchanged: every replacement needs the explicit owner decision (`core/origin.rs:103-109`). In the app, the owner's own Edit command is that decision and the router records it, as `--owner-ok` does (`docs/guide/classic/sprint-review.md:74`). |
 | Drop, decline, merge, defer by the PM or an agent | Still need owner approval: the guard is extended to tasks that carry `owner_request` | Unchanged |
-| Promotion | An Acceptance section can make the Idea eligible (`docs/guide/automation.md:665-667`); policy unchanged | Same |
+| Promotion | An Acceptance section can make the Idea eligible (`docs/guide/classic/automation.md:665-667`); policy unchanged | Same |
 
 Share intent. An outbox item is `{cmd_id, intent, caption?, parts[]}`. With a caption, the caption is
 typed owner input and the parts are data. Without one, the client sets `intent: "file"` from the gesture.
@@ -1219,8 +1219,8 @@ Rejected:
 
 | Step | Mechanism |
 |---|---|
-| Send | `assistant.send{target:"pm"}` posts an item `{from: "owner", kind: question or routing, subject: first line, quote: text, key: cmd_id}` (`core/pm_inbox.rs:428-433`; the owner may post, `docs/guide/pm.md:129-130`). State `queued for PM`. Thread entry `pm_message` with its `PMI-<n>`. |
-| Wake | Pi PM: the existing `pm_inbox_wake` (`core/pm_inbox.rs:35`), which is the cause `pmi:<id>` of the Phase 1b wake design (`redesign:198`). OmO PM: the `inbox` card on its sweep (`docs/guide/pm.md:147-151`). |
+| Send | `assistant.send{target:"pm"}` posts an item `{from: "owner", kind: question or routing, subject: first line, quote: text, key: cmd_id}` (`core/pm_inbox.rs:428-433`; the owner may post, `docs/guide/classic/pm.md:129-130`). State `queued for PM`. Thread entry `pm_message` with its `PMI-<n>`. |
+| Wake | Pi PM: the existing `pm_inbox_wake` (`core/pm_inbox.rs:35`), which is the cause `pmi:<id>` of the Phase 1b wake design (`redesign:198`). OmO PM: the `inbox` card on its sweep (`docs/guide/classic/pm.md:147-151`). |
 | `delivered` | The PM claimed the item, or its host observed the wake. |
 | `PM replied` | The PM resolves the item with an outcome of at most 4 KiB (`core/pm_inbox.rs:24`). The daemon folds `pm_inbox_resolved` into a `pm_reply` thread entry. It is shown in the thread and is not fed to the assistant model. An owner-authored item has no notice session (`core/pm_inbox.rs:234-237`), so nothing else is delivered. |
 | PM `relaunching` or `absent` | The item waits. The composer shows the PM segment of the health line. Supervision is never interrupted (R29). |

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Regenerate docs/guide/cli.md from `corral <cmd> --help` (recursively).
+# Regenerate docs/guide/classic/cli.md from `corral <cmd> --help` (recursively).
 # Usage: scripts/gen-cli-docs.sh [path-to-corral-binary]
 set -euo pipefail
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 CORRAL=${1:-${CORRAL:-$REPO/target/debug/corral}}
-OUT=$REPO/docs/guide/cli.md
+OUT=$REPO/docs/guide/classic/cli.md
 [ -x "$CORRAL" ] || { echo "corral binary not found: $CORRAL (cargo build -p corral)" >&2; exit 1; }
 mkdir -p "$(dirname "$OUT")"
 

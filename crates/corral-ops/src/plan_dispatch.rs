@@ -279,7 +279,7 @@ fn launch(
          You are the planner, not an implementer or the workspace PM. Read {}/AGENTS.md \
          and the repository contracts. The repository is mounted read-only. \
          Do not create a branch or worktree, edit source, run the code gate, commit, land, or call corral done.\n\
-         Write one canonical plan at {} in the new YAML frontmatter format documented in docs/guide/plans.md. \
+         Write one canonical plan at {} in the new YAML frontmatter format documented in docs/guide/classic/plans.md. \
          Include human_review with a nonblank problem and nonempty changes and retained lists. \
          Keep goal, non_goals, decisions and acceptance canonical; non_goals and decisions must be nonempty. \
          Use explicit None, No exclusions or No important choices statements when appropriate. \
@@ -294,7 +294,7 @@ fn launch(
          An integration target is an exception: state why main-delivery waves are insufficient and schedule \
          merging main into the integration branch and running the full gate there after every wave, before \
          the next wave starts, not only at cutover. Record wave boundaries, caps, dependencies, sync ownership \
-         and verification in decisions and the plan body; see docs/guide/plans.md.\n\
+         and verification in decisions and the plan body; see docs/guide/classic/plans.md.\n\
          Finish by submitting the plan:\n\n    '{}' --root '{}' plan submit {} '{}'\n",
         task.id,
         task.title,

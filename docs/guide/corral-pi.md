@@ -229,7 +229,7 @@ The destination defaults to the bound task, then the session's project; if neith
 available, supply `to`. Plan mode refuses `corral_artifact` calls.
 
 Run prompts list the task's current reference and report artifacts, and reviewer
-prompts also list evidence. See [artifact kinds and revisions](cli.md#corral-artifact)
+prompts also list evidence. See [artifact kinds and revisions](classic/cli.md#corral-artifact)
 for the library, filtering and CLI rules.
 
 Workspace memory is ordinary Markdown under `.corral-next/memory/`. The roles are
@@ -247,7 +247,7 @@ controls; the daemon uses it for live text. There is no per-launch secret or
 message receipt.
 
 When upgrading from a Pi host that reports `get_state (response_too_large)`,
-update both Corral and Pi (`just upgrade` from a [source checkout](install.md#contributors)).
+update both Corral and Pi (`just upgrade` from a [source checkout](classic/install.md#contributors)).
 Restarting the daemon alone does not replace running Pi processes. On the updated
 engine you can retry a refused changes verdict on a still-live old worker without
 stopping the run or losing its transcript: the refusal proves the host is alive, but does not

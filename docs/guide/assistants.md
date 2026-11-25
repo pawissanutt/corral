@@ -1,5 +1,8 @@
 # Assistant sessions
 
+> This guide covers both engines. Sections about `.corral/` and `corral <command>` describe the classic CLI (v0.4.0);
+> sections that name `corral-next` or `.corral-next/` describe the current engine. See the [guide index](README.md).
+
 Assistants have workspace-scoped session identities (`A-1`, `A-2`, …), separate from
 coding runs and the single PM. Any number can be open at once; there is still exactly one
 PM. An assistant takes no coding slot, creates no task and names no project.
@@ -656,7 +659,7 @@ steer at the next turn boundary, like any corral message, never as owner input. 
 message waits in the session's inbox (`.corral/inbox/assistant_A-<n>/`) and is delivered
 once sync finds the host live, for example after `corral pi --resume`. An ended session
 gets no message; the outcome stays in the item. The
-[PM guide](pm.md#the-pm-inbox) has the full state machine and the PM side.
+[PM guide](classic/pm.md#the-pm-inbox) has the full state machine and the PM side.
 
 ## Task focus and run transcripts
 

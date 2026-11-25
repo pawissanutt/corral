@@ -1,6 +1,6 @@
 # corral - design
 
-Status: design document. Most of it is built; [docs/guide/](guide/getting-started.md) describes what ships today,
+Status: design document. Most of it is built; [docs/guide/](guide/classic/getting-started.md) describes what ships today,
 and sections below that read as plans are not promises.
 
 corral is a project-management control plane for agentic coding, living inside
@@ -65,7 +65,7 @@ Assumed defaults were not explicitly confirmed; revisit before building the affe
   state on top. If herdr is unreachable, the board is read-only and says so.
 - **Bounded hot paths.** Sync, board frames, watch, dispatch and admission read `TaskHead`s.
   Budgets keep unattributed work independent of history and measure own-record, emitted and
-  declared follow-up work separately; see [storage](guide/storage.md#contracts-for-contributors).
+  declared follow-up work separately; see [storage](guide/classic/storage.md#contracts-for-contributors).
 - **herdr client:** raw NDJSON over the Unix socket (`HERDR_SOCKET_PATH`, else the default
   session socket). Unix only for now; the CLI wrapper is the fallback if Windows ever matters.
 
@@ -89,7 +89,7 @@ Workspace ──< Project (repo) ──< Task ──< Run ──< Artifact
 
 These are fixed class roots, each with one deleter, refused when symlinked. Cache and scratch live
 under `[storage] cache_root` and `scratch_root`, validated against the containment matrix. The full
-layout, migration journal and rollback tables are in [storage](guide/storage.md).
+layout, migration journal and rollback tables are in [storage](guide/classic/storage.md).
 
 Task fields (abbreviated below). `corral export tasks` wraps these under `task:` in
 schema-versioned YAML frontmatter, followed by the Markdown body:
@@ -248,7 +248,7 @@ task `review: owner` under an auto policy, the worktree changing during or after
 can approve or request changes from Blocked.
 
 None of this runs without authority. One workspace operating policy (`[automation]`, see
-`docs/guide/automation.md`) is either **Assist**, the default, where every start, gate, review,
+`docs/guide/classic/automation.md`) is either **Assist**, the default, where every start, gate, review,
 repair and acceptance is an explicit owner action and sync only collects receipts, or scoped
 **Autopilot**: an owner-confirmed, finite grant naming exact tasks (or projects, with an expiring
 opt-in for later-filed tasks), plus delegated dispatch, acceptance and plan-acceptance authority.

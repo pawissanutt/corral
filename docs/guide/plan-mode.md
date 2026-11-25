@@ -5,7 +5,7 @@ only you can decide, and writes a plan. You review the plan and choose how it ru
 it back with feedback.
 
 Plan mode is available in Build sessions and in chat. Task workers use
-[plan runs](plans.md) instead.
+[plan runs](classic/plans.md) instead.
 
 ## Start planning
 

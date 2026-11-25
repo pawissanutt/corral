@@ -1,7 +1,7 @@
 # Artifacts: classification, revisions and a project library
 
 Status: **implemented** (T-2047–T-2054); this document retains the 2026-11-24 proposal and its
-historical baseline for context. For current usage see the [artifact guide](../guide/cli.md#corral-artifact).
+historical baseline for context. For current usage see the [artifact guide](../guide/classic/cli.md#corral-artifact).
 Revision 1 was cross-checked by an independent architect (`architect-astra`); what changed is in the
 [review log](#12-review-log).
 
@@ -285,7 +285,7 @@ Steps 1 to 5 and 7 are non-UI. Step 6 is UI work and goes to a UI specialist.
 | 4 | Pi write path | `pi/roles/common/tools.ts`, `pi/tools/{define,corral}.ts`, `pi/roles/{build,assistant}/index.ts`, `packages/corral-pi/assets/*-contract.md` | A fixture Code session's `corral_artifact` makes a fake `corral-next` receive `artifact add <project> … --kind report`; with no project and no `to` the tool fails naming `to`; a call without `kind` fails the schema | `task-hard` |
 | 5 | Prompts | `crates/corral-engine/src/{prompt,dispatch}.rs` | A worker prompt for a task with an owner-attached reference lists it and no diff or gate row; the reviewer prompt also lists evidence | `task-easy` |
 | 6 | Views | `crates/corral-protocol/src/detail/artifact.rs`, `crates/corral-daemon/src/views/details.rs`; `app/model/artifacts/{mod,content}.rs`, `app/model/review/evidence.rs`, `app/model/preview/{artifacts,details,sample}.rs`, `app/model/tasks/page.rs`, `app/model/work/live_task.rs`, `app/screens/artifacts.rs`, `app/screens/task/overview.rs`; `pi/ui/{artifact-view,task-store,proof-view,proof-parts}.ts` | On the app's `tui` target the finder opens with no diff, gate, usage or legacy row, `kind:gate` shows them, a library row opens, and a replaced report is absent until "all" | `ui-hard`; the Pi views `ui-easy` |
-| 7 | Guides | `docs/guide/corral-pi.md`, `docs/guide/build-sessions.md`, the artifact section of `docs/guide/cli.md` | n/a | `task-easy` |
+| 7 | Guides | `docs/guide/corral-pi.md`, `docs/guide/build-sessions.md`, the artifact section of `docs/guide/classic/cli.md` | n/a | `task-easy` |
 
 Order: 1, then 2, then 3 and 5 in parallel; 4 follows 2 and 3; 6 follows 1 to 3; 7 is last.
 

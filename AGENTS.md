@@ -113,7 +113,7 @@ Do not share generated executables across task outputs. Reclamation shares the t
 state writers and authorized launch submission, requires absent panes/non-live hosts and complete
 consumer visibility, and fails closed on unsupported platforms. Sync only schedules the bounded
 output worker; never put byte/process walks in rendering or hot scheduling. See
-[storage](docs/guide/storage.md#private-rebuildable-outputs-of-inactive-tasks).
+[storage](docs/guide/classic/storage.md#private-rebuildable-outputs-of-inactive-tasks).
 
 ### Load testing: container only
 

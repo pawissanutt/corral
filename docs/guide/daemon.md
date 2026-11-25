@@ -347,7 +347,7 @@ Two switch files beside the daemon socket can make the mode more conservative fo
 running daemon without a config edit, never less: the effective mode is the most
 conservative of the setting and the files (full > audit > incremental). They live in the
 runtime directory, so a reboot removes them. They are checked at the start of every pass
-like the timing switch ([timing guide](timing.md)); no restart is needed. `"full"` behaves
+like the timing switch ([timing guide](classic/timing.md)); no restart is needed. `"full"` behaves
 as `sync-full-on`, `"audit"` as `sync-audit-on`:
 
 - `sync-full-on` turns skipping off: every pass is full. Use it to rule out the

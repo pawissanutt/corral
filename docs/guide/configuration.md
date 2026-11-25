@@ -1,5 +1,8 @@
 # Configuration
 
+> This guide covers both engines. Sections about `.corral/` and `corral <command>` describe the classic CLI (v0.4.0);
+> sections that name `corral-next` or `.corral-next/` describe the current engine. See the [guide index](README.md).
+
 Personal preferences load from `${XDG_CONFIG_HOME:-$HOME/.config}/corral/config.toml` first.
 The workspace's `.corral/corral.toml`, created by `corral init` or the initialization offer
 on `corral up` (also bare `corral`), overrides them key by key. Tables merge recursively;
@@ -230,7 +233,7 @@ in control. This runtime override does not rewrite the config or change what
 `corral config get` reports. With the catalog disabled, queries use streaming search.
 When enabled, queries use a published generation plus an exact bounded change overlay.
 Unusable generations fall back to streaming search; background maintenance republishes lazily.
-See [stored content search](content-search.md#derived-index) for bounds and maintenance controls.
+See [stored content search](classic/content-search.md#derived-index) for bounds and maintenance controls.
 
 ## limits
 
@@ -430,7 +433,7 @@ it against automatic readmission until explicitly enqueued or moved to Ready aga
 An owning sync migrates existing queued Backlog records to Ready, preserving pinned routes.
 For migration from an empty opt-in list, set `paused = true` to keep all admission disabled:
 an empty `ready_projects` list now means all configured projects.
-See [queue authorization and recovery](automation.md#dispatch-queue).
+See [queue authorization and recovery](classic/automation.md#dispatch-queue).
 
 ## projects
 
@@ -446,7 +449,7 @@ root itself is a repository and no subdirectory is, the root becomes one project
 | `review` | none | Project-level override of the [review](#review) policy. |
 | `build_exit` | `"review"` | Build-session Land policy: `"review"` requires an approving in-session review and full gate, or an owner's recorded reason to override the review; `"gate"` requires the full gate only; `"none"` disables Land. See [build sessions](build-sessions.md#finish). |
 | `dispatch` | inherited | Partial project override of the three [dispatch](#dispatch) policy fields. |
-| `post_land` | empty | Ordered opt-in named argv hooks with explicit cwd, env, timeouts and retry bounds; see [post-land operations](post-land.md). |
+| `post_land` | empty | Ordered opt-in named argv hooks with explicit cwd, env, timeouts and retry bounds; see [post-land operations](classic/post-land.md). |
 
 ```toml
 [projects.app]
@@ -483,7 +486,7 @@ including those read by Pi. See [load sandbox](load-sandbox.md).
 
 The first scheduled report covers the preceding interval; subsequent reports resume
 from the last scheduled snapshot so downtime creates no gaps. See
-[daily digests](automation.md#daily-digests) for accounting semantics.
+[daily digests](classic/automation.md#daily-digests) for accounting semantics.
 
 ## defaults
 
@@ -930,7 +933,7 @@ and `grant_digest`, then runs `corral automation confirm` with the same selectio
 and `--digest <preview-id>`, typing that full ID at the interactive prompt.
 Settings provides the same explicit confirmation path. Neither ordinary settings
 save nor a PM/agent caller can confirm consent. See
-[operating modes and owner confirmation](automation.md#operating-modes-and-owner-confirmation)
+[operating modes and owner confirmation](classic/automation.md#operating-modes-and-owner-confirmation)
 for selection and delegation flags.
 
 `corral mode status`, `corral automation status` and `corral autopilot status` report effective authority,
@@ -944,7 +947,7 @@ bound task contracts invalidates the old consent; preview and confirm again.
 ## review
 
 The policy for what happens after an agent calls `corral done`. The default is the manual flow: no gate, no
-reviewer, and you accept every run yourself. See [automation](automation.md) for how the pieces work together.
+reviewer, and you accept every run yourself. See [automation](classic/automation.md) for how the pieces work together.
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -1090,7 +1093,7 @@ How `corral sync` and the daemon (or the board without a daemon) read agent acti
 | `startup_grace_secs` | `30` | Positive startup window for a dispatched pane to appear in herdr's pane list. Missing panes become **Blocked** after this window, or immediately if previously listed (even idle). |
 | `idle_after_secs` | `120` | A run that looks idle without calling `corral done` gets an `idle_no_report` badge after this many seconds. It never moves the card. |
 | `review_idle_after_secs` | `1800` | Positive idle bound for a pending reviewer, separate from worker warnings so quiet monitor/background waits can finish. The persisted deadline survives syncs and restarts; expiry escalates with the saved notes path. |
-| `stuck_after_secs` | `300` | Seconds of raw herdr idle, and foreground-process age, before a run gets the `stuck:` warning (see [the watchdog](automation.md#the-watchdog-stuck-commands)). |
+| `stuck_after_secs` | `300` | Seconds of raw herdr idle, and foreground-process age, before a run gets the `stuck:` warning (see [the watchdog](classic/automation.md#the-watchdog-stuck-commands)). |
 | `launch_wait_secs` | `10` | Seconds a launch (dispatch, gate, review, planning, binding) waits for pane-inventory reads already in progress before refusing with "pane inventory is being reconciled". Reads that start while a launch waits queue behind it and proceed once that launch is done. `0` refuses at once and never queues. |
 | `omo_agent_dir` | unset | OmO agent directory holding `sessions/`. Unset: `$OMO_CODING_AGENT_DIR`, then `$SENPI_CODING_AGENT_DIR`, then `~/.omo/agent`. |
 | `omp_agent_dir` | unset | OMP agent directory holding `sessions/`, read for provider-overload stalls. Unset: `~/.omp/agent`. |
@@ -1283,12 +1286,12 @@ Identical contents share storage without changing artifact references.
 
 Use `corral stats --storage` for task and workspace totals, `corral artifact gc --dry-run` for proposed
 actions and bytes saved, and `corral artifact gc --yes` to apply the policy. GC is explicit; merely opening
-the board or running sync does not purge artifacts. See [storage](storage.md) for commands.
+the board or running sync does not purge artifacts. See [storage](classic/storage.md) for commands.
 
 ## storage
 
 Database, blob, scratch and retention settings. Defaults come from `StorageCfg`
-(`crates/corral-core/src/storage_roots.rs`); the layout they apply to is in [storage](storage.md).
+(`crates/corral-core/src/storage_roots.rs`); the layout they apply to is in [storage](classic/storage.md).
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -1298,12 +1301,12 @@ Database, blob, scratch and retention settings. Defaults come from `StorageCfg`
 | `review_scratch_warn` | `"2GiB"` | Per-attempt scratch size that emits one `storage_scratch_warning` and one steering message. Nothing is deleted. |
 | `review_evidence_max` | `"64MiB"` | Cap on files promoted by `--evidence PATH` on `verdict`, `plan verdict` and `plan aggregate-verdict`. |
 | `blob_grace_hours` | `24` | How long an unreferenced blob survives before blob GC may delete it. Must be above 0. |
-| `outputs.<project>.<class>` | absent (disabled) | Opt-in private rebuildable output ownership (`kind`, relative `path`, `rebuildable = true`, `exclusive = true`, `grace_hours = 24`, and generated-file `extensions`). Registration never adopts nonempty directories. See [inactive outputs](storage.md#private-rebuildable-outputs-of-inactive-tasks). |
+| `outputs.<project>.<class>` | absent (disabled) | Opt-in private rebuildable output ownership (`kind`, relative `path`, `rebuildable = true`, `exclusive = true`, `grace_hours = 24`, and generated-file `extensions`). Registration never adopts nonempty directories. See [inactive outputs](classic/storage.md#private-rebuildable-outputs-of-inactive-tasks). |
 | `view_max_age` | `30` | Seconds a read view stays valid before reads fail with `Expired`. Must be above 0. Expired idle views release their WAL snapshot during board maintenance, even if their owner retains the view. Larger overrides can delay WAL reset; keep interactive views short. |
 
 `<workspace-id>` is the first 16 hex digits of the SHA-256 of the canonical workspace root;
 without `XDG_CACHE_HOME` the base is `$HOME/.cache`. Both roots are validated against the
-containment matrix in [storage](storage.md#containers-and-the-containment-matrix): they may sit
+containment matrix in [storage](classic/storage.md#containers-and-the-containment-matrix): they may sit
 inside the workspace root, `$HOME` or `/`, but never equal or overlap `.corral`, a fixed class
 root, a project, its `.worktrees` or each other. A violation names both paths and creates nothing.
 
@@ -1320,7 +1323,7 @@ scratch_root = "/home/me/miti-workspace/.scratch"
 | `agent` | `"omo"` | Profile used for the workspace PM pane (`corral pm`, `P` on the board). Must name a profile. |
 | `push_events` | `false` | Opt in to sync pushing `[corral]` messages to the live PM pane only. |
 | `supervise` | `false` | Allow corrald to relaunch a dead or unresponsive corral-pi PM. Heartbeat and lock diagnostics run regardless. See [daemon](daemon.md). |
-| `push_kinds` | `attention_due` plus the existing ten default task/configuration kinds | Selected actionable kinds; see [events](events.md) for the complete list. Only PM-relevant config changes wake the PM. Unknown names are rejected; `[]` selects none. |
+| `push_kinds` | `attention_due` plus the existing ten default task/configuration kinds | Selected actionable kinds; see [events](classic/events.md) for the complete list. Only PM-relevant config changes wake the PM. Unknown names are rejected; `[]` selects none. |
 | `attention_secs` | `900` | PM condition re-wake age, 60..86400 seconds. |
 | `attention_owner_secs` | `1800` | Owner notification age; greater than `attention_secs`, at most 604800 seconds (7 days). |
 | `attention_notify` | `true` | Invoke owner transport for new ladder claims. False records a not-invoked outcome; conditions and ladder state remain durable. |
@@ -1334,7 +1337,7 @@ Settings General exposes PM event push and a comma-separated PM push kinds field
 push disabled. Sync checkpoints past events while disabled or when PM/herdr is absent, so skipped events
 do not form a backlog. The first enabled sync with a live PM and no saved cursor considers retained history;
 run one sync with push disabled first to skip it. Position persists in the store's `pm-events` record.
-See [board events](events.md) for delivery, wait filters, cursors and harness-specific wake guidance.
+See [board events](classic/events.md) for delivery, wait filters, cursors and harness-specific wake guidance.
 
 ### pm.guard
 

@@ -66,7 +66,7 @@ app, verifies their SHA-256 sidecars, and installs the executables under `~/.loc
 default. It needs network access, `curl` or `wget`, `tar`, and `sha256sum` or `shasum`.
 For agent work, install Git and an authenticated agent provider; herdr 0.9.3 or newer is
 needed for the terminal engine. The installer may offer to install or upgrade herdr;
-`--yes` grants that consent. See the [installation guide](../../docs/guide/install.md)
+`--yes` grants that consent. See the [installation guide](../../docs/guide/classic/install.md)
 for the classic CLI and its prerequisites.
 
 ```sh

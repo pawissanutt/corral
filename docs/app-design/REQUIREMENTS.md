@@ -21,7 +21,7 @@ The owner's verdict on a better TUI: not enough. Every driver below was confirme
 | Corral should be a product | A TUI inside Herdr TUI is too high a barrier for others. Own use and product, both. |
 | Agents on other machines | Wanted; multi-machine scaling required later, not immediately. |
 | Provider usage limits | The owner wants to balance usage across providers; only visibility is in scope now. |
-| No quick way in | Asking a question or filing an idea needs a herdr pane on the host: `corral pi` refuses `not_in_herdr` elsewhere, and capture is a board popup (`docs/guide/assistants.md:24-59`, `docs/guide/tui.md:398-402`). The first version of this design had no assistant surface at all. |
+| No quick way in | Asking a question or filing an idea needs a herdr pane on the host: `corral pi` refuses `not_in_herdr` elsewhere, and capture is a board popup (`docs/guide/assistants.md:24-59`, `docs/guide/classic/tui.md:398-402`). The first version of this design had no assistant surface at all. |
 
 ## 2. Decisions (owner answers)
 
@@ -119,8 +119,8 @@ Names: the composer is **Ask** (one field, one Send, no modes); its target is **
   title, project, labels and acceptance criteria, keeps the owner's words verbatim in the body,
   and checks for duplicates first; when one is likely it asks before filing. The thread shows what
   was filed, with edit, merge and discard. Acceptance criteria can make the Idea eligible for
-  promotion (`docs/guide/automation.md:665-667`). Changing an Idea the owner filed himself still
-  needs his acceptance (`docs/guide/sprint-review.md:60-65`).
+  promotion (`docs/guide/classic/automation.md:665-667`). Changing an Idea the owner filed himself still
+  needs his acceptance (`docs/guide/classic/sprint-review.md:60-65`).
 - R27. Answers are grounded and streamed. Every task, plan, run, file or record an answer relies on
   is a link into the app. The owner can stop an answer.
 - R28. Context travels with the question. "Ask about this" attaches the item on screen as a

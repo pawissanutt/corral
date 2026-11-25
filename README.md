@@ -5,7 +5,7 @@ place to see it: what is running, what is blocked, and what is ready to land. Gi
 separate worktrees, review their changes with evidence, and decide what lands.
 
 **[Try Corral](#try-corral)** · [Latest release](https://github.com/pawissanutt/corral/releases/latest) ·
-[App guide](apps/corral-app/README.md)
+[App guide](apps/corral-app/README.md) · [Guides](docs/guide/README.md)
 
 ![Corral Home on the desktop: Needs you cards for a blocked task and two reviews, working sessions, tasks by status, projects, cost and the Ask composer](docs/img/corral-app-home.webp)
 

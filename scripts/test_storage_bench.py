@@ -88,7 +88,7 @@ class Frontmatter(unittest.TestCase):
 
 class MigrationExport(unittest.TestCase):
     def test_migrated_retry_vectors_equal_pinned_v1_list(self):
-        # The pinned v1 binary lives outside the repository (docs/guide/storage-cutover.md).
+        # The pinned v1 binary lives outside the repository (docs/guide/classic/storage-cutover.md).
         if ARGS.before is None and not PINNED_V1.exists():
             self.skipTest(f'pinned corral-0.3.0 is absent at {PINNED_V1}; pass --before to supply it')
         before = (ARGS.before or PINNED_V1).resolve(strict=True)

@@ -12,7 +12,7 @@ on native Linux x86_64 and ARM64 (GNU) and macOS Intel and ARM64 runners. It als
 builds a portable web app archive and a per-user Windows x86_64 desktop installer.
 The Windows installer does not provide a native daemon. The detailed support matrix,
 prerequisites and installation paths are in the [app README](../../apps/corral-app/README.md).
-Classic release installation remains in the [classic guide](../guide/install.md).
+Classic release installation remains in the [classic guide](../guide/classic/install.md).
 
 Each archive and installer has a SHA-256 sidecar. Native CI exercises the candidate
 archives through the installers, including fresh install, simulated upgrade, checksum

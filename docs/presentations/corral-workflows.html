@@ -559,7 +559,7 @@ sc(1, "c", "n", "First launch",
     ["S", "S", "Open the board in herdr session `corral`", "The board runs inside the herdr terminal engine in the dedicated default session `corral` and syncs every two seconds. A six-card tour explains the keys.", { sg: "board open · sync every 2 s" }],
     ["O", "S", "Check what was found", "`corral config validate` and `corral harness list` show the projects and the installed agent CLIs; `corral doctor --json` gives a machine-readable diagnosis.", {}]
   ],
-  ["crates/corral-core/src/store.rs:213 fn init", "crates/corral/src/doctor.rs", "docs/guide/getting-started.md#1-start-corral", "docs/guide/getting-started.md#2-check-setup", "docs/guide/configuration.md#herdr"],
+  ["crates/corral-core/src/store.rs:213 fn init", "crates/corral/src/doctor.rs", "docs/guide/classic/getting-started.md#1-start-corral", "docs/guide/classic/getting-started.md#2-check-setup", "docs/guide/configuration.md#herdr"],
   ["corral up", "corral up --yes", "corral doctor --fix", "corral config validate", "corral harness list"],
   [[9, "File the first task"], [2, "Come back to it later"], [16, "Open the optional PM"]]);
 
@@ -573,7 +573,7 @@ sc(2, "c", "n", "Return to an existing workspace",
     ["S", "W", "Reconcile panes from one inventory", "One pane_list sample: working stays Running, blocked becomes Blocked, a seen pane missing on two consecutive samples becomes Blocked.", { run: "R1 · pane w3:p1 · herdr: working" }],
     ["S", "S", "Resume automation in order", "Gates collected, reviews reconciled, plan pilot and autopilot advanced, movement notices, explicit queue, automatic dispatch policy, then PM push.", {}]
   ],
-  ["crates/corral-ops/src/sync.rs:22-181 sync orchestration", "crates/corral-ops/src/session_scope.rs:17 fn owns_inventory", "crates/corral-ops/src/pane_liveness.rs:19 fn inventory", "docs/guide/getting-started.md#getting-around-the-session", "docs/session-ownership.md"],
+  ["crates/corral-ops/src/sync.rs:22-181 sync orchestration", "crates/corral-ops/src/session_scope.rs:17 fn owns_inventory", "crates/corral-ops/src/pane_liveness.rs:19 fn inventory", "docs/guide/classic/getting-started.md#getting-around-the-session", "docs/session-ownership.md"],
   ["corral up", "corral focus-board"],
   [[3, "Close the board again"], [7, "Opened from the wrong session"], [8, "Old store without saved sockets"]]);
 
@@ -587,7 +587,7 @@ sc(3, "c", "n", "Close the board",
     ["O", "S", "corral up (or prefix+k)", "The board restarts in its own pane; a new one opens only when there is no board pane at all.", { sg: "board reopened" }],
     ["S", "X", "Catch-up sync", "The first sync reconciles panes and, when a gate is configured, starts gating the Review run.", { sg: "gating (configured gate)", cap: "1 / 3 global (gate counts)" }]
   ],
-  ["crates/corral-ops/src/sync.rs:43 fn sync", "crates/corral-ops/src/review.rs:86 fn done", "docs/guide/getting-started.md#getting-around-the-session", "docs/guide/pm.md#startup-stalls-and-upgrades"],
+  ["crates/corral-ops/src/sync.rs:43 fn sync", "crates/corral-ops/src/review.rs:86 fn done", "docs/guide/classic/getting-started.md#getting-around-the-session", "docs/guide/classic/pm.md#startup-stalls-and-upgrades"],
   ["q (board)", "corral up"],
   [[4, "Keep automation running headless"], [5, "Nothing drives sync"]]);
 
@@ -602,7 +602,7 @@ sc(4, "f", "n", "Headless automation",
     ["R", "S", "corral verdict T-042 approve", "Approve continues to acceptance.", { ev: "Gate: pass · verdict approve" }],
     ["S", "G", "Land without the board", "Landing rebases/fast-forwards the local base and writes an acceptance record. Meanwhile sync also admits Ready work into the freed slot.", { st: "Done", sg: "done", cand: "landed main@c3d4", run: "R1 closed", cap: "0 / 3 global" }]
   ],
-  ["crates/corral-ops/src/watch.rs", "crates/corral-ops/src/autopilot.rs:56 fn advance_all", "docs/guide/automation.md#the-autopilot", "docs/guide/pm.md#startup-stalls-and-upgrades"],
+  ["crates/corral-ops/src/watch.rs", "crates/corral-ops/src/autopilot.rs:56 fn advance_all", "docs/guide/classic/automation.md#the-autopilot", "docs/guide/classic/pm.md#startup-stalls-and-upgrades"],
   ["corral sync --watch", "corral autopilot status"],
   [[61, "Turn the autopilot off"], [58, "Owner acceptance instead"], [5, "What if the watcher stops"]]);
 
@@ -616,7 +616,7 @@ sc(5, "c", "e", "No sync driver",
     ["S", "S", "Nothing advances", "No failure is recorded and no worker is killed; automation simply has no clock.", {}],
     ["O", "S", "corral sync (once) or sync --watch", "The next owning sync resumes everything in its usual order.", { sg: "gating (configured gate)" }]
   ],
-  ["crates/corral-ops/src/sync.rs:22-181 sync orchestration", "docs/guide/pm.md#startup-stalls-and-upgrades", "docs/guide/automation.md#finishing-work-and-capacity"],
+  ["crates/corral-ops/src/sync.rs:22-181 sync orchestration", "docs/guide/classic/pm.md#startup-stalls-and-upgrades", "docs/guide/classic/automation.md#finishing-work-and-capacity"],
   ["corral sync", "corral sync --watch"],
   [[4, "Run the headless driver"], [85, "Subscribe to events instead"]]);
 
@@ -630,7 +630,7 @@ sc(6, "c", "e", "herdr unavailable",
     ["O", "S", "Inspect durable history", "show, list, search and artifacts read files in .corral/; no pane is needed.", {}],
     ["S", "W", "herdr returns", "The next owning sync samples panes and admits T-050 when capacity permits.", { st: "Running", sg: null, run: "R1 · new pane", cap: "2 / 3 global" }]
   ],
-  ["crates/corral-ops/src/sync.rs:22-181 herdr-unavailable branch", "crates/corral-ops/src/hooks.rs:420 fn reconcile_post_land", "crates/corral-ops/src/gate.rs:593 fn collect_finished", "docs/guide/post-land.md#failure-restart-and-retry", "docs/guide/events.md#optional-push-to-the-pm"],
+  ["crates/corral-ops/src/sync.rs:22-181 herdr-unavailable branch", "crates/corral-ops/src/hooks.rs:420 fn reconcile_post_land", "crates/corral-ops/src/gate.rs:593 fn collect_finished", "docs/guide/classic/post-land.md#failure-restart-and-retry", "docs/guide/classic/events.md#optional-push-to-the-pm"],
   ["corral show T-050 --json", "corral hooks reconcile"],
   [[72, "Post-land receipts in detail"], [2, "Back to normal start"]]);
 
@@ -658,7 +658,7 @@ sc(8, "c", "e", "Legacy ownership unknown",
     ["O", "S", "corral bind-session --socket … --launch-record …", "Under the ownership claim and board writer lock, the evidence, socket and timestamp are snapshotted into .corral/herdr-session.json. Conflicting saved sockets are refused; changing an existing binding is refused.", { dec: null, run: "R2 · bound to original socket" }],
     ["S", "W", "Owning sync resumes", "With that server selected, normal startup grace and two-miss disappearance detection apply.", { sg: null, cap: "slots reconcile normally" }]
   ],
-  ["crates/corral-core/src/session_binding.rs:54 fn bind_herdr_session", "crates/corral-ops/src/session_scope.rs:23 fn owns_tasks", "docs/session-ownership.md", "docs/guide/pm.md#startup-stalls-and-upgrades"],
+  ["crates/corral-core/src/session_binding.rs:54 fn bind_herdr_session", "crates/corral-ops/src/session_scope.rs:23 fn owns_tasks", "docs/session-ownership.md", "docs/guide/classic/pm.md#startup-stalls-and-upgrades"],
   ["corral pm brief --json", "corral --root <store> bind-session --socket <sock> --launch-record <file>"],
   [[7, "Foreign session on a bound store"], [6, "herdr is down instead"]]);
 
@@ -672,7 +672,7 @@ sc(9, "c", "n", "Normal task intake",
     ["S", "S", "Persist and log", "The task file uses the schema_version 2 envelope; a created event is appended to events.jsonl.", {}],
     ["S", "S", "Eligible for admission", "A dependency-ready Backlog task without a hold is a candidate for automatic admission (auto_backlog = true by default) or explicit dispatch.", { sg: "eligible: next sync may admit" }]
   ],
-  ["crates/corral-ops/src/tasks.rs:11 fn new_task", "crates/corral-core/src/store.rs:404 fn create", "crates/corral-ops/src/completion.rs:39 fn register_criteria", "docs/guide/getting-started.md#3-capture-and-file-tasks", "docs/guide/acceptance.md#explicit-criteria-and-completion-audit"],
+  ["crates/corral-ops/src/tasks.rs:11 fn new_task", "crates/corral-core/src/store.rs:404 fn create", "crates/corral-ops/src/completion.rs:39 fn register_criteria", "docs/guide/classic/getting-started.md#3-capture-and-file-tasks", "docs/guide/classic/acceptance.md#explicit-criteria-and-completion-audit"],
   ["corral new \"Add a --dry-run flag\" -p app --body \"…\"", "corral criteria register T-042 --file criteria.json"],
   [[22, "Dispatch it manually"], [24, "Let sync admit it"], [14, "It depends on other work"]]);
 
@@ -685,7 +685,7 @@ sc(10, "f", "n", "Idea intake",
     ["P", "O", "Ask one question", "requires_owner is true. Empty slots do not authorize promotion. Without an answer, stop here: the Idea stays pending, visible in sprint review and never admitted.", { dec: "Promote T-060 to Backlog?" }],
     ["O", "S", "Owner chooses promotion", "L on the board, or corral move. This played path chooses promotion; leaving the question unanswered ends at the previous step. Promotion sets no withdrawal hold, so Backlog stays eligible for auto_backlog.", { st: "Backlog", dec: null, sg: "eligible for admission" }]
   ],
-  ["crates/corral-ops/src/promotion.rs:45 fn promotion_shortlist", "crates/corral-core/src/dispatch_config.rs:8 enum PromoteIdeas", "crates/corral-ops/src/pm_next.rs:440 fn pm_next", "docs/guide/automation.md#automatic-backlog-dispatch-and-idea-promotion", "docs/guide/sprint-review.md"],
+  ["crates/corral-ops/src/promotion.rs:45 fn promotion_shortlist", "crates/corral-core/src/dispatch_config.rs:8 enum PromoteIdeas", "crates/corral-ops/src/pm_next.rs:440 fn pm_next", "docs/guide/classic/automation.md#automatic-backlog-dispatch-and-idea-promotion", "docs/guide/classic/sprint-review.md"],
   ["corral new \"…\" --idea", "corral pm next --json", "corral move T-060 backlog"],
   [[11, "Decline, defer, narrow or merge"], [25, "Idea policy never / suggest / auto"]]);
 
@@ -699,7 +699,7 @@ sc(11, "c", "n", "Idea disposition",
     ["S", "S", "Audit is durable", "Reason, decision author and approving owner are kept; filing origin stays unchanged. Owner reductions lead the dropped section of the next sprint review.", {}],
     ["O", "S", "Merge variant", "`idea T-060 merge --into T-061` keeps the original, adds a source link on the destination and an event for review. Reopening needs no permission; repeating a disposition needs fresh consent.", {}]
   ],
-  ["crates/corral-ops/src/ideas.rs:16 fn decide_idea", "crates/corral-core/src/origin.rs:76 fn protect_owner_change", "crates/corral-ops/src/ideas.rs:16-80 dispositions", "docs/guide/sprint-review.md#protecting-owner-intent"],
+  ["crates/corral-ops/src/ideas.rs:16 fn decide_idea", "crates/corral-core/src/origin.rs:76 fn protect_owner_change", "crates/corral-ops/src/ideas.rs:16-80 dispositions", "docs/guide/classic/sprint-review.md#protecting-owner-intent"],
   ["corral comment T-060 \"owner-ok: decline Use task two instead\"", "corral idea T-060 decline --reason \"…\"", "corral idea T-060 defer --reason \"…\" --owner-ok"],
   [[10, "Idea intake"], [80, "Shows up in sprint review"]]);
 
@@ -713,7 +713,7 @@ sc(12, "c", "n", "Change scope",
     ["S", "S", "Old PASS no longer counts", "Gate and review records bind the task specification; GA1 is readable history, not reusable proof. Old evidence is never silently refreshed.", { ev: "GA1 stale · fresh gate required" }],
     ["W", "S", "Read back and continue", "The worker publishes progress and checkpoint with the new spec_revision, then earns fresh gate and evidence.", { run: "R1 · checkpoint rev 3 compatible" }]
   ],
-  ["crates/corral-ops/src/plan.rs:299 fn fresh", "crates/corral-ops/src/resume.rs:40 fn stale_reasons", "crates/corral-ops/src/progress.rs:16 fn progress_spec_revision", "crates/corral-ops/src/completion.rs:21 fn completion_spec_digest", "docs/guide/plans.md#revisions-and-freshness", "docs/guide/acceptance.md"],
+  ["crates/corral-ops/src/plan.rs:299 fn fresh", "crates/corral-ops/src/resume.rs:40 fn stale_reasons", "crates/corral-ops/src/progress.rs:16 fn progress_spec_revision", "crates/corral-ops/src/completion.rs:21 fn completion_spec_digest", "docs/guide/classic/plans.md#revisions-and-freshness", "docs/guide/classic/acceptance.md"],
   ["corral edit T-042 --owner-ok", "corral run progress T-042 --json"],
   [[13, "Add context without changing scope"], [44, "Stale checkpoint handling"], [38, "Stale plan"]]);
 
@@ -726,7 +726,7 @@ sc(13, "c", "n", "Add context",
     ["S", "W", "Owner note delivered", "A stuck agent queues it instead of typing into the stuck terminal.", { sg: "comment 2 · delivered" }],
     ["S", "R", "Reviewer prompts include Owner comments", "Dispatch and reviewer prompts carry the thread under Owner comments, even with custom templates.", { ev: "Gate: pass GA2 (still valid)" }]
   ],
-  ["crates/corral-ops/src/comments.rs:10 fn comment", "crates/corral-ops/src/comments.rs:73 fn owner_comments", "crates/corral-core/src/comments.rs:23 struct TaskComment", "docs/guide/comments.md", "docs/guide/events.md"],
+  ["crates/corral-ops/src/comments.rs:10 fn comment", "crates/corral-ops/src/comments.rs:73 fn owner_comments", "crates/corral-core/src/comments.rs:23 struct TaskComment", "docs/guide/classic/comments.md", "docs/guide/classic/events.md"],
   ["corral comment T-046 \"…\"", "corral comment T-046 \"…\" --send"],
   [[48, "Delivery fails"], [12, "It really is a scope change"]]);
 
@@ -740,7 +740,7 @@ sc(14, "c", "n", "Dependency chain",
     ["S", "S", "No free automatic slot", "Automatic claims keep limits.review headroom; with none free T-043 waits with a capacity reason.", { sg: "eligible · waiting for capacity", cap: "3 / 3 global" }],
     ["S", "W", "Slot frees → Ready → Running", "auto_backlog moves it through Ready to Running on a later sync.", { st: "Running", sg: null, run: "R1 · pane w6:p1", cap: "3 / 3 global" }]
   ],
-  ["crates/corral-ops/src/queue.rs:339 fn dependency_check", "crates/corral-ops/src/dispatch_policy.rs:105-185 eligibility", "docs/guide/automation.md#dispatch-queue"],
+  ["crates/corral-ops/src/queue.rs:339 fn dependency_check", "crates/corral-ops/src/dispatch_policy.rs:105-185 eligibility", "docs/guide/classic/automation.md#dispatch-queue"],
   ["corral queue list --json"],
   [[15, "Broken dependency graph"], [26, "Every admission hold"]]);
 
@@ -753,7 +753,7 @@ sc(15, "c", "e", "Invalid dependency graph",
     ["S", "W", "Unrelated T-047 admitted", "A malformed graph does not block unrelated work.", { cap: "2 / 3 global (T-047 started)" }],
     ["O", "S", "Fix with corral edit", "Remove or correct the edge; the next sync re-evaluates T-044.", { task: "T-044", sg: "eligible" }]
   ],
-  ["crates/corral-ops/src/queue.rs:339 fn dependency_check", "crates/corral-ops/src/queue.rs:378 fn blocked_reason", "docs/guide/automation.md#automatic-backlog-dispatch-and-idea-promotion"],
+  ["crates/corral-ops/src/queue.rs:339 fn dependency_check", "crates/corral-ops/src/queue.rs:378 fn blocked_reason", "docs/guide/classic/automation.md#automatic-backlog-dispatch-and-idea-promotion"],
   ["corral queue list", "corral edit T-044"],
   [[14, "A valid chain"]]);
 
@@ -766,7 +766,7 @@ sc(16, "c", "n", "Open the PM",
     ["P", "S", "corral sync, then pm brief --json", "Sync at startup, then read health (sync_owned, done_unfinished_runs, last_version_skew), slot usage, status counts and lessons.", { sg: "brief read" }],
     ["P", "S", "pm next --json", "Exactly one closed card. Both readbacks are side-effect free.", { sg: "card ready" }]
   ],
-  ["crates/corral-ops/src/pm.rs:22 fn open_pm", "crates/corral-ops/src/pm.rs:74 fn live_pm_pane", "crates/corral-ops/src/pm.rs:9-138 single PM", "docs/guide/pm.md#startup-stalls-and-upgrades", "docs/guide/configuration.md#pm"],
+  ["crates/corral-ops/src/pm.rs:22 fn open_pm", "crates/corral-ops/src/pm.rs:74 fn live_pm_pane", "crates/corral-ops/src/pm.rs:9-138 single PM", "docs/guide/classic/pm.md#startup-stalls-and-upgrades", "docs/guide/configuration.md#pm"],
   ["corral pm", "corral pm brief --json", "corral pm next --json"],
   [[17, "Run the PM loop"], [19, "Work without a PM"]]);
 
@@ -781,7 +781,7 @@ sc(17, "c", "n", "PM loop",
     ["P", "S", "Verify the stated outcome", "corral show T-050 --json confirms Running and the run identity.", {}],
     ["P", "S", "corral wait --json --print-cursor through monitor", "Subscribe to actionable events and keep the cursor for re-arming.", { sg: "subscribed (after_offset kept)" }]
   ],
-  ["crates/corral-ops/src/pm_next.rs:124 fn pm_card", "crates/corral-ops/src/pm_next.rs:440 fn pm_next", "crates/corral-ops/src/dispatch.rs:59 fn dispatch", "docs/guide/pm.md#running-corral-with-a-cheap-pm", "docs/guide/pm.md#policy-boundaries"],
+  ["crates/corral-ops/src/pm_next.rs:124 fn pm_card", "crates/corral-ops/src/pm_next.rs:440 fn pm_next", "crates/corral-ops/src/dispatch.rs:59 fn dispatch", "docs/guide/classic/pm.md#running-corral-with-a-cheap-pm", "docs/guide/classic/pm.md#policy-boundaries"],
   ["corral pm brief --json", "corral pm next --json", "corral wait --json --print-cursor"],
   [[18, "A board wake"], [85, "Cursor and timeout rules"]]);
 
@@ -795,7 +795,7 @@ sc(18, "c", "n", "PM board wake",
     ["P", "O", "Show the exact question", "Pending questions rank first among cards.", {}],
     ["P", "S", "Re-arm with --after-offset", "Events between waits are still considered.", { sg: "re-armed" }]
   ],
-  ["crates/corral-core/src/event_reader.rs:37 struct EventReader", "crates/corral-ops/src/pm_next.rs:440 fn pm_next", "docs/guide/events.md", "docs/guide/pm.md#what-the-cards-trust"],
+  ["crates/corral-core/src/event_reader.rs:37 struct EventReader", "crates/corral-ops/src/pm_next.rs:440 fn pm_next", "docs/guide/classic/events.md", "docs/guide/classic/pm.md#what-the-cards-trust"],
   ["corral wait --after-offset 18233 --json --print-cursor"],
   [[46, "Answer the question"], [85, "Event subscription details"]]);
 
@@ -809,7 +809,7 @@ sc(19, "c", "n", "PM absent",
     ["R", "S", "Verdict approve", "accept = owner (default): the run waits as ✓ reviewed.", { sg: "reviewed", ev: "Gate: pass · verdict approve" }],
     ["O", "S", "Owner approves on the board", "`a` in review, or corral approve.", { st: "Done", sg: "done", cand: "landed main@c3d4", run: "R1 closed", cap: "0 / 3 global" }]
   ],
-  ["crates/corral-ops/src/sync.rs:22-181 no PM requirement", "crates/corral-ops/src/dispatch_policy.rs:129 fn advance", "crates/corral-ops/src/pm.rs:9-138 optional PM", "docs/guide/automation.md#automatic-backlog-dispatch-and-idea-promotion"],
+  ["crates/corral-ops/src/sync.rs:22-181 no PM requirement", "crates/corral-ops/src/dispatch_policy.rs:129 fn advance", "crates/corral-ops/src/pm.rs:9-138 optional PM", "docs/guide/classic/automation.md#automatic-backlog-dispatch-and-idea-promotion"],
   ["corral board", "corral approve T-042"],
   [[20, "PM push while absent"], [21, "reviewer = pm needs a PM"]]);
 
@@ -823,7 +823,7 @@ sc(20, "f", "e", "PM push disabled or unavailable",
     ["S", "P", "Only new events are sent", "[corral] messages reach the remembered live PM pane only, never coding panes. Earlier skipped events are not replayed.", { sg: "delivered: new needs_me" }],
     ["S", "S", "First-ever cursor caveat", "A first enabled sync with no saved cursor considers retained history from offset zero; run one sync with push disabled first to skip it.", {}]
   ],
-  ["crates/corral-ops/src/pm_events.rs:16 fn push_events", "docs/guide/events.md#optional-push-to-the-pm", "docs/guide/configuration.md#pm"],
+  ["crates/corral-ops/src/pm_events.rs:16 fn push_events", "docs/guide/classic/events.md#optional-push-to-the-pm", "docs/guide/configuration.md#pm"],
   ["corral config set pm.push_events true"],
   [[18, "Wake via wait instead"], [19, "No PM at all"]]);
 
@@ -836,7 +836,7 @@ sc(21, "f", "n", "reviewer = pm",
     ["P", "S", "corral verdict T-042 approve --notes …", "The verdict binds to the commit; a moved worktree is not trusted.", { ev: "Gate: pass · verdict approve (PM)" }],
     ["S", "S", "Acceptance follows policy", "accept = owner → reviewed. Approval later closes non-PM reviewer panes; the PM pane is preserved.", { sg: "reviewed" }]
   ],
-  ["crates/corral-ops/src/reviewer.rs:323 fn review_run", "crates/corral-ops/src/pm.rs:22 fn open_pm", "crates/corral-core/src/review.rs:57 enum Reviewer", "docs/guide/automation.md#reviewer-runs-and-verdicts", "docs/guide/automation.md#manual-review"],
+  ["crates/corral-ops/src/reviewer.rs:323 fn review_run", "crates/corral-ops/src/pm.rs:22 fn open_pm", "crates/corral-core/src/review.rs:57 enum Reviewer", "docs/guide/classic/automation.md#reviewer-runs-and-verdicts", "docs/guide/classic/automation.md#manual-review"],
   ["corral review-run T-042 --reviewer pm"],
   [[55, "Profile reviewer instead"], [58, "Acceptance modes"]]);
 
@@ -851,7 +851,7 @@ sc(22, "c", "n", "Manual dispatch",
     ["S", "G", "Create the worktree", "<project>/.worktrees/T-042 on branch corral/T-042 (Worktree).", { run: "R1 · worktree ready", cand: "branch corral/T-042 · base main@a1f0" }],
     ["S", "W", "Pane and prompt submission", "CreatingPane → Pane → Submitting: the agent launches with the task prompt and the card moves to Running.", { st: "Running", sg: null, run: "R1 · pane w4:p1 · working" }]
   ],
-  ["crates/corral-ops/src/dispatch.rs:59 fn dispatch", "crates/corral-ops/src/launch.rs:73 fn launch", "crates/corral-core/src/routing.rs:175 fn route_task", "crates/corral-core/src/model.rs:379 enum LaunchStage", "docs/guide/getting-started.md#4-open-the-board", "docs/guide/configuration.md#resources"],
+  ["crates/corral-ops/src/dispatch.rs:59 fn dispatch", "crates/corral-ops/src/launch.rs:73 fn launch", "crates/corral-core/src/routing.rs:175 fn route_task", "crates/corral-core/src/model.rs:379 enum LaunchStage", "docs/guide/classic/getting-started.md#4-open-the-board", "docs/guide/configuration.md#resources"],
   ["corral dispatch T-042 --profile deep"],
   [[30, "Launch interrupted"], [31, "Submission uncertain"], [41, "Worker starts coding"]]);
 
@@ -864,7 +864,7 @@ sc(23, "c", "n", "Explicit queue",
     ["S", "S", "Drain in order", "P0, P1, P2, P3 (unknown last), then creation time, then task ID; review headroom is preserved.", { cap: "2 / 3 global (a run finished)" }],
     ["S", "W", "Launch the pinned route", "Model availability is re-checked at claim; the same reservation/worktree/pane sequence as manual dispatch follows.", { st: "Running", sg: null, run: "R1 · pane w4:p1", cap: "3 / 3 global" }]
   ],
-  ["crates/corral-ops/src/queue.rs:10 fn enqueue", "crates/corral-ops/src/queue.rs:434 fn sort_candidates", "crates/corral-ops/src/queue.rs:459 fn dispatch_queue", "docs/guide/automation.md#dispatch-queue", "docs/guide/cli.md#corral-queue-add"],
+  ["crates/corral-ops/src/queue.rs:10 fn enqueue", "crates/corral-ops/src/queue.rs:434 fn sort_candidates", "crates/corral-ops/src/queue.rs:459 fn dispatch_queue", "docs/guide/classic/automation.md#dispatch-queue", "docs/guide/classic/cli.md#corral-queue-add"],
   ["corral queue add T-042 --profile deep --model opus --effort high --base main", "corral queue list --json"],
   [[28, "Withdraw it"], [29, "Pinned model missing"], [27, "Pause the queue"]]);
 
@@ -878,7 +878,7 @@ sc(24, "f", "n", "Automatic Backlog dispatch",
     ["S", "S", "Backlog → Ready", "A dispatch_policy event records reason, rank, eligibility inputs, free slots and the selected route.", { st: "Ready", sg: "selected by dispatch_policy" }],
     ["S", "W", "Ready → Running", "The claim rechecks headroom under the board lock, then launches.", { st: "Running", sg: null, run: "R1 · pane w4:p1", cap: "2 coding · 0 review / limits running 4, review 2" }]
   ],
-  ["crates/corral-ops/src/dispatch_policy.rs:105-185 eligibility", "crates/corral-ops/src/dispatch_policy.rs:54 fn automatic_capacity_reason", "crates/corral-core/src/dispatch_config.rs:25-55 defaults", "docs/guide/automation.md#automatic-backlog-dispatch-and-idea-promotion"],
+  ["crates/corral-ops/src/dispatch_policy.rs:105-185 eligibility", "crates/corral-ops/src/dispatch_policy.rs:54 fn automatic_capacity_reason", "crates/corral-core/src/dispatch_config.rs:25-55 defaults", "docs/guide/classic/automation.md#automatic-backlog-dispatch-and-idea-promotion"],
   ["corral autopilot status"],
   [[26, "Why something is held"], [25, "Idea promotion policy"], [32, "Two syncs at once"]]);
 
@@ -892,7 +892,7 @@ sc(25, "f", "n", "Idea promotion policy",
     ["S", "S", "auto", "Moves eligible Ideas to Backlog and dispatches them without asking, even when auto_backlog is false. Existing eligible Backlog work goes first.", { st: "Backlog", sg: "auto: promoted" }],
     ["S", "W", "Budget consumed", "max_auto_promotions_per_day = 3 is a workspace-wide budget on the UTC date. Dispatching existing Backlog work does not consume it.", { st: "Running", run: "R1 · pane w7:p1", cap: "promotions today 3 / 3 · budget exhausted" }]
   ],
-  ["crates/corral-ops/src/promotion.rs:45 fn promotion_shortlist", "crates/corral-core/src/dispatch_config.rs:8 enum PromoteIdeas", "crates/corral-core/src/dispatch_config.rs:25-55 defaults", "docs/guide/automation.md#automatic-backlog-dispatch-and-idea-promotion", "docs/guide/configuration.md#dispatch"],
+  ["crates/corral-ops/src/promotion.rs:45 fn promotion_shortlist", "crates/corral-core/src/dispatch_config.rs:8 enum PromoteIdeas", "crates/corral-core/src/dispatch_config.rs:25-55 defaults", "docs/guide/classic/automation.md#automatic-backlog-dispatch-and-idea-promotion", "docs/guide/configuration.md#dispatch"],
   ["corral config set dispatch.promote_ideas auto", "corral autopilot status"],
   [[10, "Owner-driven intake"], [24, "Automatic Backlog dispatch"]]);
 
@@ -923,7 +923,7 @@ sc(27, "c", "n", "Queue pause and resume",
     ["O", "S", "corral queue resume", "The next sync admits T-050 by priority.", { sg: "admitted" }],
     ["S", "W", "T-050 starts", "", { st: "Running", sg: null, run: "R1 · pane w4:p1", cap: "2 / 3 global" }]
   ],
-  ["crates/corral-ops/src/queue.rs:118 fn dispatch_pause", "docs/guide/cli.md#corral-queue-pause", "docs/guide/configuration.md#dispatch", "docs/guide/automation.md#finishing-work-and-capacity"],
+  ["crates/corral-ops/src/queue.rs:118 fn dispatch_pause", "docs/guide/classic/cli.md#corral-queue-pause", "docs/guide/configuration.md#dispatch", "docs/guide/classic/automation.md#finishing-work-and-capacity"],
   ["corral queue pause", "corral queue resume"],
   [[61, "Autopilot off is different"], [28, "Withdraw one task"]]);
 
@@ -935,7 +935,7 @@ sc(28, "c", "n", "Withdrawal",
     ["S", "S", "auto_backlog skips it", "The hold prevents immediate automatic readmission.", {}],
     ["O", "S", "corral queue add T-050 (or move to Ready)", "Explicit enqueue clears the hold and resolves the route again.", { st: "Ready", sg: "route resolved again" }]
   ],
-  ["crates/corral-ops/src/queue.rs:94 fn dequeue", "crates/corral-ops/src/queue.rs:10-141 queue semantics", "docs/guide/automation.md#dispatch-queue"],
+  ["crates/corral-ops/src/queue.rs:94 fn dequeue", "crates/corral-ops/src/queue.rs:10-141 queue semantics", "docs/guide/classic/automation.md#dispatch-queue"],
   ["corral queue remove T-050", "corral queue add T-050"],
   [[23, "Explicit queue"], [24, "Automatic Backlog"]]);
 
@@ -948,7 +948,7 @@ sc(29, "c", "e", "Pinned routing",
     ["S", "S", "Claim: model unavailable", "Availability is re-checked at claim; the pinned model is missing, so launch fails visibly with no substitute. Preparation releases capacity but keeps intent and error.", { sg: "launch failed: model opus-x unavailable" }],
     ["O", "S", "Dequeue and enqueue to re-route", "Also required when the harness behind a pinned profile changes.", { sg: "pinned: deep · opus · high" }]
   ],
-  ["crates/corral-core/src/routing.rs:175 fn route_task", "crates/corral-ops/src/queue.rs:14 fn enqueue_ready", "docs/guide/automation.md#dispatch-queue", "docs/guide/configuration.md#routing"],
+  ["crates/corral-core/src/routing.rs:175 fn route_task", "crates/corral-ops/src/queue.rs:14 fn enqueue_ready", "docs/guide/classic/automation.md#dispatch-queue", "docs/guide/configuration.md#routing"],
   ["corral queue remove T-052", "corral queue add T-052 --profile deep --model opus"],
   [[28, "Withdraw and re-add"], [23, "Explicit queue"]]);
 
@@ -962,7 +962,7 @@ sc(30, "c", "e", "Interrupted launch",
     ["S", "S", "Next sync resumes the journal", "The unique workspace label lets sync find and reuse the same run, branch, worktree and pane. No second run is created.", { run: "R1 · Pane (reused)" }],
     ["S", "W", "Submit and run", "Failed preparation would instead release capacity and keep intent and error for recovery.", { st: "Running", run: "R1 · pane w4:p1 · working" }]
   ],
-  ["crates/corral-ops/src/launch.rs:30 fn resume", "crates/corral-ops/src/launch.rs:31-100 launch phases", "crates/corral-core/src/model.rs:379 enum LaunchStage", "docs/guide/automation.md#dispatch-queue", "docs/session-ownership.md"],
+  ["crates/corral-ops/src/launch.rs:30 fn resume", "crates/corral-ops/src/launch.rs:31-100 launch phases", "crates/corral-core/src/model.rs:379 enum LaunchStage", "docs/guide/classic/automation.md#dispatch-queue", "docs/session-ownership.md"],
   ["corral sync"],
   [[31, "Interrupted at Submitting"], [32, "Concurrent dispatch"]]);
 
@@ -976,7 +976,7 @@ sc(31, "c", "e", "Uncertain submission",
     ["O", "W", "corral jump T-042", "Inspect what actually ran in the pane.", {}],
     ["O", "S", "Explicit recovery", "An ordinary retry or explicit reply is the owner's recovery action.", { st: "Running", dec: null, run: "R1 · pane w4:p1 · working (reply sent)" }]
   ],
-  ["crates/corral-ops/src/launch.rs:31-100 no resubmission after Submitting", "crates/corral-ops/src/dispatch.rs:343 fn reply", "docs/guide/automation.md#dispatch-queue"],
+  ["crates/corral-ops/src/launch.rs:31-100 no resubmission after Submitting", "crates/corral-ops/src/dispatch.rs:343 fn reply", "docs/guide/classic/automation.md#dispatch-queue"],
   ["corral jump T-042", "corral reply T-042 \"…\"", "corral retry T-042"],
   [[30, "Interrupted earlier"], [50, "Worker failure"]]);
 
@@ -989,7 +989,7 @@ sc(32, "c", "e", "Concurrent dispatch",
     ["S", "S", "One claim wins", "Reservation R1 is recorded; the loser rechecks under the lock, sees the claim and skips.", { run: "R1 · Reserved (winner)", cap: "3 / 3 global" }],
     ["S", "W", "One worker", "Exactly one pane is created for R1.", { st: "Running", run: "R1 · pane w4:p1" }]
   ],
-  ["crates/corral-core/src/store.rs:78 fn lock", "crates/corral-ops/src/launch.rs:73 fn launch", "crates/corral-ops/src/queue.rs:459 fn dispatch_queue", "docs/guide/automation.md#dispatch-queue"],
+  ["crates/corral-core/src/store.rs:78 fn lock", "crates/corral-ops/src/launch.rs:73 fn launch", "crates/corral-ops/src/queue.rs:459 fn dispatch_queue", "docs/guide/classic/automation.md#dispatch-queue"],
   [],
   [[30, "Interrupted launch"], [67, "Concurrent landing"]]);
 
@@ -1002,7 +1002,7 @@ sc(33, "c", "n", "Routine work without planning",
     ["S", "W", "Coding run starts", "No Plan → Plan review → Your approval stages appear.", { st: "Running", sg: null, run: "R1 · pane w4:p1" }],
     ["W", "S", "corral done", "Review as usual.", { st: "Review", cand: "head c3d4 · base main@a1f0" }]
   ],
-  ["crates/corral-core/src/review.rs:344 fn plan_required", "crates/corral-ops/src/dispatch/admission.rs:16 fn plan_requested", "docs/guide/plans.md"],
+  ["crates/corral-core/src/review.rs:344 fn plan_required", "crates/corral-ops/src/dispatch/admission.rs:16 fn plan_requested", "docs/guide/classic/plans.md"],
   ["corral dispatch T-042"],
   [[34, "This one needs a plan"], [41, "Coding run"]]);
 
@@ -1015,7 +1015,7 @@ sc(34, "f", "n", "Plan-required work",
     ["W", "S", "corral plan submit T-001 plan.md", "Exact bytes are snapshotted as P1 and bound to spec, dependencies and criteria. Submission ends the planner, closes its pane and releases its slot; it never calls corral done.", { st: "Review", sg: "Plan review", run: "D1 submitted · planner pane closed", cap: "1 / 3 global", ev: "plan P1 snapshot" }],
     ["S", "R", "Independent plan reviewer", "Must differ from the planner in profile and effective model; aliases of the same model do not count. Its launch acquires a review slot.", { run: "plan review PR1 · pane w8:p2", cap: "2 / 3 global", ev: "plan P1 · review PR1 pending" }]
   ],
-  ["crates/corral-ops/src/plan_sandbox.rs:9 fn command", "crates/corral-ops/src/plan.rs:67 fn plan_submit", "crates/corral-ops/src/plan.rs:220 fn independent_reviewer", "crates/corral-ops/src/plan.rs:16-90 plan binding", "docs/guide/plans.md"],
+  ["crates/corral-ops/src/plan_sandbox.rs:9 fn command", "crates/corral-ops/src/plan.rs:67 fn plan_submit", "crates/corral-ops/src/plan.rs:220 fn independent_reviewer", "crates/corral-ops/src/plan.rs:16-90 plan binding", "docs/guide/classic/plans.md"],
   ["corral dispatch T-001 --plan", "corral plan submit T-001 plan.md --json"],
   [[35, "Reviewer asks for changes"], [36, "Approval"], [39, "Planner fails"]]);
 
@@ -1028,7 +1028,7 @@ sc(35, "c", "n", "Plan changes",
     ["W", "S", "Submit P2", "A new revision; stale callbacks for P1 cannot overwrite it. Submission ends the planner, closes its pane and releases its slot.", { st: "Review", sg: "Plan review", run: "D1 submitted · planner pane closed", cap: "1 / 3 global", ev: "P2 snapshot · P1 history kept" }],
     ["S", "R", "Fresh review PR2", "The revised plan now awaits an independent verdict; the reviewer acquires a slot.", { run: "plan review PR2 · pane w8:p4", cap: "2 / 3 global", ev: "P2 · review PR2 pending" }]
   ],
-  ["crates/corral-ops/src/plan_review.rs", "crates/corral-ops/src/plan.rs:67 fn plan_submit", "docs/guide/plans.md#review-and-owner-acceptance"],
+  ["crates/corral-ops/src/plan_review.rs", "crates/corral-ops/src/plan.rs:67 fn plan_submit", "docs/guide/classic/plans.md#review-and-owner-acceptance"],
   ["corral plan verdict T-001 changes --plan P1 --attempt PR1 --notes-file notes.md"],
   [[36, "Approval"], [40, "Review fails"]]);
 
@@ -1041,7 +1041,7 @@ sc(36, "f", "n", "Plan approval",
     ["O", "S", "corral plan verdict T-001 approve --owner --plan P2 --notes-file …", "Outstanding owner decisions need `Resolved: <decision> => <resolution>` lines. This single-task plan is attached to T-001; a multi-task plan instead publishes children and finishes the parent (Decomposition branch).", { st: "Ready", dec: null, sg: "approved plan attached", run: "D1 approved · planning and review finished", cap: "1 / 3 global (unrelated work only)", ev: "P2 accepted by owner" }],
     ["S", "S", "Approval launches nothing", "Implementation follows normal promotion, dependency and WIP policy. Separately, plan_accept = \"auto\" explicitly delegates final acceptance after independent review; unlike this owner path it cannot resolve outstanding owner decisions.", {}]
   ],
-  ["crates/corral-ops/src/plan.rs:346 fn decisions_resolved", "crates/corral-ops/src/plan.rs:371 fn accepted_owner_notes", "crates/corral-ops/src/plan.rs:392 fn approved_plan", "docs/guide/plans.md#review-and-owner-acceptance"],
+  ["crates/corral-ops/src/plan.rs:346 fn decisions_resolved", "crates/corral-ops/src/plan.rs:371 fn accepted_owner_notes", "crates/corral-ops/src/plan.rs:392 fn approved_plan", "docs/guide/classic/plans.md#review-and-owner-acceptance"],
   ["corral plan show T-001 --json", "corral plan verdict T-001 approve --owner --plan P2 --notes-file owner-notes.md"],
   [[37, "Decompose into tasks"], [38, "Plan goes stale"]]);
 
@@ -1054,7 +1054,7 @@ sc(37, "c", "n", "Decomposition",
     ["S", "S", "Parent Done as a planning task", "No code landing happens.", { st: "Done", sg: "children T-070, T-071" }],
     ["S", "W", "Children follow normal policy", "T-070 is admitted when eligible; T-071 waits for T-070 to be Done. The separate single-scope path creates no children and returns T-001 to Ready, as shown in Plan approval.", { task: "T-070", st: "Running", sg: null, run: "R1 · pane w9:p1", cap: "2 / 3 global", ev: null }]
   ],
-  ["crates/corral-ops/src/plan_decompose.rs:60 fn apply", "crates/corral-ops/src/plan_decompose.rs:25 fn check_attachment", "docs/guide/plans.md#decomposition-and-implementation"],
+  ["crates/corral-ops/src/plan_decompose.rs:60 fn apply", "crates/corral-ops/src/plan_decompose.rs:25 fn check_attachment", "docs/guide/classic/plans.md#decomposition-and-implementation"],
   ["corral show T-001"],
   [[14, "Child dependency chain"], [24, "Children admitted automatically"]]);
 
@@ -1067,7 +1067,7 @@ sc(38, "c", "e", "Pending or stale plan",
     ["O", "S", "Edit plan source, task spec or reviewer policy", "Any of these invalidates approval: the snapshot no longer matches its bindings.", { ev: "P2 stale (spec changed)" }],
     ["S", "S", "Fresh review and approval required", "Submit a new revision; an accepted replacement can update the plan link only before admission or child publication starts.", { sg: "Plan review (P3)", dec: null }]
   ],
-  ["crates/corral-ops/src/queue.rs:218 fn pending_plan_reason", "crates/corral-ops/src/plan.rs:299 fn fresh", "crates/corral-ops/src/dispatch/pending_plan_tests.rs", "docs/guide/plans.md#revisions-and-freshness"],
+  ["crates/corral-ops/src/queue.rs:218 fn pending_plan_reason", "crates/corral-ops/src/plan.rs:299 fn fresh", "crates/corral-ops/src/dispatch/pending_plan_tests.rs", "docs/guide/classic/plans.md#revisions-and-freshness"],
   ["corral dispatch T-001 --plan", "corral plan show T-001 --json"],
   [[36, "Approval"], [12, "Scope change"]]);
 
@@ -1081,7 +1081,7 @@ sc(39, "c", "e", "Planner failure or cancellation",
     ["R", "S", "Late review callback", "May record its verdict but cannot revive the cancelled execution.", {}],
     ["O", "S", "Explicit restart", "Only dispatch --plan starts another planner, as a new design-run history entry.", { st: "Running", sg: "Plan", run: "plan run D2 · pane w8:p3", cap: "2 / 3 global" }]
   ],
-  ["crates/corral-ops/src/plan_lifecycle.rs:166-208 cancellation", "crates/corral-ops/src/plan_lifecycle.rs:41 fn shell_returned", "crates/corral-ops/src/plan_lifecycle.rs:167 fn plan_cancel", "docs/guide/plans.md#reply-and-cancellation"],
+  ["crates/corral-ops/src/plan_lifecycle.rs:166-208 cancellation", "crates/corral-ops/src/plan_lifecycle.rs:41 fn shell_returned", "crates/corral-ops/src/plan_lifecycle.rs:167 fn plan_cancel", "docs/guide/classic/plans.md#reply-and-cancellation"],
   ["corral plan cancel T-001", "corral dispatch T-001 --plan"],
   [[40, "Plan review fails"], [34, "Plan-required flow"]]);
 
@@ -1095,7 +1095,7 @@ sc(40, "c", "e", "Plan review failure",
     ["O", "S", "Owner requests changes", "An owner decision terminalizes any pending attempt.", { st: "Running", sg: "Plan", dec: null, ev: "P1 · owner changes" }],
     ["R", "S", "Late PR1 callback", "Refused: it cannot overwrite the newer owner decision.", {}]
   ],
-  ["crates/corral-ops/src/plan.rs:220 fn independent_reviewer", "crates/corral-ops/src/plan.rs:154 fn expected_reviewer", "crates/corral-ops/src/plan_review.rs", "docs/guide/plans.md#review-and-owner-acceptance"],
+  ["crates/corral-ops/src/plan.rs:220 fn independent_reviewer", "crates/corral-ops/src/plan.rs:154 fn expected_reviewer", "crates/corral-ops/src/plan_review.rs", "docs/guide/classic/plans.md#review-and-owner-acceptance"],
   ["corral plan review T-001 --json", "corral plan verdict T-001 changes --owner --plan P1 --notes-file owner-notes.md"],
   [[35, "Normal change round"], [39, "Planner fails"]]);
 
@@ -1110,7 +1110,7 @@ sc(41, "c", "n", "Coding run",
     ["W", "S", "corral evidence record T-042 --file observation.json", "A live capture after the gate, bound to run, attempt and artifact hash.", { ev: "Gate: pass GA1 · C1 live pass" }],
     ["W", "S", "corral done --summary …", "Moves to Review once the completion audit passes.", { st: "Review", sg: "queued for gating" }]
   ],
-  ["crates/corral-ops/src/resume.rs:67 fn resume_packet", "crates/corral-ops/src/completion.rs:171 fn record_evidence", "crates/corral-ops/src/review.rs:86 fn done", "crates/corral-ops/src/lessons.rs:136 fn lessons_prompt", "docs/guide/acceptance.md#explicit-criteria-and-completion-audit"],
+  ["crates/corral-ops/src/resume.rs:67 fn resume_packet", "crates/corral-ops/src/completion.rs:171 fn record_evidence", "crates/corral-ops/src/review.rs:86 fn done", "crates/corral-ops/src/lessons.rs:136 fn lessons_prompt", "docs/guide/classic/acceptance.md#explicit-criteria-and-completion-audit"],
   ["corral gate T-042 --wait", "corral evidence record T-042 --file observation.json", "corral done T-042 --summary \"…\""],
   [[42, "Report progress"], [51, "Completion preflight"], [45, "Wait on CI"]]);
 
@@ -1123,7 +1123,7 @@ sc(42, "c", "n", "Execution progress",
     ["W", "S", "Update to revision 2", "Stable IDs; done and dropped are terminal; drop with a reason instead of removing.", { run: "R1 · progress rev 2 · 2/3 steps done" }],
     ["S", "S", "criteria_progress join", "Linked steps done but no current passing evidence: readback flags progress_without_evidence:C1.", { ev: "progress_without_evidence:C1" }]
   ],
-  ["crates/corral-ops/src/progress.rs:165 fn update_progress", "crates/corral-ops/src/progress.rs:79 fn progress_readback", "crates/corral-core/src/progress.rs:15 fn criterion_progress", "docs/guide/run-progress.md#progress-payload"],
+  ["crates/corral-ops/src/progress.rs:165 fn update_progress", "crates/corral-ops/src/progress.rs:79 fn progress_readback", "crates/corral-core/src/progress.rs:15 fn criterion_progress", "docs/guide/classic/run-progress.md#progress-payload"],
   ["corral run progress T-058 --json", "corral run progress T-058 --file progress.json --json"],
   [[43, "Checkpoint and retry"], [44, "Stale writes"]]);
 
@@ -1136,7 +1136,7 @@ sc(43, "c", "n", "Portable checkpoint and retry",
     ["S", "W", "Resume packet for R2", "Canonical spec, compatible progress, current decisions/waits/resources, prior run obligations; R1 evidence listed as historical context only.", { ev: "R1 evidence: historical context only" }],
     ["W", "S", "R2 publishes its own checkpoint", "Inherited snapshots never count as a new completion receipt; criteria need new captures for R2.", { run: "R2 · checkpoint rev 1", ev: "C1 needs R2 capture" }]
   ],
-  ["crates/corral-ops/src/resume.rs:229 fn retry_checkpoint", "crates/corral-ops/src/resume.rs:67 fn resume_packet", "crates/corral-ops/src/progress.rs:238 fn save_checkpoint", "docs/guide/run-progress.md#retry-and-stale-writes"],
+  ["crates/corral-ops/src/resume.rs:229 fn retry_checkpoint", "crates/corral-ops/src/resume.rs:67 fn resume_packet", "crates/corral-ops/src/progress.rs:238 fn save_checkpoint", "docs/guide/classic/run-progress.md#retry-and-stale-writes"],
   ["corral run checkpoint T-058 --file checkpoint.json --json", "corral retry T-058 --run R1 --profile implementer"],
   [[44, "Stale checkpoint"], [50, "Why the run failed"]]);
 
@@ -1149,7 +1149,7 @@ sc(44, "c", "e", "Stale progress or checkpoint",
     ["W", "S", "Read back", "Copy identity strings from readback; never derive them or bump revisions blindly.", {}],
     ["W", "S", "Submit a fresh payload", "Current revisions and identity; pending waits/resources keep their IDs until resolved.", { sg: null, run: "R2 · checkpoint rev 2 compatible" }]
   ],
-  ["crates/corral-ops/src/resume.rs:40 fn stale_reasons", "crates/corral-ops/src/progress.rs:29 fn tree_revision", "docs/guide/run-progress.md#retry-and-stale-writes"],
+  ["crates/corral-ops/src/resume.rs:40 fn stale_reasons", "crates/corral-ops/src/progress.rs:29 fn tree_revision", "docs/guide/classic/run-progress.md#retry-and-stale-writes"],
   ["corral run checkpoint T-058 --json"],
   [[12, "Spec changed"], [43, "Checkpoint and retry"]]);
 
@@ -1163,7 +1163,7 @@ sc(45, "c", "n", "External wait",
     ["W", "S", "corral run resume T-042 --wait ci --file receipt.json", "Outcome ready, delivery acknowledged, observed between registration and submission. Receipts are immutable.", { sg: "wait ci: ready (acknowledged)" }],
     ["S", "S", "Reconcile under the task lock", "Notified once per transition. Corral never resends a command or launches another worker because a wait completed.", { sg: null }]
   ],
-  ["crates/corral-ops/src/obligations.rs:44 fn register_wait", "crates/corral-ops/src/obligations.rs:162 fn resume_run", "crates/corral-ops/src/obligations_sync.rs:16 fn reconcile_one", "docs/guide/automation.md#explicit-waits-and-owner-decisions"],
+  ["crates/corral-ops/src/obligations.rs:44 fn register_wait", "crates/corral-ops/src/obligations.rs:162 fn resume_run", "crates/corral-ops/src/obligations_sync.rs:16 fn reconcile_one", "docs/guide/classic/automation.md#explicit-waits-and-owner-decisions"],
   ["corral run wait T-042 --file wait.json", "corral run resume T-042 --wait ci --file receipt.json"],
   [[47, "The wait breaks"], [46, "Ask the owner instead"]]);
 
@@ -1176,7 +1176,7 @@ sc(46, "c", "n", "Owner question",
     ["O", "S", "r on the card (corral reply T-042 \"…\")", "A successfully delivered reply answers the first pending decision; run resume --decision is the structured alternative.", { dec: null, sg: "answer recorded" }],
     ["S", "W", "Answer delivered", "Answers stay on the run for future resume packets.", { st: "Running", sg: null }]
   ],
-  ["crates/corral-ops/src/obligations.rs:95 fn register_decision", "crates/corral-ops/src/obligations.rs:221 fn answer_reply", "crates/corral-ops/src/dispatch.rs:343 fn reply", "crates/corral-ops/src/obligations.rs:95-204 decisions", "docs/guide/automation.md#explicit-waits-and-owner-decisions", "docs/guide/pm.md#what-the-cards-trust"],
+  ["crates/corral-ops/src/obligations.rs:95 fn register_decision", "crates/corral-ops/src/obligations.rs:221 fn answer_reply", "crates/corral-ops/src/dispatch.rs:343 fn reply", "crates/corral-ops/src/obligations.rs:95-204 decisions", "docs/guide/classic/automation.md#explicit-waits-and-owner-decisions", "docs/guide/classic/pm.md#what-the-cards-trust"],
   ["corral run decision T-042 --file decision.json", "corral reply T-042 \"Yes, drop it\""],
   [[48, "Reply fails to deliver"], [18, "The PM sees it"]]);
 
@@ -1190,7 +1190,7 @@ sc(47, "c", "e", "Broken wait",
     ["S", "S", "Gate wait delivery unknown", "Finished gates produce one receipt per wait, delivery unknown: collecting a result does not prove the harness woke.", { sg: "gate wait: ready (delivery unknown)" }],
     ["S", "O", "Inspection, not resend", "Unknown delivery needs inspection and maybe an explicit owner reply. The stuck watchdog stays active: a wait never suppresses it.", { dec: "Inspect R1: did the worker see the result?" }]
   ],
-  ["crates/corral-ops/src/obligations.rs:247 fn receipt_observation", "crates/corral-ops/src/obligations.rs:267 fn transition", "crates/corral-core/src/obligations.rs:53 enum WaitState", "docs/guide/automation.md#explicit-waits-and-owner-decisions"],
+  ["crates/corral-ops/src/obligations.rs:247 fn receipt_observation", "crates/corral-ops/src/obligations.rs:267 fn transition", "crates/corral-core/src/obligations.rs:53 enum WaitState", "docs/guide/classic/automation.md#explicit-waits-and-owner-decisions"],
   ["corral show T-042 --json", "corral reply T-042 \"…\""],
   [[45, "Healthy wait"], [49, "Idle or stuck?"]]);
 
@@ -1203,7 +1203,7 @@ sc(48, "c", "e", "Reply delivery failure",
     ["S", "S", "Stuck agent variant", "While a run is flagged stuck, replies queue instead of typing into the terminal.", {}],
     ["O", "S", "corral reply T-046 --resend", "Retries that exact message without adding another comment. A different pending reply must be resolved first.", { sg: "reply delivered", dec: null, st: "Running" }]
   ],
-  ["crates/corral-ops/src/dispatch.rs:428 fn resend_reply", "crates/corral-ops/src/comments.rs:10 fn comment", "docs/guide/comments.md#delivering-a-note", "docs/guide/pm.md#startup-stalls-and-upgrades"],
+  ["crates/corral-ops/src/dispatch.rs:428 fn resend_reply", "crates/corral-ops/src/comments.rs:10 fn comment", "docs/guide/classic/comments.md#delivering-a-note", "docs/guide/classic/pm.md#startup-stalls-and-upgrades"],
   ["corral reply T-046 --resend"],
   [[13, "Comment without delivery"], [50, "Pane is gone for good"]]);
 
@@ -1217,7 +1217,7 @@ sc(49, "c", "e", "Idle vs stuck vs finished",
     ["S", "S", "OmO activity correction", "An OmO session file changing within the idle window counts as working.", {}],
     ["W", "S", "Only corral done finishes", "A herdr done label is not a gate pass, corral done or landing.", { st: "Review", sg: "queued for gating" }]
   ],
-  ["crates/corral-ops/src/sync.rs:22-181 idle never moves the card", "crates/corral-ops/src/watchdog.rs:167 fn foreign_process", "docs/guide/automation.md#the-watchdog-stuck-commands", "docs/guide/configuration.md#sync"],
+  ["crates/corral-ops/src/sync.rs:22-181 idle never moves the card", "crates/corral-ops/src/watchdog.rs:167 fn foreign_process", "docs/guide/classic/automation.md#the-watchdog-stuck-commands", "docs/guide/configuration.md#sync"],
   [],
   [[50, "Provider failure or stuck process"], [53, "Successful done"]]);
 
@@ -1231,7 +1231,7 @@ sc(50, "c", "e", "Worker or provider failure",
     ["O", "S", "One bounded instruction", "corral reply once the provider recovers, or corral retry --profile; continued failure goes back to the owner, not an unbounded loop.", { st: "Running", sg: null, dec: null }],
     ["O", "S", "corral unstick T-042 for a hung command", "Shows the process, rechecks it is the same one, SIGTERM, SIGKILL after three seconds, then resubmits a pending reply.", { sg: "stuck process terminated (identity checked)" }]
   ],
-  ["crates/corral-ops/src/provider_stall.rs:1-40 backoff", "crates/corral-ops/src/provider_stall.rs:394 fn advance_agent", "crates/corral-ops/src/watchdog.rs:199 fn unstick_with", "docs/guide/pm.md#startup-stalls-and-upgrades", "docs/guide/automation.md#the-watchdog-stuck-commands"],
+  ["crates/corral-ops/src/provider_stall.rs:1-40 backoff", "crates/corral-ops/src/provider_stall.rs:394 fn advance_agent", "crates/corral-ops/src/watchdog.rs:199 fn unstick_with", "docs/guide/classic/pm.md#startup-stalls-and-upgrades", "docs/guide/classic/automation.md#the-watchdog-stuck-commands"],
   ["corral show T-042 --json", "corral reply T-042 \"…\"", "corral retry T-042 --profile deep", "corral unstick T-042"],
   [[43, "Retry with a checkpoint"], [49, "Idle vs stuck"]]);
 
@@ -1245,7 +1245,7 @@ sc(51, "c", "n", "Completion preflight",
     ["S", "S", "Evidence", "Required criteria have current-run, post-gate, live captures with verified artifact hashes.", {}],
     ["S", "S", "Decisions and summary", "No unresolved owner decisions; Verified: / Not verified: sections present (presence, not truth).", { sg: "preflight: pass" }]
   ],
-  ["crates/corral-ops/src/completion.rs:388 fn completion_check_task", "crates/corral-ops/src/completion.rs:296 fn evidence_failures", "docs/guide/acceptance.md#explicit-criteria-and-completion-audit"],
+  ["crates/corral-ops/src/completion.rs:388 fn completion_check_task", "crates/corral-ops/src/completion.rs:296 fn evidence_failures", "docs/guide/classic/acceptance.md#explicit-criteria-and-completion-audit"],
   ["corral done T-042 --check --json --summary \"…\""],
   [[52, "Preflight fails"], [53, "Real done"]]);
 
@@ -1259,7 +1259,7 @@ sc(52, "c", "e", "Rejected completion",
     ["W", "W", "Fix", "Commit, re-gate, recapture with a new key, resolve the decision.", { cand: "head d5e6 · base main@a1f0", ev: "Gate: pass GA2 · C1 live pass (new key)", dec: null }],
     ["W", "S", "corral done again", "Audit passes; Review.", { st: "Review", sg: "queued for gating" }]
   ],
-  ["crates/corral-ops/src/review.rs:87-125 done preconditions", "crates/corral-ops/src/completion.rs:39-59 manifest", "crates/corral-ops/src/completion.rs:170-230 evidence keys", "docs/guide/acceptance.md#explicit-criteria-and-completion-audit"],
+  ["crates/corral-ops/src/review.rs:87-125 done preconditions", "crates/corral-ops/src/completion.rs:39-59 manifest", "crates/corral-ops/src/completion.rs:170-230 evidence keys", "docs/guide/classic/acceptance.md#explicit-criteria-and-completion-audit"],
   ["corral done T-042 --summary \"…\""],
   [[51, "Preflight"], [46, "Resolve the decision"]]);
 
@@ -1273,7 +1273,7 @@ sc(53, "c", "n", "Successful done → Review",
     ["S", "S", "Artifacts and transition", "Final diff +N −M and Done summary artifacts. The run's outcome is recorded as done while the task status becomes Review.", { st: "Review", sg: "queued for gating", run: "R1 · outcome done (task in Review)" }],
     ["S", "S", "Not landed", "main is unchanged. Done requires review and acceptance.", { cand: "head c3d4 · main still a1f0" }]
   ],
-  ["crates/corral-ops/src/review.rs:86 fn done", "crates/corral-ops/src/review.rs:87-125 done preconditions", "docs/guide/getting-started.md#5-review-and-land", "docs/guide/acceptance.md"],
+  ["crates/corral-ops/src/review.rs:86 fn done", "crates/corral-ops/src/review.rs:87-125 done preconditions", "docs/guide/classic/getting-started.md#5-review-and-land", "docs/guide/classic/acceptance.md"],
   ["corral done T-042 --summary \"…\""],
   [[54, "Gate fails"], [55, "Independent review"], [58, "Acceptance"]]);
 
@@ -1287,7 +1287,7 @@ sc(54, "f", "e", "Gate failure",
     ["W", "G", "Fix and commit", "", { cand: "head e7f8 · base main@a1f0" }],
     ["W", "S", "corral done again", "A fresh gate attempt for the new candidate; GA3 cannot be reused.", { st: "Review", sg: "gating", ev: "gate attempt GA4 running" }]
   ],
-  ["crates/corral-ops/src/gate.rs:228 fn gate_start", "crates/corral-ops/src/gate.rs:388 fn gate_collect", "crates/corral-ops/src/dispatch.rs:492 fn auto_request_changes", "docs/guide/automation.md#the-gate", "docs/guide/automation.md#failures-loop-back"],
+  ["crates/corral-ops/src/gate.rs:228 fn gate_start", "crates/corral-ops/src/gate.rs:388 fn gate_collect", "crates/corral-ops/src/dispatch.rs:492 fn auto_request_changes", "docs/guide/classic/automation.md#the-gate", "docs/guide/classic/automation.md#failures-loop-back"],
   ["corral gate T-042 --wait"],
   [[57, "Rounds run out"], [55, "Gate passes, review next"]]);
 
@@ -1299,7 +1299,7 @@ sc(55, "f", "n", "Independent review",
     ["R", "S", "Verdict bound to the commit and attempt", "The reviewer also sees the evidence ledger. This sequence follows approve. A changes verdict instead reopens coding work (or queues a fresh retry); escalate instead moves to Blocked with the review notes.", {}],
     ["S", "S", "approve", "Continues to acceptance. Use the branch links for change rounds or owner escalation; those alternatives do not run after approval.", { sg: "approved → acceptance", ev: "Gate: pass · verdict approve", cap: "2 / 3 global" }]
   ],
-  ["crates/corral-ops/src/reviewer.rs:323 fn review_run", "crates/corral-ops/src/reviewer.rs:718 fn verdict_bound", "crates/corral-ops/src/reviewer.rs:580 fn implementer_vendor", "docs/guide/automation.md#reviewer-runs-and-verdicts"],
+  ["crates/corral-ops/src/reviewer.rs:323 fn review_run", "crates/corral-ops/src/reviewer.rs:718 fn verdict_bound", "crates/corral-ops/src/reviewer.rs:580 fn implementer_vendor", "docs/guide/classic/automation.md#reviewer-runs-and-verdicts"],
   ["corral review-run T-042", "corral verdict T-042 approve --notes \"…\""],
   [[56, "Review breaks"], [58, "Acceptance"], [57, "Changes verdict and repeated rounds"], [59, "Escalation to owner"]]);
 
@@ -1313,7 +1313,7 @@ sc(56, "c", "e", "Review failure",
     ["R", "S", "Stale verdict callback", "An old attempt's verdict is rejected; a failed submission escalates on the next idle sample.", {}],
     ["O", "S", "Owner retries review", "corral review-run starts a fresh attempt on the current candidate.", { st: "Review", sg: "reviewing (attempt 2)", dec: null }]
   ],
-  ["crates/corral-ops/src/reviewer.rs:718 fn verdict_bound", "crates/corral-ops/src/reviewer.rs:712 fn verdict", "docs/guide/automation.md#reviewer-runs-and-verdicts", "docs/guide/automation.md#what-always-needs-you"],
+  ["crates/corral-ops/src/reviewer.rs:718 fn verdict_bound", "crates/corral-ops/src/reviewer.rs:712 fn verdict", "docs/guide/classic/automation.md#reviewer-runs-and-verdicts", "docs/guide/classic/automation.md#what-always-needs-you"],
   ["corral review-run T-042"],
   [[55, "Healthy review"], [59, "Owner guards"]]);
 
@@ -1326,7 +1326,7 @@ sc(57, "f", "e", "Repeated change rounds",
     ["P", "O", "PM presents options", "Preserve notes; resetting rounds, raising limits, waiving findings or accepting on timeout needs explicit owner authority.", {}],
     ["O", "S", "Owner requests a bounded change", "The owner's own request-changes or retry resets the count.", { st: "Running", sg: "changes (owner round)", dec: null }]
   ],
-  ["crates/corral-ops/src/escalation.rs:28 fn escalation", "crates/corral-ops/src/dispatch.rs:629 fn request_changes_escalated", "docs/guide/automation.md#failures-loop-back", "docs/guide/pm.md#startup-stalls-and-upgrades"],
+  ["crates/corral-ops/src/escalation.rs:28 fn escalation", "crates/corral-ops/src/dispatch.rs:629 fn request_changes_escalated", "docs/guide/classic/automation.md#failures-loop-back", "docs/guide/classic/pm.md#startup-stalls-and-upgrades"],
   ["corral changes T-042 \"…\""],
   [[54, "Gate failure round"], [59, "Owner guards"]]);
 
@@ -1338,7 +1338,7 @@ sc(58, "f", "n", "Owner vs automatic acceptance",
     ["O", "S", "Owner approves", "a in review or corral approve: the same rebase, gate, wait, carry and land sequence, recorded as acceptance_mode: owner_override. The owner may override a completed gate or review outcome, but current configured receipt identities are still required.", { sg: "landing", dec: null }],
     ["S", "G", "Land and record", "An Acceptance record artifact keeps gate log, verdict, notes, rounds, landed commit and policy.", { st: "Done", sg: "done", cand: "landed main@c3d4", run: "R1 closed" }]
   ],
-  ["crates/corral-core/src/review.rs:15 enum Accept", "crates/corral-ops/src/autopilot.rs:56 fn advance_all", "crates/corral-ops/src/acceptance.rs:163 fn record_acceptance", "docs/guide/automation.md#the-autopilot", "docs/guide/acceptance.md#review-and-landing"],
+  ["crates/corral-core/src/review.rs:15 enum Accept", "crates/corral-ops/src/autopilot.rs:56 fn advance_all", "crates/corral-ops/src/acceptance.rs:163 fn record_acceptance", "docs/guide/classic/automation.md#the-autopilot", "docs/guide/classic/acceptance.md#review-and-landing"],
   ["corral approve T-042"],
   [[59, "Guards that stop auto"], [62, "Landing on an unchanged base"]]);
 
@@ -1351,7 +1351,7 @@ sc(59, "f", "e", "Owner guards",
     ["S", "S", "Untrustworthy evidence", "A required semantic criterion with only a worker_assertion and no reviewer escalates; a pass event disagreeing with its log is re-gated.", { ev: "C2 worker_assertion only" }],
     ["O", "S", "Owner decides", "Approve, request changes, retry or discard like any Review task.", { st: "Done", sg: "done (owner_override)", dec: null, cand: "landed main@c3d4" }]
   ],
-  ["crates/corral-core/src/review.rs:167 struct ReviewPolicy", "crates/corral-ops/src/integration/size_limits.rs", "docs/guide/automation.md#what-always-needs-you", "docs/guide/pm.md#what-the-cards-trust", "docs/guide/acceptance.md"],
+  ["crates/corral-core/src/review.rs:167 struct ReviewPolicy", "crates/corral-ops/src/integration/size_limits.rs", "docs/guide/classic/automation.md#what-always-needs-you", "docs/guide/classic/pm.md#what-the-cards-trust", "docs/guide/classic/acceptance.md"],
   ["corral review T-042 --diff", "corral approve T-042"],
   [[58, "Acceptance modes"], [76, "Discard instead"]]);
 
@@ -1364,7 +1364,7 @@ sc(60, "c", "e", "Review capacity exhausted",
     ["X", "S", "Another gate completes", "Completed gates, verdicts and vanished reviewer panes release review capacity.", { cap: "2 / 3 global · review 1 / 2" }],
     ["S", "X", "T-042's gate starts first", "Queued coding (T-050) keeps waiting.", { sg: "gating", cap: "3 / 3 global · review 2 / 2", ev: "gate attempt GA1 running" }]
   ],
-  ["crates/corral-ops/src/review_budget.rs:166 fn reserve", "crates/corral-ops/src/review_budget.rs:402 fn reconcile", "docs/guide/automation.md#finishing-work-and-capacity", "docs/guide/configuration.md#limits"],
+  ["crates/corral-ops/src/review_budget.rs:166 fn reserve", "crates/corral-ops/src/review_budget.rs:402 fn reconcile", "docs/guide/classic/automation.md#finishing-work-and-capacity", "docs/guide/configuration.md#limits"],
   ["corral autopilot status"],
   [[26, "Admission holds"], [61, "Autopilot off"]]);
 
@@ -1378,7 +1378,7 @@ sc(61, "c", "n", "Autopilot off",
     ["O", "X", "Manual path", "corral gate, review-run, verdict, approve and changes keep working.", { ev: "Gate: pass GA1 (manual)" }],
     ["S", "W", "Queue admission continues", "Coding admission is the separate queue pause switch.", {}]
   ],
-  ["crates/corral-ops/src/autopilot.rs:1-115 kill switch", "crates/corral-core/src/config_events.rs:168 fn set_autopilot", "docs/guide/automation.md#kill-switch"],
+  ["crates/corral-ops/src/autopilot.rs:1-115 kill switch", "crates/corral-core/src/config_events.rs:168 fn set_autopilot", "docs/guide/classic/automation.md#kill-switch"],
   ["corral autopilot off", "corral autopilot on", "corral gate T-042 --wait"],
   [[27, "Queue pause is different"], [62, "Manual landing"]]);
 
@@ -1392,7 +1392,7 @@ sc(62, "c", "n", "Base unchanged → fast-forward",
     ["S", "S", "Acceptance record", "approved event with project, base branch, previous base and landed SHA.", { st: "Done", sg: "done", ev: "Acceptance record" }],
     ["S", "G", "Cleanup", "Worktree removed (remove_worktree = true), merged branch deleted with git branch -d.", { run: "R1 closed · worktree removed", cap: "1 / 3 global" }]
   ],
-  ["crates/corral-git/src/lib.rs:477 fn land_checked", "crates/corral-git/src/lib.rs:444 fn landing_lock", "crates/corral-ops/src/review.rs:319 fn approve", "crates/corral-ops/src/acceptance.rs:163 fn record_acceptance", "docs/guide/acceptance.md#review-and-landing"],
+  ["crates/corral-git/src/lib.rs:477 fn land_checked", "crates/corral-git/src/lib.rs:444 fn landing_lock", "crates/corral-ops/src/review.rs:319 fn approve", "crates/corral-ops/src/acceptance.rs:163 fn record_acceptance", "docs/guide/classic/acceptance.md#review-and-landing"],
   ["corral approve T-042 --merge ff"],
   [[63, "Base moved"], [70, "Post-land hooks"], [74, "Cleanup details"]]);
 
@@ -1406,7 +1406,7 @@ sc(63, "c", "n", "Base advanced cleanly",
     ["S", "S", "Strict verdict carry", "Only if the committed patch is identical (ignoring blob IDs and hunk headers), the other review inputs and evidence match, and the fresh gate passed. Otherwise a fresh review.", { ev: "Gate: pass GA5 · verdict carried (verdict_carried)" }],
     ["S", "G", "Fast-forward", "", { st: "Done", sg: "done", cand: "landed main@f0a1" }]
   ],
-  ["crates/corral-ops/src/verdict_carry.rs:21 fn rebase", "crates/corral-ops/src/verdict_carry.rs:48 fn carry", "crates/corral-ops/src/integration.rs:52 fn check", "docs/guide/acceptance.md#review-and-landing", "docs/guide/automation.md#reviewer-runs-and-verdicts"],
+  ["crates/corral-ops/src/verdict_carry.rs:21 fn rebase", "crates/corral-ops/src/verdict_carry.rs:48 fn carry", "crates/corral-ops/src/integration.rs:52 fn check", "docs/guide/classic/acceptance.md#review-and-landing", "docs/guide/classic/automation.md#reviewer-runs-and-verdicts"],
   ["corral approve T-042"],
   [[64, "Rebase conflicts"], [67, "Another landing races"]]);
 
@@ -1420,7 +1420,7 @@ sc(64, "c", "e", "Integration conflict",
     ["W", "G", "Rebase and resolve", "", { cand: "head 1b2c · base main@b7e2" }],
     ["W", "S", "Fresh proof", "A new gate and a new semantic review: conflicts never carry a verdict.", { st: "Review", sg: "gating" }]
   ],
-  ["crates/corral-ops/src/integration.rs:152 fn build", "crates/corral-ops/src/autopilot/repair.rs", "crates/corral-ops/src/integration.rs:52 fn check", "docs/guide/automation.md#failures-loop-back"],
+  ["crates/corral-ops/src/integration.rs:152 fn build", "crates/corral-ops/src/autopilot/repair.rs", "crates/corral-ops/src/integration.rs:52 fn check", "docs/guide/classic/automation.md#failures-loop-back"],
   ["corral show T-042 --json"],
   [[65, "Git itself fails"], [63, "Clean rebase"]]);
 
@@ -1433,7 +1433,7 @@ sc(65, "c", "e", "Git infrastructure failure",
     ["O", "G", "Repair the repository", "", {}],
     ["O", "S", "Retry review", "", { st: "Review", sg: "gating", dec: null }]
   ],
-  ["crates/corral-ops/src/integration.rs:52 fn check", "docs/guide/automation.md#failures-loop-back"],
+  ["crates/corral-ops/src/integration.rs:52 fn check", "docs/guide/classic/automation.md#failures-loop-back"],
   ["corral review T-042"],
   [[64, "Ordinary conflict"]]);
 
@@ -1446,7 +1446,7 @@ sc(66, "f", "e", "Main dirty or wrong branch",
     ["O", "G", "Commit, stash or switch to main", "", {}],
     ["S", "G", "Next sync lands", "", { st: "Done", sg: "done", cand: "landed main@c3d4" }]
   ],
-  ["crates/corral-ops/src/review.rs:63 fn has_tracked_changes", "crates/corral-ops/src/review.rs:46 fn main_repo", "crates/corral-core/src/model.rs:298 enum AutoStage", "docs/guide/automation.md#landing"],
+  ["crates/corral-ops/src/review.rs:63 fn has_tracked_changes", "crates/corral-ops/src/review.rs:46 fn main_repo", "crates/corral-core/src/model.rs:298 enum AutoStage", "docs/guide/classic/automation.md#landing"],
   ["git -C <project> status"],
   [[67, "Concurrent landing"], [62, "Normal landing"]]);
 
@@ -1460,7 +1460,7 @@ sc(67, "c", "e", "Concurrent or stale landing",
     ["S", "S", "Retry through re-integration", "The next pass follows the base-advanced path (fresh gate, strict carry).", { cand: "head f0a1 · base main@b7e2", sg: "landing · re-gating" }],
     ["S", "S", "Outside writers", "Direct Git writers do not take corral's advisory lock and must not operate main concurrently.", {}]
   ],
-  ["crates/corral-git/src/lib.rs:451 fn try_landing_lock", "crates/corral-git/src/lib.rs:477 fn land_checked", "docs/guide/acceptance.md#review-and-landing", "docs/guide/pm.md#policy-boundaries"],
+  ["crates/corral-git/src/lib.rs:451 fn try_landing_lock", "crates/corral-git/src/lib.rs:477 fn land_checked", "docs/guide/classic/acceptance.md#review-and-landing", "docs/guide/classic/pm.md#policy-boundaries"],
   [],
   [[63, "Base advanced cleanly"], [32, "Concurrent dispatch"]]);
 
@@ -1474,7 +1474,7 @@ sc(68, "c", "n", "Peer landing during coding",
     ["S", "S", "Deferred or uncertain", "Pending replies or owner waits defer it; an interrupted send becomes uncertain rather than resent.", {}],
     ["W", "W", "Worker decides when to integrate", "Notices never rebase, accept, change status or consume a change round.", {}]
   ],
-  ["crates/corral-ops/src/movement.rs:130 fn reconcile", "crates/corral-ops/src/movement/delivery.rs", "docs/guide/automation.md#early-main-movement-notices", "docs/guide/events.md#active-worker-integration-notices"],
+  ["crates/corral-ops/src/movement.rs:130 fn reconcile", "crates/corral-ops/src/movement/delivery.rs", "docs/guide/classic/automation.md#early-main-movement-notices", "docs/guide/classic/events.md#active-worker-integration-notices"],
   ["corral edit T-042 (write_scope)"],
   [[64, "Conflict later at review"], [63, "Clean integration"]]);
 
@@ -1487,7 +1487,7 @@ sc(69, "c", "n", "Keep-branch approval",
     ["S", "X", "No post-land hooks", "Only a successful base advancement triggers them.", { ops: "not triggered (no landing)" }],
     ["S", "S", "Downstream effects", "Lessons' after_landings does not count keep_branch; revert refuses kept branches.", {}]
   ],
-  ["crates/corral-ops/src/review.rs:319 fn approve", "crates/corral-core/src/review.rs:49 enum MergeMode", "docs/guide/post-land.md", "docs/guide/lessons.md#scheduling-and-pm-use"],
+  ["crates/corral-ops/src/review.rs:319 fn approve", "crates/corral-core/src/review.rs:49 enum MergeMode", "docs/guide/classic/post-land.md", "docs/guide/classic/lessons.md#scheduling-and-pm-use"],
   ["corral approve T-042 --merge keep"],
   [[78, "Revert refuses it"], [62, "Normal landing"]]);
 
@@ -1500,7 +1500,7 @@ sc(70, "f", "n", "Post-land operations",
     ["S", "X", "smoke", "corral --help.", { ops: "check ok · install ok (identity c3d4) · smoke: running" }],
     ["S", "S", "Receipts", "Fsynced under .corral/state/post-land/, keyed by project, repository, landed SHA, hook and policy digest. The acceptance record includes them.", { ops: "operationally ready" }]
   ],
-  ["crates/corral-ops/src/hooks.rs:127 fn post_land_operations", "crates/corral-ops/src/hooks.rs:247 fn complete_landing", "crates/corral-ops/src/hooks.rs:76 fn ready", "docs/guide/post-land.md#corral-recipe"],
+  ["crates/corral-ops/src/hooks.rs:127 fn post_land_operations", "crates/corral-ops/src/hooks.rs:247 fn complete_landing", "crates/corral-ops/src/hooks.rs:76 fn ready", "docs/guide/classic/post-land.md#corral-recipe"],
   ["corral hooks list --json"],
   [[71, "A hook fails"], [72, "Interrupted operation"]]);
 
@@ -1513,7 +1513,7 @@ sc(71, "f", "e", "Hook failure",
     ["S", "O", "One blocked notification", "Notification intent is saved before delivery, so a crash can omit but never duplicate it.", { ops: "blocked: operational (install)" }],
     ["S", "S", "Dependent admission waits", "Project dispatch and tasks depending on this project's Done tasks hold with an operational-blocker reason.", { task: "T-050 (depends on T-042)", st: "Ready", sg: "hold: operational blocker", run: null, cand: null, ev: null }]
   ],
-  ["crates/corral-ops/src/hooks.rs:80 fn blocker", "crates/corral-ops/src/hooks.rs:152 fn operational_blocker", "crates/corral-ops/src/hooks.rs:76-152 landed vs ready", "docs/guide/post-land.md#failure-restart-and-retry"],
+  ["crates/corral-ops/src/hooks.rs:80 fn blocker", "crates/corral-ops/src/hooks.rs:152 fn operational_blocker", "crates/corral-ops/src/hooks.rs:76-152 landed vs ready", "docs/guide/classic/post-land.md#failure-restart-and-retry"],
   ["corral hooks list --json"],
   [[73, "Bounded retry"], [26, "Admission holds"]]);
 
@@ -1526,7 +1526,7 @@ sc(72, "f", "e", "Interrupted operation",
     ["S", "X", "After exit: identity proof", "An identity-bearing install can be proved from its executable without reinstalling.", { ops: "install: proved by identity · smoke pending" }],
     ["S", "X", "Pending hooks continue", "This branch has identity proof, so sync runs the still-pending smoke hook. Nothing uncertain was replayed. Without proof, use the Explicit retry branch instead; successful receipts never rerun.", { ops: "install proved · smoke ok · operationally ready" }]
   ],
-  ["crates/corral-ops/src/hooks.rs:420 fn reconcile_post_land", "crates/corral-ops/src/hooks.rs:234 fn reconcile_locked", "crates/corral-ops/src/hooks.rs:419-485 receipts", "docs/guide/post-land.md#failure-restart-and-retry"],
+  ["crates/corral-ops/src/hooks.rs:420 fn reconcile_post_land", "crates/corral-ops/src/hooks.rs:234 fn reconcile_locked", "crates/corral-ops/src/hooks.rs:419-485 receipts", "docs/guide/classic/post-land.md#failure-restart-and-retry"],
   ["corral hooks reconcile"],
   [[73, "Explicit retry"], [6, "herdr unavailable"]]);
 
@@ -1539,7 +1539,7 @@ sc(73, "f", "e", "Explicit bounded hook retry",
     ["O", "S", "Uncertain variant", "An uncertain command also needs --acknowledge-uncertain.", {}],
     ["X", "S", "install and smoke succeed", "The operational blocker clears; nothing resets, reverts, pushes or removes the landed commit.", { ops: "operationally ready" }]
   ],
-  ["crates/corral-ops/src/hooks.rs:436 fn retry_post_land", "docs/guide/post-land.md#failure-restart-and-retry", "docs/guide/cli.md#corral-hooks-retry"],
+  ["crates/corral-ops/src/hooks.rs:436 fn retry_post_land", "docs/guide/classic/post-land.md#failure-restart-and-retry", "docs/guide/classic/cli.md#corral-hooks-retry"],
   ["corral hooks retry app <sha>", "corral hooks retry app <sha> --acknowledge-uncertain"],
   [[71, "The failure"], [24, "Admission resumes"]]);
 
@@ -1553,7 +1553,7 @@ sc(74, "c", "n", "Cleanup",
     ["S", "G", "Delete the merged branch", "git branch -d only after the worktree is gone.", { cand: "landed main@c3d4 · branch deleted" }],
     ["S", "S", "History stays", "Runs, artifacts and events remain searchable.", {}]
   ],
-  ["crates/corral-ops/src/cleanup.rs:20 fn cleanup", "crates/corral-ops/src/cleanup_worktree.rs:97 fn remove", "docs/guide/cleanup.md"],
+  ["crates/corral-ops/src/cleanup.rs:20 fn cleanup", "crates/corral-ops/src/cleanup_worktree.rs:97 fn remove", "docs/guide/classic/cleanup.md"],
   ["corral approve T-042"],
   [[75, "Cleanup fails"], [79, "Search history later"]]);
 
@@ -1566,7 +1566,7 @@ sc(75, "c", "e", "Cleanup failure",
     ["S", "S", "cleanup_failed event", "", { run: "R1 · worktree retained (warning)" }],
     ["S", "S", "Later sync sweep", "Reaps leftover panes and empty owned workspaces of Done/Dropped tasks; corral doctor reports remaining directories without deleting them.", { run: "R1 · cleaned on retry", cap: "1 / 3 global" }]
   ],
-  ["crates/corral-ops/src/cleanup.rs:35 fn sweep", "crates/corral-ops/src/cleanup.rs:24 fn cleanup_report", "docs/guide/cleanup.md", "docs/guide/automation.md#manual-review"],
+  ["crates/corral-ops/src/cleanup.rs:35 fn sweep", "crates/corral-ops/src/cleanup.rs:24 fn cleanup_report", "docs/guide/classic/cleanup.md", "docs/guide/classic/automation.md#manual-review"],
   ["corral doctor"],
   [[74, "Clean cleanup"]]);
 
@@ -1579,7 +1579,7 @@ sc(76, "c", "n", "Discard",
     ["S", "G", "Remove the worktree and delete the branch", "Including intentionally discarded dirty files; the unmerged branch is explicitly deleted. --keep-branch keeps it.", { cand: "branch deleted · main@a1f0 untouched" }],
     ["S", "S", "Records remain", "Artifacts and run history stay; the discarded event records warnings and what was removed.", {}]
   ],
-  ["crates/corral-ops/src/review.rs:585 fn discard", "crates/corral-ops/src/cleanup_worktree.rs:178 fn discard_branch", "docs/guide/cleanup.md", "docs/guide/sprint-review.md#protecting-owner-intent"],
+  ["crates/corral-ops/src/review.rs:585 fn discard", "crates/corral-ops/src/cleanup_worktree.rs:178 fn discard_branch", "docs/guide/classic/cleanup.md", "docs/guide/classic/sprint-review.md#protecting-owner-intent"],
   ["corral discard T-042 --reason \"…\"", "corral discard T-042 --keep-branch"],
   [[11, "Idea dispositions"], [74, "Cleanup after landing"]]);
 
@@ -1593,7 +1593,7 @@ sc(77, "c", "n", "Revert",
     ["S", "G", "Append the revert commit", "Never rewrites history or pushes.", { cand: "revert 3f4a on main@d9e0" }],
     ["S", "S", "Backlog with a dispatch hold", "A reverted event links the original commits and the revert SHA; run evidence remains. Reverts run the configured post-land operations too.", { st: "Backlog", sg: "dispatch hold (reverted)", ops: "post-land hooks for revert" }]
   ],
-  ["crates/corral-ops/src/revert.rs:118 fn revert", "crates/corral-ops/src/revert.rs:118-152 revert flow", "crates/corral-git/src/revert.rs:186 fn revert_range_prepared", "docs/guide/automation.md#reverting-a-landing"],
+  ["crates/corral-ops/src/revert.rs:118 fn revert", "crates/corral-ops/src/revert.rs:118-152 revert flow", "crates/corral-git/src/revert.rs:186 fn revert_range_prepared", "docs/guide/classic/automation.md#reverting-a-landing"],
   ["corral revert T-042"],
   [[78, "Revert refused"], [28, "Explicit reauthorization"]]);
 
@@ -1607,7 +1607,7 @@ sc(78, "c", "e", "Revert refused",
     ["S", "G", "Inverse conflicts", "Refused with conflicting paths and later commit SHAs touching them.", { sg: "revert refused: conflict in src/cli.rs" }],
     ["S", "S", "Nothing changed", "Base and task untouched.", { cand: "main@d9e0 unchanged" }]
   ],
-  ["crates/corral-ops/src/revert.rs:39-69 range validation", "crates/corral-git/src/revert.rs:11 struct RevertRange", "docs/guide/automation.md#reverting-a-landing"],
+  ["crates/corral-ops/src/revert.rs:39-69 range validation", "crates/corral-git/src/revert.rs:11 struct RevertRange", "docs/guide/classic/automation.md#reverting-a-landing"],
   ["corral revert T-042"],
   [[77, "Successful revert"], [69, "Keep-branch approval"]]);
 
@@ -1620,7 +1620,7 @@ sc(79, "c", "n", "Search and pin",
     ["O", "S", "corral artifact show T-070:R1:…-test.log --lines 20-35", "Line numbers are one-based in the stored document.", {}],
     ["O", "S", "corral pin", "Pinned artifacts appear in the artifact finder.", { sg: "pinned" }]
   ],
-  ["crates/corral-ops/src/content_search.rs:100 fn search_content", "crates/corral-ops/src/search.rs:78 fn search_tasks", "crates/corral-core/src/pins.rs:251 fn pin", "docs/guide/content-search.md", "docs/guide/search.md"],
+  ["crates/corral-ops/src/content_search.rs:100 fn search_content", "crates/corral-ops/src/search.rs:78 fn search_tasks", "crates/corral-core/src/pins.rs:251 fn pin", "docs/guide/classic/content-search.md", "docs/guide/classic/search.md"],
   ["corral search 'error:\"stale review\"' --in all --json", "corral artifact show <ref> --lines 20-35", "corral pin <ref>"],
   [[80, "Sprint review"]]);
 
@@ -1634,7 +1634,7 @@ sc(80, "c", "n", "Sprint and daily review",
     ["O", "S", "--mark", "Records the covered-through point after building; ordinary reports do not move it.", { sg: "review mark advanced" }],
     ["S", "S", "Daily digest", "corral digest, or [digest] every = \"1d\" during sync (no independent timer).", { ev: "Sprint report + daily digest (pinned)" }]
   ],
-  ["crates/corral-ops/src/sprint.rs:109 fn review_sprint", "crates/corral-ops/src/digest.rs:191 fn scheduled_digest_at", "docs/guide/sprint-review.md", "docs/guide/automation.md#daily-digests"],
+  ["crates/corral-ops/src/sprint.rs:109 fn review_sprint", "crates/corral-ops/src/digest.rs:191 fn scheduled_digest_at", "docs/guide/classic/sprint-review.md", "docs/guide/classic/automation.md#daily-digests"],
   ["corral review-sprint --mark", "corral digest --since 2d --json"],
   [[11, "Idea dispositions in the report"], [81, "Lessons"]]);
 
@@ -1649,7 +1649,7 @@ sc(81, "f", "n", "Lessons cycle",
     ["W", "S", "corral lessons apply --file proposal.json", "Evidence must come from captured observations; pinned lessons survive unchanged.", { ev: "lessons applied (source_digest matched)" }],
     ["S", "W", "Future prompts snapshot rules", "Dispatch captures matching rules under Known pitfalls; review reuses those exact bytes.", {}]
   ],
-  ["crates/corral-ops/src/lesson_distill.rs:125 fn announce_due", "crates/corral-ops/src/lesson_distill.rs:175 fn lessons_distill", "crates/corral-ops/src/lesson_distill.rs:276 fn lessons_apply", "crates/corral-ops/src/lessons.rs:112 fn record_lessons", "docs/guide/lessons.md"],
+  ["crates/corral-ops/src/lesson_distill.rs:125 fn announce_due", "crates/corral-ops/src/lesson_distill.rs:175 fn lessons_distill", "crates/corral-ops/src/lesson_distill.rs:276 fn lessons_apply", "crates/corral-ops/src/lessons.rs:112 fn record_lessons", "docs/guide/classic/lessons.md"],
   ["corral lessons due --json", "corral lessons distill --project app --profile omo", "corral lessons apply --project app --file proposal.json"],
   [[82, "Stale proposal"], [24, "How the spike is admitted"]]);
 
@@ -1662,7 +1662,7 @@ sc(82, "c", "e", "Stale lessons proposal",
     ["S", "S", "No replay", "An applied request cannot be replayed either.", {}],
     ["P", "S", "File a new request", "A fresh distill captures current lessons.", { ev: "new request source_digest 7b2d" }]
   ],
-  ["crates/corral-ops/src/lesson_distill.rs:276 fn lessons_apply", "docs/guide/lessons.md#distillation"],
+  ["crates/corral-ops/src/lesson_distill.rs:276 fn lessons_apply", "docs/guide/classic/lessons.md#distillation"],
   ["corral lessons pin readiness --project app"],
   [[81, "Lessons cycle"]]);
 
@@ -1676,7 +1676,7 @@ sc(83, "c", "e", "Config change",
     ["O", "X", "Invalid edit", "config_invalid; the previous in-process config is kept and a board toast shows the error.", { sg: "config_invalid: previous config kept" }],
     ["S", "W", "Running agents untouched", "", {}]
   ],
-  ["crates/corral-core/src/config_events.rs:139 fn reload_config_if_changed", "crates/corral-core/src/config_events.rs:242 fn observe_invalid_config", "docs/guide/configuration.md#recorded-config-changes", "docs/guide/acceptance.md"],
+  ["crates/corral-core/src/config_events.rs:139 fn reload_config_if_changed", "crates/corral-core/src/config_events.rs:242 fn observe_invalid_config", "docs/guide/configuration.md#recorded-config-changes", "docs/guide/classic/acceptance.md"],
   ["corral config validate", "corral config diff", "corral config history --json"],
   [[84, "Binary updated"], [85, "Subscribe to config events"]]);
 
@@ -1690,7 +1690,7 @@ sc(84, "c", "e", "Updated binary or unknown schema",
     ["O", "S", "q, then corral up", "No automatic re-exec. Restart the board, not the workers or herdr.", { sg: "board restarted", dec: null }],
     ["P", "S", "Sync, then brief", "health.last_version_skew is historical evidence, not a live probe.", {}]
   ],
-  ["crates/corral-core/src/store.rs:280 fn check_runtime", "crates/corral-core/src/runtime.rs:65 fn check", "docs/guide/automation.md#updates-and-state-compatibility", "docs/guide/pm.md#startup-stalls-and-upgrades"],
+  ["crates/corral-core/src/store.rs:280 fn check_runtime", "crates/corral-core/src/runtime.rs:65 fn check", "docs/guide/classic/automation.md#updates-and-state-compatibility", "docs/guide/classic/pm.md#startup-stalls-and-upgrades"],
   ["corral up"],
   [[70, "Install via post-land hooks"], [2, "Return to the workspace"]]);
 
@@ -1704,7 +1704,7 @@ sc(85, "c", "n", "Event subscription",
     ["S", "P", "Timeout: exit 124, no output", "Keep the previous after_offset; sync once if no driver is active.", {}],
     ["S", "S", "Rotation", "A bare offset belongs to the current file; use --since to rescan retained history. Rotated-away history cannot be recovered.", { sg: "offset uncertain · rescan --since" }]
   ],
-  ["crates/corral-core/src/event_reader.rs:37 struct EventReader", "crates/corral-core/src/event_reader.rs:143 fn from_offset", "docs/guide/events.md"],
+  ["crates/corral-core/src/event_reader.rs:37 struct EventReader", "crates/corral-core/src/event_reader.rs:143 fn from_offset", "docs/guide/classic/events.md"],
   ["corral wait --for done,needs_me --json --print-cursor", "corral wait --after-offset 20411 --json --print-cursor"],
   [[18, "PM board wake"], [5, "No sync driver"]]);
 

@@ -105,7 +105,7 @@ affected_paths:
   - packages/corral-pi/src/roles/pm/tools.ts
   - packages/corral-pi/src/host/session.ts
   - docs/guide/corral-pi.md
-  - docs/guide/pm.md
+  - docs/guide/classic/pm.md
   - docs/guide/assistants.md
 contracts:
   - "AgentRole::Assistant and Actor::Assistant (via `assistant:A-<n>`)"
@@ -143,7 +143,7 @@ dependencies:
       - scenario: "Add, list, show, pin, search and GC session artifacts `A-1:report.md`."
         expected: "Snapshots live under `.corral/artifacts/assistant/A-1/`; refs, tiers, search and GC treat them like run artifacts; an assistant cannot add to another session or to a task run."
   - task: pm-inbox
-    write_scope: [crates/corral-core/src/pm_inbox.rs, crates/corral/src/pm_cmd.rs, crates/corral-ops/src/pm_next.rs, crates/corral-ops/src/agent/ops/pm.rs, packages/corral-pi/src/roles/pm/tools.ts, docs/guide/pm.md]
+    write_scope: [crates/corral-core/src/pm_inbox.rs, crates/corral/src/pm_cmd.rs, crates/corral-ops/src/pm_next.rs, crates/corral-ops/src/agent/ops/pm.rs, packages/corral-pi/src/roles/pm/tools.ts, docs/guide/classic/pm.md]
     depends_on: [assistant-entry-guard, assistant-launch]
     acceptance:
       - scenario: "C7, plus withdraw by the author, a post from a refused-class command and an OmO PM sweep."
@@ -322,7 +322,7 @@ and spikes never do (C9, C10); focus and transcripts are bounded (C11).
 | Pi role modules and op names | `packages/corral-pi/src/roles/types.ts`, `roles/pm/tools.ts` |
 | Host tags pane input `interactive` | `packages/corral-pi/src/host/session.ts` (input handler) |
 | Approve requires a fresh review unless the resolved reviewer is none | `crates/corral-ops/src/review.rs` |
-| Landing lock, integration, size checks | `approve_landed`, `docs/guide/acceptance.md` |
+| Landing lock, integration, size checks | `approve_landed`, `docs/guide/classic/acceptance.md` |
 | Machine-load probe | `ResourceProbe`, `crates/corral-ops/src/resources.rs` |
 | Artifacts are keyed by task and run | `Artifact`, `crates/corral-core/src/model.rs` |
 | T-460 P3 handoff: assistant column from the W standard template, after capability-framework | T-460 plan "Existing T-544 handoff" |

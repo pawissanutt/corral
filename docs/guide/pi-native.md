@@ -21,7 +21,7 @@ Legacy project-bound hosts remain restricted to their stored project.
 Conversation access is not executor consent: automatic dispatch, review, gates, repair
 and landing independently recheck current effective policy and pauses at action time.
 Existing bounded manual PM operator authority and owner-only controls remain unchanged.
-See [PM authority](pm.md#pm-authority).
+See [PM authority](classic/pm.md#pm-authority).
 
 ## Annotation host API
 

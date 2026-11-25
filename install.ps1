@@ -155,7 +155,7 @@ function Install-LegacyCorral($Archive, $Temporary, $Directory, $Tag, $ReleaseRe
             Write-Output ('For this PowerShell session: $env:PATH = "' + $Directory + ';$env:PATH"')
         }
         Write-Output 'Before corral up: install herdr >= 0.9.3 (https://herdr.dev/docs/install/), Git for Windows with Git Bash on PATH, and authenticate an agent CLI.'
-        Write-Output "Windows pane-shell setup: https://github.com/$ReleaseRepo/blob/main/docs/guide/install.md#native-windows"
+        Write-Output "Windows pane-shell setup: https://github.com/$ReleaseRepo/blob/main/docs/guide/classic/install.md#native-windows"
     } finally {
         if ($staged -and [IO.File]::Exists($staged)) { [IO.File]::Delete($staged) }
     }
