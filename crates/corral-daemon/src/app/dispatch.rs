@@ -150,6 +150,11 @@ pub(crate) fn serve(
         op::OP_RESULT => answer!(Ok(ops::result(shared, decode(params)?)?)),
         chat::ASSISTANT_WARM => answer!(Ok(assistant::warm(shared, decode(params)?)?)),
         chat::ASSISTANT_SESSION => answer!(Ok(assistant::session(shared, decode(params)?)?)),
+        build::CODE_START => answer!(Ok(builds::start_code(shared, decode(params)?)?)),
+        build::CODE_RESUME => answer!({
+            let target: control::SessionTarget = decode(params)?;
+            Ok(builds::resume_code(shared, &target.id)?)
+        }),
         build::BUILD_START => answer!(Ok(builds::start(shared, decode(params)?)?)),
         build::BUILD_REMOVE => answer!(Ok(builds::remove(shared, decode(params)?)?)),
         host::SESSION_SEND => answer!(Ok(sessions::send(

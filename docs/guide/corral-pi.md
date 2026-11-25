@@ -45,6 +45,13 @@ commands without Corral's Build permission prompts. Use it only where you would
 trust an agent with your own shell. It does not elevate OS privileges, change
 provider credentials or lift spending limits.
 
+Any enrolled device can choose **New code session…** in the app to start Code
+with this same trust in the owner's configured project checkout. Enrol only
+devices you trust with that authority. No worktree is created, and another live
+session using the same checkout may make overlapping edits. The app can resume
+a cold Code session without relaunching it as a Build. Managed Build termination,
+exit, landing and removal do not apply to Code.
+
 Code keeps Build's editor, child agents, background jobs, questions, Todo and
 optional plan mode. It does not require a commit, gate, review or landing choice:
 quit normally and your edits stay in place. Resume with `corral-pi code --resume <id>`.

@@ -722,6 +722,8 @@ fn request_deadline(method: &str, params: &Value) -> u64 {
         // These may start the session's host before they answer. Expiring sooner reports a
         // start as failed while corrald completes it.
         wire::build::BUILD_START
+        | wire::build::CODE_START
+        | wire::build::CODE_RESUME
         | wire::session::SESSION_RELAUNCH
         | wire::session_host::SESSION_SEND
         | wire::assistant::ASSISTANT_WARM => APP_LAUNCH_DEADLINE_MS,

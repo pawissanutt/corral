@@ -74,7 +74,7 @@ pub(super) fn handles(event: &Event) -> bool {
         event,
         Event::Health(_) | Event::Rows { .. } | Event::Reset { .. } | Event::TopicError { .. }
     ) || matches!(event, Event::Reply { method, .. } if matches!(*method,
-            APP_SESSION | OP_SUBMIT | OP_RESULT | CONFIG_GET | CONFIG_PUT | SESSION_SEND | BUILD_START |
+            APP_SESSION | OP_SUBMIT | OP_RESULT | CONFIG_GET | CONFIG_PUT | SESSION_SEND | BUILD_START | wire::build::CODE_START | wire::build::CODE_RESUME |
             SESSION_CARD_ANSWER | SESSION_QUEUE_WITHDRAW | SESSION_QUEUE_MOVE | SESSION_ACTION |
             SESSION_MODEL | BUILD_REMOVE | DETAIL_GET | CHANGES_PAGE | SEEN_ADVANCE | DEVICE_REVOKE |
             wire::device::PAIR_BEGIN | wire::device::PAIR_STATUS | wire::device::PAIR_CONFIRM | wire::device::PAIR_CANCEL |
@@ -106,6 +106,8 @@ fn refusable(method: &str) -> bool {
             | control::SESSION_REWIND
             | SESSION_SEND
             | BUILD_START
+            | wire::build::CODE_START
+            | wire::build::CODE_RESUME
     )
 }
 

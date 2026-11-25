@@ -2,7 +2,7 @@
 
 use corral_protocol::app::{ChangesQuery, SeenAdvance};
 use corral_protocol::assistant::{AssistantSessionOp, AssistantWarm, ContextRef};
-use corral_protocol::build::{BuildRemove, BuildStart};
+use corral_protocol::build::{BuildRemove, BuildStart, CodeStart};
 use corral_protocol::detail::DetailGet;
 use corral_protocol::session_host::{
     SESSION_QUEUE_MOVE, SESSION_QUEUE_WITHDRAW, SessionActionRequest, SessionCardAnswer,
@@ -133,6 +133,10 @@ pub enum Effect {
     BuildStart {
         key: Id,
         start: BuildStart,
+    },
+    CodeStart {
+        key: Id,
+        start: CodeStart,
     },
     /// Answer, or dismiss, a card the session's host waits on (`session.card.answer`); the
     /// reply (`SessionCardAnswered`) is read under `key`.

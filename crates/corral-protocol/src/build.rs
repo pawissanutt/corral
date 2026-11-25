@@ -7,6 +7,21 @@ use serde::{Deserialize, Serialize};
 pub const BUILD_START: &str = "build.start";
 pub const BUILD_REMOVE: &str = "build.remove";
 
+pub const CODE_START: &str = "code.start";
+pub const CODE_RESUME: &str = "code.resume";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct CodeStart {
+    /// A configured project whose checkout the trusted Code session runs in.
+    pub project: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct BuildStart {
     /// A configured project; absent means the workspace root's repository.

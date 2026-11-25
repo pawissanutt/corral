@@ -20,6 +20,12 @@ test("Code preserves invocation cwd in an unborn Git checkout", () => {
     mkdirSync(cwd);
     const code = parseBuildFlags([], "/assets", {}, cwd, "code");
     expect(code.launch).toMatchObject({ repoRoot: root, here: true, trustedCode: true });
+    mkdirSync(join(root, ".corral-next"));
+    writeFileSync(join(root, ".corral-next", "pi.toml"), '[startup]\nmodel = "openai-codex/gpt-6.2-sol"\n');
+    const managed = parseBuildFlags(["--headless", "--id", "B-code"], "/assets",
+      { CORRAL_PI_MANAGED_BUILD: "1" }, cwd, "code", root);
+    expect(managed.launch).toMatchObject({ provider: "openai-codex", model: "openai-codex/gpt-6.2-sol", trustedCode: true, here: true });
+    expect(managed.local.codeCwd).toBe(cwd);
     expect(code.local.codeCwd).toBe(cwd);
     // A terminal may have resumed into a different workspace (or an unbound Code session).
     const ambient = { CORRAL_NEXT_ROOT: join(root, "original-workspace") };

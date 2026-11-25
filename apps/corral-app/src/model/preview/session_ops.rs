@@ -6,7 +6,7 @@
 //! the daemon launches a headless host.
 
 use corral_protocol::assistant::QUICK_THREAD;
-use corral_protocol::build::BuildStart;
+use corral_protocol::build::{BuildMode, BuildStart, CodeStart};
 use corral_protocol::rows::{AssistantKind, AssistantState};
 use corral_protocol::session_host::{InputDisposition, SessionSend, SessionSent};
 use corral_types::Origin;
@@ -98,7 +98,23 @@ fn next_build(feed: &Feed) -> String {
 }
 
 /// Starts a sample build session; the reply is its row.
-pub(super) fn start(feed: &mut Feed, start: &BuildStart) -> Result<Value, String> {
+pub(super) fn start_code(feed: &mut Feed, request: &CodeStart) -> Result<Value, String> {
+    start(
+        feed,
+        &BuildStart {
+            project: Some(request.project.clone()),
+            name: request.name.clone(),
+            here: true,
+            model: request.model.clone(),
+            effort: request.effort.clone(),
+            fallback: Vec::new(),
+            profile: None,
+        },
+        true,
+    )
+}
+
+pub(super) fn start(feed: &mut Feed, start: &BuildStart, code: bool) -> Result<Value, String> {
     let project = start
         .project
         .clone()
@@ -122,7 +138,7 @@ pub(super) fn start(feed: &mut Feed, start: &BuildStart) -> Result<Value, String
             build.name == name && build.project.as_deref() == Some(project.as_str())
         })
     });
-    if taken {
+    if taken && !code {
         return Err(format!(
             "A build named {name} already exists in {project}; choose another name"
         ));
@@ -141,7 +157,14 @@ pub(super) fn start(feed: &mut Feed, start: &BuildStart) -> Result<Value, String
     if let Some(build) = row.build.as_mut().filter(|_| start.here) {
         build.here = true;
         build.branch = None;
-        if let Some(path) = path {
+        if code {
+            build.mode = BuildMode::Code;
+            build.exit = None;
+            if let Some(path) = path {
+                build.repo_root = path;
+            }
+            build.worktree = build.repo_root.clone();
+        } else if let Some(path) = path {
             build.worktree = path;
         }
     }

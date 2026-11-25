@@ -37,6 +37,8 @@ pub enum Control {
     Terminate,
     /// Start a lost host again on the same session.
     Relaunch,
+    /// Resume a cold trusted Code host in its checkout.
+    ResumeCode,
     /// Ask for the turns a worker can be rewound to and the rewinds already done.
     Rewinds,
     /// Rewind the worker to the start of this turn.
@@ -59,7 +61,7 @@ impl Control {
         match self {
             Self::Cancel => "Cancel turn".into(),
             Self::Pause => "Pause".into(),
-            Self::Resume => "Resume".into(),
+            Self::Resume | Self::ResumeCode => "Resume".into(),
             Self::Terminate => "Terminate".into(),
             Self::Relaunch => "Relaunch".into(),
             Self::Rewinds => "Rewind…".into(),
@@ -72,7 +74,7 @@ impl Control {
         match self {
             Self::Cancel => "cancel-turn",
             Self::Pause => "pause",
-            Self::Resume => "resume",
+            Self::Resume | Self::ResumeCode => "resume",
             Self::Terminate => "terminate",
             Self::Relaunch => "relaunch",
             Self::Rewinds => "rewind",
@@ -85,6 +87,7 @@ impl Control {
             Self::Cancel => SESSION_CANCEL,
             Self::Pause => SESSION_PAUSE,
             Self::Resume => SESSION_RESUME,
+            Self::ResumeCode => corral_protocol::build::CODE_RESUME,
             Self::Terminate => SESSION_TERMINATE,
             Self::Relaunch => SESSION_RELAUNCH,
             Self::Rewinds | Self::Rewind(_) => SESSION_REWIND,
@@ -216,6 +219,9 @@ fn chat_controls(feed: &Feed, session: &str) -> Vec<Control> {
         return Vec::new();
     };
     if super::is_code(row) {
+        if row.live_in == AssistantLocation::None && row.state == AssistantState::Cold {
+            return vec![Control::ResumeCode];
+        }
         return if row.live_in != AssistantLocation::None
             && matches!(
                 row.state,
@@ -346,6 +352,7 @@ pub fn outcome(control: Control, operation: Option<&Operation>) -> Outcome {
             _ => "Paused · automated input waits; Resume or a message from you continues".into(),
         },
         Control::Resume => "Resumed · held input is delivered in order".into(),
+        Control::ResumeCode => "Code session resumed".into(),
         Control::Terminate => {
             "Terminated · the transcript stays; Relaunch starts the session again".into()
         }

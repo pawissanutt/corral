@@ -141,7 +141,15 @@ fn chat(feed: &mut Feed, session: &str, control: Control) -> Result<Value, Fail>
             pi::end(feed, &id);
             Ok(Value::Null)
         }
-        Control::Relaunch => {
+        Control::ResumeCode
+            if !feed
+                .assistants
+                .get(id.as_str())
+                .is_some_and(crate::model::agents::is_code) =>
+        {
+            Err(Fail::Refused("expected a Code session".into()))
+        }
+        Control::Relaunch | Control::ResumeCode => {
             pi::revive(feed, &id);
             Ok(json!({"id": id.as_str()}))
         }

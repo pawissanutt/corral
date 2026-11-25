@@ -446,6 +446,25 @@ fn document() -> Value {
                 Internal,
             ],
         ),
+        method::<build::CodeStart, rows::AssistantRow>(
+            &mut generator,
+            build::CODE_START,
+            false,
+            &[
+                InvalidParams,
+                NotFound,
+                Refused,
+                Busy,
+                Unavailable,
+                Internal,
+            ],
+        ),
+        method::<session::SessionTarget, session::SessionRelaunched>(
+            &mut generator,
+            build::CODE_RESUME,
+            false,
+            &session_host_errors,
+        ),
         method::<build::BuildRemove, build::BuildRemoved>(
             &mut generator,
             build::BUILD_REMOVE,

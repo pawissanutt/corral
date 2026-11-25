@@ -83,6 +83,7 @@ fn new_item(app: AppState, item: NewItem) -> AnyElement {
         .accessibility_label(item.label)
         .on_select(move || match press {
             NewPress::Assistant => app.new_assistant(),
+            NewPress::Code => run_agents(app, Action::Start(StartAction::OpenCode)),
             NewPress::Build => run_agents(app, Action::Start(StartAction::Open)),
         })
         .cursor_pointer()
@@ -222,6 +223,7 @@ fn content(app: AppState) -> Modal {
         .child(projects)
         .child(name)
         .child(place)
+        .child(quiet(app, sheet, |s| s.warning.clone(), Hue::Held))
         .child(model)
         .child(effort)
         .into_element();

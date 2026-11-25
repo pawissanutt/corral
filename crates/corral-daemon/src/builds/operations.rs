@@ -5,7 +5,7 @@ use anyhow::anyhow;
 use corral_engine::runner::pi::{BuildLaunch, PiRefusal, PiRunner};
 use corral_protocol::{
     app::SESSION_PART_MAX,
-    build::{BuildRemove, BuildRemoved, BuildStart},
+    build::{BuildRemove, BuildRemoved, BuildStart, CodeStart},
     session::SessionRelaunched,
 };
 use std::{
@@ -17,6 +17,37 @@ use std::{
 };
 
 pub(crate) fn start(shared: &Shared, request: BuildStart) -> Result<AssistantRow> {
+    start_host(shared, request, false)
+}
+
+pub(crate) fn start_code(shared: &Shared, request: CodeStart) -> Result<AssistantRow> {
+    start_host(
+        shared,
+        BuildStart {
+            project: Some(request.project),
+            name: request.name,
+            here: true,
+            profile: None,
+            model: request.model,
+            effort: request.effort,
+            fallback: Vec::new(),
+        },
+        true,
+    )
+}
+
+fn launch_host(shared: &Shared, launch: BuildLaunch<'_>, code: bool) -> Result<SessionRef> {
+    let placement = shared.chat_placement();
+    let runner = PiRunner::new(placement.as_ref());
+    let (session, _) = if code {
+        runner.start_code(launch)?
+    } else {
+        runner.start_build(launch)?
+    };
+    Ok(session)
+}
+
+fn start_host(shared: &Shared, request: BuildStart, code: bool) -> Result<AssistantRow> {
     let cwd = if let Some(project) = &request.project {
         shared
             .root()
@@ -46,7 +77,7 @@ pub(crate) fn start(shared: &Shared, request: BuildStart) -> Result<AssistantRow
         effort: request.effort.as_deref(),
         fallback: &request.fallback,
     };
-    let (session, _) = match PiRunner::new(shared.chat_placement().as_ref()).start_build(launch) {
+    let session = match launch_host(shared, launch, code) {
         Ok(started) => started,
         Err(error) => {
             let error = launch_error(&dir, 0, error);
@@ -60,17 +91,34 @@ pub(crate) fn start(shared: &Shared, request: BuildStart) -> Result<AssistantRow
     };
     shared.publish();
     let build = require(shared, &id)?;
-    reject_code(build.record.trusted_code)?;
+    require_mode(&build, code)?;
     Ok(build.row(shared, Some(&session)))
 }
 
 pub(crate) fn relaunch(shared: &Shared, id: &str) -> Result<SessionRelaunched> {
+    restart_host(shared, id, false)
+}
+
+pub(crate) fn resume_code(shared: &Shared, id: &str) -> Result<SessionRelaunched> {
+    restart_host(shared, id, true)
+}
+
+fn require_mode(build: &Build, code: bool) -> Result<()> {
+    if !code {
+        reject_code(build.record.trusted_code)?;
+    } else if !build.record.trusted_code {
+        return Err(refuse("expected a Code session", vec![]));
+    }
+    Ok(())
+}
+
+fn restart_host(shared: &Shared, id: &str, code: bool) -> Result<SessionRelaunched> {
     let _lock = shared
         .build_ops
         .lock()
         .unwrap_or_else(|err| err.into_inner());
     let build = require(shared, id)?;
-    reject_code(build.record.trusted_code)?;
+    require_mode(&build, code)?;
     if build.live(shared)?.is_none() {
         let data_root = shared.build_data_root()?;
         let socket_root = shared.private_chat_sockets();
@@ -102,9 +150,7 @@ pub(crate) fn relaunch(shared: &Shared, id: &str) -> Result<SessionRelaunched> {
             Err(err) if err.kind() == ErrorKind::NotFound => 0,
             Err(err) => return Err(err).with_context(|| format!("inspect {}", log.display())),
         };
-        PiRunner::new(shared.chat_placement().as_ref())
-            .start_build(launch)
-            .map_err(|err| launch_error(&build.dir, start, err))?;
+        launch_host(shared, launch, code).map_err(|err| launch_error(&build.dir, start, err))?;
         shared.publish();
     }
     Ok(SessionRelaunched { id: id.into() })

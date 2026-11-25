@@ -30,12 +30,12 @@ mod operations;
 use operations::oversized_status;
 #[cfg(test)]
 pub(crate) use operations::remove_with;
-pub(crate) use operations::{relaunch, remove, start, terminate};
+pub(crate) use operations::{relaunch, remove, resume_code, start, start_code, terminate};
 
 pub(crate) fn reject_code(code: bool) -> Result<()> {
     if code {
         return Err(refuse(
-            "terminal Code sessions are not managed by corrald",
+            "Code sessions do not accept managed Build operations",
             vec![],
         ));
     }

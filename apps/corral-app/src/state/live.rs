@@ -388,6 +388,22 @@ impl AppState {
                         .update(|state| state.unsent(&session, &key, why));
                 }
             }
+            Effect::CodeStart { key, start } => {
+                let unsent = self.link_refusal().map(str::to_owned).or_else(|| {
+                    (!requests::session_request(
+                        key.to_string(),
+                        corral_protocol::build::CODE_START,
+                        start,
+                    ))
+                    .then(|| "the app's connection task is not running".to_owned())
+                });
+                if let Some(why) = unsent {
+                    self.agents.update(|state| {
+                        state.start.sending = None;
+                        state.start.failed = Some(why);
+                    });
+                }
+            }
             Effect::BuildStart { key, start } => {
                 let unsent = match self.link_refusal() {
                     Some(refusal) => Some(refusal.to_owned()),

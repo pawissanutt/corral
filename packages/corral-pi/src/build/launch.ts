@@ -93,7 +93,10 @@ export function parseBuildFlags(argv: readonly string[], assets: string, env = p
     ...(values["no-fallback"] ? { fallback: undefined } : {}),
     ...(values.fallback?.length ? { "no-fallback": undefined } : {}),
   };
-  const managed = !trustedCode && !resuming && values.headless === true && values.id !== undefined && env.CORRAL_PI_MANAGED_BUILD === "1";
+  const managed = !resuming && values.headless === true && values.id !== undefined && env.CORRAL_PI_MANAGED_BUILD === "1";
+  if (managed && trustedCode && (!workspaceRoot || codeOutsideGit)) {
+    throw new Error("Daemon Code requires a Git checkout in a Corral workspace");
+  }
   if (managed && flags.model === undefined && flags.provider === undefined) {
     const saved = (raw.startup as { model?: unknown } | undefined)?.model;
     if (saved !== undefined) {
@@ -101,7 +104,7 @@ export function parseBuildFlags(argv: readonly string[], assets: string, env = p
       flags.model = saved;
     }
   }
-  // Native daemon Builds keep the behavior of the existing Project default route.
+  // Native daemon launches keep the behavior of the existing Project default route.
   const route = managed ? modelSettings(flags) : modelSettings(flags, "startup");
   return {
     launch: { version: 1, assets, dataRoot, repoRoot, here: trustedCode || values.here === true,

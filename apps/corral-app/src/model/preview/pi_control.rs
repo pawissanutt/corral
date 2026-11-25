@@ -73,7 +73,7 @@ pub(super) fn control(
         }
         Control::Rewinds => serde_json::to_value(list).map_err(|error| error.to_string())?,
         Control::Rewind(turn) => rewind(feed, id, turn, &at)?,
-        Control::Terminate | Control::Relaunch => {
+        Control::Terminate | Control::Relaunch | Control::ResumeCode => {
             return Err("terminate and relaunch go through corrald, not the host".into());
         }
     };

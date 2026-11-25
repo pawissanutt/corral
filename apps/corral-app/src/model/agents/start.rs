@@ -7,7 +7,8 @@
 
 use std::collections::BTreeSet;
 
-use corral_protocol::build::BuildStart;
+use corral_protocol::build::{BuildStart, CodeStart};
+use corral_protocol::rows::AssistantLocation;
 use corral_protocol::rows::AssistantRow;
 use serde_json::Value;
 
@@ -55,6 +56,7 @@ pub enum ModelPick {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Start {
     pub open: bool,
+    pub code: bool,
     /// The chosen project; none until one is pressed (the default then applies).
     pub project: Option<String>,
     pub name: String,
@@ -71,6 +73,7 @@ pub struct Start {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StartAction {
     Open,
+    OpenCode,
     Close,
     Project(String),
     Name(String),
@@ -87,6 +90,7 @@ pub enum NewPress {
     Assistant,
     /// The New build sheet.
     Build,
+    Code,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -123,6 +127,12 @@ pub fn new_menu() -> NewMenu {
                 label: "New build session…",
                 key: Some("N"),
                 press: NewPress::Build,
+            },
+            NewItem {
+                id: "btn-new-code",
+                label: "New code session…",
+                key: None,
+                press: NewPress::Code,
             },
         ],
     }
@@ -202,6 +212,7 @@ pub struct NewBuildForm {
     pub start: StartButton,
     pub cancel: Action,
     pub error: Option<String>,
+    pub warning: Option<String>,
 }
 
 const NO_PROJECT: &str = "Builds need a project. Add one in Settings › Configuration.";
@@ -340,7 +351,8 @@ pub fn form(state: &Start, feed: &Feed, filter: &ProjectFilter) -> Option<NewBui
         .and_then(|id| feed.projects.get(id))
         .and_then(|row| row.effective.as_ref())
         .map(|settings| settings.path.display().to_string());
-    let place = PlaceField {
+    let code = state.code;
+    let mut place = PlaceField {
         label: "Where",
         choices: [
             (Place::Worktree, "New worktree"),
@@ -360,28 +372,49 @@ pub fn form(state: &Start, feed: &Feed, filter: &ProjectFilter) -> Option<NewBui
             Place::Worktree => {
                 "work on a new branch in its own worktree; the checkout is untouched".into()
             }
-            Place::Checkout => match path {
+            Place::Checkout => match &path {
                 Some(path) => format!("work directly in {path} on its current branch"),
                 None => "work directly in the project's checkout on its current branch".into(),
             },
         },
     };
+    if code {
+        place.choices.clear();
+        place.explain =
+            "Works directly in the owner's checkout with the same trust as terminal Code.".into();
+    }
+    let warning = (code
+        && chosen.is_some()
+        && feed.assistants.values().any(|row| {
+            row.live_in != AssistantLocation::None
+                && row.build.as_ref().is_some_and(|build| {
+                    build.here
+                        && (build.project.as_deref() == chosen.as_deref()
+                            || path.as_ref().is_some_and(|path| path == &build.repo_root))
+                })
+        }))
+    .then(|| "Another live session uses this checkout. Its edits may overlap yours.".into());
     let mut model_choices = vec![choice(
         "seg-build-model-default".into(),
         "Project default",
         state.model == ModelPick::Route,
         StartAction::Model(ModelPick::Route),
     )];
-    model_choices.extend(profiles(feed).into_iter().map(|(name, model, _)| {
-        let mut found = choice(
-            format!("seg-build-model-profile-{name}"),
-            format!("{name} profile"),
-            state.model == ModelPick::Profile(name.clone()),
-            StartAction::Model(ModelPick::Profile(name)),
-        );
-        found.detail = model;
-        found
-    }));
+    model_choices.extend(
+        profiles(feed)
+            .into_iter()
+            .filter(|_| !code)
+            .map(|(name, model, _)| {
+                let mut found = choice(
+                    format!("seg-build-model-profile-{name}"),
+                    format!("{name} profile"),
+                    state.model == ModelPick::Profile(name.clone()),
+                    StartAction::Model(ModelPick::Profile(name)),
+                );
+                found.detail = model;
+                found
+            }),
+    );
     model_choices.extend(models(feed).into_iter().map(|model| {
         choice(
             format!("seg-build-model-{model}"),
@@ -390,7 +423,13 @@ pub fn form(state: &Start, feed: &Feed, filter: &ProjectFilter) -> Option<NewBui
             StartAction::Model(ModelPick::Model(model)),
         )
     }));
-    let levels = efforts(feed);
+    let levels = if code {
+        ["minimal", "low", "medium", "high", "xhigh", "max"]
+            .map(str::to_owned)
+            .to_vec()
+    } else {
+        efforts(feed)
+    };
     let effort = (!levels.is_empty()).then(|| EffortField {
         label: "Effort",
         choices: std::iter::once(choice(
@@ -417,13 +456,17 @@ pub fn form(state: &Start, feed: &Feed, filter: &ProjectFilter) -> Option<NewBui
         None
     };
     Some(NewBuildForm {
-        title: "New build session",
+        title: if code {
+            "New code session"
+        } else {
+            "New build session"
+        },
         project: projects,
         name: NameField {
             id: "field-build-name",
             label: "Name",
             value: state.name.clone(),
-            hint: "Leave it empty and the host names the build.",
+            hint: "Leave it empty and the host names the session.",
         },
         place,
         model: ModelField {
@@ -440,6 +483,8 @@ pub fn form(state: &Start, feed: &Feed, filter: &ProjectFilter) -> Option<NewBui
             id: "btn-start-build",
             label: if state.sending.is_some() {
                 "Starting…"
+            } else if code {
+                "Start Code"
             } else {
                 "Start build"
             },
@@ -448,6 +493,7 @@ pub fn form(state: &Start, feed: &Feed, filter: &ProjectFilter) -> Option<NewBui
         },
         cancel: start(StartAction::Close),
         error: state.failed.clone(),
+        warning,
     })
 }
 
@@ -461,7 +507,14 @@ impl Start {
         filter: &ProjectFilter,
     ) -> Vec<Effect> {
         match action {
-            StartAction::Open => self.open = true,
+            StartAction::Open => {
+                self.open = true;
+                self.code = false;
+            }
+            StartAction::OpenCode => {
+                self.open = true;
+                self.code = true;
+            }
             StartAction::Close => {
                 if self.sending.is_none() {
                     *self = Self::default();
@@ -488,6 +541,17 @@ impl Start {
                     ModelPick::Model(model) => (None, Some(model.trim().to_owned())),
                 };
                 let name = self.name.trim();
+                if self.code {
+                    return vec![Effect::CodeStart {
+                        key,
+                        start: CodeStart {
+                            project,
+                            name: (!name.is_empty()).then(|| name.to_owned()),
+                            model: model.filter(|model| !model.is_empty()),
+                            effort: self.effort.clone(),
+                        },
+                    }];
+                }
                 return vec![Effect::BuildStart {
                     key,
                     start: BuildStart {
@@ -521,7 +585,12 @@ impl Start {
         self.sending = None;
         if let Some(refusal) = &operation.refusal {
             return vec![Effect::Refused(RefusalSheet {
-                title: "Start build".into(),
+                title: if self.code {
+                    "Start Code"
+                } else {
+                    "Start build"
+                }
+                .into(),
                 refusal: refusal.clone(),
             })];
         }
@@ -545,6 +614,10 @@ impl Start {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "start_tests.rs"]
+mod code_tests;
 
 #[cfg(test)]
 mod tests {

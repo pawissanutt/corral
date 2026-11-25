@@ -64,65 +64,7 @@ fn launch_fixture() -> (Fixture, Placement) {
 fn launch_fixture_with_resume(
     on_resume: impl Fn(Script) -> Script + Send + Sync + 'static,
 ) -> (Fixture, Placement) {
-    let placement = Placement::new(move |command, dir| {
-        let args: Vec<_> = command.get_args().collect();
-        assert_eq!(command.get_program(), "corral-pi");
-        assert_eq!(args[0], "build");
-        assert!(args.contains(&OsStr::new("--headless")));
-        let workspace = command
-            .get_envs()
-            .find_map(|(key, value)| {
-                (key == "CORRAL_NEXT_ROOT")
-                    .then_some(value)
-                    .flatten()
-                    .map(Path::new)
-            })
-            .unwrap();
-        let checkout = workspace.join("repo");
-        assert_eq!(command.get_current_dir(), Some(checkout.as_path()));
-        let data_root = workspace.join("pi-data");
-        assert_eq!(argument(&args, "--data-dir"), Some(data_root.as_os_str()));
-        assert!(Path::new(argument(&args, "--corral").unwrap()).is_absolute());
-        let id = dir.file_name().unwrap();
-        let resuming = dir.join("session.json").is_file();
-        if resuming {
-            assert_eq!(argument(&args, "--resume"), Some(id));
-            assert!(argument(&args, "--id").is_none());
-        } else {
-            assert_eq!(argument(&args, "--id"), Some(id));
-            assert_eq!(argument(&args, "--project"), Some(OsStr::new("demo")));
-            assert_eq!(argument(&args, "--model"), Some(OsStr::new(MODEL)));
-            assert!(argument(&args, "--resume").is_none());
-        }
-        let socket = PathBuf::from(argument(&args, "--socket").unwrap());
-        save_record(dir, workspace, &socket, false);
-        fs::write(dir.join("journal.json"), json!({
-            "title": "Journal title", "diff": {"commits": 1, "files": 2, "added": 3, "removed": 4},
-        }).to_string()).unwrap();
-        let mut script = Script::default();
-        script.pages.push_back(json!({"last": 0, "next": 0, "events": [], "more": false, "state": {
-            "mode": "headless", "turn": 0, "open": false, "paused": false, "queue_total": 0,
-            "model": MODEL, "effort": "high", "usage": {"tokens": 0, "cost_partial": false,
-                "context_tokens": 0, "context_window": 0},
-            "children": {"live": 0, "waiting": 0, "total": 0}, "jobs": {"live": 0, "waiting": 0, "total": 0},
-        }}));
-        Some(Host::start(
-            socket,
-            id.to_str().unwrap().into(),
-            "build",
-            dir,
-            if resuming { on_resume(script) } else { script },
-        ))
-    });
-    let runner = placement.clone();
-    let fixture = Fixture::with_runner(Arc::new(move || Box::new(runner.clone())));
-    fs::create_dir(fixture.root().join("repo")).unwrap();
-    fs::write(
-        fixture.root().join(crate::STATE_DIR).join("corral.toml"),
-        "[projects.demo]\npath = 'repo'\n",
-    )
-    .unwrap();
-    (fixture, placement)
+    managed_code::launch_fixture_mode("build", on_resume)
 }
 
 fn rows(socket: &Path, caps: Vec<String>) -> Vec<AssistantRow> {
@@ -829,6 +771,7 @@ fn a_child_scope_never_reads_outside_its_session_directory() {
     assert_eq!(refused.code, rpc::ErrorCode::Refused);
 }
 
+mod managed_code;
 #[path = "pi_build/retained_child.rs"]
 mod retained_child;
 

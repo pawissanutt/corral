@@ -27,6 +27,7 @@ pub fn effect(feed: &mut Feed, effect: &Effect) -> Result<(), String> {
         Effect::Session { key, .. }
         | Effect::SessionSend { key, .. }
         | Effect::BuildStart { key, .. }
+        | Effect::CodeStart { key, .. }
         | Effect::SessionCardAnswer { key, .. }
         | Effect::SessionQueue { key, .. }
         | Effect::SessionAction { key, .. }
@@ -114,6 +115,7 @@ pub fn operation(feed: &mut Feed, key: &Id, effect: &Effect) -> Result<(), Strin
         Effect::Session { .. } => ASSISTANT_SESSION,
         Effect::SessionSend { .. } => corral_protocol::session_host::SESSION_SEND,
         Effect::BuildStart { .. } => corral_protocol::build::BUILD_START,
+        Effect::CodeStart { .. } => corral_protocol::build::CODE_START,
         Effect::SessionCardAnswer { .. } => corral_protocol::session_host::SESSION_CARD_ANSWER,
         Effect::SessionQueue { request, .. } => request.method(),
         Effect::SessionAction { .. } => corral_protocol::session_host::SESSION_ACTION,
@@ -197,7 +199,8 @@ fn execute_operation(feed: &mut Feed, effect: &Effect) -> Result<Value, String> 
     match effect {
         Effect::Session { op, .. } => assistant_session(feed, op),
         Effect::SessionSend { send, .. } => super::session_ops::send(feed, send),
-        Effect::BuildStart { start, .. } => super::session_ops::start(feed, start),
+        Effect::BuildStart { start, .. } => super::session_ops::start(feed, start, false),
+        Effect::CodeStart { start, .. } => super::session_ops::start_code(feed, start),
         Effect::SessionCardAnswer { answer, .. } => super::build_ops::answer(feed, answer),
         Effect::SessionQueue { request, .. } => match request {
             QueueRequest::Withdraw(key) => super::build_ops::withdraw(feed, key),

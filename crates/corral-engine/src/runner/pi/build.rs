@@ -59,6 +59,14 @@ pub fn pi_data_root() -> Result<PathBuf> {
 
 impl PiRunner<'_> {
     pub fn start_build(&self, launch: BuildLaunch<'_>) -> Result<(SessionRef, Hello)> {
+        self.start_build_host("build", launch)
+    }
+
+    pub fn start_code(&self, launch: BuildLaunch<'_>) -> Result<(SessionRef, Hello)> {
+        self.start_build_host("code", launch)
+    }
+
+    fn start_build_host(&self, mode: &str, launch: BuildLaunch<'_>) -> Result<(SessionRef, Hello)> {
         ensure!(
             is_build_id(launch.id),
             "invalid: expected build id B-<base36>"
@@ -75,7 +83,7 @@ impl PiRunner<'_> {
         let mut command = Command::new("corral-pi");
         command
             .args([
-                "build",
+                mode,
                 "--headless",
                 if launch.resume { "--resume" } else { "--id" },
                 launch.id,
@@ -88,7 +96,7 @@ impl PiRunner<'_> {
             .arg(crate::binary_path()?)
             .current_dir(launch.cwd)
             .env("CORRAL_NEXT_ROOT", launch.workspace)
-            // A daemon Build's Project default retains its existing route, unlike a new terminal launch.
+            // Daemon launches use the non-interactive project default route.
             .env("CORRAL_PI_MANAGED_BUILD", "1")
             .env_remove("CORRAL_ACTOR")
             .env_remove("CORRAL_TASK")
@@ -106,7 +114,7 @@ impl PiRunner<'_> {
                     command.args([flag, value]);
                 }
             }
-            if launch.here {
+            if mode == "build" && launch.here {
                 command.arg("--here");
             }
             for model in launch.fallback {

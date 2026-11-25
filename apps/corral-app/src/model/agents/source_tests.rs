@@ -179,7 +179,11 @@ fn a_cold_code_session_is_labelled_and_has_no_managed_controls() {
         .removable()
     );
     feed.assistants.insert(id.into(), row);
-    assert!(controls(&feed, id).is_empty());
+    assert_eq!(controls(&feed, id), [Control::ResumeCode]);
+    assert_eq!(
+        Control::ResumeCode.method(),
+        corral_protocol::build::CODE_RESUME
+    );
     let page = crate::model::session::page(
         &feed,
         &Default::default(),
@@ -189,7 +193,16 @@ fn a_cold_code_session_is_labelled_and_has_no_managed_controls() {
             form: crate::model::nav::Form::Terminal,
         },
     );
-    assert!(page.bar.unwrap().action.is_none());
+    assert!(matches!(
+        page.bar.unwrap().action,
+        Some((
+            _,
+            crate::model::session::Action::Control {
+                control: Control::ResumeCode,
+                ..
+            }
+        ))
+    ));
 }
 
 /// A build whose host runs in a terminal corrald cannot reach is not offered Resume here.

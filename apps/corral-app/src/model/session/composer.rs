@@ -169,11 +169,22 @@ pub fn host_bar(cx: &Cx<'_>) -> Option<HostBar> {
         }),
         Host::NotRunning if *cx.role == SessionRole::Code => Some(HostBar {
             text: if cx.elsewhere() {
-                "This Code session runs in another terminal; continue it there.".into()
+                format!(
+                    "Continue in its terminal with corral code --resume {}.",
+                    cx.id
+                )
             } else {
-                format!("Continue in a terminal with corral code --resume {}", cx.id)
+                "The Code host is not running. Its transcript is kept.".into()
             },
-            action: None,
+            action: (!cx.elsewhere()).then(|| {
+                (
+                    "Resume",
+                    Action::Control {
+                        session: cx.id.clone(),
+                        control: Control::ResumeCode,
+                    },
+                )
+            }),
         }),
         Host::NotRunning if cx.elsewhere() => Some(HostBar {
             text:

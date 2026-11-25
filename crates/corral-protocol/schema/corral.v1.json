@@ -1960,6 +1960,36 @@
         ],
         "type": "object"
       },
+      "CodeStart": {
+        "properties": {
+          "effort": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project": {
+            "description": "A configured project whose checkout the trusted Code session runs in.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project"
+        ],
+        "type": "object"
+      },
       "CommandSource": {
         "enum": [
           "host",
@@ -14289,6 +14319,133 @@
         {
           "code": "busy",
           "message": "busy"
+        },
+        {
+          "code": "unavailable",
+          "message": "unavailable"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
+    },
+    {
+      "name": "code.start",
+      "params": [
+        {
+          "name": "effort",
+          "required": false,
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        {
+          "name": "model",
+          "required": false,
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        {
+          "name": "name",
+          "required": false,
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        {
+          "name": "project",
+          "required": true,
+          "schema": {
+            "description": "A configured project whose checkout the trusted Code session runs in.",
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/AssistantRow"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/CodeStart"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "not_found",
+          "message": "not_found"
+        },
+        {
+          "code": "refused",
+          "message": "refused"
+        },
+        {
+          "code": "busy",
+          "message": "busy"
+        },
+        {
+          "code": "unavailable",
+          "message": "unavailable"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
+    },
+    {
+      "name": "code.resume",
+      "params": [
+        {
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SessionRelaunched"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/SessionTarget"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "not_found",
+          "message": "not_found"
+        },
+        {
+          "code": "refused",
+          "message": "refused"
+        },
+        {
+          "code": "too_large",
+          "message": "too_large"
         },
         {
           "code": "unavailable",
