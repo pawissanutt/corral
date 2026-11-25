@@ -16,7 +16,7 @@ pub(crate) use rewind::sheet as rewind_sheet;
 pub use session::{
     Compact, ask_view, compact as ask_session, page as live_session, phone as live_session_phone,
 };
-pub(crate) use start::{new_menu, sheet as start_sheet};
+pub(crate) use start::{new_menu, pane_new_menu, sheet as start_sheet};
 
 use nsh_core::prelude::*;
 

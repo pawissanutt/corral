@@ -67,6 +67,8 @@ pub struct Start {
     pub sending: Option<Id>,
     /// Why the last start failed without a typed refusal.
     pub failed: Option<String>,
+    /// Opened from the side pane's +: the started session opens on a tab there, not its page.
+    pub beside: bool,
 }
 
 /// What the New menu and the sheet do.
@@ -74,6 +76,8 @@ pub struct Start {
 pub enum StartAction {
     Open,
     OpenCode,
+    /// The sheet was opened from the side pane: what starts opens there.
+    Beside,
     Close,
     Project(String),
     Name(String),
@@ -515,6 +519,7 @@ impl Start {
                 self.open = true;
                 self.code = true;
             }
+            StartAction::Beside => self.beside = true,
             StartAction::Close => {
                 if self.sending.is_none() {
                     *self = Self::default();
@@ -604,8 +609,14 @@ impl Start {
         }
         match operation.decode::<AssistantRow>() {
             Some(row) => {
+                let beside = self.beside;
                 *self = Self::default();
-                vec![Effect::OpenLive(Live::Session(Id::from(row.id.as_str())))]
+                let id = Id::from(row.id.as_str());
+                vec![if beside {
+                    Effect::OpenBeside(id)
+                } else {
+                    Effect::OpenLive(Live::Session(id))
+                }]
             }
             None => {
                 self.failed = Some("corrald's answer could not be read.".into());

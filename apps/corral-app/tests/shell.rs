@@ -270,18 +270,22 @@ fn ask_opens_with_the_field_focused() {
     );
 }
 
-/// Escape in Home's docked composer stayed in the field, so `j` typed into it instead of
-/// walking Home's cards: Escape leaves the field.
+/// The desktop's Home has no composer of its own: `/` opens Ask in the side pane, and Escape
+/// closes it so `j` walks Home's cards rather than typing into the field.
 #[test]
-fn escape_leaves_homes_docked_composer_so_the_keys_walk_the_cards() {
+fn home_asks_in_the_side_pane_and_escape_gives_the_keys_back() {
     let mut app = preview(desktop(), &[("corral.destination", "home")]);
     app.wait_for("id:list-home").unwrap();
+    assert_eq!(app.screen().count("id:home-composer").unwrap(), 0);
     app.press_key("/").unwrap();
-    app.wait_for("id:ask-input").unwrap();
+    app.wait_for("id:side-pane >> id:ask-input").unwrap();
     app.press_key("x").unwrap();
     assert_eq!(app.screen().input_text("id:ask-input").unwrap(), Some("x"));
     app.press_key("escape").unwrap();
+    assert_eq!(app.screen().count("id:side-pane").unwrap(), 0);
     app.press_key("j").unwrap();
+    assert_eq!(app.screen().count("id:side-pane").unwrap(), 0);
+    app.press("id:side-pane-open-bar").unwrap();
     assert_eq!(app.screen().input_text("id:ask-input").unwrap(), Some("x"));
 }
 
@@ -800,16 +804,15 @@ fn dock_context_is_sent_by_the_pane_but_not_shared_with_ask() {
     );
     let context = text.lines().next().unwrap();
     app.wait_for(&format!("text:/^{context}/")).unwrap();
-    app.press("id:nav-home").unwrap();
-    app.wait_for("id:home-composer >> id:ask-input").unwrap();
-    app.wait_for("id:dock-pane >> id:btn-dock-remove-context")
-        .unwrap();
+    app.press("id:dock-tab-ask").unwrap();
+    app.wait_for("id:ask-pane >> id:ask-input").unwrap();
     assert_eq!(
-        app.screen()
-            .count("id:home-composer >> id:btn-unchip")
-            .unwrap(),
+        app.screen().count("id:ask-pane >> id:btn-unchip").unwrap(),
         0
     );
+    app.press("id:dock-tab-B-k3x9").unwrap();
+    app.wait_for("id:dock-pane >> id:btn-dock-remove-context")
+        .unwrap();
 }
 
 /// Ask and the sessions kept beside the page are tabs of one pane: choosing one keeps the
@@ -851,5 +854,24 @@ fn the_switcher_opens_a_code_session_in_the_side_pane() {
     app.press("id:switch-side-B-code").unwrap();
     app.wait_for("id:dock-tab-B-code").unwrap();
     app.wait_for("id:dock-transcript").unwrap();
+    app.wait_for("id:list-tasks").unwrap();
+}
+
+/// The strip's + starts a build that opens on a tab of its own in the side pane, the page
+/// staying where it was.
+#[test]
+fn the_panes_plus_starts_a_build_on_a_tab_of_its_own() {
+    let mut app = preview(desktop(), &[("corral.destination", "tasks")]);
+    app.wait_for("id:list-tasks").unwrap();
+    app.press_key("/").unwrap();
+    app.wait_for("id:pane-new").unwrap();
+    app.press("id:pane-new").unwrap();
+    app.press("id:pane-new-build").unwrap();
+    app.wait_for("id:field-build-name").unwrap();
+    app.press("id:seg-build-project-corral").unwrap();
+    app.type_text("id:field-build-name", "walk").unwrap();
+    app.press("id:btn-start-build").unwrap();
+    app.wait_for("id:dock-transcript").unwrap();
+    app.wait_for("text:walk").unwrap();
     app.wait_for("id:list-tasks").unwrap();
 }

@@ -266,6 +266,37 @@ fn next_step(app: AppState, index: usize, step: NextButton) -> AnyElement {
         .into_element()
 }
 
+/// What shows or hides the desktop side pane where a page's head or the top bar shows it:
+/// "Side pane" with its chord, outlined while the pane shows. None off the desktop.
+pub fn pane_trigger(app: AppState, test_id: &'static str) -> Option<AnyElement> {
+    use crate::model::dock;
+    dock::supported(app.form).then(|| {
+        let open = computed(move || app.pane_open());
+        dynamic(move || {
+            let kind = if open.get() {
+                ButtonKind::Ghost
+            } else {
+                ButtonKind::Quiet
+            };
+            untracked(|| {
+                button_with(
+                    app,
+                    dock::PANE,
+                    kind,
+                    ButtonOptions {
+                        icon: Some(Icon::Split),
+                        key_hint: Some(dock::KEY),
+                        ..ButtonOptions::default()
+                    },
+                    test_id,
+                    move || app.toggle_pane(),
+                )
+            })
+        })
+        .into_element()
+    })
+}
+
 /// What opens the Agents switcher where a page's head shows it: "Agents" with its chord (none
 /// on the phone, which has no keyboard to press it on). The sidebars draw their own row in the
 /// shell's colours.

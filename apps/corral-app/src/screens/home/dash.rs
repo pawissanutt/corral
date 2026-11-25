@@ -298,7 +298,12 @@ fn spark(days: &[f32]) -> AnyElement {
 /// context. It takes the keyboard focus only when pressed or on `/`, so the cards keep the keys.
 /// While Ask itself is open it steps out: Ask is the same composer, and one field holds the
 /// draft.
+///
+/// Not on the desktop, where Ask is the side pane's first tab (`/`, Ctrl+J, the top bar).
 pub(super) fn composer(app: AppState) -> AnyElement {
+    if crate::model::dock::supported(app.form) {
+        return view().into_element();
+    }
     let keyed = computed(move || (!app.is_open(Overlay::Ask)).then(|| app.ask_id()));
     dynamic(move || {
         let id = keyed.get()?;

@@ -288,21 +288,33 @@ fn desktop_body(app: AppState) -> View {
         .bg(color(Token::Bg))
         .flex_col()
         .child(super::docked::strip(app))
-        .child(
-            when(
-                move || app.is_open(crate::model::Overlay::Ask),
-                move || {
-                    untracked(|| {
-                        view()
-                            .test_id("ask-pane")
-                            .flex_1()
-                            .min_h(px(0.0))
-                            .child(body(app, Compact::Drawer, desktop_head))
-                    })
-                },
-            )
-            .otherwise(move || super::docked::pane(app)),
-        )
+        .child(ask_tab(app))
+        .child(super::docked::pane(app))
+}
+
+/// Ask's tab: mounted the first time it is chosen, then kept (hidden while a session tab
+/// shows), so choosing it again resumes where it was.
+fn ask_tab(app: AppState) -> AnyElement {
+    let open = computed(move || app.is_open(crate::model::Overlay::Ask));
+    let opened = signal(false);
+    effect(move || {
+        if open.get() && !opened.get_untracked() {
+            opened.set(true);
+        }
+    });
+    dynamic(move || {
+        opened.get().then(|| {
+            untracked(|| {
+                view()
+                    .test_id("ask-pane")
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .style_when(move || !open.get(), |s| s.hidden())
+                    .child(body(app, Compact::Drawer, desktop_head))
+            })
+        })
+    })
+    .into_element()
 }
 
 /// The narrow desktop fallback: the original drawer over the right of the page.

@@ -38,7 +38,7 @@ pub(super) fn strip(app: AppState) -> AnyElement {
             view()
                 .flex_row()
                 .items_center()
-                .flex_1()
+                .flex_shrink(1.0)
                 .min_w(px(0.0))
                 .overflow_hidden()
                 .gap(px(2.0))
@@ -74,6 +74,8 @@ pub(super) fn strip(app: AppState) -> AnyElement {
         .border_b(px(1.0))
         .border_b_color(color(Token::Rule))
         .child(row)
+        .child(crate::screens::agents::pane_new_menu(app))
+        .child(view().flex_1())
         .child(close_pane(app))
         .into_element()
 }
@@ -196,23 +198,66 @@ fn close_pane(app: AppState) -> AnyElement {
         .into_element()
 }
 
-/// The chosen session tab's body.
+/// The session tabs' bodies. A tab mounts the first time it is chosen and stays mounted, hidden,
+/// while it is in the strip: going back to it resumes where it was (its transcript, scroll and
+/// draft) instead of reading it again from the start. A source change starts them all afresh.
 pub(super) fn pane(app: AppState) -> AnyElement {
     let selected = computed(move || app.shown_dock());
     let source = computed(move || app.dock_source());
+    let strip = computed(move || {
+        app.dock_tabs()
+            .into_iter()
+            .map(|tab| tab.id)
+            .collect::<Vec<Id>>()
+    });
     view()
         .test_id("dock-pane")
         .flex_1()
         .min_h(px(0.0))
+        .flex_col()
+        .style_when(move || selected.get().is_none(), |s| s.hidden())
         .child(dynamic(move || {
             let _ = source.get();
-            selected.get().map(|id| untracked(|| session(app, id)))
+            untracked(|| {
+                let visited = signal(Vec::<Id>::new());
+                effect(move || {
+                    if let Some(id) = selected.get()
+                        && !visited.with_untracked(|seen| seen.contains(&id))
+                    {
+                        visited.update(|seen| seen.push(id));
+                    }
+                });
+                each(
+                    move || {
+                        let seen = visited.get();
+                        strip.with(|ids| {
+                            ids.iter()
+                                .filter(|id| seen.contains(id))
+                                .cloned()
+                                .collect::<Vec<Id>>()
+                        })
+                    },
+                    |id: &Id| id.clone(),
+                    move |id, _| {
+                        let id = id.get_untracked();
+                        let chosen = id.clone();
+                        let on = computed(move || selected.with(|s| s.as_ref() == Some(&chosen)));
+                        view()
+                            .flex_1()
+                            .min_h(px(0.0))
+                            .flex_col()
+                            .style_when(move || !on.get(), |s| s.hidden())
+                            .child(session(app, id))
+                    },
+                )
+            })
         }))
         .into_element()
 }
 
 fn session(app: AppState, id: Id) -> AnyElement {
     let app = app.for_dock();
+    keep_child_live(app, &id);
     let page = ask_view(app, id.clone());
     view()
         .flex_1()
@@ -220,6 +265,29 @@ fn session(app: AppState, id: Id) -> AnyElement {
         .child(head(app, id.clone(), page))
         .child(ask_session(app, id, page, Compact::Dock))
         .into_element()
+}
+
+/// A child agent's conversation is told apart only through its session's live stream (its fleet
+/// and the `children` events that re-read the child's transcript), and its transcript is not
+/// pinned by that stream: while its tab is mounted the pane holds both, whatever page shows.
+fn keep_child_live(app: AppState, id: &Id) {
+    let Some((parent, _)) = id.as_str().split_once("/child/") else {
+        return;
+    };
+    let parent = Id::from(parent);
+    let live = untracked(|| {
+        app.feed.with(|feed| {
+            crate::model::agents::session_line(feed, parent.as_str())
+                .is_some_and(|line| line.state != SessionState::Gone)
+        })
+    });
+    if live {
+        crate::screens::agents::watch_transcript(app, parent);
+    }
+    let source = untracked(|| app.scope());
+    let target = corral_protocol::detail::DetailRef::Session { id: id.to_string() };
+    source.watch_detail(target.clone(), true);
+    cleanup(move || source.watch_detail(target, false));
 }
 
 /// As Ask's head: the session's id and name, its role and state, then Open session ↗, which
@@ -327,4 +395,24 @@ pub(crate) fn open_beside(app: AppState, live: &Live) -> Option<AnyElement> {
         format!("btn-side-pane-{id}"),
         move || app.dock_session(&id),
     ))
+}
+
+/// In a page's or view's place while the side pane shows the same conversation: says so, with
+/// the way to take it back out of the pane.
+pub(crate) fn beside_note(app: AppState, id: Id) -> AnyElement {
+    view()
+        .test_id("conversation-beside")
+        .flex_row()
+        .items_center()
+        .gap(px(12.0))
+        .p(px(16.0))
+        .child(text(dock::CONVERSATION_BESIDE).text_color(color(Token::Ink2)))
+        .child(button(
+            app,
+            dock::MOVE_BACK,
+            ButtonKind::Ghost,
+            "btn-move-back",
+            move || app.move_back(&id),
+        ))
+        .into_element()
 }

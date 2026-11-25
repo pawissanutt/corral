@@ -276,6 +276,7 @@ impl AppState {
             && !matches!(
                 &effect,
                 Effect::OpenLive(_)
+                    | Effect::OpenBeside(_)
                     | Effect::Select(_)
                     | Effect::AskAbout { .. }
                     | Effect::VerbMenu(_)
@@ -294,6 +295,7 @@ impl AppState {
         }
         match effect {
             Effect::OpenLive(live) => self.open_live(live),
+            Effect::OpenBeside(id) => self.dock_session(&id),
             Effect::Select(live) => self.select(live),
             Effect::AskAbout { context, text } => self.ask_about(context, text),
             Effect::Act(act) => self.dispatch(act),

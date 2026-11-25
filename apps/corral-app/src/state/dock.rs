@@ -177,6 +177,37 @@ impl AppState {
         self.visible_dock()
     }
 
+    /// Tracked: the conversation the pane shows now: Ask's chat on Ask's tab, else the session
+    /// tab's. A page or view drawing the same conversation gives way to it.
+    pub fn pane_conversation(&self) -> Option<Id> {
+        if self.is_open(Overlay::Ask) {
+            return dock::supported(self.form)
+                .then(|| self.ask_chat().map(Id::from))
+                .flatten();
+        }
+        self.shown_dock()
+    }
+
+    /// Tracked: whether the pane holds the conversation, on a tab of its own or on Ask's open
+    /// one.
+    pub fn in_pane(&self, id: &Id) -> bool {
+        self.docked(id)
+            || (self.is_open(Overlay::Ask)
+                && dock::supported(self.form)
+                && self.ask_chat().as_deref() == Some(id.as_str()))
+    }
+
+    /// Takes the conversation out of the pane: Ask's tab closes the pane, a session tab closes.
+    pub fn move_back(&self, id: &Id) {
+        if untracked(|| {
+            self.is_open(Overlay::Ask) && self.ask_chat().as_deref() == Some(id.as_str())
+        }) {
+            self.close(Overlay::Ask);
+        } else {
+            self.undock(id);
+        }
+    }
+
     /// Tracked: whether the side pane shows, on Ask's tab or a session's.
     pub fn pane_open(&self) -> bool {
         self.is_open(Overlay::Ask) || self.shown_dock().is_some()
@@ -280,7 +311,7 @@ impl AppState {
     }
 
     /// Tracked: whether the session has a tab in the pane.
-    pub fn docked(&self, id: &Id) -> bool {
+    fn docked(&self, id: &Id) -> bool {
         dock::supported(self.form)
             && self.ask_chat().as_deref() != Some(id.as_str())
             && self.with_dock(|saved| {
@@ -312,11 +343,14 @@ impl AppState {
     /// Puts any session (a chat, a Code or Build session, a run of any role) in the pane on a
     /// tab of its own and shows it there.
     pub fn dock_session(&self, id: &Id) {
-        let gone: Vec<String> = untracked(|| self.dock_tabs())
+        // A full pane gives up an ended session's tab, or one of Ask's chat (which the strip
+        // does not show), first.
+        let mut gone: Vec<String> = untracked(|| self.dock_tabs())
             .into_iter()
             .filter(|tab| tab.state == crate::model::status::SessionState::Gone)
             .map(|tab| tab.id.to_string())
             .collect();
+        gone.extend(untracked(|| self.ask_chat()));
         let exact = self.feed.with_untracked(|feed| dock::exact(feed, id));
         // Ask's chat already has Ask's tab: show that rather than a second tab of it.
         if exact.is_some() && exact == untracked(|| self.ask_chat()) {
@@ -358,10 +392,12 @@ impl AppState {
         }
     }
 
-    /// Ask's tab gives way to a session tab without closing the pane.
+    /// Ask's tab gives way to a session tab without closing the pane, keeping what Ask's
+    /// draft was written about for when its tab is chosen again.
     fn leave_ask_for_tab(&self) {
         if untracked(|| self.is_open(Overlay::Ask)) {
-            self.close_only(Overlay::Ask);
+            self.change(|nav| nav.close(Overlay::Ask));
+            self.close_attach_field();
         }
     }
 

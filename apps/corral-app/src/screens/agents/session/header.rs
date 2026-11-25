@@ -221,6 +221,7 @@ pub(super) fn head(app: AppState, page: Memo<SessionPage>, wide: Memo<bool>) -> 
             .child(facts(app, page, header))
             .child(term::space(1.0))
             .child(crate::shell::agents_trigger(app, "agents-open-head"))
+            .children(crate::shell::pane_trigger(app, "side-pane-open-head"))
             .child(views(app, page, wide))
             .child(details_button(app, page))
             .child(more(app, page))
@@ -556,7 +557,7 @@ fn side_pane_toggle(app: AppState, page: Memo<SessionPage>) -> AnyElement {
     let id = untracked(|| page.with(|p| p.id.clone()));
     let docked = {
         let id = id.clone();
-        computed(move || app.docked(&id))
+        computed(move || app.in_pane(&id))
     };
     dynamic(move || {
         let docked = docked.get();
@@ -579,7 +580,7 @@ fn side_pane_toggle(app: AppState, page: Memo<SessionPage>) -> AnyElement {
                 "btn-dock-side",
                 move || {
                     if docked {
-                        app.undock(&id);
+                        app.move_back(&id);
                     } else {
                         app.dock_session(&id);
                     }

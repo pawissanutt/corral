@@ -29,6 +29,12 @@ pub const KEY: &str = "Ctrl J";
 pub const CHORD: &str = "mod+j";
 pub const CLOSE_TAB: &str = "Close tab";
 pub const ASK_TAB: &str = "Ask";
+/// The strip's +, and what it offers.
+pub const NEW_TAB: &str = "Open a new session in the side pane";
+pub const NEW_CHAT: &str = "New chat";
+pub const NEW_CODE: &str = "New Code session…";
+pub const NEW_BUILD: &str = "New build session…";
+pub const OPEN_OTHER: &str = "Open a conversation…  Ctrl G";
 pub const CONVERSATION_BESIDE: &str = "This conversation is open in the side pane.";
 
 pub fn supported(form: Form) -> bool {
@@ -140,7 +146,49 @@ pub fn tabs(feed: &Feed, saved: &StoreAgents, ask: Option<&str>) -> Vec<Tab> {
 fn session_tab(feed: &Feed, id: &str) -> (Option<String>, SessionState) {
     let line = session_line(feed, id);
     let state = line.as_ref().map_or(SessionState::Gone, |line| line.state);
-    (line.map(|line| line.name), state)
+    let named = line
+        .map(|line| line.name)
+        .filter(|name| !name.trim().is_empty() && name != id);
+    (named.or_else(|| unnamed(feed, id)), state)
+}
+
+/// A readable name for a session its host did not name: a Code or Build session by its
+/// build's name or its checkout's folder and branch, a chat by the task it is about, a run by
+/// its task and role. None leaves the id.
+fn unnamed(feed: &Feed, id: &str) -> Option<String> {
+    if let Some(row) = feed.assistants.get(id) {
+        if let Some(build) = &row.build {
+            let kind = if build.mode == corral_protocol::build::BuildMode::Code {
+                "Code"
+            } else {
+                "Build"
+            };
+            let folder = [&build.worktree, &build.repo_root]
+                .into_iter()
+                .filter_map(|path| path.trim_end_matches('/').rsplit('/').next())
+                .find(|folder| !folder.is_empty());
+            let name = Some(build.name.trim())
+                .filter(|name| !name.is_empty() && *name != id)
+                .or(folder)?;
+            return Some(match build.branch.as_deref().filter(|b| !b.is_empty()) {
+                Some(branch) if branch != name => format!("{kind} · {name} ({branch})"),
+                _ => format!("{kind} · {name}"),
+            });
+        }
+        return Some(match row.focus.as_deref().filter(|f| !f.is_empty()) {
+            Some(focus) => format!("Chat · {focus}"),
+            None => "Chat".to_owned(),
+        });
+    }
+    let (task, run) = id.split_once('_')?;
+    let role = feed
+        .agents
+        .get(id)
+        .map(|row| row.run.role.as_str().to_owned());
+    Some(match role {
+        Some(role) => format!("{task} {run} · {role}"),
+        None => format!("{task} {run}"),
+    })
 }
 
 /// A child agent's tab, from its session's fleet as corrald streams it: its id and title, and

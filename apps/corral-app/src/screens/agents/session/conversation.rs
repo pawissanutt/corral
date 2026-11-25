@@ -95,6 +95,14 @@ pub(super) fn page(
     });
     let more = signal(false);
     let (top_scope, phone_scope) = (scope.clone(), scope.clone());
+    // The side pane already shows this conversation: it gives way here rather than twice.
+    let scoped = crate::model::Id::from(scope.as_str());
+    let beside = {
+        let scoped = scoped.clone();
+        // Never inside the pane itself.
+        let in_pane = app.dock_panel().is_some();
+        computed(move || !in_pane && app.pane_conversation().as_ref() == Some(&scoped))
+    };
     let shape = tab.part(|t| of(t).map(Head::of));
     let facts = tab.part(|t| of(t).map(|c| c.facts.clone()));
     let asks = tab.part(|t| t.confirm.is_some() || t.picker.is_some());
@@ -163,7 +171,18 @@ pub(super) fn page(
         .flex_col()
         .child(top)
         .child(asked)
-        .child(surface)
+        .child(when(
+            move || beside.get(),
+            move || crate::ui::ask::beside_note(app, scoped.clone()),
+        ))
+        .child(
+            view()
+                .flex_1()
+                .min_h(px(0.0))
+                .flex_col()
+                .style_when(move || beside.get(), |s| s.hidden())
+                .child(surface),
+        )
         .into_element()
 }
 

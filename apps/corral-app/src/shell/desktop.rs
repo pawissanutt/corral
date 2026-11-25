@@ -131,6 +131,53 @@ fn top_bar(app: AppState, workspace: Memo<Option<Workspace>>, collapsed: Memo<bo
                 .overflow_hidden()
                 .child(health_line(app, HealthLayout::Bar)),
         )
+        .child(bar_pane_toggle(app))
+        .into_element()
+}
+
+/// The top bar's Side pane control, in the shell's colours: shows or hides the pane (tinted
+/// while it shows), with its chord. test_id "side-pane-open-bar".
+fn bar_pane_toggle(app: AppState) -> AnyElement {
+    let ink = color(Token::ShellInk);
+    let quiet = color(Token::ShellInk2);
+    let open = computed(move || app.pane_open());
+    view()
+        .h(px(control_height(28.0)))
+        .flex_shrink_0()
+        .flex_row()
+        .items_center()
+        .gap(px(6.0))
+        .px(px(8.0))
+        .rounded(px(RADIUS_CONTROL))
+        .cursor_pointer()
+        .transition_colors()
+        .duration(120.0_f32)
+        .bg(move || {
+            if open.get() {
+                ink.opacity(0.14)
+            } else {
+                AdaptiveColor::TRANSPARENT
+            }
+        })
+        .hover(move |s| s.bg(ink.opacity(0.1)))
+        .active(move |s| s.bg(ink.opacity(0.16)))
+        .focus_visible(focus_ring)
+        .role(AccessibilityRole::Button)
+        .label(dock::TOGGLE)
+        .accessibility_state(move || AccessibilityState {
+            expanded: Some(open.get()),
+            ..AccessibilityState::default()
+        })
+        .test_id("side-pane-open-bar")
+        .on_press(move || app.toggle_pane())
+        .child(icon(Icon::Split, 15.0, quiet))
+        .child(
+            text(dock::PANE)
+                .number_of_lines(1u32)
+                .text_size(px(text_size(app.form) - 1.0))
+                .text_color(quiet),
+        )
+        .child(key_hint(dock::KEY))
         .into_element()
 }
 

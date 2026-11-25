@@ -54,6 +54,8 @@ pub enum Effect {
     Focus(&'static str),
     /// Select a live record and push its page where the form stacks it.
     OpenLive(Live),
+    /// Open the session on a tab of the desktop side pane, the page staying as it is.
+    OpenBeside(Id),
     /// Open a session's page with the card `asked` names open (`session::DockAction::Answer`).
     Answer {
         session: Id,

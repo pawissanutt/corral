@@ -497,10 +497,10 @@ impl AppState {
 }
 
 impl AppState {
-    /// Untracked: whether Home is in view with Ask's composer docked at its foot: desktop and
-    /// terminal, no page over it, served, and not the assistant-only landing.
+    /// Untracked: whether Home is in view with Ask's composer docked at its foot: a terminal
+    /// (the desktop has the side pane instead), no page over it, served, and not the assistant-only landing.
     fn home_docks_composer(&self) -> bool {
-        self.form != crate::model::Form::Phone
+        self.form == crate::model::Form::Terminal
             && self
                 .nav
                 .with_untracked(|nav| nav.destination == Destination::Home && nav.pages.is_empty())

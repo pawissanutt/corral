@@ -473,19 +473,17 @@ impl AppState {
     /// Closes an overlay; leaving Ask also detaches its contextual chip and closes the side
     /// pane, so a session tab never takes Ask's place unasked.
     pub fn close(&self, overlay: Overlay) {
-        let pane = overlay == Overlay::Ask && self.nav.with_untracked(|nav| nav.is_open(overlay));
-        self.close_only(overlay);
-        if pane {
-            self.hide_dock();
-        }
-    }
-
-    fn close_only(&self, overlay: Overlay) {
+        let pane = overlay == Overlay::Ask
+            && crate::model::dock::supported(self.form)
+            && self.nav.with_untracked(|nav| nav.is_open(overlay));
         self.change(|nav| nav.close(overlay));
         if overlay == Overlay::Ask {
             self.ask_context.set(None);
             self.project_context_removed.set(None);
             self.close_attach_field();
+        }
+        if pane {
+            self.hide_dock();
         }
     }
 

@@ -541,6 +541,8 @@ fn a_child_conversation_opens_in_the_side_pane() {
         .unwrap();
     wait_in_tree(&mut app, "dock-tab-B-k3x9/child/migration");
     wait_in_tree(&mut app, "dock-transcript");
+    // The parent's Agents view no longer shows the same conversation beside it.
+    app.wait_for("id:conversation-beside").unwrap();
     app.press("id:btn-agents-back").unwrap();
     wait_in_tree(&mut app, "session-agents");
     wait_in_tree(&mut app, "dock-transcript");
@@ -559,4 +561,15 @@ fn asks_chat_opens_in_asks_tab_not_a_second_one() {
     app.press("id:btn-open-beside").unwrap();
     app.wait_for("id:ask-transcript").unwrap();
     assert!(!in_tree(&app, "dock-tab-A-7"));
+    // Its own page gives the conversation to the pane rather than showing it twice, and takes
+    // it back on Move back to the page, which closes Ask's tab.
+    app.press("id:pane-close").unwrap();
+    open(&mut app, "A-7");
+    app.press("id:btn-dock-side").unwrap();
+    app.wait_for("id:ask-transcript").unwrap();
+    app.wait_for("id:conversation-beside").unwrap();
+    app.press("id:btn-move-back").unwrap();
+    app.wait_for_gone("id:conversation-beside", Duration::from_secs(5))
+        .unwrap();
+    assert!(!in_tree(&app, "side-pane"));
 }

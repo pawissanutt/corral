@@ -12,7 +12,7 @@ mod unconnected;
 pub(crate) use attach::{
     chip_row, controls as attach_controls, dock_context, field_row, plus, tray,
 };
-pub(crate) use docked::open_beside;
+pub(crate) use docked::{beside_note, open_beside};
 
 use nsh_core::prelude::*;
 

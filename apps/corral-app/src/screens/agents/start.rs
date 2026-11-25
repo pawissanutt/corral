@@ -8,6 +8,8 @@
 //! `btn-new-assistant`, `btn-new-build`, the sheet `start-build`, its fields
 //! `seg-build-<field>-<value>`, `field-build-name`, `field-build-model`, `btn-start-build`.
 
+use std::rc::Rc;
+
 use nsh_base::{menu, menu_item};
 use nsh_core::element::color as for_appearance;
 use nsh_core::prelude::*;
@@ -415,5 +417,71 @@ fn foot(app: AppState, sheet: Memo<Option<NewBuildForm>>) -> AnyElement {
                 .child(cancel)
                 .child(submit),
         )
+        .into_element()
+}
+
+/// The side pane's +: what opens on a new tab there. A new chat opens on Ask's tab; a new Code
+/// or Build session opens on a tab of its own once corrald started it; any other conversation
+/// comes from the Agents switcher (S opens it in the pane). Desktop only, as the pane is.
+pub(crate) fn pane_new_menu(app: AppState) -> AnyElement {
+    let form = app.form;
+    let item = |id: &'static str, label: &'static str, press: Rc<dyn Fn()>| {
+        menu_item()
+            .accessibility_label(label)
+            .on_select(move || press())
+            .cursor_pointer()
+            .hover(|s| s.bg(color(Token::Hover)))
+            .focus(|s| s.bg(color(Token::Hover)))
+            .child(
+                view().test_id(id).px(px(12.0)).py(px(6.0)).child(
+                    text(label)
+                        .number_of_lines(1u32)
+                        .font_family(FONT_TEXT)
+                        .text_size(px(12.5))
+                        .text_color(color(Token::Ink)),
+                ),
+            )
+            .into_element()
+    };
+    let beside = move |action: StartAction| {
+        start(app, action);
+        start(app, StartAction::Beside);
+    };
+    let items = vec![
+        item(
+            "pane-new-chat",
+            crate::model::dock::NEW_CHAT,
+            Rc::new(move || {
+                app.new_assistant();
+                app.open_ask();
+            }),
+        ),
+        item(
+            "pane-new-code",
+            crate::model::dock::NEW_CODE,
+            Rc::new(move || beside(StartAction::OpenCode)),
+        ),
+        item(
+            "pane-new-build",
+            crate::model::dock::NEW_BUILD,
+            Rc::new(move || beside(StartAction::Open)),
+        ),
+        item(
+            "pane-new-open",
+            crate::model::dock::OPEN_OTHER,
+            Rc::new(move || app.open_agents()),
+        ),
+    ];
+    menu()
+        .popup_style(popup(form))
+        .backdrop_style(|s| s.bg(color(Token::Shell).opacity(0.5)))
+        .on_open_change(counted(app))
+        .trigger(menu_trigger(
+            app,
+            "+",
+            crate::model::dock::NEW_TAB,
+            "pane-new",
+        ))
+        .child(view().children(items))
         .into_element()
 }

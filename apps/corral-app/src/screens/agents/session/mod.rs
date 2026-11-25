@@ -118,7 +118,7 @@ pub fn page(app: AppState, id: Id) -> AnyElement {
     // Details widens with the page; BESIDE reads the whole page, before Details takes its share.
     let panel_width = computed(move || sidebar::panel_width(room.get()));
     let conversation_beside = computed(move || {
-        let shown = app.shown_dock();
+        let shown = app.pane_conversation();
         page.with(|p| {
             shown.as_ref() == Some(&p.id) && matches!(p.body, Body::Chat(_) | Body::Log(_))
         })
@@ -138,31 +138,12 @@ pub fn page(app: AppState, id: Id) -> AnyElement {
             )
             .otherwise({
                 let id = id.clone();
-                move || {
-                    let back = id.clone();
-                    view()
-                        .test_id("conversation-beside")
-                        .flex_row()
-                        .items_center()
-                        .gap(px(12.0))
-                        .p(px(16.0))
-                        .child(
-                            text(crate::model::dock::CONVERSATION_BESIDE)
-                                .text_color(color(Token::Ink2)),
-                        )
-                        .child(crate::ui::kit::button::button(
-                            app,
-                            crate::model::dock::MOVE_BACK,
-                            crate::ui::kit::button::ButtonKind::Ghost,
-                            "btn-move-back",
-                            move || app.undock(&back),
-                        ))
-                }
+                move || crate::ui::ask::beside_note(app, id.clone())
             }),
         )
         .child(when(
             move || {
-                let shown = app.shown_dock();
+                let shown = app.pane_conversation();
                 page.with(|p| shown.as_ref() != Some(&p.id))
             },
             {
