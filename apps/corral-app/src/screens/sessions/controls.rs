@@ -41,12 +41,13 @@ pub(super) fn filter_bar(app: AppState, shown: Memo<sessions::Listing>) -> AnyEl
                 .filter(|chip| chip.mode == "all" || chip.count > 0 || chip.selected)
                 .map(|chip| {
                     let mode = chip.mode.clone();
+                    let on = chip.selected;
                     option(
                         app,
                         Size::Bar,
                         title_case(&chip.mode),
                         Some(chip.count),
-                        chip.selected,
+                        move || on,
                         format!("seg-mode-{}", chip.mode),
                         move || app.agents.update(|state| state.list.set_mode(&mode)),
                     )
@@ -120,7 +121,7 @@ pub(super) fn sort_bar(app: AppState, group: String) -> AnyElement {
                     }
                     .to_owned(),
                     None,
-                    sort == choice,
+                    move || sort == choice,
                     format!("seg-sort-{group}-{}", choice.slug()),
                     move || {
                         app.agents.update(|state| {

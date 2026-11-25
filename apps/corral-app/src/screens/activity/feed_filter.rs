@@ -22,14 +22,15 @@ fn set(app: AppState, change: impl FnOnce(&mut FeedFilter)) {
     app.work.update(|state| change(&mut state.feed));
 }
 
-/// One toolbar of options: `All` (or `Anyone`) then each value, the chosen one pressed.
+/// One toolbar of options: `All` (or `Anyone`) then each value, the chosen one pressed. It is
+/// built once and reads `chosen` reactively, so choosing keeps the keyboard on the option.
 fn options<T: Copy + PartialEq + 'static>(
     app: AppState,
     name: &'static str,
     group: &'static str,
     every: &'static str,
     values: &[(T, &'static str, &'static str)],
-    chosen: Option<T>,
+    chosen: impl Fn() -> Option<T> + Copy + 'static,
     pick: impl Fn(Option<T>) + Copy + 'static,
 ) -> AnyElement {
     let all = option(
@@ -37,7 +38,7 @@ fn options<T: Copy + PartialEq + 'static>(
         Size::Bar,
         every.to_owned(),
         None,
-        chosen.is_none(),
+        move || chosen().is_none(),
         format!("seg-feed-{group}-all"),
         move || pick(None),
     );
@@ -47,7 +48,7 @@ fn options<T: Copy + PartialEq + 'static>(
             Size::Bar,
             label.to_owned(),
             None,
-            chosen == Some(value),
+            move || chosen() == Some(value),
             format!("seg-feed-{group}-{slug}"),
             move || pick(Some(value)),
         )
@@ -70,47 +71,42 @@ pub(super) fn bar(app: AppState, counted: Memo<Option<String>>) -> AnyElement {
         move || app.work.with(|state| state.feed.search.clone()),
         move |typed| set(app, |filter| typed.clone_into(&mut filter.search)),
     );
-    let chosen = computed(move || app.work.with(|state| (state.feed.category, state.feed.who)));
-    let choices = dynamic(move || {
-        let (category, who) = chosen.get();
-        untracked(move || {
-            let categories: Vec<_> = Category::ALL
-                .into_iter()
-                .map(|value| (value, value.label(), value.slug()))
-                .collect();
-            let actors: Vec<_> = Who::ALL
-                .into_iter()
-                .map(|value| (value, value.label(), value.slug()))
-                .collect();
-            // On the phone each group takes the row's width, so its options wrap inside it.
-            view()
-                .when(form != Form::Phone, |row| {
-                    row.flex_row().flex_wrap().items_center()
-                })
-                .when(form == Form::Terminal, |row| row.gap_x(term::cells(2.0)))
-                .when(form == Form::Desktop, |row| row.gap(px(8.0)))
-                .when(form == Form::Phone, |column| column.gap(px(12.0)))
-                .child(options(
-                    app,
-                    "Event category",
-                    "category",
-                    "All",
-                    &categories,
-                    category,
-                    move |value| set(app, |filter| filter.category = value),
-                ))
-                .child(options(
-                    app,
-                    "Who acted",
-                    "actor",
-                    "Anyone",
-                    &actors,
-                    who,
-                    move |value| set(app, |filter| filter.who = value),
-                ))
-                .into_element()
+    let category = computed(move || app.work.with(|state| state.feed.category));
+    let who = computed(move || app.work.with(|state| state.feed.who));
+    let categories: Vec<_> = Category::ALL
+        .into_iter()
+        .map(|value| (value, value.label(), value.slug()))
+        .collect();
+    let actors: Vec<_> = Who::ALL
+        .into_iter()
+        .map(|value| (value, value.label(), value.slug()))
+        .collect();
+    // On the phone each group takes the row's width, so its options wrap inside it.
+    let choices = view()
+        .when(form != Form::Phone, |row| {
+            row.flex_row().flex_wrap().items_center()
         })
-    });
+        .when(form == Form::Terminal, |row| row.gap_x(term::cells(2.0)))
+        .when(form == Form::Desktop, |row| row.gap(px(8.0)))
+        .when(form == Form::Phone, |column| column.gap(px(12.0)))
+        .child(options(
+            app,
+            "Event category",
+            "category",
+            "All",
+            &categories,
+            move || category.get(),
+            move |value| set(app, |filter| filter.category = value),
+        ))
+        .child(options(
+            app,
+            "Who acted",
+            "actor",
+            "Anyone",
+            &actors,
+            move || who.get(),
+            move |value| set(app, |filter| filter.who = value),
+        ));
     let reset = dynamic(move || {
         let counted = counted.get();
         untracked(move || {

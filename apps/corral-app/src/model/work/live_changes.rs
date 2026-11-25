@@ -138,12 +138,13 @@ fn headline(event: &Event) -> String {
         .unwrap_or_default()
 }
 
-/// The titles named by loaded `created` events, for tasks the board no longer holds (Done and
-/// Dropped tasks leave it).
-fn created_titles(feed: &Feed) -> BTreeMap<&str, &str> {
+/// The latest title each task's loaded `created` or `edited` events name, for tasks the board
+/// no longer holds (Done and Dropped tasks leave it). Events run oldest first, so a rename
+/// replaces the title it was created with.
+fn loaded_titles(feed: &Feed) -> BTreeMap<&str, &str> {
     feed.changes
         .values()
-        .filter(|event| event.kind == EventKind::Created)
+        .filter(|event| matches!(event.kind, EventKind::Created | EventKind::Edited))
         .filter_map(|event| {
             let title = event.detail.get("title").and_then(Value::as_str)?;
             Some((event.task.as_deref()?, title))
@@ -196,7 +197,7 @@ pub fn feed_page(feed: &Feed, scope: &Scope, filter: &FeedFilter) -> FeedPage {
     let mut days: Vec<(Date, Vec<FeedEvent>)> = Vec::new();
     let mut loaded = 0usize;
     let mut shown = 0usize;
-    let titles = created_titles(feed);
+    let titles = loaded_titles(feed);
     for event in feed
         .changes
         .values()
@@ -432,20 +433,57 @@ mod tests {
         assert_eq!(ids(&page), ["T-4"]);
         assert!(page.no_match.is_none());
 
-        // A task off the board keeps the title its loaded `created` event names.
-        feed.changes.insert(
-            3,
-            Event {
-                detail: json!({"title": "Pair the phone"}),
-                ..event(3, "2026-11-14T07:00:00Z", EventKind::Created, None)
-            },
+        // A task off the board, created, renamed, edited without a rename and dropped: every
+        // row carries its latest loaded title, which search finds.
+        let off_board = |seq, at, kind, detail| Event {
+            task: Some("T-3".into()),
+            detail,
+            ..event(seq, at, kind, None)
+        };
+        for event in [
+            off_board(
+                1,
+                "2026-11-14T06:00:00Z",
+                EventKind::Created,
+                json!({"title": "Pair the phone"}),
+            ),
+            off_board(
+                2,
+                "2026-11-14T07:00:00Z",
+                EventKind::Edited,
+                json!({"title": "Pair any device"}),
+            ),
+            off_board(
+                8,
+                "2026-11-15T11:30:00Z",
+                EventKind::Edited,
+                json!({"title": null, "priority": "P1"}),
+            ),
+            off_board(9, "2026-11-15T11:40:00Z", EventKind::Dropped, json!({})),
+        ] {
+            feed.changes.insert(event.seq, event);
+        }
+        let renamed = FeedFilter {
+            search: "any device".into(),
+            ..FeedFilter::default()
+        };
+        let page = feed_page(&feed, &Scope::All, &renamed);
+        let rows: Vec<(&str, Option<&str>)> = page
+            .days
+            .iter()
+            .flat_map(|day| &day.events)
+            .map(|event| (event.label.as_str(), event.title.as_deref()))
+            .collect();
+        let title = Some("Pair any device");
+        assert_eq!(
+            rows,
+            [
+                ("Dropped", title),
+                ("Edited", title),
+                ("Edited", title),
+                ("Created", title)
+            ]
         );
-        let page = feed_page(&feed, &Scope::All, &FeedFilter::default());
-        let created = page.days[1]
-            .events
-            .last()
-            .map(|event| event.title.as_deref());
-        assert_eq!(created, Some(Some("Pair the phone")));
 
         let empty = feed_page(&feed_at_noon(), &Scope::All, &none);
         assert!(empty.notice.is_some() && empty.no_match.is_none());

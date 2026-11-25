@@ -130,13 +130,14 @@ pub fn track(
 }
 
 /// One option: its words and, for a mode, how many sessions it holds; the chosen one raised
-/// on the surface in ink, the others quiet.
+/// on the surface in ink, the others quiet. `on` is read reactively, so a row of options can
+/// stay mounted (and keep the keyboard focus) while the choice changes.
 pub fn option(
     app: AppState,
     size: Size,
     label: String,
     count: Option<usize>,
-    on: bool,
+    on: impl Fn() -> bool + Copy + 'static,
     test_id: String,
     pick: impl Fn() + 'static,
 ) -> AnyElement {
@@ -151,19 +152,21 @@ pub fn option(
     };
     let words = text(label)
         .number_of_lines(1u32)
-        .text_color(color(if on || form == Form::Terminal {
-            Token::Ink
-        } else {
-            Token::Ink3
-        }))
-        .when(on, |t| t.font_weight(FontWeight::SEMIBOLD))
+        .text_color(move || {
+            color(if on() || form == Form::Terminal {
+                Token::Ink
+            } else {
+                Token::Ink3
+            })
+        })
+        .style_when(on, |s| s.font_weight(FontWeight::SEMIBOLD))
         .when(form != Form::Terminal, |t| {
             t.font_family(FONT_TEXT).text_size(px(words_size))
         });
     let count = count.map(|count| {
         let figure = text(count.to_string())
             .number_of_lines(1u32)
-            .text_color(color(if on { Token::Ink3 } else { Token::Ink4 }));
+            .text_color(move || color(if on() { Token::Ink3 } else { Token::Ink4 }));
         match form {
             Form::Terminal => figure.into_element(),
             Form::Desktop | Form::Phone => figure
@@ -183,7 +186,7 @@ pub fn option(
     let handle = element_ref();
     let target = toggle()
         .element_ref(&handle)
-        .pressed(move || on)
+        .pressed(on)
         .on_change(move |_: &bool| pick())
         .flex_row()
         .flex_shrink_0()
@@ -213,19 +216,23 @@ pub fn option(
             .px(px(pad))
             .rounded(px(radius))
             .border_1()
-            .bg(if on {
-                color(Token::Surface)
-            } else if form == Form::Phone && size == Size::Bar {
-                color(Token::BgSunk)
-            } else {
-                AdaptiveColor::TRANSPARENT
+            .bg(move || {
+                if on() {
+                    color(Token::Surface)
+                } else if form == Form::Phone && size == Size::Bar {
+                    color(Token::BgSunk)
+                } else {
+                    AdaptiveColor::TRANSPARENT
+                }
             })
-            .border_color(if on {
-                color(Token::Rule2)
-            } else if form == Form::Phone && size == Size::Bar {
-                color(Token::Rule)
-            } else {
-                AdaptiveColor::TRANSPARENT
+            .border_color(move || {
+                if on() {
+                    color(Token::Rule2)
+                } else if form == Form::Phone && size == Size::Bar {
+                    color(Token::Rule)
+                } else {
+                    AdaptiveColor::TRANSPARENT
+                }
             })
             .hover(|s| s.bg(color(Token::Hover)))
             .focus_visible(|s| {
