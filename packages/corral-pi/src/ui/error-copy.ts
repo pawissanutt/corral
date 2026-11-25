@@ -36,7 +36,7 @@ const CONNECTION_NAMES: Readonly<Record<string, string>> = {
 const STOP_TEXTS: Readonly<Record<string, true>> = {
   "Operation aborted": true, "Request was aborted": true, "The operation was aborted.": true, "Retry cancelled": true,
 };
-const SUMMARY = /^(?:(claude_compaction_conflict|claude_query_incomplete|search turn limit): )?([a-z0-9.-]+): ([a-z_]+) \(([a-z]+)\)$/;
+const SUMMARY = /^(?:Service temporarily unavailable: )?(?:(claude_compaction_conflict|claude_query_incomplete|search turn limit): )?([a-z0-9.-]+): ([a-z_]+) \(([a-z]+)\)$/;
 const RETRY_STEP = "Send a message to retry.";
 const RETRY_OR_MODEL = "Send a message to retry, or choose another model.";
 const SENTENCE_ROWS = 4;
@@ -82,7 +82,7 @@ function providerCopy(failure: ProviderFailure, input: ErrorInput, now: number, 
   const failed = (sentence: string, step: string): ErrorCopy => ({ kind: "failed", sentence, step, raw });
   switch (failure.category) {
     case "transient":
-      return failed(`${name} is overloaded or limiting requests${ref}. ${lostClause(input, true)}`,
+      return failed(`The ${name} request failed temporarily${ref}. ${lostClause(input, true)}`,
         until ? `Wait until ${until}, then send a message to retry, or choose another model.` : "Send a message to retry in a moment, or choose another model.");
     case "subscription_quota":
       return failed(`The ${name} usage limit${failure.scope === "model" ? " for this model" : ""} is reached. ${lostClause(input, true)}`,

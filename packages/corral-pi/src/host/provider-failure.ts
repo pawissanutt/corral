@@ -134,25 +134,52 @@ async function errorBody(response: Response): Promise<unknown> {
   finally { void reader.cancel().catch(() => undefined); }
 }
 
+// Pinned Codex can fail after HTTP 200, or before it has a response at all. Match only
+// known native diagnostics, not arbitrary mentions of timeouts, quota or retry in prose.
+function codexTransportFailure(message: string | undefined): boolean {
+  return !!message && (/^(?:fetch failed|terminated|socket hang up|The socket connection was closed unexpectedly\.?|OpenAI Responses stream ended before a terminal response event|Codex stream ended without a stop reason|Codex SSE response headers timed out after \d+ms|(?:read |write )?ECONNRESET)$/i.test(message)
+    || message.startsWith("Codex error: An error occurred while processing your request. You can retry your request"));
+}
+
 /** Per-stream evidence, before pinned Codex collapses *every* 429 into quota-looking prose.
  * Continuation is decided by the session, never by this provider adapter. */
 export function withProviderFailures(provider: ProviderId, stream: StreamFunction): StreamFunction {
   return (model, context, options) => lazyStream(model, async () => {
     let http: FailureInput | undefined;
+    let streamError: FailureInput | undefined;
     const send = options?.fetch ?? globalThis.fetch;
     const fetch: typeof globalThis.fetch = async (input, init) => {
+      http = streamError = undefined;
       const response = await send(input, init);
       http = response.ok ? undefined : { status: response.status, headers: response.headers, body: await errorBody(response) };
       return response;
     };
-    const source = stream(model, context, { ...options, fetch });
+    const source = stream(model, context, { ...options, fetch, ...(provider === "openai-codex" && {
+      onProviderStreamEvent(data: unknown, current: typeof model) {
+        const event = record(data);
+        if (event.type === "error" || event.type === "response.failed") {
+          const error = record(event.type === "error" ? event.error : record(event.response).error);
+          const code = event.type === "error" ? event.code ?? error.code : error.code;
+          if (typeof code === "string") streamError = { sdk_error: code };
+        }
+        return options?.onProviderStreamEvent?.(data, current);
+      },
+    }) });
     return (async function* () {
       for await (const event of source) {
         if (event.type === "error" && event.reason === "error") {
           const message = event.error as typeof event.error & FailureMessage;
-          const failure = message.providerFailure ?? normalizeFailure(provider, http ?? { message: message.errorMessage });
+          const failure = message.providerFailure ?? normalizeFailure(provider, http ?? streamError ?? {
+            message: message.errorMessage,
+            ...(provider === "openai-codex" && codexTransportFailure(message.errorMessage) && { sdk_error: "server_error" }),
+          });
           message.providerFailure = failure;
-          message.errorMessage = failureSummary(failure, message.errorMessage);
+          const summary = failureSummary(failure, message.errorMessage);
+          // Pi 1.6's retry predicate reads errorMessage, not providerFailure. Give it a
+          // fixed, non-sensitive cue only for a restartable turn. Pi owns backoff/cancel.
+          const restartable = provider === "openai-codex" && failure.category === "transient"
+            && !message.content.length && !options?.signal?.aborted && !failure.retry_after_secs;
+          message.errorMessage = restartable ? `Service temporarily unavailable: ${summary}` : summary;
         }
         yield event;
       }

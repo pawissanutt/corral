@@ -2,8 +2,35 @@ import { expect, test } from "bun:test";
 import { providerErrorClass } from "../src/host/session.ts";
 import { type FailureMessage, normalizeFailure, withProviderFailures } from "../src/host/provider-failure.ts";
 import { createAssistantMessageEventStream, normalizeContext, type StreamFunction } from "@earendil-works/pi-ai";
-import { getModel } from "@earendil-works/pi-ai/compat";
+import { getModel, isRetryableAssistantError } from "@earendil-works/pi-ai/compat";
 import { emptyOutput } from "../src/claude/events.ts";
+
+test("Codex stream failures retain safe evidence for Pi's bounded retry decision", async () => {
+  const model = getModel("openai-codex", "gpt-6.1-sol")!;
+  for (const [code, partial, text, category, retry] of [
+    ["server_error", false, "opaque", "transient", true],
+    ["server_error", true, "opaque", "transient", false],
+    ["invalid_request_error", false, "fetch failed", "invalid_request", false],
+    [undefined, false, "fetch failed", "transient", true],
+    [undefined, false, "unrecognized error", "unknown", false],
+  ] as const) {
+    const source: StreamFunction = (current, _context, options) => {
+      const output = createAssistantMessageEventStream();
+      void (async () => {
+        if (code) await options?.onProviderStreamEvent?.({ type: "response.failed", response: { error: { code, message: "sk-secret" } } }, current);
+        const error = emptyOutput(current);
+        if (partial) error.content.push({ type: "text", text: "partial" });
+        error.stopReason = "error"; error.errorMessage = text;
+        output.push({ type: "error", reason: "error", error }); output.end();
+      })();
+      return output;
+    };
+    const result = await withProviderFailures("openai-codex", source)(model, normalizeContext({ messages: [] })).result();
+    expect((result as FailureMessage).providerFailure?.category).toBe(category);
+    expect(isRetryableAssistantError(result)).toBe(retry);
+    expect(JSON.stringify(result)).not.toContain("sk-secret");
+  }
+});
 
 // A failed provider turn with unknown wording must stop, not consume transient retries.
 test("unknown provider failures are not transient", () => {
