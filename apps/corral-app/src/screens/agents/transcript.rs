@@ -30,6 +30,9 @@ mod older;
 mod older_tests;
 mod parts;
 mod prose;
+mod retained;
+#[cfg(test)]
+mod retained_tests;
 mod rows;
 mod tool;
 mod watch;
@@ -172,9 +175,9 @@ fn body_column(app: AppState, rows: impl IntoIterator<Item = AnyElement>) -> Any
 
 /// A message's block, placed among the transcript's rows by its anchor so the reading
 /// position can hold on to it.
-fn anchored(transcript: &Transcript, anchor: &str, block: AnyElement) -> AnyElement {
+fn anchored(scope: &str, anchor: &str, block: AnyElement) -> AnyElement {
     let token = anchors::token();
-    let scope = transcript.scope.to_string();
+    let scope = scope.to_owned();
     let key = anchor.to_owned();
     {
         let (scope, key) = (scope.clone(), key.clone());
@@ -245,105 +248,18 @@ struct Spot<'a> {
 /// messages, every message of the page in order (or why there are none), this device's sends
 /// the page does not hold yet, the live turn and the quiet rows after it, then the note. Desktop centres it at the mockup's measure; the phone uses
 /// the full width with 16 pt sides.
-pub fn transcript(app: AppState, transcript: &Transcript) -> AnyElement {
-    let form = app.form;
-    provide_styles(app);
-    let scope = transcript.scope.to_string();
-    let mut next = 0;
-    let mut messages = Vec::new();
-    for message in &transcript.messages {
-        let block = self::message(app, &scope, message, next);
-        messages.push(anchored(transcript, &message.anchor, block));
-        next += message.items.len() + usize::from(message.footer.is_some());
-    }
-    messages.extend(
-        transcript
-            .echoes
-            .iter()
-            .map(|sent| bubbles::echo(app, sent)),
-    );
-    for message in &transcript.live {
-        let block = self::message(app, &scope, message, next);
-        messages.push(anchored(transcript, &message.anchor, block));
-        next += message.items.len() + usize::from(message.footer.is_some());
-    }
-    let after = (!transcript.after.is_empty()).then(|| {
-        body_column(
-            app,
-            transcript
-                .after
-                .iter()
-                .enumerate()
-                .map(|(n, entry)| item(app, entry, next + n, None)),
-        )
-    });
-    let stale = transcript
-        .stale
-        .as_ref()
-        .map(|words| notice(app, Hue::Held, &vec![span(words.clone())], None));
-    let older = pager(
-        app,
-        &transcript.older,
-        "Show earlier messages",
-        "btn-older",
-        transcript.paging,
-    );
-    let fill = self::fill(app, &transcript.fill);
-    let note = disclaimer(app, &transcript.disclaimer);
-    match form {
-        Form::Terminal => {
-            let mut parts = Vec::new();
-            for (at, block) in messages.into_iter().enumerate() {
-                if at > 0 {
-                    parts.push(term::blank());
-                }
-                parts.push(block);
-            }
-            view()
-                .test_id("session-transcript-items")
-                .children(stale)
-                .children(older.map(|button| view().flex_row().child(button)))
-                .children(fill)
-                .children(parts)
-                .children(after.map(|rows| view().child(term::blank()).child(rows)))
-                .when_some(note, |list, note| list.child(term::blank()).child(note))
-                .into_element()
-        }
-        Form::Desktop | Form::Phone => {
-            let sides = if form == Form::Phone { 16.0 } else { 24.0 };
-            let edge = move |content: AnyElement| {
-                view().flex_row().px(px(sides)).py(px(4.0)).child(content)
-            };
-            view()
-                .w_full()
-                .items_center()
-                .child(
-                    view()
-                        .test_id("session-transcript-items")
-                        .w_full()
-                        .max_w(px(MEASURE_CONVERSATION))
-                        .pt(px(if form == Form::Phone { 8.0 } else { 16.0 }))
-                        .pb(px(10.0))
-                        .children(stale.map(|notice| edge(notice).pb(px(8.0))))
-                        .children(older.map(edge))
-                        .children(fill)
-                        .children(messages)
-                        .children(after)
-                        .children(
-                            note.map(|note| {
-                                view().px(px(sides)).pt(px(4.0)).pb(px(16.0)).child(note)
-                            }),
-                        ),
-                )
-                .into_element()
-        }
-    }
+pub fn transcript(app: AppState, shown: Memo<Option<Transcript>>) -> AnyElement {
+    retained::render(app, shown)
 }
 
 /// One item of a message, numbered `n` across the page, drawn at `spot` when it is keyed.
 fn item(app: AppState, entry: &MessageItem, n: usize, spot: Option<Spot<'_>>) -> AnyElement {
+    numbered(n, item_body(app, entry, n, spot))
+}
+
+fn item_body(app: AppState, entry: &MessageItem, n: usize, spot: Option<Spot<'_>>) -> AnyElement {
     let id = n.to_string();
-    let body = match entry {
+    match entry {
         MessageItem::Paragraph(words) => paragraph(app, words),
         MessageItem::Prose(words) => prose::prose(app, words, &id),
         MessageItem::Thinking(thought) => prose::thinking(app, thought, &id),
@@ -357,7 +273,10 @@ fn item(app: AppState, entry: &MessageItem, n: usize, spot: Option<Spot<'_>>) ->
         MessageItem::Marker(marker) => rows::marker(app, marker, &id),
         MessageItem::Card(card) => rows::card(app, card, &id),
         MessageItem::Question(card) => question(app, card),
-    };
+    }
+}
+
+fn numbered(n: usize, body: AnyElement) -> AnyElement {
     view()
         .test_id(&format!("item-{n}"))
         .min_w(px(0.0))
@@ -369,52 +288,23 @@ fn item(app: AppState, entry: &MessageItem, n: usize, spot: Option<Spot<'_>>) ->
 /// bubble with its lead; an agent's message (`.tm`) with its avatar in its hue, the header line,
 /// then its items in recorded order and the turn's footer. A live message carries the streaming
 /// mark in its header.
-fn message(app: AppState, scope: &str, message: &Message, first: usize) -> AnyElement {
+fn agent_message(
+    app: AppState,
+    message: &Message,
+    column_of: impl Fn(View) -> View,
+    head_words: Memo<Rich>,
+    live: Memo<bool>,
+    items: Vec<AnyElement>,
+) -> AnyElement {
     let form = app.form;
-    let keyed = message.keys.len() == message.items.len();
-    // An agent's items are drawn in a column beside its avatar, under its head.
-    let column =
-        (keyed && message.kind == MessageKind::Agent).then(|| format!("{}#items", message.anchor));
-    let column_of = |items: View| match &column {
-        Some(key) => part(scope, &message.anchor, key, None, items),
-        None => items,
-    };
-    let mut items = message
-        .items
-        .iter()
-        .enumerate()
-        .map(|(n, entry)| {
-            let key = message.keys.get(n).filter(|_| keyed);
-            let spot = key.map(|key| Spot {
-                scope,
-                anchor: &message.anchor,
-                key,
-            });
-            let row = item(app, entry, first + n, spot);
-            match key {
-                Some(key) => placed(scope, &message.anchor, key, column.as_deref(), row),
-                None => row,
-            }
-        })
-        .collect::<Vec<_>>();
-    if let Some(footer) = &message.footer {
-        items.push(rows::footer(
-            app,
-            footer,
-            &(first + message.items.len()).to_string(),
-        ));
-    }
-    match message.kind {
-        MessageKind::Quiet => return body_column(app, items),
-        MessageKind::Bubble => return bubbles::bubble(app, message, items),
-        MessageKind::Agent => {}
-    }
     let head = view()
         .flex_row()
         .items_center()
         .gap(px(6.0))
-        .child(line(app, &message.head, 11.5, Token::Ink3))
-        .when(message.live, |head| head.child(prose::caret(app)));
+        .child(dynamic(move || {
+            line(app, &head_words.get(), 11.5, Token::Ink3)
+        }))
+        .child(when(move || live.get(), move || prose::caret(app)));
     if form == Form::Terminal {
         return view()
             .child(
