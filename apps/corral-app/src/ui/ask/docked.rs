@@ -15,14 +15,26 @@ use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::button::{ButtonKind, button};
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
+const CLOSE_SIZE: f32 = 20.0;
+const TAB_GAP: f32 = 2.0;
+
+// Leave text room after the padding, mark and close, even when scrolling.
+fn session_tab_min() -> f32 {
+    44.0 + control_height(CLOSE_SIZE)
+}
+
 /// The strip over the pane: Ask's tab, the session tabs, then the pane's close.
 pub(super) fn strip(app: AppState) -> AnyElement {
     let tabs = computed(move || app.dock_tabs());
     let ask = computed(move || app.is_open(Overlay::Ask));
     let shown = computed(move || app.shown_dock());
+    let tab_min = session_tab_min();
+    let room = signal(0.0_f32);
+    let ask_width = signal(0.0_f32);
     let row = dynamic(move || {
         let tabs = tabs.get();
         untracked(|| {
+            let session_count = tabs.len() as f32;
             let ask_tab = tab(
                 TabFace {
                     test_id: "dock-tab-ask".into(),
@@ -34,15 +46,26 @@ pub(super) fn strip(app: AppState) -> AnyElement {
                 move || ask.get(),
                 move || app.open_ask(),
                 None,
+                room,
             );
             view()
                 .flex_row()
                 .items_center()
-                .flex_shrink(1.0)
-                .min_w(px(0.0))
-                .overflow_hidden()
-                .gap(px(2.0))
-                .child(ask_tab)
+                // Constrain flex shrink to the viewport until only the minimum tabs fit.
+                .w(move || {
+                    px(room
+                        .get()
+                        .max(ask_width.get() + session_count * (tab_min + TAB_GAP)))
+                })
+                .gap(px(TAB_GAP))
+                .child(
+                    view()
+                        .flex_none()
+                        .on_layout(move |bounds: &Bounds<Points>| {
+                            ask_width.set(bounds.size.width.0);
+                        })
+                        .child(ask_tab),
+                )
                 .children(tabs.into_iter().map(|t| {
                     let (chosen, select, close) = (t.id.clone(), t.id.clone(), t.id.clone());
                     let on = computed(move || shown.with(|shown| shown.as_ref() == Some(&chosen)));
@@ -57,6 +80,7 @@ pub(super) fn strip(app: AppState) -> AnyElement {
                         move || on.get(),
                         move || app.select_dock(&select),
                         Some(Box::new(move || app.undock(&close))),
+                        room,
                     )
                 }))
                 .into_element()
@@ -73,9 +97,21 @@ pub(super) fn strip(app: AppState) -> AnyElement {
         .bg(color(Token::Surface))
         .border_b(px(1.0))
         .border_b_color(color(Token::Rule))
-        .child(row)
-        .child(crate::screens::agents::pane_new_menu(app))
-        .child(view().flex_1())
+        .child(
+            scroll()
+                .test_id("dock-tab-strip")
+                .horizontal()
+                .scrollbar(false)
+                .flex_1()
+                .min_w(px(0.0))
+                .on_layout(move |bounds: &Bounds<Points>| room.set(bounds.size.width.0))
+                .child(row),
+        )
+        .child(
+            view()
+                .flex_none()
+                .child(crate::screens::agents::pane_new_menu(app)),
+        )
         .child(close_pane(app))
         .into_element()
 }
@@ -95,12 +131,27 @@ fn tab(
     chosen: impl Fn() -> bool + Copy + 'static,
     pick: impl Fn() + 'static,
     close: Option<Box<dyn Fn()>>,
+    room: Signal<f32>,
 ) -> AnyElement {
+    let is_session = close.is_some();
+    let tab_ref = element_ref();
+    effect(move || {
+        let _ = room.get();
+        if chosen() {
+            tab_ref.reveal(
+                RevealOptions::default()
+                    .vertical(ScrollAlignment::Nearest)
+                    .animated(false),
+            );
+        }
+    });
     let dim = face.dim;
     let words = text(face.label)
+        .test_id(&format!("{}-text", face.test_id))
         .number_of_lines(1u32)
         .truncate()
         .min_w(px(0.0))
+        .flex_shrink(1.0)
         .font_family(FONT_TEXT)
         .text_size(px(12.5))
         .font_weight(FontWeight::MEDIUM)
@@ -132,7 +183,8 @@ fn tab(
         .pl(px(8.0))
         .pr(px(if close.is_some() { 2.0 } else { 8.0 }))
         .h_full()
-        .child(face.lead)
+        .overflow_hidden()
+        .child(view().flex_none().child(face.lead))
         .child(words);
     let close = close.map(|close| {
         view()
@@ -141,7 +193,7 @@ fn tab(
             .label(format!("{} · {}", dock::CLOSE_TAB, face.spoken))
             .on_press(close)
             .cursor_pointer()
-            .size(px(control_height(20.0)))
+            .size(px(control_height(CLOSE_SIZE)))
             .flex_none()
             .items_center()
             .justify_center()
@@ -149,12 +201,16 @@ fn tab(
             .hover(|s| s.bg(color(Token::Hover)))
             .child(icon(Icon::Close, 10.0, color(Token::Ink3)))
     });
-    view()
-        .flex_row()
-        .items_center()
-        .min_w(px(0.0))
-        .max_w(px(200.0))
-        .flex_shrink(1.0)
+    let frame = view().flex_row().items_center().element_ref(&tab_ref);
+    let frame = if is_session {
+        frame
+            .min_w(px(session_tab_min()))
+            .max_w(px(200.0))
+            .flex_shrink(1.0)
+    } else {
+        frame.flex_none()
+    };
+    frame
         .h(px(control_height(30.0)))
         .pr(px(if close.is_some() { 4.0 } else { 0.0 }))
         .rounded_t(px(6.0))
@@ -416,3 +472,7 @@ pub(crate) fn beside_note(app: AppState, id: Id) -> AnyElement {
         ))
         .into_element()
 }
+
+#[cfg(test)]
+#[path = "docked_tests.rs"]
+mod tests;
