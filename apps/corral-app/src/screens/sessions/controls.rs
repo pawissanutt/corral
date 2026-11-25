@@ -7,12 +7,13 @@
 //! chosen one raised. Phone: the field over a wrapping row of modes. Terminal: the field and
 //! modes on one row; NSH bands a pressed option itself.
 
-use nsh_base::{toggle, toggle_group};
+use nsh_base::{toggle, toolbar};
 use nsh_core::element::color as for_appearance;
 use nsh_core::prelude::*;
 
 use crate::model::{Form, sessions};
 use crate::state::AppState;
+use crate::ui::atoms::control_height;
 use crate::ui::composer::copyable_input;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::term;
@@ -80,11 +81,13 @@ pub(super) fn filter_bar(app: AppState, shown: Memo<sessions::Listing>) -> AnyEl
             .child(field(app))
             .child(modes)
             .into_element(),
+        // The modes wrap under the field, and onto further rows, where the list is narrow.
         Form::Terminal => bar
             .flex_row()
+            .flex_wrap()
             .items_center()
-            .gap(term::cells(2.0))
-            .h(term::rows(1.0))
+            .gap_x(term::cells(2.0))
+            .min_h(term::rows(1.0))
             .px(term::cells(1.0))
             .child(field(app))
             .child(modes)
@@ -215,18 +218,20 @@ pub(super) fn sort_bar(app: AppState, group: String) -> AnyElement {
     .into_element()
 }
 
-/// The group the options of one control sit in, a toggle group (one tab stop, the arrow keys
-/// move between its options) inside a group that names it for screen readers: a sunk track on
-/// a desktop toolbar.
+/// The options of one control as a toolbar named for screen readers (one tab stop, the arrow
+/// keys move between its options): a sunk track on a desktop toolbar.
 fn track(
     app: AppState,
     size: Size,
     name: impl Into<String>,
     options: Vec<AnyElement>,
 ) -> AnyElement {
-    let row = toggle_group().flex_row().items_center();
+    let name: String = name.into();
+    let row = toolbar()
+        .accessibility_label(SharedString::from(name))
+        .items_center();
     let row = match (app.form, size) {
-        (Form::Terminal, _) => row.gap(term::cells(1.0)),
+        (Form::Terminal, _) => row.flex_wrap().gap_x(term::cells(1.0)),
         (Form::Desktop, Size::Bar) => row
             .flex_wrap()
             .gap(px(2.0))
@@ -239,13 +244,7 @@ fn track(
         (Form::Phone, Size::Bar) => row.flex_wrap().gap_x(px(6.0)).gap_y(px(TARGET - 32.0)),
         (Form::Desktop | Form::Phone, Size::Small) => row.gap(px(2.0)),
     };
-    view()
-        .role(AccessibilityRole::Group)
-        .label(name.into())
-        .flex_row()
-        .items_center()
-        .child(row.children(options))
-        .into_element()
+    row.children(options).into_element()
 }
 
 /// One option: its words and, for a mode, how many sessions it holds; the chosen one raised
@@ -261,8 +260,9 @@ fn option(
 ) -> AnyElement {
     let form = app.form;
     let (height, words_size, pad, radius) = match (form, size) {
-        (Form::Desktop, Size::Bar) => (24.0, 12.0, 10.0, 5.0),
-        (Form::Desktop, Size::Small) => (20.0, 11.0, 7.0, 4.0),
+        // A touch tablet draws the desktop form; its options keep the 44 pt target.
+        (Form::Desktop, Size::Bar) => (control_height(24.0), 12.0, 10.0, 5.0),
+        (Form::Desktop, Size::Small) => (control_height(20.0), 11.0, 7.0, 4.0),
         (Form::Phone, Size::Bar) => (32.0, 13.5, 12.0, 16.0),
         (Form::Phone, Size::Small) => (32.0, 12.5, 8.0, 6.0),
         (Form::Terminal, _) => (16.0, text_size(form), 1.0, 0.0),

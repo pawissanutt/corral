@@ -558,6 +558,7 @@ fn asks_chat_opens_in_asks_tab_not_a_second_one() {
     app.press("id:pane-close").unwrap();
     app.wait_for("id:agent-A-7").unwrap();
     app.press("id:list-sessions >> id:more-A-7").unwrap();
+    app.wait_for("id:btn-open-beside").unwrap();
     app.press("id:btn-open-beside").unwrap();
     app.wait_for("id:ask-transcript").unwrap();
     assert!(!in_tree(&app, "dock-tab-A-7"));

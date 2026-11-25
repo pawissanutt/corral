@@ -479,24 +479,25 @@ fn section_head(
                     .child(count.font_family(FONT_MONO).text_size(px(11.0)))
                     .children(note.map(|note| note.font_family(FONT_TEXT).text_size(px(11.5)))),
             )
-            .children(trailing.map(|trailing| trailing.h(px(row_height(form)))))
+            .children(trailing.map(|trailing| trailing.min_h(px(row_height(form)))))
             .into_element(),
+        // The heading's height and paddings are the fold button's own, so its whole band
+        // takes the press; a trailing control sits beside it at the label's height.
         Form::Phone => line
-            .min_h(px(36.0))
-            .pt(px(14.0))
-            .pb(px(6.0))
             .px(px(18.0))
             .gap_x(px(GAP))
-            .gap_y(px(6.0))
             .child(
-                head.gap(px(GAP))
+                head.min_h(px(36.0))
+                    .pt(px(14.0))
+                    .pb(px(6.0))
+                    .gap(px(GAP))
                     .children(caret)
                     .children(mark)
                     .child(label.font_family(FONT_TEXT).text_size(px(13.0)))
                     .child(count.font_family(FONT_MONO).text_size(px(12.0)))
                     .children(note.map(|note| note.font_family(FONT_TEXT).text_size(px(12.5)))),
             )
-            .children(trailing)
+            .children(trailing.map(|trailing| trailing.pt(px(8.0)).pb(px(6.0))))
             .into_element(),
     }
 }
