@@ -5,7 +5,7 @@ use std::os::unix::net::UnixStream;
 
 const VECTORS: &str = include_str!("../../../../docs/contracts/lite-analyst-v1/vectors.json");
 
-fn enrollment() -> bootstrap::Enrollment {
+pub(super) fn enrollment() -> bootstrap::Enrollment {
     bootstrap::Enrollment {
         link_id: "link_A".into(),
         lite_instance: "lite_A".into(),
@@ -18,7 +18,7 @@ fn enrollment() -> bootstrap::Enrollment {
     }
 }
 
-fn approval(now: u64, request_id: &str, question: &str) -> Value {
+pub(super) fn approval(now: u64, request_id: &str, question: &str) -> Value {
     let mut body = serde_json::from_str::<Value>(VECTORS).unwrap()["request"]["body"].clone();
     body["deadline_ms"] = json!(now + 60_000);
     body["request_id"] = json!(request_id);
@@ -27,7 +27,7 @@ fn approval(now: u64, request_id: &str, question: &str) -> Value {
     json!({"request_b64":STANDARD.encode(&bytes),"request_digest":wire::sha256(&bytes)})
 }
 
-fn work_pair() -> (Work, Work, std::os::fd::OwnedFd) {
+pub(super) fn work_pair() -> (Work, Work, std::os::fd::OwnedFd) {
     let (a, b) = UnixStream::pair().unwrap();
     let (lifetime, keep_alive) = rustix::pipe::pipe().unwrap();
     let server = Work::new(a, lifetime.try_clone().unwrap()).unwrap();
@@ -35,11 +35,11 @@ fn work_pair() -> (Work, Work, std::os::fd::OwnedFd) {
     (server, peer, keep_alive)
 }
 
-fn deadline() -> Instant {
+pub(super) fn deadline() -> Instant {
     Instant::now() + FRAME_TIMEOUT
 }
 
-fn new_session<'a>(store: &'a mut Store, work: &'a Work) -> Session<'a> {
+pub(super) fn new_session<'a>(store: &'a mut Store, work: &'a Work) -> Session<'a> {
     Session {
         store,
         work,
@@ -50,7 +50,7 @@ fn new_session<'a>(store: &'a mut Store, work: &'a Work) -> Session<'a> {
     }
 }
 
-fn state_root() -> tempfile::TempDir {
+pub(super) fn state_root() -> tempfile::TempDir {
     use std::os::unix::fs::PermissionsExt as _;
     tempfile::Builder::new()
         .permissions(std::fs::Permissions::from_mode(0o700))
@@ -363,24 +363,34 @@ fn authenticated_turn_send_is_once_and_dropped_settlement_ack_replays_only_recei
             .unwrap();
         assert_eq!(
             session
-                .send_once(&lease, b"changed", |_| panic!("different digest sent"))
+                .send_once(
+                    &lease,
+                    b"changed",
+                    || Ok(()),
+                    |_| panic!("different digest sent")
+                )
                 .unwrap(),
             SendAdmission::<()>::Refused(Fault::Conflict)
         );
         assert_eq!(
             session
-                .send_once(&lease, b"final body", |bytes| assert_eq!(
-                    bytes,
-                    b"final body"
-                ))
+                .send_once(
+                    &lease,
+                    b"final body",
+                    || Ok(()),
+                    |bytes| assert_eq!(bytes, b"final body")
+                )
                 .unwrap(),
             SendAdmission::HandedOff(())
         );
         assert_eq!(
             session
-                .send_once(&lease, b"final body", |_| panic!(
-                    "consumed permit sent again"
-                ))
+                .send_once(
+                    &lease,
+                    b"final body",
+                    || Ok(()),
+                    |_| panic!("consumed permit sent again")
+                )
                 .unwrap(),
             SendAdmission::<()>::Refused(Fault::Conflict)
         );

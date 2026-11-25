@@ -6,7 +6,7 @@ use super::{
     isolation::{Payload, Sandbox},
     policy,
     provider::Provider,
-    turns::Outcome,
+    turns::{Outcome, ReserveTurn},
     wire::{self, Binding, FenceReason, StartBody},
     work::FRAME_TIMEOUT,
 };
@@ -324,26 +324,46 @@ impl Session<'_> {
         let admission = (|| {
             broker.prove_live(deadline, &mut || self.pump_run(binding, "working"))?;
             io.check_waiting()?;
-            self.send_once(&lease, body, |exact| endpoint.send(exact))
+            self.send_once(
+                &lease,
+                body,
+                || {
+                    broker.check_live()?;
+                    io.check_waiting()
+                },
+                |exact| endpoint.send(exact),
+            )
         })();
+        let received = self.settle_exchange(&reserve, admission, |session| {
+            let message = endpoint.receive(deadline, &mut || {
+                session.pump_run(binding, "working")?;
+                broker.check_live()?;
+                io.check_waiting()
+            })?;
+            // Cross-turn correlation is part of exchange validity, not
+            // a dispatch-time check after settling the completed tariff.
+            let calls = if message["content"].is_string() {
+                Vec::new()
+            } else {
+                plan_calls(&message, call_ids)?
+            };
+            Ok((message, calls))
+        })?;
+        self.pump_run(binding, "working")?;
+        broker.check_live()?;
+        received
+    }
+
+    // Keep a settled exchange failure distinct from failure to record settlement.
+    fn settle_exchange<T>(
+        &mut self,
+        reserve: &ReserveTurn,
+        admission: Result<SendAdmission<Result<()>>>,
+        receive: impl FnOnce(&mut Self) -> Result<T>,
+    ) -> Result<Result<T>> {
         let (outcome, received) = match admission {
             Ok(SendAdmission::HandedOff(Ok(()))) => {
-                let reply = endpoint
-                    .receive(deadline, &mut || {
-                        self.pump_run(binding, "working")?;
-                        broker.check_live()?;
-                        io.check_waiting()
-                    })
-                    .and_then(|message| {
-                        // Cross-turn correlation is part of exchange validity, not
-                        // a dispatch-time check after settling the completed tariff.
-                        let calls = if message["content"].is_string() {
-                            Vec::new()
-                        } else {
-                            plan_calls(&message, call_ids)?
-                        };
-                        Ok((message, calls))
-                    });
+                let reply = receive(self);
                 let outcome = if reply.is_ok() {
                     Outcome::Completed
                 } else {
@@ -362,10 +382,8 @@ impl Session<'_> {
                 Err(anyhow::anyhow!("fixture provider handoff refused")),
             ),
         };
-        self.settle_turn(&reserve, outcome)?;
-        self.pump_run(binding, "working")?;
-        broker.check_live()?;
-        received
+        self.settle_turn(reserve, outcome)?;
+        Ok(received)
     }
 
     fn pump_run(&mut self, binding: &Binding, state: &str) -> Result<()> {

@@ -466,6 +466,7 @@ impl Session<'_> {
         &mut self,
         lease: &PermitLease,
         body: &[u8],
+        check_session: impl FnOnce() -> anyhow::Result<()>,
         send: impl FnOnce(&[u8]) -> T,
     ) -> anyhow::Result<SendAdmission<T>> {
         self.tick()?;
@@ -483,10 +484,15 @@ impl Session<'_> {
         // Failures after the durable commit are distinguishable from pre-consume
         // refusal and must settle indeterminate (not not_sent).
         let checked = (|| -> anyhow::Result<bool> {
-            Ok(!self.work.readable(Instant::now())?
-                && lease
-                    .check_send_time(self.clock.now()?, Instant::now())
-                    .is_ok())
+            if self.work.readable(Instant::now())? {
+                return Ok(false);
+            }
+            // Work watches broker bootstrap, not the retained per-run Pi and
+            // shim channels. Observe those locally again after the commit.
+            check_session()?;
+            Ok(lease
+                .check_send_time(self.clock.now()?, Instant::now())
+                .is_ok())
         })();
         if !matches!(checked, Ok(true)) {
             return Ok(SendAdmission::ConsumedWithoutHandoff);
