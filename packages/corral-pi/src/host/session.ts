@@ -2097,7 +2097,11 @@ export class HostSession {
           settle({ disposition });
           return;
         }
-        admit?.();
+        try { admit?.(); } catch (error) {
+          // Settle with the admission reason before the SDK wraps the throw.
+          refuse(error instanceof Error ? error.message : String(error));
+          throw error;
+        }
         this.nextTurnOrigin = { kind: "bridge" };
         settle({ disposition, turn: this.turn + 1 });
       },
