@@ -38,8 +38,8 @@ pub fn scale(max: u64, lines: u64) -> Scale {
     let step = step(max, lines);
     let steps = max.div_ceil(step).max(1);
     Scale {
-        top: step * steps,
-        ticks: (0..=steps).map(|at| at * step).collect(),
+        top: step.saturating_mul(steps),
+        ticks: (0..=steps).map(|at| at.saturating_mul(step)).collect(),
     }
 }
 

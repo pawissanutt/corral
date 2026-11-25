@@ -25,7 +25,11 @@ pub(super) fn stats(app: AppState, page: &Page) -> Option<AnyElement> {
         .test_id("usage-stats")
         .flex_row()
         .flex_wrap()
-        .gap(px(if app.form == Form::Terminal { 0.0 } else { 10.0 }))
+        .gap(px(if app.form == Form::Terminal {
+            0.0
+        } else {
+            10.0
+        }))
         .min_w(px(0.0))
         .children(
             page.stats
@@ -63,11 +67,10 @@ pub(super) fn strip(app: AppState, gaps: &Gaps) -> AnyElement {
         .items_center()
         .gap(px(8.0))
         .min_w(px(0.0))
-        .children(gaps.partial.then(|| {
-            text("◐")
-                .flex_shrink_0()
-                .text_color(hue_ink(Hue::Held))
-        }))
+        .children(
+            gaps.partial
+                .then(|| text("◐").flex_shrink_0().text_color(hue_ink(Hue::Held))),
+        )
         .child(
             words(app, &gaps.line, Token::Ink2, 12.5)
                 .flex_shrink(1.0)

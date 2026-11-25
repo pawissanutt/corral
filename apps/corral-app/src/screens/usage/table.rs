@@ -85,9 +85,7 @@ fn key(app: AppState, row: &GroupRow) -> AnyElement {
                 .text_color(color(Token::Ink2))
         }))
         .children(row.reasons.clone().map(|why| {
-            let marker = text("◐")
-                .flex_shrink_0()
-                .text_color(hue_ink(Hue::Held));
+            let marker = text("◐").flex_shrink_0().text_color(hue_ink(Hue::Held));
             hinted(app, marker, why)
         }));
     view()

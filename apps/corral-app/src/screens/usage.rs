@@ -123,7 +123,13 @@ fn measured(width: Signal<Option<f32>>) -> impl Fn(&Bounds<Points>) + 'static {
 
 /// The content under the controls, at `room` (desktop points, or terminal Cells): the status,
 /// the tiles, the coverage line, the days, the groups with their total and the estimate line.
-fn content(app: AppState, page: &Page, records: bool, room: usize) -> AnyElement {
+fn content(
+    app: AppState,
+    page: &Page,
+    records: bool,
+    room: usize,
+    reading: days::Reading,
+) -> AnyElement {
     let form = app.form;
     let block = |child: AnyElement, top: f32, bottom: f32| match form {
         Form::Terminal => view().child(child).child(term::blank()).into_element(),
@@ -162,7 +168,7 @@ fn content(app: AppState, page: &Page, records: bool, room: usize) -> AnyElement
         .children(
             page.days
                 .as_ref()
-                .map(|strip| block(days::strip(app, strip, room), 12.0, 4.0)),
+                .map(|strip| block(days::strip(app, strip, room, reading), 12.0, 4.0)),
         )
         .child(groups)
         .child(block(
@@ -191,6 +197,7 @@ fn page_head(
 }
 
 fn desktop(app: AppState, data: Memo<Page>) -> AnyElement {
+    let reading = days::Reading::new();
     let width = signal(None::<f32>);
     let records = computed(move || width.get().is_some_and(|w| w < TABLE_MIN));
     let scroll = view()
@@ -199,7 +206,7 @@ fn desktop(app: AppState, data: Memo<Page>) -> AnyElement {
         .child(dynamic(move || {
             let records = records.get();
             let page = data.get();
-            untracked(|| content(app, &page, records, 0))
+            untracked(|| content(app, &page, records, 0, reading))
         }))
         .into_element();
     view()
@@ -216,17 +223,19 @@ fn desktop(app: AppState, data: Memo<Page>) -> AnyElement {
 /// The phone body: the switches and the custom range, then the content as sections. It is the
 /// page's scroll and keeps the clearance under the floating Ask button.
 fn phone(app: AppState, data: Memo<Page>) -> AnyElement {
+    let reading = days::Reading::new();
     let scroll = view()
         .child(controls::stacked(app, data))
         .child(dynamic(move || {
             let page = data.get();
-            untracked(|| content(app, &page, true, 0))
+            untracked(|| content(app, &page, true, 0, reading))
         }))
         .into_element();
     pane(app, "usage", scroll)
 }
 
 fn terminal(app: AppState, data: Memo<Page>) -> AnyElement {
+    let reading = days::Reading::new();
     let width = signal(None::<f32>);
     let scroll = view()
         .on_layout(measured(width))
@@ -238,7 +247,7 @@ fn terminal(app: AppState, data: Memo<Page>) -> AnyElement {
                 (w / column + 0.01).floor().max(0.0) as usize
             });
             let page = data.get();
-            untracked(|| content(app, &page, room < TERM_TABLE_MIN, room))
+            untracked(|| content(app, &page, room < TERM_TABLE_MIN, room, reading))
         }))
         .into_element();
     view()

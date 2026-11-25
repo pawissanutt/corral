@@ -10,6 +10,7 @@
 
 use std::rc::Rc;
 
+use nsh_core::AccessibilityValue;
 use nsh_core::canvas::CanvasTextAlign;
 use nsh_core::keymap::Keystroke;
 use nsh_core::prelude::*;
@@ -39,8 +40,28 @@ const BLOCKS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█
 /// From this many Cells a day, its last Cell is a gap, so neighbouring days read apart.
 const GAPPED_DAY: usize = 3;
 
+/// What the chart keeps while the page's figures update under it: its measured width and the
+/// day pointed at and picked, so a live update neither blanks the plot for a frame nor drops
+/// the day being read. Made once per page.
+#[derive(Clone, Copy)]
+pub(super) struct Reading {
+    width: Signal<f32>,
+    hovered: Signal<Option<usize>>,
+    picked: Signal<Option<usize>>,
+}
+
+impl Reading {
+    pub(super) fn new() -> Self {
+        Self {
+            width: signal(0.0),
+            hovered: signal(None),
+            picked: signal(None),
+        }
+    }
+}
+
 /// The strip in `room` terminal Cells (unused on desktop and the phone, which measure).
-pub(super) fn strip(app: AppState, strip: &DayStrip, room: usize) -> AnyElement {
+pub(super) fn strip(app: AppState, strip: &DayStrip, room: usize, reading: Reading) -> AnyElement {
     let drawn = match app.form {
         Form::Terminal => view()
             .accessible(true)
@@ -48,7 +69,7 @@ pub(super) fn strip(app: AppState, strip: &DayStrip, room: usize) -> AnyElement 
             .label(strip.spoken.clone())
             .child(cells(strip, room))
             .into_element(),
-        Form::Desktop | Form::Phone => graphic(app, strip),
+        Form::Desktop | Form::Phone => graphic(app, strip, reading),
     };
     view()
         .test_id("usage-days")
@@ -105,10 +126,19 @@ fn rect(x: f32, y: f32, w: f32, h: f32) -> Bounds<Points> {
     bounds(point(px(x), px(y)), size(px(w), px(h)))
 }
 
+/// Where day `index`'s label centres: under its slot, kept inside the plot.
+fn label_x(g: &Geometry, index: usize) -> f32 {
+    let half = g.tick_width / 2.0;
+    // Not `clamp`, which panics when a chart too narrow for one label inverts its bounds.
+    (g.left + (index as f32 + 0.5) * g.slot)
+        .max(g.left + half)
+        .min(g.right - half)
+}
+
 /// The plot with the day read now (`at`) banded and its bar and label in the picked colour.
 fn paint(g: &Geometry, bars: &[DayBar], at: Option<usize>) -> Painter {
     let mut p = Painter::new();
-    if let Some(at) = at {
+    if let Some(at) = at.filter(|&at| at < bars.len()) {
         p = p
             .fill_color(ink(Token::Hover))
             .begin_path()
@@ -135,10 +165,7 @@ fn paint(g: &Geometry, bars: &[DayBar], at: Option<usize>) -> Painter {
             )
             .fill();
     }
-    let half = g.tick_width / 2.0;
-    let centre = |index: usize| {
-        (g.left + (index as f32 + 0.5) * g.slot).clamp(g.left + half, g.right - half)
-    };
+    let centre = |index: usize| label_x(g, index);
     p = p
         .font(&mono_font(AXIS_SIZE))
         .text_align(CanvasTextAlign::Center);
@@ -168,16 +195,19 @@ fn paint(g: &Geometry, bars: &[DayBar], at: Option<usize>) -> Painter {
 
 /// The chart, its readout over it, the days as hover and press targets over the canvas, and
 /// the keys that walk them once it has the focus.
-fn graphic(app: AppState, strip: &DayStrip) -> AnyElement {
+fn graphic(app: AppState, strip: &DayStrip, reading: Reading) -> AnyElement {
     let phone = app.form == Form::Phone;
     let height = if phone { PHONE_HEIGHT } else { HEIGHT };
-    let width = signal(0.0_f32);
-    let hovered = signal(None::<usize>);
-    let picked = signal(None::<usize>);
-    let shown = computed(move || hovered.get().or(picked.get()));
+    let Reading {
+        width,
+        hovered,
+        picked,
+    } = reading;
     let bars: Rc<[DayBar]> = strip.bars.clone().into();
+    let count = bars.len();
+    let shown = computed(move || hovered.get().or(picked.get()).filter(|&at| at < count));
     let peak = strip.peak;
-    let last = bars.len().saturating_sub(1);
+    let last = count.saturating_sub(1);
 
     let words = bars.clone();
     let prompt = strip.prompt;
@@ -198,6 +228,17 @@ fn graphic(app: AppState, strip: &DayStrip) -> AnyElement {
             .into_element()
     });
 
+    // The day read now as the chart's value, which a screen reader says as the keys move it.
+    let said = bars.clone();
+    let spoken_day = computed(move || {
+        shown
+            .get()
+            .and_then(|at| said.get(at))
+            .map(|day| AccessibilityValue {
+                text: Some(day.hint.as_str().into()),
+                ..AccessibilityValue::default()
+            })
+    });
     let plot = dynamic(move || {
         let room = width.get();
         let bars = bars.clone();
@@ -229,7 +270,7 @@ fn graphic(app: AppState, strip: &DayStrip) -> AnyElement {
                         .outline_offset(px(2.0))
                 })
                 .on_focus(move || {
-                    if picked.get_untracked().is_none() {
+                    if count > 0 && picked.get_untracked().is_none_or(|at| at >= count) {
                         picked.set(Some(last));
                     }
                 })
@@ -243,12 +284,16 @@ fn graphic(app: AppState, strip: &DayStrip) -> AnyElement {
                         "End" => last,
                         _ => return,
                     };
+                    if count == 0 {
+                        return;
+                    }
                     hovered.set(None);
                     picked.set(Some(next));
                 })
                 .accessible(true)
                 .role(AccessibilityRole::Image)
                 .label(strip.spoken.clone())
+                .accessibility_value(spoken_day)
                 .child(plot),
         )
         .into_element()
@@ -350,4 +395,22 @@ fn cells(strip: &DayStrip, room: usize) -> AnyElement {
             .text_color(color(Token::Ink3)),
         )
         .into_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_chart_narrower_than_one_date_label_places_its_labels() {
+        let day = |tokens| DayBar {
+            fraction: 1.0,
+            tokens,
+            tick: "25 Nov".into(),
+            hint: String::new(),
+        };
+        let bars = [day(10), day(1_800_000)];
+        let narrow = geometry(&bars, 1_800_000, 40.0, HEIGHT);
+        assert!(label_x(&narrow, 1).is_finite());
+    }
 }

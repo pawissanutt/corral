@@ -469,7 +469,7 @@ pub fn burnup(series: &BurnupSeries, width: f32, height: f32) -> Burnup {
         .max()
         .unwrap_or(0);
     let step = u32::try_from(crate::model::chart::step(u64::from(most), 3)).unwrap_or(u32::MAX);
-    let top = step * 3;
+    let top = step.saturating_mul(3);
     let x = |fraction: f32| 26.0 + fraction.clamp(0.0, 1.0) * (width - 32.0);
     let y = |v: u32| 8.0 + (1.0 - v as f32 / top as f32) * (height - 30.0);
     let scope: Vec<Point> = series

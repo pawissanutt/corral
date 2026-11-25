@@ -7,8 +7,9 @@
 //!   baseline stronger in `rule-2`, and each step's compact label in 10.5 pt mono `ink-3`,
 //!   right-aligned in a gutter left of the plot. Time runs left to right with its labels under
 //!   the baseline, thinned from the newest end so they never collide.
-//! - **Colour.** One measured series in `worker`; the point read now in `foreground`; a second
-//!   series (the burn-up's scope) dashed in `ink-3`. Every colour is a theme role read through
+//! - **Colour.** One measured series in `worker`; the point read now in `foreground`. A chart
+//!   comparing two series (the burn-up) draws the result in `foreground` against the target
+//!   dashed in `ink-3`. Every colour is a theme role read through
 //!   [`now`], so a chart redraws when the appearance changes.
 //! - **Values.** A chart says its exact figures in words: hovered, touched or reached with the
 //!   arrow keys, the point's sentence shows in a readout line above the plot (a full chart) or

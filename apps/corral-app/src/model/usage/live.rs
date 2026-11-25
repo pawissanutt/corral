@@ -571,7 +571,7 @@ fn day_strip(days: Days, series: &UsageSeries) -> DayStrip {
         .iter()
         .map(|(day, summary)| {
             let total = &summary.total;
-            let mut hint = if total.requests == 0 {
+            let mut hint = if total.requests == 0 && used(summary) == 0 {
                 format!("{}: no requests reported", short_day(*day))
             } else {
                 format!(
