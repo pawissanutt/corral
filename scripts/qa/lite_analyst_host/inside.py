@@ -100,10 +100,13 @@ def durable(root, approval, conversation, terminal, receipts, report):
     return sum(row[4] for row in ledger)
 
 
-def terminal(peer, approval):
+def terminal(peer, approval, expected_turns):
     deadline = time.monotonic() + 25
     while time.monotonic() < deadline:
-        if approval.scenario == "reconnect":
+        if approval.scenario == "reconnect" or len(approval.settles) < expected_turns:
+            # Drive the reverse calls without queuing status at Corral's send
+            # boundary (which refuses any unprocessed control frame). Read as
+            # soon as the final settlement barrier has been acknowledged.
             got = peer.pump(0.1)
             need(got is None, "unsolicited_response")
             if peer.dropped_settlement:
@@ -168,7 +171,7 @@ def scenario(root, name, fixture, manifest_sha, lock_sha):
             release_provider.set()
             snapshot = None
         else:
-            snapshot = terminal(daemon.peer, approval)
+            snapshot = terminal(daemon.peer, approval, script.available_turns)
         need(daemon.peer.handshakes == {"evidence": 3, "host_poll": 0 if name == "registry" else 3},
              "broker_negotiation_not_exercised")
         if name in ("reconnect", "crash"):
