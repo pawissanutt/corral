@@ -28,7 +28,7 @@ pub(super) async fn sink(name: &str, bytes: u64) -> Result<Option<SaveOutput>, S
     }
     if bytes > BLOB_MAX {
         return Err(format!(
-            "This browser holds a download in memory, so Corral saves at most {} here; use a browser with a save picker (Chrome or Edge) or the desktop app.",
+            "This browser holds a download in memory, so Corral saves at most {} here; download it in Chrome or Edge, which save any size, or in the desktop or terminal app.",
             crate::model::session::transcript::size(BLOB_MAX)
         ));
     }
