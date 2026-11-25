@@ -1,8 +1,10 @@
 //! Download: the whole artifact's original bytes saved through the platform's own way to save a
-//! file (the save dialog on a desktop, a browser download on the web, the Downloads folder where
-//! no dialog exists, as in a terminal). The client reads the bytes from corrald page by page
-//! into the sink, which keeps them in a private temporary file or Blob parts until the read is
-//! complete and verified, so a failed or cancelled download leaves no file behind.
+//! file: the save dialog on a desktop, the Downloads folder where no dialog exists (a terminal),
+//! the browser's save picker on the web, else a browser download of bounded size. The client
+//! reads the bytes from corrald page by page, writing each to the sink before asking for the
+//! next; the sink keeps them in a private temporary file, the picked file's uncommitted stream
+//! or bounded Blob parts until the read is complete and verified, so a failed or cancelled
+//! download leaves no file behind.
 //!
 //! test ids: "btn-download-artifact", "btn-cancel-download", "artifact-download".
 
@@ -24,6 +26,9 @@ use crate::ui::kit::text::dim;
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "save_native.rs"]
 mod native;
+#[cfg(target_arch = "wasm32")]
+#[path = "save_web.rs"]
+mod web;
 
 /// The finder's one download: which artifact it is for and where it stands. It lives as long
 /// as the finder, so moving between the results and full size keeps it; leaving the page drops
@@ -137,7 +142,7 @@ fn start(app: AppState, downloads: Downloads, save: Save) {
     // the status, which ends it.
     app.root.run(|| {
         spawn(async move {
-            let output = match sink(&save.file_name, form).await {
+            let output = match sink(&save.file_name, save.bytes, form).await {
                 Ok(Some(output)) => output,
                 Ok(None) => {
                     status.try_set(Saving::Idle);
@@ -178,90 +183,11 @@ fn start(app: AppState, downloads: Downloads, save: Save) {
 
 /// Where the bytes go: none when the owner cancels the save dialog.
 #[cfg(not(target_arch = "wasm32"))]
-async fn sink(name: &str, form: Form) -> Result<Option<SaveOutput>, String> {
+async fn sink(name: &str, _: u64, form: Form) -> Result<Option<SaveOutput>, String> {
     native::sink(name, form).await
 }
 
 #[cfg(target_arch = "wasm32")]
-async fn sink(name: &str, _: Form) -> Result<Option<SaveOutput>, String> {
-    web::WebSave::new(name).map(|save| Some(Box::new(save) as SaveOutput))
-}
-
-#[cfg(target_arch = "wasm32")]
-mod web {
-    use js_sys::{Array, Function, Uint8Array};
-    use wasm_bindgen::{JsCast as _, JsValue, closure::Closure};
-    use web_sys::{Blob, BlobPropertyBag, HtmlElement, Url};
-
-    use crate::client::download::{SaveFinish, SaveSink};
-
-    /// The bytes as Blob parts the browser holds, outside the app's memory, until the read is
-    /// complete; then one browser download under the suggested name.
-    pub(super) struct WebSave {
-        name: String,
-        parts: Array,
-    }
-
-    impl WebSave {
-        pub(super) fn new(name: &str) -> Result<Self, String> {
-            Ok(Self {
-                name: name.to_owned(),
-                parts: Array::new(),
-            })
-        }
-
-        fn save(self) -> Result<String, String> {
-            let window = web_sys::window().ok_or("No browser window is available.")?;
-            let document = window
-                .document()
-                .ok_or("No browser document is available.")?;
-            let props = BlobPropertyBag::new();
-            props.set_type("application/octet-stream");
-            let blob = Blob::new_with_blob_sequence_and_options(&self.parts, &props)
-                .map_err(|_| "Could not assemble the download.")?;
-            let url = Url::create_object_url_with_blob(&blob)
-                .map_err(|_| "Could not create a browser URL for the download.")?;
-            let retire = url.clone();
-            let revoke: Function = Closure::once_into_js(move || {
-                let _ = Url::revoke_object_url(&retire);
-            })
-            .unchecked_into();
-            let link = document
-                .create_element("a")
-                .map_err(|_| "Could not start the browser download.")?;
-            let started = link
-                .set_attribute("href", &url)
-                .and_then(|()| link.set_attribute("download", &self.name))
-                .ok()
-                .and_then(|()| link.dyn_into::<HtmlElement>().ok())
-                .map(|link| link.click());
-            if started.is_none() {
-                let _ = revoke.call0(&JsValue::UNDEFINED);
-                return Err("Could not start the browser download.".into());
-            }
-            // The browser reads the URL after the click returns, so it is retired a minute
-            // later; without a timer it stays until the page goes.
-            let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(&revoke, 60_000);
-            // A page is not told when the browser's download completes.
-            Ok(format!(
-                "as {}: handed to the browser's downloads",
-                self.name
-            ))
-        }
-    }
-
-    impl SaveSink for WebSave {
-        fn append(&mut self, bytes: &[u8]) -> Result<(), String> {
-            let buffers = Array::new();
-            buffers.push(&Uint8Array::from(bytes));
-            let part = Blob::new_with_u8_array_sequence(&buffers)
-                .map_err(|_| "Could not stage the download.")?;
-            self.parts.push(&part);
-            Ok(())
-        }
-
-        fn finish(self: Box<Self>) -> SaveFinish {
-            Box::pin(async move { self.save() })
-        }
-    }
+async fn sink(name: &str, bytes: u64, _: Form) -> Result<Option<SaveOutput>, String> {
+    web::sink(name, bytes).await
 }

@@ -1,5 +1,6 @@
-//! A native download: the platform's save dialog where it has one, else the Downloads folder
-//! under a name that replaces nothing. Bytes go to a private temporary file in the destination's
+//! A native download: the platform's save dialog where it has one, else the Downloads folder.
+//! It never replaces a file: what stands at the chosen name (whether the dialog showed it or it
+//! appeared during the download) is kept and the file takes the first free numbered name. Bytes go to a private temporary file in the destination's
 //! folder, which only a verified, complete read renames into place; dropped, it is deleted.
 use std::{
     io::Write as _,
@@ -10,10 +11,10 @@ use nsh_core::file_dialog::SaveDialog;
 use nsh_core::prelude::*;
 use tempfile::NamedTempFile;
 
-use crate::client::download::{SaveFinish, SaveOutput, SaveSink};
+use crate::client::download::{SaveFinish, SaveOutput, SaveSink, SaveStep};
 use crate::model::Form;
 
-/// Numbered names tried in the Downloads folder before giving up.
+/// Numbered names tried beside a taken one before giving up.
 const NUMBERED: u32 = 100;
 
 pub(super) async fn sink(name: &str, form: Form) -> Result<Option<SaveOutput>, String> {
@@ -39,9 +40,6 @@ fn boxed(save: NativeSave) -> SaveOutput {
 
 pub(super) struct NativeSave {
     file: NamedTempFile,
-    /// The path chosen in the dialog, and whether a file stood there when the owner agreed to
-    /// replace it; else none, and the file takes the first free name in `folder`.
-    chosen: Option<(PathBuf, bool)>,
     folder: PathBuf,
     name: String,
 }
@@ -57,30 +55,19 @@ impl NativeSave {
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .ok_or("The chosen path has no file name.")?;
-        // The dialog asked before replacing a file there now, and only that one.
-        let replace = path.exists();
-        Self::open(folder, name, Some((path, replace)))
+        Self::open(folder, name)
     }
 
     fn downloads(name: &str) -> Result<Self, String> {
-        Self::open(downloads_folder()?, name.to_owned(), None)
+        Self::open(downloads_folder()?, name.to_owned())
     }
 
-    fn open(
-        folder: PathBuf,
-        name: String,
-        chosen: Option<(PathBuf, bool)>,
-    ) -> Result<Self, String> {
+    fn open(folder: PathBuf, name: String) -> Result<Self, String> {
         let file = tempfile::Builder::new()
             .prefix(".corral-download-")
             .tempfile_in(&folder)
             .map_err(|error| format!("Could not write in {}: {error}", folder.display()))?;
-        Ok(Self {
-            file,
-            chosen,
-            folder,
-            name,
-        })
+        Ok(Self { file, folder, name })
     }
 
     fn place(mut self) -> Result<String, String> {
@@ -88,27 +75,18 @@ impl NativeSave {
             .flush()
             .and_then(|()| self.file.as_file().sync_all())
             .map_err(|error| format!("Could not write the file: {error}"))?;
-        if let Some((path, replace)) = self.chosen {
-            // A file that appeared at a new path during the download was not agreed to.
-            let placed = if replace {
-                self.file
-                    .persist(&path)
-                    .map(drop)
-                    .map_err(|error| error.error)
-            } else {
-                self.file
-                    .persist_noclobber(&path)
-                    .map(drop)
-                    .map_err(|error| error.error)
-            };
-            placed.map_err(|error| format!("Could not save {}: {error}", path.display()))?;
-            return Ok(format!("to {}", path.display()));
-        }
         let mut file = self.file;
         for at in 0..=NUMBERED {
             let path = self.folder.join(numbered(&self.name, at));
             match file.persist_noclobber(&path) {
-                Ok(_) => return Ok(format!("to {}", path.display())),
+                Ok(_) if at == 0 => return Ok(format!("to {}", path.display())),
+                Ok(_) => {
+                    return Ok(format!(
+                        "to {}, since {} already exists and was kept",
+                        path.display(),
+                        self.name
+                    ));
+                }
                 Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
                     file = error.file;
                 }
@@ -129,11 +107,17 @@ impl NativeSave {
     }
 }
 
-impl SaveSink for NativeSave {
-    fn append(&mut self, bytes: &[u8]) -> Result<(), String> {
+impl NativeSave {
+    fn write(&mut self, bytes: &[u8]) -> Result<(), String> {
         self.file
             .write_all(bytes)
             .map_err(|error| format!("Could not write the file: {error}"))
+    }
+}
+
+impl SaveSink for NativeSave {
+    fn append<'a>(&'a mut self, bytes: &'a [u8]) -> SaveStep<'a> {
+        Box::pin(std::future::ready(self.write(bytes)))
     }
 
     fn finish(self: Box<Self>) -> SaveFinish {
@@ -181,25 +165,25 @@ fn downloads_folder() -> Result<PathBuf, String> {
 mod tests {
     use super::*;
 
+    /// A path the dialog answered while it was free, taken during the download, is kept: the
+    /// owner never agreed to replace it. A dropped download leaves no file.
     #[test]
-    fn a_download_never_replaces_a_file_it_was_not_told_to_and_leaves_none_when_dropped() {
+    fn a_chosen_path_taken_during_the_download_is_kept_and_a_dropped_one_leaves_nothing() {
         let folder = tempfile::tempdir().unwrap();
-        std::fs::write(folder.path().join("report.md"), b"kept").unwrap();
-        let mut save = NativeSave::open(folder.path().into(), "report.md".into(), None).unwrap();
-        save.append(b"new bytes").unwrap();
+        let chosen = folder.path().join("report.md");
+        let mut save = NativeSave::chosen(chosen.clone()).unwrap();
+        save.write(b"new bytes").unwrap();
+        std::fs::write(&chosen, b"appeared meanwhile").unwrap();
         let at = save.place().unwrap();
-        assert!(at.ends_with("report (1).md"));
-        assert_eq!(
-            std::fs::read(folder.path().join("report.md")).unwrap(),
-            b"kept"
-        );
+        assert!(at.contains("report (1).md"), "{at}");
+        assert_eq!(std::fs::read(&chosen).unwrap(), b"appeared meanwhile");
         assert_eq!(
             std::fs::read(folder.path().join("report (1).md")).unwrap(),
             b"new bytes"
         );
 
-        let mut dropped = NativeSave::open(folder.path().into(), "x.bin".into(), None).unwrap();
-        dropped.append(b"partial").unwrap();
+        let mut dropped = NativeSave::open(folder.path().into(), "x.bin".into()).unwrap();
+        dropped.write(b"partial").unwrap();
         drop(dropped);
         assert_eq!(std::fs::read_dir(folder.path()).unwrap().count(), 2);
     }

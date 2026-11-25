@@ -12,7 +12,7 @@ pub mod download;
 mod tests;
 
 pub use content::{
-    Body, Content, Line, PREVIEW_BYTES, PREVIEW_LINES, content, content_of,
+    Body, Content, FULL_PARTIAL_LINES, Line, PREVIEW_BYTES, PREVIEW_LINES, content, content_of,
     target as content_target,
 };
 pub(crate) use content::{log_hue, plain_text, utf8_text};

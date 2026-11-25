@@ -16,7 +16,7 @@ pub(super) struct SaveTransfer {
     /// The continuation of the page last read; none before the first.
     next: Option<String>,
     /// The first page's identity, which every later page must repeat.
-    first: Option<(String, String, String, ArtifactEncoding)>,
+    first: Option<(String, String, String)>,
     received: u64,
     hash: Sha256,
 }
@@ -59,9 +59,13 @@ impl SaveTransfer {
         tag.strip_prefix(TAG_PREFIX) == Some(self.request.id.as_str()) && self.percent().is_some()
     }
 
-    /// Takes one served page: checks it continues the first, hands its bytes to the sink and
-    /// answers whether more follow.
-    fn accept(&mut self, request: DetailGet, reply: DetailReply) -> Result<bool, String> {
+    /// Takes one served page: checks it continues the first and answers its original bytes,
+    /// for the sink, and whether more follow.
+    fn accept(
+        &mut self,
+        request: DetailGet,
+        reply: DetailReply,
+    ) -> Result<(Vec<u8>, bool), String> {
         let invalid = || "corrald answered the download with an unexpected page.".to_owned();
         if request.target != self.target() || request.page != self.next {
             return Err(invalid());
@@ -69,12 +73,8 @@ impl SaveTransfer {
         let Some(DetailBody::Artifact(page)) = reply.body else {
             return Err(invalid());
         };
-        let identity = (
-            reply.etag.clone(),
-            page.task.clone(),
-            page.key.clone(),
-            page.encoding,
-        );
+        // Not the encoding: a text artifact's page that is not UTF-8 arrives as bytes.
+        let identity = (reply.etag.clone(), page.task.clone(), page.key.clone());
         match &self.first {
             None => self.first = Some(identity),
             Some(first) if *first == identity => {}
@@ -96,13 +96,12 @@ impl SaveTransfer {
             return Err("corrald sent more bytes than the artifact holds.".into());
         }
         self.hash.update(&bytes);
-        self.request.output.append(&bytes)?;
         match (reply.next, page.truncated) {
             (Some(next), true) => {
                 self.next = Some(next);
-                Ok(true)
+                Ok((bytes, true))
             }
-            (None, false) => Ok(false),
+            (None, false) => Ok((bytes, false)),
             _ => Err(invalid()),
         }
     }
@@ -201,6 +200,11 @@ impl AppState {
                 Err("The artifact changed while it downloaded. Try again.".into())
             }
             Err((_, problem)) => Err(format!("corrald could not serve it: {problem}")),
+        };
+        // The sink takes the page before the next is asked for: at most one page waits.
+        let more = match more {
+            Ok((bytes, more)) => save.request.output.append(&bytes).await.map(|()| more),
+            Err(problem) => Err(problem),
         };
         match more {
             Ok(true) => {

@@ -20,6 +20,8 @@ use super::{
 const ROW_LIMIT: usize = 100;
 const TEXT_BYTES: usize = 8 * 1024; // Worst-case JSON escaping still fits CONTROL.
 const BINARY_BYTES: usize = 32 * 1024;
+/// Bytes of an artifact's head read to tell text from binary before its first page.
+pub(super) const INSPECT_BYTES: u64 = 64 * 1024;
 
 pub(super) fn read(engine: &Engine, query: DetailGet) -> Result<DetailReply> {
     if let DetailRef::Terminal { id } = &query.target {
@@ -467,7 +469,8 @@ pub(super) fn artifact_page(
         {
             false
         }
-        None => is_text(&mut file)?,
+        // Only the head is inspected: a large log's first page must not wait for a read to EOF.
+        None => is_text(&mut (&mut file).take(INSPECT_BYTES), total > INSPECT_BYTES)?,
     };
     let etag = format!("{}{}", if text { 't' } else { 'b' }, fingerprint);
     let at = offset(query.page.as_deref(), &etag)? as u64;
@@ -480,12 +483,19 @@ pub(super) fn artifact_page(
         .context("seek to artifact page")?;
     let mut bytes = vec![0; take as usize];
     file.read_exact(&mut bytes).context("read artifact page")?;
-    let (encoding, content, size) = if text {
-        let size = match std::str::from_utf8(&bytes) {
-            Ok(_) => bytes.len(),
-            Err(error) if error.error_len().is_none() && at + take < total => error.valid_up_to(),
-            Err(error) => return Err(error).context("invalid: artifact text page is not UTF-8"),
-        };
+    // Past the inspected head a text stream may hold bytes that are not UTF-8: that page
+    // travels as bytes, so every page still carries the artifact's exact bytes.
+    let text_size = match std::str::from_utf8(&bytes) {
+        _ if !text => None,
+        Ok(_) => Some(bytes.len()),
+        Err(error)
+            if error.error_len().is_none() && at + take < total && error.valid_up_to() > 0 =>
+        {
+            Some(error.valid_up_to())
+        }
+        Err(_) => None,
+    };
+    let (encoding, content, size) = if let Some(size) = text_size {
         bytes.truncate(size);
         (ArtifactEncoding::Text, String::from_utf8(bytes)?, size)
     } else {
@@ -513,7 +523,9 @@ pub(super) fn artifact_page(
     reply(query, seq, etag, DetailBody::Artifact(body), next)
 }
 
-fn is_text(reader: &mut impl Read) -> Result<bool> {
+/// Whether `reader` (the content's head) is UTF-8 without NULs; `more` says content follows it,
+/// so a character cut at its end still counts.
+fn is_text(reader: &mut impl Read, more: bool) -> Result<bool> {
     let mut buf = [0_u8; 8 * 1024];
     let mut carry = 0;
     loop {
@@ -521,7 +533,7 @@ fn is_text(reader: &mut impl Read) -> Result<bool> {
             .read(&mut buf[carry..])
             .context("inspect artifact encoding")?;
         if read == 0 {
-            return Ok(carry == 0);
+            return Ok(carry == 0 || more);
         }
         let len = carry + read;
         if buf[..len].contains(&0) {
@@ -556,4 +568,81 @@ pub(super) fn media_type(title: &str) -> Option<&'static str> {
             _ => return None,
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{cell::Cell, io::Cursor, rc::Rc};
+
+    use super::*;
+
+    /// A blob that counts the bytes read from it.
+    struct Counted<'a> {
+        inner: Cursor<&'a [u8]>,
+        read: Rc<Cell<u64>>,
+    }
+
+    impl Read for Counted<'_> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let read = self.inner.read(buf)?;
+            self.read.set(self.read.get() + read as u64);
+            Ok(read)
+        }
+    }
+
+    impl Seek for Counted<'_> {
+        fn seek(&mut self, to: SeekFrom) -> std::io::Result<u64> {
+            self.inner.seek(to)
+        }
+    }
+
+    /// A large UTF-8 log must serve its head without being read to EOF, and a byte that is not
+    /// UTF-8 past the inspected head must still reach the reader exactly.
+    #[test]
+    fn a_large_log_serves_its_head_without_reading_to_eof_and_every_byte_after() {
+        let mut blob = "a line of the log\n".repeat(30_000).into_bytes();
+        blob[300_000] = 0xff;
+        let page = |token: Option<String>| {
+            let read = Rc::new(Cell::new(0));
+            let file = Counted {
+                inner: Cursor::new(blob.as_slice()),
+                read: read.clone(),
+            };
+            let query = DetailGet {
+                target: DetailRef::Artifact {
+                    reference: "T-1:1".into(),
+                },
+                etag: None,
+                page: token,
+            };
+            let source = ArtifactSource {
+                media_type: None,
+                text: None,
+                fingerprint: "f".into(),
+                bytes: blob.len() as u64,
+                task: "T-1".into(),
+                key: "1".into(),
+            };
+            let reply = artifact_page(&query, 1, file, source).unwrap();
+            (reply, read.get())
+        };
+        let (first, read) = page(None);
+        assert!(
+            read <= INSPECT_BYTES + TEXT_BYTES as u64,
+            "read {read} bytes"
+        );
+        let mut got = Vec::new();
+        let mut next = Some(first);
+        while let Some(reply) = next.take() {
+            let Some(DetailBody::Artifact(part)) = reply.body else {
+                panic!("expected an artifact page");
+            };
+            match part.encoding {
+                ArtifactEncoding::Text => got.extend(part.content.into_bytes()),
+                _ => got.extend(STANDARD.decode(part.content).unwrap()),
+            }
+            next = reply.next.map(|token| page(Some(token)).0);
+        }
+        assert_eq!(got, blob);
+    }
 }

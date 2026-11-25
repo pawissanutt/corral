@@ -349,6 +349,14 @@ fn previews_stay_bounded_and_say_when_they_are_partial() {
         );
     }
 
+    // Full size, a partial head of many short lines stays within a line budget too.
+    content_served(&mut feed, &large, &"x\n".repeat(30_000), true);
+    let shown = content(&feed, &large, Form::Desktop, true);
+    let Body::Text(text) = &shown.body else {
+        panic!("a text head draws as text");
+    };
+    assert_eq!(text.lines().count(), FULL_PARTIAL_LINES);
+
     let small = artifact("T-1", 2, ArtifactKind::Report, "notes.txt", 2);
     content_served(&mut feed, &small, "one\ntwo\n", false);
     let shown = content(&feed, &small, Form::Desktop, false);

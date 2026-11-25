@@ -17,6 +17,8 @@ use crate::model::{Form, Hue};
 pub const PREVIEW_LINES: usize = 40;
 /// Bytes of text the preview shows at most, so one very long line stays bounded too.
 pub const PREVIEW_BYTES: usize = 4 * 1024;
+/// Lines a full-size view of a partial head draws at most; a complete artifact draws whole.
+pub const FULL_PARTIAL_LINES: usize = 1000;
 
 const BINARY: &str =
     "Binary content: the app shows its facts, not its bytes. Download saves the bytes.";
@@ -290,7 +292,13 @@ pub fn content_of(
         };
     }
     let held = text.len();
-    let (text, lines_cut) = head(&text, !full);
+    // Full size draws a complete artifact whole; a partial head stays within a line budget too.
+    let limit = match (full, page.truncated) {
+        (false, _) => Some((PREVIEW_LINES, PREVIEW_BYTES)),
+        (true, true) => Some((FULL_PARTIAL_LINES, usize::MAX)),
+        (true, false) => None,
+    };
+    let (text, lines_cut) = head(&text, limit);
     let lines = |hue: fn(&str) -> Hue| {
         text.lines()
             .map(|line| Line {
@@ -305,7 +313,7 @@ pub fn content_of(
         Shape::Log => Body::Log(lines(log_hue)),
         Shape::Html | Shape::Text => Body::Text(text.clone()),
     };
-    let cut = cut_note(&lines_cut, held, page.truncated, total, full);
+    let cut = cut_note(&lines_cut, text.len(), held, page.truncated, total, full);
     Content { body, cut }
 }
 
@@ -313,23 +321,29 @@ pub fn content_of(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Cut {
     Whole,
-    Lines { total: usize },
+    Lines { shown: usize, total: usize },
     Bytes { shown: usize },
 }
 
-/// The text the view draws: full size all that is held, in the preview at most
-/// [`PREVIEW_LINES`] lines and [`PREVIEW_BYTES`] bytes, cut at a character's boundary.
-fn head(text: &str, preview: bool) -> (String, Cut) {
-    if !preview {
+/// The text the view draws: without a limit all that is held, else at most its lines and bytes,
+/// cut at a character's boundary.
+fn head(text: &str, limit: Option<(usize, usize)>) -> (String, Cut) {
+    let Some((lines, bytes)) = limit else {
         return (text.to_owned(), Cut::Whole);
-    }
-    let (lined, total) = first_lines(text, Some(PREVIEW_LINES));
-    if lined.len() > PREVIEW_BYTES {
-        let end = lined.floor_char_boundary(PREVIEW_BYTES);
+    };
+    let (lined, total) = first_lines(text, Some(lines));
+    if lined.len() > bytes {
+        let end = lined.floor_char_boundary(bytes);
         return (lined[..end].to_owned(), Cut::Bytes { shown: end });
     }
     match total {
-        Some(total) => (lined, Cut::Lines { total }),
+        Some(total) => (
+            lined,
+            Cut::Lines {
+                shown: lines,
+                total,
+            },
+        ),
         None => (lined, Cut::Whole),
     }
 }
@@ -339,6 +353,7 @@ fn head(text: &str, preview: bool) -> (String, Cut) {
 /// of the whole when the reference names the whole artifact).
 fn cut_note(
     cut: &Cut,
+    drawn: usize,
     held: usize,
     partial: bool,
     total: Option<u64>,
@@ -346,15 +361,11 @@ fn cut_note(
 ) -> Option<String> {
     let size = |bytes: u64| crate::model::session::transcript::size(bytes);
     if partial {
-        let shown = match cut {
-            Cut::Bytes { shown } => *shown,
-            Cut::Lines { .. } | Cut::Whole => held,
-        };
         let of = total
             .map(|total| format!(" of {}", size(total)))
             .unwrap_or_default();
         let lines = match cut {
-            Cut::Lines { .. } => format!("{PREVIEW_LINES} lines, "),
+            Cut::Lines { shown, .. } => format!("{shown} lines, "),
             Cut::Bytes { .. } | Cut::Whole => String::new(),
         };
         let more = if full {
@@ -364,13 +375,13 @@ fn cut_note(
         };
         return Some(format!(
             "Partial preview: the first {lines}{}{of}.{more} Download saves the whole artifact.",
-            size(shown as u64)
+            size(drawn as u64)
         ));
     }
     match cut {
         Cut::Whole => None,
-        Cut::Lines { total } => Some(format!(
-            "The first {PREVIEW_LINES} of {total} lines; open it full size for the rest."
+        Cut::Lines { shown, total } => Some(format!(
+            "The first {shown} of {total} lines; open it full size for the rest."
         )),
         Cut::Bytes { shown } => Some(format!(
             "The first {} of {}; open it full size for the rest.",

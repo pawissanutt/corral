@@ -95,36 +95,40 @@ pub(super) fn merge_pages(pages: &[DetailReply]) -> Result<Option<DetailBody>, S
     if let Some(DetailBody::Artifact(first)) = pages.first().and_then(|page| page.body.as_ref()) {
         use base64::{Engine, engine::general_purpose::STANDARD};
         let mut artifact = first.clone();
+        // A text artifact's page that is not UTF-8 arrives as bytes: then all of it is bytes.
         let mut bytes = vec![];
-        artifact.content.clear();
         for page in pages {
             let Some(DetailBody::Artifact(part)) = &page.body else {
                 return Err("Artifact page kind changed.".into());
             };
             if part.task != artifact.task
                 || part.key != artifact.key
-                || part.encoding != artifact.encoding
                 || part.media_type != artifact.media_type
             {
-                return Err("Artifact page identity or encoding changed.".into());
+                return Err("Artifact page identity changed.".into());
             }
             match part.encoding {
-                ArtifactEncoding::Text => artifact.content.push_str(&part.content),
-                ArtifactEncoding::Base64 => bytes.extend(
-                    STANDARD
-                        .decode(&part.content)
-                        .map_err(|error| format!("Invalid artifact base64: {error}"))?,
-                ),
+                ArtifactEncoding::Text => bytes.extend_from_slice(part.content.as_bytes()),
+                ArtifactEncoding::Base64 => {
+                    artifact.encoding = ArtifactEncoding::Base64;
+                    bytes.extend(
+                        STANDARD
+                            .decode(&part.content)
+                            .map_err(|error| format!("Invalid artifact base64: {error}"))?,
+                    )
+                }
                 ArtifactEncoding::Other => return Ok(Some(DetailBody::Artifact(first.clone()))),
             }
             artifact.truncated = part.truncated;
-            if bytes.len() > MAX_DETAIL_BYTES || artifact.content.len() > MAX_DETAIL_BYTES {
+            if bytes.len() > MAX_DETAIL_BYTES {
                 return Err("Artifact exceeds this device's bounded byte cache.".into());
             }
         }
-        if artifact.encoding == ArtifactEncoding::Base64 {
-            artifact.content = STANDARD.encode(bytes);
-        }
+        artifact.content = match artifact.encoding {
+            ArtifactEncoding::Text => String::from_utf8(bytes)
+                .map_err(|_| "Artifact text pages are not UTF-8.".to_owned())?,
+            _ => STANDARD.encode(bytes),
+        };
         return Ok(Some(DetailBody::Artifact(artifact)));
     }
     // A job's output is read newest page first, each further page older: the pages' words join

@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use crate::client::core::Event;
-use crate::client::download::{SaveFinish, SaveSink};
+use crate::client::download::{SaveFinish, SaveSink, SaveStep};
 
 use super::*;
 
@@ -14,9 +14,9 @@ struct Writes {
 
 struct Sink(Arc<Mutex<Writes>>);
 impl SaveSink for Sink {
-    fn append(&mut self, bytes: &[u8]) -> Result<(), String> {
+    fn append<'a>(&'a mut self, bytes: &'a [u8]) -> SaveStep<'a> {
         self.0.lock().unwrap().bytes.extend_from_slice(bytes);
-        Ok(())
+        Box::pin(std::future::ready(Ok(())))
     }
 
     fn finish(self: Box<Self>) -> SaveFinish {
@@ -32,7 +32,8 @@ impl Drop for Sink {
     }
 }
 
-/// Serves `content` as corrald does: text in UTF-8 pages, anything else in base64 pages.
+/// Serves `content` as corrald does: a text stream in UTF-8 pages, except a page that is not
+/// UTF-8, which travels as base64 as every page of a binary stream does.
 fn serve((method, params, tag): Outgoing, content: &[u8], text: bool, page: usize) -> Event {
     let request: DetailGet = decode(params.clone()).unwrap();
     let at = request
@@ -41,11 +42,17 @@ fn serve((method, params, tag): Outgoing, content: &[u8], text: bool, page: usiz
         .and_then(|token| token.rsplit_once(':'))
         .map_or(0, |(_, at)| at.parse::<usize>().unwrap());
     let mut end = (at + page).min(content.len());
-    if text {
-        while std::str::from_utf8(&content[at..end]).is_err() {
-            end -= 1;
+    let utf8 = match std::str::from_utf8(&content[at..end]) {
+        _ if !text => false,
+        Ok(_) => true,
+        Err(error)
+            if error.error_len().is_none() && end < content.len() && error.valid_up_to() > 0 =>
+        {
+            end = at + error.valid_up_to();
+            true
         }
-    }
+        Err(_) => false,
+    };
     let part = &content[at..end];
     let etag = if text { "tdigest" } else { "bdigest" };
     Event::Reply {
@@ -61,12 +68,12 @@ fn serve((method, params, tag): Outgoing, content: &[u8], text: bool, page: usiz
                 task: "T-1".into(),
                 key: "2".into(),
                 media_type: None,
-                encoding: if text {
+                encoding: if utf8 {
                     ArtifactEncoding::Text
                 } else {
                     ArtifactEncoding::Base64
                 },
-                content: if text {
+                content: if utf8 {
                     String::from_utf8(part.to_vec()).unwrap()
                 } else {
                     STANDARD.encode(part)
@@ -116,7 +123,10 @@ fn downloads_save_the_stored_bytes_of_text_and_binary_artifacts_apart_from_the_c
     app.ready = true;
     let text = "summary — café\r\nline two\n".repeat(3).into_bytes();
     let binary = (0..=255u8).chain([0, 0xff, 0x89]).collect::<Vec<_>>();
-    for (content, is_text) in [(&text, true), (&binary, false)] {
+    // A log whose head is text, with a byte that is not UTF-8 further on.
+    let mut mixed = "a long log line\n".repeat(4).into_bytes();
+    mixed[40] = 0xff;
+    for (content, is_text) in [(&text, true), (&binary, false), (&mixed, true)] {
         let digest = format!("{:x}", Sha256::digest(content));
         let (status, writes) = download(&mut app, feed, content, digest, is_text);
         assert_eq!(

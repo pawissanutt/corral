@@ -9,9 +9,13 @@ use crate::model::artifacts::download::Saving;
 /// Puts the completed file in place; answers where, as the platform names it.
 pub(crate) type SaveFinish = Pin<Box<dyn Future<Output = Result<String, String>>>>;
 
+/// One page written; the next page is asked for only once it is, so a slow disk bounds what
+/// waits in memory to one page.
+pub(crate) type SaveStep<'a> = Pin<Box<dyn Future<Output = Result<(), String>> + 'a>>;
+
 /// Where a download's bytes go. Dropped without `finish`, it leaves no file behind.
 pub(crate) trait SaveSink {
-    fn append(&mut self, bytes: &[u8]) -> Result<(), String>;
+    fn append<'a>(&'a mut self, bytes: &'a [u8]) -> SaveStep<'a>;
     fn finish(self: Box<Self>) -> SaveFinish;
 }
 
