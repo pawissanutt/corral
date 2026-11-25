@@ -10,6 +10,7 @@ pub mod detail;
 pub mod device;
 pub mod frame;
 pub mod health;
+pub mod host;
 pub mod op;
 pub mod pane;
 pub mod rows;

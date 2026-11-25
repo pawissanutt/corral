@@ -36,6 +36,7 @@ pub(crate) enum Rows {
     Assistant(Vec<AssistantRow>),
     Settings(Vec<SettingsSnapshot>),
     System(Vec<SystemRow>),
+    Host(Vec<corral_protocol::host::HostMetrics>),
 }
 
 macro_rules! each {
@@ -50,6 +51,7 @@ macro_rules! each {
             Rows::Assistant($rows) => $body,
             Rows::Settings($rows) => $body,
             Rows::System($rows) => $body,
+            Rows::Host($rows) => $body,
         }
     };
 }
@@ -73,6 +75,7 @@ impl Rows {
             Self::Assistant(rows) => rows[index].id.as_str().into(),
             Self::Settings(_) => "settings".into(),
             Self::System(rows) => rows[index].project.as_str().into(),
+            Self::Host(_) => "host".into(),
         }
     }
 

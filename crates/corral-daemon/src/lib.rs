@@ -10,6 +10,7 @@ mod conn;
 mod devices;
 mod harnesses;
 mod health;
+mod host;
 mod identity;
 mod ops;
 mod pairing;

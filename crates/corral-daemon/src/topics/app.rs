@@ -74,7 +74,9 @@ impl Subscriber {
             return Ok(Some((super::reset(self.topic, shared.epoch())?, true)));
         }
         if self.walk.is_none() {
-            let next = if self.topic == Topic::Assistant && build_rows {
+            let next = if self.topic == Topic::Host {
+                shared.host.latest(shared.root())
+            } else if self.topic == Topic::Assistant && build_rows {
                 shared.row_cache.assistant_with_builds(shared)?
             } else {
                 shared.row_cache.get(shared, self.topic)?

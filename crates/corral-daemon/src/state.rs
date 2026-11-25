@@ -26,6 +26,7 @@ pub(crate) struct Shared {
     pub(crate) latest_seq: AtomicU64,
     pub(crate) row_cache: crate::views::RowCache,
     pub(crate) system: crate::system::System,
+    pub(crate) host: Arc<crate::host::Sampler>,
     pub(crate) harness_inventory: crate::harnesses::Inventory,
     pub(crate) terminal_cache: crate::topics::TerminalCache,
     pub(crate) session_live: crate::topics::SessionLive,
@@ -77,6 +78,7 @@ impl Shared {
             latest_seq: AtomicU64::new(0),
             row_cache: Default::default(),
             system: Default::default(),
+            host: Default::default(),
             harness_inventory: Default::default(),
             terminal_cache: Default::default(),
             session_live: Default::default(),
@@ -247,10 +249,12 @@ impl Shared {
         self.lock().stop = true;
         self.changed.notify_all();
         self.system.stop();
+        self.host.stop();
     }
 
     pub(crate) fn close(&self) {
         self.system.stop();
+        self.host.stop();
         let mut state = self.lock();
         state.closed = true;
         state.stop = true;

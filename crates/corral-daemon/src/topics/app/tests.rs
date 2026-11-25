@@ -304,3 +304,34 @@ fn settings_delta_contains_parsed_config_listener_and_devices() {
     assert_eq!(listener.address, Some(address.to_string()));
     assert_eq!(listener.origins, origins);
 }
+
+#[test]
+fn host_topic_needs_its_grant_and_serves_one_shared_snapshot() {
+    let fixture = Fixture::new();
+    let mut plain = Subscriptions::new(&fixture.shared);
+    let open = SubOpen {
+        topic: Topic::Host,
+        scope: None,
+        since: None,
+    };
+    assert!(plain.open(open.clone()).is_err());
+
+    let mut subs = Subscriptions::new(&fixture.shared);
+    subs.set_capabilities(&[corral_protocol::host::HOST_V1.into()]);
+    subs.open(open).unwrap();
+    let Some(SubDelta::Host { delta }) = receive(&mut subs) else {
+        panic!("expected a host page");
+    };
+    assert_eq!(delta.rows.len(), 1);
+    assert_eq!(
+        delta.rows[0].interval_ms,
+        corral_protocol::host::HOST_INTERVAL_MS
+    );
+    let root = fixture.shared.root();
+    let (a, b) = (
+        fixture.shared.host.latest(root),
+        fixture.shared.host.latest(root),
+    );
+    assert!(Arc::ptr_eq(&a, &b), "subscribers share one sampler");
+    fixture.shared.stop();
+}

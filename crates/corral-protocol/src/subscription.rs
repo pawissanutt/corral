@@ -26,6 +26,8 @@ pub enum Topic {
     Assistant,
     Usage,
     Settings,
+    /// Daemon-host performance (`host.v1`), one row, host-wide.
+    Host,
     Session,
     Terminal,
     #[serde(other)]
@@ -98,6 +100,10 @@ pub enum SubDelta {
     Settings {
         #[serde(flatten)]
         delta: RowsDelta<SettingsSnapshot>,
+    },
+    Host {
+        #[serde(flatten)]
+        delta: RowsDelta<crate::host::HostMetrics>,
     },
     Session {
         scope: String,

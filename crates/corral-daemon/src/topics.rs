@@ -23,6 +23,7 @@ pub(crate) struct Subscriptions<'a> {
     session_state: bool,
     build_rows: bool,
     system: bool,
+    host: bool,
     system_features: SystemFeatures,
 }
 
@@ -37,6 +38,7 @@ impl<'a> Subscriptions<'a> {
             session_state: false,
             build_rows: false,
             system: false,
+            host: false,
             system_features: SystemFeatures::default(),
         }
     }
@@ -46,6 +48,7 @@ impl<'a> Subscriptions<'a> {
         self.session_state = caps.iter().any(|cap| cap == wire::app::SESSION_STATE_V1);
         self.build_rows = caps.iter().any(|cap| cap == wire::app::BUILD_V1);
         self.system = caps.iter().any(|cap| cap == wire::app::SYSTEM_V1);
+        self.host = caps.iter().any(|cap| cap == wire::host::HOST_V1);
         self.system_features = SystemFeatures {
             runtime: self.system && caps.iter().any(|cap| cap == wire::app::SYSTEM_RUNTIME_V1),
             entries: self.system && caps.iter().any(|cap| cap == wire::app::SYSTEM_ENTRIES_V1),
@@ -54,6 +57,9 @@ impl<'a> Subscriptions<'a> {
         };
         if !self.system {
             self.rows.retain(|sub| sub.topic != Topic::System);
+        }
+        if !self.host {
+            self.rows.retain(|sub| sub.topic != Topic::Host);
         }
     }
 
@@ -77,6 +83,7 @@ impl<'a> Subscriptions<'a> {
             open.topic != Topic::System || self.system,
             "system.v1 required"
         );
+        ensure!(open.topic != Topic::Host || self.host, "host.v1 required");
         ensure!(
             matches!(
                 open.topic,
@@ -89,6 +96,7 @@ impl<'a> Subscriptions<'a> {
                     | Topic::Assistant
                     | Topic::Usage
                     | Topic::Settings
+                    | Topic::Host
             ),
             "unsupported topic"
         );

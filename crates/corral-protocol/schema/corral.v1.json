@@ -4313,6 +4313,34 @@
         ],
         "type": "object"
       },
+      "HostCoverage": {
+        "description": "What a summed rate covers and why.",
+        "properties": {
+          "rule": {
+            "description": "Which sources count, in one sentence.",
+            "type": "string"
+          },
+          "sources": {
+            "description": "Interface or device names summed in the newest sample.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "unavailable": {
+            "description": "Why the rates are absent when the host cannot report them.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "sources",
+          "rule"
+        ],
+        "type": "object"
+      },
       "HostEvent": {
         "properties": {
           "at": {
@@ -4336,6 +4364,110 @@
           "at",
           "kind",
           "text"
+        ],
+        "type": "object"
+      },
+      "HostFilesystem": {
+        "description": "Capacity of the filesystem the workspace lives on (not I/O).",
+        "properties": {
+          "free": {
+            "description": "Available to unprivileged users.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "mount": {
+            "description": "Where that filesystem is mounted, absent when unknown.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "description": "The daemon's workspace root, the path sampled.",
+            "type": "string"
+          },
+          "total": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "used": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "path",
+          "total",
+          "used",
+          "free"
+        ],
+        "type": "object"
+      },
+      "HostMetrics": {
+        "description": "The one row of `Topic::Host`: the newest samples and what they cover.",
+        "properties": {
+          "cpus": {
+            "description": "Logical CPUs, absent when unknown.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "disk": {
+            "$ref": "#/components/schemas/HostCoverage",
+            "description": "Which block devices the disk I/O rates sum."
+          },
+          "filesystem": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HostFilesystem"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The filesystem holding the daemon's workspace root, absent when it cannot be read."
+          },
+          "hostname": {
+            "description": "The daemon host's name, absent when the system does not report one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "interval_ms": {
+            "description": "Milliseconds between samples.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "network": {
+            "$ref": "#/components/schemas/HostCoverage",
+            "description": "Which interfaces the network rates sum."
+          },
+          "os": {
+            "description": "The daemon host's operating system (`linux`, `macos`, ...).",
+            "type": "string"
+          },
+          "samples": {
+            "description": "Oldest first, at most `HOST_HISTORY_MAX`; empty before the first sample.",
+            "items": {
+              "$ref": "#/components/schemas/HostSample"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "os",
+          "interval_ms",
+          "samples",
+          "network",
+          "disk"
         ],
         "type": "object"
       },
@@ -4373,6 +4505,77 @@
           "other"
         ],
         "type": "string"
+      },
+      "HostSample": {
+        "description": "One sample. Rates are bytes per second over the time since the previous sample.",
+        "properties": {
+          "at_ms": {
+            "description": "Daemon-host wall clock, milliseconds since the Unix epoch.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "cpu_percent": {
+            "description": "Busy share of all CPUs since the previous sample, 0 to 100.",
+            "format": "float",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "disk_read_bps": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "disk_write_bps": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "memory_total": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "memory_used": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "net_rx_bps": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "net_tx_bps": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "at_ms"
+        ],
+        "type": "object"
       },
       "InputDisposition": {
         "enum": [
@@ -9930,6 +10133,47 @@
             "type": "object"
           },
           {
+            "description": "One bounded page in flight; `left` contains removed row IDs.",
+            "properties": {
+              "cursor": {
+                "$ref": "#/components/schemas/BoardCursor"
+              },
+              "epoch": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "left": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "more": {
+                "type": "boolean"
+              },
+              "rows": {
+                "items": {
+                  "$ref": "#/components/schemas/HostMetrics"
+                },
+                "type": "array"
+              },
+              "topic": {
+                "const": "host",
+                "type": "string"
+              }
+            },
+            "required": [
+              "topic",
+              "epoch",
+              "rows",
+              "left",
+              "cursor",
+              "more"
+            ],
+            "type": "object"
+          },
+          {
             "properties": {
               "cursor": {
                 "$ref": "#/components/schemas/BoardCursor"
@@ -10471,6 +10715,11 @@
           {
             "const": "assistant",
             "description": "Shared rows for clients granted `assistant.v1` or `build.v1`.",
+            "type": "string"
+          },
+          {
+            "const": "host",
+            "description": "Daemon-host performance (`host.v1`), one row, host-wide.",
             "type": "string"
           }
         ]
@@ -11418,7 +11667,8 @@
             7,
             8,
             9,
-            10
+            10,
+            11
           ]
         },
         {
@@ -11440,7 +11690,8 @@
             7,
             8,
             9,
-            10
+            10,
+            11
           ]
         },
         {
@@ -11463,7 +11714,7 @@
             "type": "array"
           },
           "x-required-in": [
-            9
+            10
           ]
         },
         {
@@ -11525,7 +11776,8 @@
             5,
             6,
             7,
-            8
+            8,
+            9
           ]
         },
         {
@@ -11545,7 +11797,8 @@
             7,
             8,
             9,
-            10
+            10,
+            11
           ]
         },
         {
@@ -11607,6 +11860,12 @@
                   "$ref": "#/components/schemas/SettingsSnapshot"
                 },
                 "type": "array"
+              },
+              {
+                "items": {
+                  "$ref": "#/components/schemas/HostMetrics"
+                },
+                "type": "array"
               }
             ]
           },
@@ -11619,7 +11878,8 @@
             5,
             6,
             7,
-            8
+            8,
+            9
           ]
         },
         {
@@ -11629,8 +11889,8 @@
             "type": "string"
           },
           "x-required-in": [
-            9,
-            10
+            10,
+            11
           ]
         },
         {
@@ -11702,6 +11962,10 @@
               },
               {
                 "const": "settings",
+                "type": "string"
+              },
+              {
+                "const": "host",
                 "type": "string"
               },
               {

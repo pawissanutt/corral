@@ -58,6 +58,7 @@ pub(crate) fn welcome(shared: &Shared, hello: wire::Hello) -> wire::Welcome {
                         | app::SESSION_STATE_V1
                         | app::BUILD_V1
                         | app::SYSTEM_V1
+                        | wire::host::HOST_V1
                         | wire::detail::STREAM_TERMINAL_V1
                         | wire::REVIEW_V1
                         | wire::TIMELINE_V1
