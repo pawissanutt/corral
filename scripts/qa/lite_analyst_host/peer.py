@@ -109,7 +109,10 @@ class LitePeer:
             step = b.get("step") if isinstance(b, dict) else None
             need(type(step) is int and 1 <= step <= len(approval.reserves), "work_settle_step")
             reserve, permit = approval.reserves[step - 1]
-            outcome = "indeterminate" if approval.scenario in ("forbidden", "reconnect", "crash") else "completed"
+            indeterminate = approval.scenario in ("forbidden", "reconnect", "crash") or (
+                approval.scenario == "repeated_id" and step == 2
+            )
+            outcome = "indeterminate" if indeterminate else "completed"
             need(b == {"v": 1, "kind": op, "run_id": approval.run, "generation": 1, "step": step,
                        "permit_id": permit["permit_id"], "reserve_digest": permit["reserve_digest"],
                        "outcome": outcome, "charged_microusd": 760 if outcome == "completed" else 1000}
@@ -222,11 +225,13 @@ class LitePeer:
     def effect(self, channel, tool, args, invocation):
         a = self.approval
         samples = self.fixture.samples
-        expected = ["search_materials", "read_evidence", "calculate_metric"]
-        if a.scenario == "pending":
-            expected.append("read_result")
+        expected = {
+            "happy": ["search_materials", "read_evidence", "calculate_metric"],
+            "pending": ["search_materials", "read_evidence", "calculate_metric", "read_result"],
+            "repeated_id": ["search_materials"],
+        }.get(a.scenario, [])
         index = len(a.broker_calls)
-        need(a.scenario in ("happy", "pending") and index < len(expected) and tool == expected[index]
+        need(index < len(expected) and tool == expected[index]
              and channel == ("host_poll" if tool == "read_result" else "evidence"), "broker_forbidden_call")
         need(invocation not in {prior[1] for prior in a.broker_calls}, "broker_repeated_invocation")
         a.broker_calls.append((tool, invocation))

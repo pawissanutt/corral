@@ -39,6 +39,7 @@ pub(super) struct Broker {
     binding: BindingRecord,
     pipes: Option<Pipes>,
     next_id: u64,
+    startup_step: usize,
     budget: Option<Budget>,
 }
 
@@ -149,31 +150,50 @@ impl Broker {
             "fixture shim binding acknowledgement mismatch"
         );
 
-        let mut lines = Lines::default();
-        negotiate_shim(
-            &mut scope,
-            stdio.as_fd(),
-            &mut lines,
-            &[bootstrap.as_fd(), host_poll.as_fd(), control.as_fd()],
-        )?;
         let pipes = Pipes {
             stdio,
             control,
             host_poll,
-            lines,
+            lines: Lines::default(),
         };
         io::quiet(&pipes.idle())?;
         Ok(Self {
             binding,
             pipes: Some(pipes),
             next_id: 3,
+            startup_step: 0,
             budget: None,
         })
+    }
+
+    /// Relay actual Pi-initiated JSON-RPC startup to the distinct stdio payload.
+    /// No invocation identity or data channel is visible on this path.
+    pub(super) fn negotiate_stdio(
+        &mut self,
+        request: &Value,
+        deadline: Instant,
+        pump: &mut dyn FnMut() -> Result<()>,
+    ) -> Result<Option<Value>> {
+        let mut pipes = self.pipes.take().context("fixture broker is closed")?;
+        let mut scope = Scope { deadline, pump };
+        let reply = relay_shim_phase(
+            &mut scope,
+            pipes.stdio.as_fd(),
+            &mut pipes.lines,
+            &[pipes.host_poll.as_fd(), pipes.control.as_fd()],
+            self.startup_step,
+            request,
+        )?;
+        io::quiet(&pipes.idle())?;
+        self.startup_step += 1;
+        self.pipes = Some(pipes);
+        Ok(reply)
     }
 
     pub(super) fn set_limits(&mut self, limits: &wire::Limits) -> Result<()> {
         ensure!(
             self.budget.is_none()
+                && self.startup_step == 3
                 && self.pipes.is_some()
                 && (1..=MAX_CALLS).contains(&limits.calls)
                 && (1..=MAX_REPLY).contains(&limits.response_bytes)
@@ -203,6 +223,7 @@ impl Broker {
         deadline: Instant,
         pump: &mut dyn FnMut() -> Result<()>,
     ) -> Result<()> {
+        ensure!(self.budget.is_some(), "fixture broker startup incomplete");
         self.check_live()?;
         let pipes = self.pipes.as_ref().context("fixture broker is closed")?;
         let probe = Probe::new()?;
@@ -332,22 +353,36 @@ fn negotiate_packet(
     protocol::check_listing(scope.recv_packet(fd, idle)?, host_poll)
 }
 
-fn negotiate_shim(
+fn relay_shim_phase(
     scope: &mut Scope<'_>,
     fd: BorrowedFd<'_>,
     lines: &mut Lines,
     idle: &[BorrowedFd<'_>],
-) -> Result<()> {
-    scope.send_line(fd, &protocol::initialize(), idle)?;
-    ensure!(
-        lines.read(scope, fd, idle)? == protocol::server_info(protocol::SHIM_SERVER),
-        "fixture shim MCP initialization mismatch"
-    );
+    step: usize,
+    request: &Value,
+) -> Result<Option<Value>> {
+    let expected = match step {
+        0 => protocol::initialize(),
+        1 => protocol::initialized(),
+        2 => protocol::list(),
+        _ => anyhow::bail!("unexpected fixture shim negotiation"),
+    };
+    ensure!(*request == expected, "fixture Pi MCP negotiation mismatch");
+    scope.send_line(fd, request, idle)?;
+    if step == 1 {
+        return Ok(None);
+    }
+    let reply = lines.read(scope, fd, idle)?;
+    if step == 0 {
+        ensure!(
+            reply == protocol::server_info(protocol::SHIM_SERVER),
+            "fixture shim MCP initialization mismatch"
+        );
+    } else {
+        protocol::check_listing(reply.clone(), false)?;
+    }
     lines.unbuffered()?;
-    scope.send_line(fd, &protocol::initialized(), idle)?;
-    scope.send_line(fd, &protocol::list(), idle)?;
-    protocol::check_listing(lines.read(scope, fd, idle)?, false)?;
-    lines.unbuffered()
+    Ok(Some(reply))
 }
 
 #[cfg(test)]

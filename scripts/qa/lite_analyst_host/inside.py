@@ -146,7 +146,7 @@ def scenario(root, name, fixture, manifest_sha, lock_sha):
              and snapshot["acked"] is False, "terminal_without_offer")
         assert_no_workers(daemon.process.pid)
         need(len(script.digests) == len(approval.reserves) == script.available_turns, "provider_turn_count")
-        expected_calls = {"happy": 3, "pending": 4}.get(name, 0)
+        expected_calls = {"happy": 3, "pending": 4, "repeated_id": 1}.get(name, 0)
         need(approval.binds == approval.attachments == 1 and len(approval.broker_calls) == expected_calls,
              "broker_call_count")
         need(script.derived == (name in ("happy", "pending")), "finish_was_not_derived")

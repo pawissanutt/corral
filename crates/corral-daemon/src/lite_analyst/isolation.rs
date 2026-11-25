@@ -1,10 +1,18 @@
 //! Linux fixture process and network boundary. The trusted runner retains the staged
 //! runtime and outer namespaces. Each payload sees only its own executable and ABI.
 use anyhow::{Context, Result, ensure};
-use rustix::fs::{MemfdFlags, SealFlags, fcntl_add_seals, memfd_create};
+use rustix::{
+    event::{PollFd, PollFlags, Timespec, poll},
+    fs::{MemfdFlags, OFlags, SealFlags, fcntl_add_seals, fcntl_setfl, memfd_create},
+    io::Errno,
+    net::{SendFlags, send},
+    pipe::{PipeFlags, pipe_with},
+    process::{Pid, PidfdFlags, Signal, pidfd_open, pidfd_send_signal},
+};
+use serde::Deserialize;
 use std::{
     fs::{self, File},
-    io::{Seek, Write},
+    io::{ErrorKind, Read, Seek, Write},
     os::{
         fd::{AsRawFd, OwnedFd},
         unix::{fs::MetadataExt, net::UnixStream, process::CommandExt},
@@ -18,9 +26,11 @@ use std::{
 const BWRAP: &str = "/usr/bin/bwrap";
 const SCRATCH: &str = "/scratch";
 const PACKAGE: &str = "/fixture/corral";
+const INFO_MAX: usize = 4096;
+const STEP: Duration = Duration::from_millis(20);
+const FORCE_GRACE: Duration = Duration::from_secs(1);
 
 pub(super) fn protect_supervisor() -> Result<()> {
-    use std::io::Read;
     let mut interfaces = String::new();
     File::open("/proc/net/dev")
         .context("open fixture interfaces")?
@@ -81,15 +91,33 @@ impl Payload {
     }
 }
 
-/// Owns only the waitable bwrap child created here, never a looked-up PID. A
-/// normal wrapper exit has reaped its private namespace init. A forced or
-/// otherwise unproven exit cannot release the durable slot.
-pub(super) struct Sandbox(Child);
+/// The wrapper can report the payload's status while namespace PID 1 still
+/// has descendants. Keep its own waitable Child and a separate, verified pidfd
+/// for PID 1; neither identity alone proves teardown.
+pub(super) struct Sandbox {
+    wrapper: Child,
+    init: Option<OwnedFd>,
+    gate: Option<UnixStream>,
+    info: InfoPipe,
+}
 
 impl Sandbox {
     pub(super) fn spawn(payload: Payload) -> Result<(Self, UnixStream)> {
         let filter = payload_filter()?;
-        let filter_fd = filter.as_raw_fd();
+        let (info_reader, info_writer) =
+            pipe_with(PipeFlags::CLOEXEC).context("create bwrap info pipe")?;
+        fcntl_setfl(&info_reader, OFlags::NONBLOCK).context("configure bwrap info reader")?;
+        let (gate, gate_reader) = UnixStream::pair().context("create bwrap startup gate")?;
+        // bwrap treats EOF on --block-fd as release. Pass a duplicate of our
+        // peer endpoint as --sync-fd so namespace init itself prevents EOF if
+        // we drop the gate or the wrapper dies. Without --as-pid-1, bwrap
+        // closes the sync fd in the payload before exec.
+        let inherited = [
+            filter.as_raw_fd(),
+            info_writer.as_raw_fd(),
+            gate_reader.as_raw_fd(),
+            gate.as_raw_fd(),
+        ];
         let (host, child) = UnixStream::pair().context("create fixture stdio pair")?;
         let child_in: OwnedFd = child.try_clone().context("clone fixture stdin")?.into();
         let child_out: OwnedFd = child.into();
@@ -151,7 +179,13 @@ impl Sandbox {
                 "--chdir",
                 SCRATCH,
                 "--seccomp",
-                &filter_fd.to_string(),
+                &inherited[0].to_string(),
+                "--info-fd",
+                &inherited[1].to_string(),
+                "--block-fd",
+                &inherited[2].to_string(),
+                "--sync-fd",
+                &inherited[3].to_string(),
             ]);
         if matches!(payload, Payload::Pi) {
             for (key, value) in [
@@ -179,7 +213,9 @@ impl Sandbox {
                     u32::MAX,
                     libc::CLOSE_RANGE_CLOEXEC,
                 ) != 0
-                    || libc::fcntl(filter_fd, libc::F_SETFD, 0) != 0
+                    || inherited
+                        .into_iter()
+                        .any(|fd| libc::fcntl(fd, libc::F_SETFD, 0) != 0)
                     || libc::setrlimit(
                         libc::RLIMIT_CORE,
                         &libc::rlimit {
@@ -193,45 +229,220 @@ impl Sandbox {
                 Ok(())
             });
         }
-        let running = cmd.spawn().context("launch isolated fixture payload")?;
-        Ok((Self(running), host))
+        let wrapper = cmd.spawn().context("launch isolated fixture payload")?;
+        Ok((
+            Self {
+                wrapper,
+                init: None,
+                gate: Some(gate),
+                info: InfoPipe {
+                    reader: info_reader.into(),
+                    raw: Vec::new(),
+                },
+            },
+            host,
+        ))
     }
 
-    /// Caller has first closed the supervised stdio/control endpoint. A hung
-    /// wrapper is killed by retained child identity; we still quarantine the
-    /// slot because a killed wrapper alone is not proof of descendant teardown.
+    /// Store this Sandbox before calling; failure still needs `reap`. Do not
+    /// use the returned stdio until the init identity is retained and released.
+    pub(super) fn confirm_identity(
+        &mut self,
+        deadline: Instant,
+        pump: &mut dyn FnMut() -> Result<()>,
+    ) -> Result<()> {
+        let gate = self
+            .gate
+            .as_ref()
+            .context("fixture gate already released")?;
+        self.init = Some(retain_init(
+            &mut self.wrapper,
+            &mut self.info,
+            deadline,
+            pump,
+        )?);
+        pump()?;
+        ensure!(
+            Instant::now() < deadline,
+            "fixture startup deadline elapsed"
+        );
+        ensure!(
+            self.wrapper
+                .try_wait()
+                .context("observe fixture wrapper")?
+                .is_none(),
+            "fixture wrapper exited before startup release"
+        );
+        ensure!(
+            send(gate, b"x", SendFlags::DONTWAIT | SendFlags::NOSIGNAL)
+                .context("release fixture startup gate")?
+                == 1,
+            "fixture startup gate not released"
+        );
+        self.gate = None;
+        Ok(())
+    }
+
+    /// Caller has first closed the supervised stdio/control endpoint. An init
+    /// pidfd becomes readable only once Linux has finished exiting PID 1,
+    /// which includes killing/reaping any remaining namespace descendants.
     pub(super) fn reap(&mut self, deadline: Instant) -> Result<()> {
-        use std::os::unix::process::ExitStatusExt;
+        if self.init.is_none() && Instant::now() < deadline {
+            // Cancellation may have interrupted the info read. Try once more
+            // for cleanup only: never release the gate from this path.
+            self.init =
+                retain_init(&mut self.wrapper, &mut self.info, deadline, &mut || Ok(())).ok();
+        }
+        if self.init.is_some() && self.wait_teardown(deadline) {
+            return Ok(());
+        }
+        if let Some(init) = &self.init {
+            let _ = pidfd_send_signal(init, Signal::KILL);
+        }
+        let _ = self.wrapper.kill();
+        ensure!(
+            self.wait_teardown(Instant::now() + FORCE_GRACE),
+            "fixture namespace and wrapper teardown unproved"
+        );
+        Ok(())
+    }
+
+    fn wait_teardown(&mut self, deadline: Instant) -> bool {
         loop {
-            if let Some(status) = self.0.try_wait().context("observe fixture wrapper")? {
-                // bubblewrap can mirror the sandbox exit status. A signal that
-                // directly removed the wrapper cannot be distinguished here.
-                ensure!(
-                    status.signal().is_none(),
-                    "fixture wrapper teardown unproved"
-                );
-                return Ok(());
+            let wrapper_gone = self.wrapper.try_wait().is_ok_and(|status| status.is_some());
+            if wrapper_gone {
+                match self.init.as_ref().map(pidfd_exited) {
+                    Some(Ok(true)) => return true,
+                    None => return false,
+                    _ => {}
+                }
             }
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
-                self.0.kill().context("kill retained fixture wrapper")?;
-                // Reap the wrapper if the kernel returns it, but do not promote
-                // the forced wrapper exit into proof that its init was reaped.
-                let force_deadline = Instant::now() + Duration::from_secs(1);
-                while Instant::now() < force_deadline
-                    && self
-                        .0
-                        .try_wait()
-                        .context("reap killed fixture wrapper")?
-                        .is_none()
-                {
-                    thread::sleep(Duration::from_millis(20));
-                }
-                anyhow::bail!("fixture wrapper teardown unproved");
+                return false;
             }
-            thread::sleep(remaining.min(Duration::from_millis(20)));
+            thread::sleep(remaining.min(STEP));
         }
     }
+}
+
+struct InfoPipe {
+    reader: File,
+    raw: Vec<u8>,
+}
+
+impl InfoPipe {
+    fn read(
+        &mut self,
+        deadline: Instant,
+        pump: &mut dyn FnMut() -> Result<()>,
+    ) -> Result<BwrapInfo> {
+        let mut chunk = [0; 1024];
+        loop {
+            pump()?;
+            let remaining = deadline.saturating_duration_since(Instant::now()).min(STEP);
+            ensure!(!remaining.is_zero(), "fixture startup deadline elapsed");
+            match self.reader.read(&mut chunk) {
+                Ok(0) => return serde_json::from_slice(&self.raw).context("decode bwrap info"),
+                Ok(n) => {
+                    self.raw.extend_from_slice(&chunk[..n]);
+                    ensure!(self.raw.len() <= INFO_MAX, "bwrap info too large");
+                }
+                Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+                Err(e) if e.kind() == ErrorKind::WouldBlock => {
+                    let mut fds = [PollFd::new(&self.reader, PollFlags::IN)];
+                    let timeout = Timespec {
+                        tv_sec: 0,
+                        tv_nsec: remaining.subsec_nanos().into(),
+                    };
+                    match poll(&mut fds, Some(&timeout)) {
+                        Ok(_) | Err(Errno::INTR) => {}
+                        Err(e) => return Err(e).context("poll bwrap info"),
+                    }
+                }
+                Err(e) => return Err(e).context("read bwrap info"),
+            }
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "kebab-case")]
+struct BwrapInfo {
+    child_pid: i32,
+    pid_namespace: u64,
+    mnt_namespace: u64,
+    net_namespace: u64,
+}
+
+fn retain_init(
+    wrapper: &mut Child,
+    info: &mut InfoPipe,
+    deadline: Instant,
+    pump: &mut dyn FnMut() -> Result<()>,
+) -> Result<OwnedFd> {
+    let info = info.read(deadline, pump)?;
+    ensure!(
+        wrapper
+            .try_wait()
+            .context("observe fixture wrapper")?
+            .is_none(),
+        "fixture wrapper exited before init verification"
+    );
+    let parent = wrapper.id();
+    let child = info.child_pid;
+    ensure!(
+        child > 1 && child as u32 != parent,
+        "invalid bwrap child PID"
+    );
+    let pidfd = pidfd_open(
+        Pid::from_raw(child).context("missing bwrap child PID")?,
+        PidfdFlags::empty(),
+    )
+    .context("open fixture namespace init pidfd")?;
+    let proc = format!("/proc/{child}");
+    let status = fs::read_to_string(format!("{proc}/status")).context("read bwrap init status")?;
+    ensure!(
+        is_direct_init(&status, parent, child),
+        "bwrap child is not its direct namespace init"
+    );
+    for (ns, reported) in [
+        ("pid", info.pid_namespace),
+        ("mnt", info.mnt_namespace),
+        ("net", info.net_namespace),
+    ] {
+        let actual = fs::metadata(format!("{proc}/ns/{ns}")).context("inspect bwrap namespace")?;
+        let outer =
+            fs::metadata(format!("/proc/self/ns/{ns}")).context("inspect outer namespace")?;
+        ensure!(
+            actual.ino() == reported && reported != outer.ino(),
+            "bwrap namespace not verified private"
+        );
+    }
+    // A live pidfd after the procfs checks excludes PID reuse between opening
+    // it and inspecting /proc. The un-reaped wrapper PID cannot be reused, and
+    // only its trusted, still-gated clone can be its direct child and PID 1.
+    ensure!(
+        !pidfd_exited(&pidfd)?,
+        "fixture init exited during verification"
+    );
+    Ok(pidfd)
+}
+
+fn is_direct_init(status: &str, wrapper: u32, child: i32) -> bool {
+    let field = |key| status.lines().find_map(|line| line.strip_prefix(key));
+    field("PPid:").and_then(|value| value.trim().parse::<u32>().ok()) == Some(wrapper)
+        && field("NSpid:").is_some_and(|ids| {
+            ids.split_ascii_whitespace()
+                .map(str::parse::<i32>)
+                .eq([Ok(child), Ok(1)])
+        })
+}
+
+fn pidfd_exited(pidfd: &OwnedFd) -> Result<bool> {
+    let mut fds = [PollFd::new(pidfd, PollFlags::IN)];
+    poll(&mut fds, Some(&Timespec::default())).context("poll fixture init pidfd")?;
+    Ok(fds[0].revents().contains(PollFlags::IN))
 }
 
 fn payload_filter() -> Result<File> {

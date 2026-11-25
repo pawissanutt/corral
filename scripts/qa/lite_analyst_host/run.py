@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from contextlib import ExitStack
 from pathlib import Path
 
 from protocol import OPT_IN, SCENARIOS, Failure, load, need, wire
@@ -40,75 +41,112 @@ def bwrap_info(fd, process):
     if not raw:
         raise IsolationUnavailable("outer_bwrap_namespace_unavailable")
     info = load(bytes(raw))
-    for ns in ("pid", "mnt", "net"):
-        if info.get(f"{ns}-namespace") in (None, os.stat(f"/proc/self/ns/{ns}").st_ino):
-            raise IsolationUnavailable("outer_bwrap_namespace_not_private")
+    need(type(info) is dict, "outer_bwrap_info_shape")
     pid = info.get("child-pid")
-    need(type(pid) is int and pid > 1 and pid != process.pid, "outer_child_identity")
+    need(type(pid) is int and pid > 1 and pid != process.pid and process.poll() is None,
+         "outer_child_identity")
+    pidfd = os.pidfd_open(pid)
     try:
-        return os.pidfd_open(pid)
-    except ProcessLookupError:
-        # Fast startup failure can destroy the entire private PID namespace
-        # before the reviewer acquires the pidfd; no work can survive its init.
-        if process.poll() is None:
-            raise TeardownUnconfirmed("outer_child_identity_lost") from None
-        return None
+        proc = Path(f"/proc/{pid}")
+        status = dict(line.split(":", 1) for line in (proc / "status").read_text().splitlines())
+        need(status.get("PPid", "").split() == [str(process.pid)] and
+             status.get("NSpid", "").split() == [str(pid), "1"], "outer_child_not_namespace_init")
+        for ns in ("pid", "mnt", "net"):
+            reported = info.get(f"{ns}-namespace")
+            need(type(reported) is int and reported == (proc / "ns" / ns).stat().st_ino and
+                 reported != Path(f"/proc/self/ns/{ns}").stat().st_ino, "outer_namespace_not_verified")
+        # If the PID were replaced while reading procfs, the pinned task would
+        # already be exited. The waitable wrapper was not reaped during verification.
+        need(not select.select([pidfd], [], [], 0)[0], "outer_child_exited_during_verification")
+        return pidfd
+    except BaseException:
+        os.close(pidfd)
+        raise
 
 
 def stop_outer(process, pidfd):
+    until = time.monotonic() + 5
+    if process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=max(0, until - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            pass
+    if (process.poll() is not None and pidfd is not None and
+            select.select([pidfd], [], [], max(0, until - time.monotonic()))[0]):
+        return
+    if pidfd is not None:
+        try:
+            signal.pidfd_send_signal(pidfd, signal.SIGKILL)
+        except OSError:
+            pass  # A subsequent exit observation, not the signal result, is the proof.
+    if process.poll() is None:
+        process.kill()
+    until = time.monotonic() + 3
     try:
-        if process.poll() is None:
-            process.terminate()
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=3)
-        if pidfd is not None and not select.select([pidfd], [], [], 3)[0]:
-            raise TeardownUnconfirmed("outer_namespace_still_alive")
+        process.wait(timeout=max(0, until - time.monotonic()))
     except subprocess.TimeoutExpired:
         raise TeardownUnconfirmed("outer_wrapper_still_alive") from None
-    finally:
-        if pidfd is not None:
-            os.close(pidfd)
+    if pidfd is None:
+        raise TeardownUnconfirmed("outer_child_identity_unconfirmed")
+    if not select.select([pidfd], [], [], max(0, until - time.monotonic()))[0]:
+        raise TeardownUnconfirmed("outer_namespace_still_alive")
 
 
-def run_sandbox(root, lanes):
-    fd, writer = os.pipe()
-    try:
-        process = subprocess.Popen([str(root / "bwrap"), "--unshare-all", "--new-session", "--die-with-parent",
-                                    "--clearenv", "--cap-drop", "ALL", "--proc", "/proc", "--dev", "/dev",
-                                    "--tmpfs", "/tmp", "--ro-bind", "/usr", "/usr", "--symlink", "usr/lib", "/lib",
-                                    "--symlink", "usr/lib64", "/lib64",
-                                    "--ro-bind", str(root / "bwrap"), "/usr/bin/bwrap",
-                                    "--ro-bind", str(root / "qa"), "/qa",
-                                    "--ro-bind", str(root / "corral"), "/fixture/corral",
-                                    "--ro-bind", str(root / "meta"), "/fixture/meta",
-                                    "--bind", str(root / "state"), "/state",
-                                    "--bind", str(root / "scratch"), "/scratch",
-                                    "--info-fd", str(writer), "--chdir", "/scratch", "--", "/usr/bin/python3",
-                                    "-EsB", "/qa/inside.py", "--inside"],
-                                   env=CLEAN_ENV, cwd=root, pass_fds=(writer,), stdin=subprocess.DEVNULL,
-                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    except BaseException:
-        os.close(fd)
-        raise
-    finally:
-        os.close(writer)
-    pidfd = None
-    try:
-        pidfd = bwrap_info(fd, process)
-        raw, _ = process.communicate(timeout=35 + 50 * lanes)
-        need(0 < len(raw) <= 16384, "outer_controller_receipt")
-        result = load(raw)
-        need(type(result) is dict and result.get("status") in ("pass", "fail") and
-             (result["status"] == "pass") == (process.returncode == 0), "outer_controller_status")
-        return process.returncode if process.returncode in (0, 69, 70, 74) else 70, result
-    finally:
-        os.close(fd)
-        stop_outer(process, pidfd)
-        if process.stdout is not None:
-            process.stdout.close()
+def run_sandbox(root, lanes, receipt):
+    with ExitStack() as host, ExitStack() as inherited:
+        fd, writer = os.pipe()
+        host.callback(os.close, fd)
+        inherited.callback(os.close, writer)
+        gate, release = os.pipe()
+        inherited.callback(os.close, gate)
+        host.callback(os.close, release)
+        # Set the fail-closed default before Popen, including interruptions
+        # during spawn or cleanup. Only both retained exit proofs can clear it.
+        receipt["outer_teardown"] = "unconfirmed"
+        try:
+            process = subprocess.Popen([str(root / "bwrap"), "--unshare-all", "--new-session", "--die-with-parent",
+                                        "--clearenv", "--cap-drop", "ALL", "--proc", "/proc", "--dev", "/dev",
+                                        "--tmpfs", "/tmp", "--ro-bind", "/usr", "/usr", "--symlink", "usr/lib", "/lib",
+                                        "--symlink", "usr/lib64", "/lib64",
+                                        "--ro-bind", str(root / "bwrap"), "/usr/bin/bwrap",
+                                        "--ro-bind", str(root / "qa"), "/qa",
+                                        "--ro-bind", str(root / "corral"), "/fixture/corral",
+                                        "--ro-bind", str(root / "meta"), "/fixture/meta",
+                                        "--bind", str(root / "state"), "/state",
+                                        "--bind", str(root / "scratch"), "/scratch",
+                                        "--info-fd", str(writer), "--block-fd", str(gate), "--sync-fd", str(release),
+                                        "--chdir", "/scratch", "--", "/usr/bin/python3", "-EsB", "/qa/inside.py", "--inside"],
+                                       env=CLEAN_ENV, cwd=root, pass_fds=(writer, gate, release), stdin=subprocess.DEVNULL,
+                                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        except OSError:
+            # Popen itself reported failure before wrapper exec.
+            del receipt["outer_teardown"]
+            raise
+        pidfd = None
+        try:
+            inherited.close()
+            pidfd = bwrap_info(fd, process)
+            need(process.poll() is None, "outer_wrapper_exited_before_release")
+            # bwrap treats block-fd EOF as release. The sync-fd copy kept by
+            # namespace init prevents EOF even if this QA runner disappears;
+            # bwrap closes that copy in the actual controller before exec.
+            need(os.write(release, b"x") == 1, "outer_gate_release")
+            raw, _ = process.communicate(timeout=35 + 50 * lanes)
+            need(0 < len(raw) <= 16384, "outer_controller_receipt")
+            result = load(raw)
+            need(type(result) is dict and result.get("status") in ("pass", "fail") and
+                 (result["status"] == "pass") == (process.returncode == 0), "outer_controller_status")
+            return process.returncode if process.returncode in (0, 69, 70, 74) else 70, result
+        finally:
+            try:
+                stop_outer(process, pidfd)
+                receipt["outer_teardown"] = "confirmed"
+            finally:
+                if pidfd is not None:
+                    os.close(pidfd)
+                if process.stdout is not None:
+                    process.stdout.close()
 
 
 def sigterm(_sig, _frame):
@@ -140,7 +178,8 @@ def main():
         need(len(set(selected)) == len(selected), "duplicate_scenario")
         if platform.system() != "Linux" or platform.machine() != "x86_64" or os.getuid() == 0 or os.geteuid() == 0:
             raise IsolationUnavailable("rootless_linux_x86_64_required")
-        if BWRAP.is_symlink() or not BWRAP.is_file() or not Path(LOADER).is_file() or not hasattr(os, "pidfd_open"):
+        if (BWRAP.is_symlink() or not BWRAP.is_file() or not Path(LOADER).is_file() or
+                not hasattr(os, "pidfd_open") or not hasattr(signal, "pidfd_send_signal")):
             raise IsolationUnavailable("missing_pinned_runtime")
         checked_program(BWRAP)
         if ctypes.CDLL(None, use_errno=True).syscall(38, 1, 0, 0, 0) != 0:  # PR_SET_NO_NEW_PRIVS
@@ -149,7 +188,7 @@ def main():
         signal.signal(signal.SIGTERM, sigterm)
         receipt["pins"] = stage(root, opts)
         exit_code = 70
-        exit_code, observed = run_sandbox(root, len(selected))
+        exit_code, observed = run_sandbox(root, len(selected), receipt)
         receipt.update(observed)
         receipt["outer_teardown"] = "confirmed"
     except IsolationUnavailable as exc:
@@ -163,6 +202,8 @@ def main():
     except (Exception, KeyboardInterrupt) as exc:
         receipt["error"] = type(exc).__name__
     finally:
+        if receipt.get("outer_teardown") == "unconfirmed":
+            exit_code = 74
         if root is not None:
             if exit_code == 74:
                 receipt["scratch_quarantined"] = True

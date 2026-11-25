@@ -18,7 +18,7 @@ POLICY_REF = "b363edfa14cbf9f9f32cf9578d260c99e762e12719df2b0505358f12e94e0104"
 CANARY = "ZZ_QA_UNAPPROVED_OWNER_CANARY_ZZ"
 DAEMON = "/fixture/corral/bin/corrald-next"
 OPT_IN = "--enable-public-fixture-e2e"
-SCENARIOS = ("happy", "pending", "forbidden", "registry", "reconnect", "crash")
+SCENARIOS = ("happy", "pending", "forbidden", "repeated_id", "registry", "reconnect", "crash")
 
 
 class Failure(Exception):

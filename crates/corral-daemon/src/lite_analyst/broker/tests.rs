@@ -35,6 +35,14 @@ fn example() -> (Enrollment, wire::Binding, wire::Limits) {
     )
 }
 
+fn setup_requests() -> [Value; 3] {
+    [
+        protocol::initialize(),
+        protocol::initialized(),
+        protocol::list(),
+    ]
+}
+
 fn rpc_reply(id: &Value, payload: Value) -> Value {
     json!({"jsonrpc":"2.0","id":id,"result":{"content":[],"isError":false,"structuredContent":payload}})
 }
@@ -116,6 +124,7 @@ fn no_stdio_call_until_exact_arm_ack() {
                 lines: Lines::default(),
             }),
             next_id: 3,
+            startup_step: 3,
             budget: None,
         };
         broker.set_limits(&limits).unwrap();
@@ -198,13 +207,18 @@ fn shim_rejects_unarmed_or_mismatched_call_without_forward() {
                     .unwrap(),
                 bound.record(BindingKind::ShimBound).unwrap()
             );
-            negotiate_shim(
-                &mut scope,
-                stdio.as_fd(),
-                &mut Lines::default(),
-                &[control.as_fd()],
-            )
-            .unwrap();
+            let mut lines = Lines::default();
+            for (step, request) in setup_requests().into_iter().enumerate() {
+                relay_shim_phase(
+                    &mut scope,
+                    stdio.as_fd(),
+                    &mut lines,
+                    &[control.as_fd()],
+                    step,
+                    &request,
+                )
+                .unwrap();
+            }
             let call = Call::new(
                 3,
                 "search_materials",
@@ -349,6 +363,20 @@ fn attach_negotiates_evidence_first_and_only_releases_terminal_poll_payload() {
             &mut pump,
         )
         .unwrap();
+        assert!(broker.set_limits(&limits).is_err());
+        let replies = setup_requests().map(|request| {
+            broker
+                .negotiate_stdio(&request, deadline, &mut pump)
+                .unwrap()
+        });
+        assert_eq!(
+            replies,
+            [
+                Some(protocol::server_info(protocol::SHIM_SERVER)),
+                None,
+                Some(protocol::listing(false).unwrap())
+            ]
+        );
         broker.set_limits(&limits).unwrap();
         let result = broker
             .invoke(

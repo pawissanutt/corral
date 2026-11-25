@@ -138,6 +138,11 @@ impl Session<'_> {
         self.pump_run(binding, "admitted")?;
         let (shim, stdio) = Sandbox::spawn(Payload::Shim)?;
         children.shim = Some(shim);
+        children
+            .shim
+            .as_mut()
+            .context("fixture shim missing")?
+            .confirm_identity(startup, &mut || self.pump_run(binding, "admitted"))?;
         let work = self.work;
         children.broker = Some(work.during_broker_attach(|| {
             Broker::attach(
@@ -150,7 +155,6 @@ impl Session<'_> {
             )
         })?);
         let broker = children.broker.as_mut().context("fixture broker missing")?;
-        broker.set_limits(&body.limits)?;
         self.pump_run(binding, "admitted")?;
         broker.check_live()?;
         let (pi, io) = Sandbox::spawn(Payload::Pi)?;
@@ -159,18 +163,29 @@ impl Session<'_> {
             io,
             buffer: Vec::new(),
         });
+        children
+            .pi
+            .as_mut()
+            .context("fixture Pi wrapper missing")?
+            .confirm_identity(startup, &mut || {
+                self.pump_run(binding, "admitted")?;
+                broker.check_live()
+            })?;
         let io = children.io.as_mut().context("fixture Pi missing")?;
-        let mut starting = || {
-            self.pump_run(binding, "admitted")?;
-            broker.check_live()
-        };
+        let mut starting = || self.pump_run(binding, "admitted");
         io.send(
             &json!({"type":"start", "question":body.question, "prompt":policy::prompt()?,
             "tools":policy::model_descriptors()?}),
             startup,
             &mut starting,
         )?;
-        let PiFrame::Turn { body: initial } = io.receive(startup, &mut starting)? else {
+        io.negotiate_shim(broker, startup, &mut starting)?;
+        broker.set_limits(&body.limits)?;
+        let PiFrame::Turn { body: initial } = io.receive(startup, &mut || {
+            starting()?;
+            broker.check_live()
+        })?
+        else {
             anyhow::bail!("fixture Pi did not expose initial registry");
         };
         let mut transcript = Vec::new();
@@ -187,7 +202,7 @@ impl Session<'_> {
         let mut citations = HashSet::new();
         let mut call_ids = HashSet::new();
         for turn in 1..=body.limits.turns {
-            let message = self.provider_turn(
+            let (message, calls) = self.provider_turn(
                 fixture.resources.credential(),
                 binding,
                 launch_id,
@@ -195,9 +210,12 @@ impl Session<'_> {
                 &outgoing,
                 broker,
                 io,
+                &mut call_ids,
             )?;
-            // Verify every resulting dispatch before starting the first one.
-            let calls = plan_calls(&message, &mut call_ids)?;
+            ensure!(
+                !calls.is_empty(),
+                "fixture provider ended without local finish"
+            );
             let mut working = || {
                 self.pump_run(binding, "working")?;
                 broker.check_live()
@@ -289,7 +307,8 @@ impl Session<'_> {
         body: &[u8],
         broker: &Broker,
         io: &PiIo,
-    ) -> Result<Value> {
+        call_ids: &mut HashSet<String>,
+    ) -> Result<(Value, Vec<Call>)> {
         let mut endpoint = Provider::connect(
             credential,
             deadline.min(Instant::now() + FRAME_TIMEOUT),
@@ -309,11 +328,22 @@ impl Session<'_> {
         })();
         let (outcome, received) = match admission {
             Ok(SendAdmission::HandedOff(Ok(()))) => {
-                let reply = endpoint.receive(deadline, &mut || {
-                    self.pump_run(binding, "working")?;
-                    broker.check_live()?;
-                    io.check_waiting()
-                });
+                let reply = endpoint
+                    .receive(deadline, &mut || {
+                        self.pump_run(binding, "working")?;
+                        broker.check_live()?;
+                        io.check_waiting()
+                    })
+                    .and_then(|message| {
+                        // Cross-turn correlation is part of exchange validity, not
+                        // a dispatch-time check after settling the completed tariff.
+                        let calls = if message["content"].is_string() {
+                            Vec::new()
+                        } else {
+                            plan_calls(&message, call_ids)?
+                        };
+                        Ok((message, calls))
+                    });
                 let outcome = if reply.is_ok() {
                     Outcome::Completed
                 } else {
@@ -366,6 +396,9 @@ impl Session<'_> {
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 enum PiFrame {
+    Mcp {
+        request: Value,
+    },
     Turn {
         body: Value,
     },
@@ -410,6 +443,34 @@ fn wait(
 }
 
 impl PiIo {
+    fn negotiate_shim(
+        &mut self,
+        broker: &mut Broker,
+        deadline: Instant,
+        pump: &mut dyn FnMut() -> Result<()>,
+    ) -> Result<()> {
+        for _ in 0..3 {
+            let PiFrame::Mcp { request } = self.receive(deadline, &mut || {
+                pump()?;
+                broker.check_live()
+            })?
+            else {
+                anyhow::bail!("fixture Pi skipped MCP negotiation");
+            };
+            if let Some(response) = broker.negotiate_stdio(&request, deadline, pump)? {
+                self.send(
+                    &json!({"type":"mcp", "response":response}),
+                    deadline,
+                    &mut || {
+                        pump()?;
+                        broker.check_live()
+                    },
+                )?;
+            }
+        }
+        Ok(())
+    }
+
     fn check_waiting(&self) -> Result<()> {
         let mut fds = [PollFd::new(&self.io, PollFlags::IN | PollFlags::RDHUP)];
         poll(&mut fds, Some(&Timespec::default())).context("check waiting fixture Pi")?;

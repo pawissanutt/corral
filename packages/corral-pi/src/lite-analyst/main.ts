@@ -4,6 +4,7 @@ import type { AgentTool, StreamFn } from "@earendil-works/pi-agent-core";
 import { createAssistantMessageEventStream, getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai";
 import type { AssistantMessage, JsonObject, Model, ToolCall, TranscriptContext } from "@earendil-works/pi-ai";
 import { compile } from "@earendil-works/pi-schema";
+import { negotiateEvidence } from "./mcp.ts";
 import { canonical, closedObject, FixturePipe, isObject, MAX_BODY_BYTES, parseStrictJson, requireWire } from "./wire.ts";
 
 // C1/T-2069 asset pins, independent of the Rust supervisor and any launch-supplied manifest.
@@ -244,6 +245,9 @@ async function run(pipe: FixturePipe): Promise<void> {
       }
     },
   });
+  // The first three entries of the ordered, hash-pinned registry are the evidence tools.
+  // finish_report is local to the host adapter and is not part of the shim registry.
+  await negotiateEvidence(pipe, start.tools.slice(0, 3));
   await agent.prompt({ role: "user", content: question, timestamp: Date.now() });
   requireWire(completed && !agent.state.errorMessage);
   await pipe.send({ type: "done" });

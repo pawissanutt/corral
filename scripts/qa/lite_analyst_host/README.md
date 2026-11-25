@@ -40,7 +40,7 @@ revision is caller-declared baseline metadata, not proof of a clean build or
 substitute for the executable digests. There is no build, install, vault, Git
 operation, external HTTP, owner service or repository mount at launch.
 
-`--scenario NAME` is repeatable; omit it for all six. The only output is a
+`--scenario NAME` is repeatable; omit it for all seven. The only output is a
 sanitized JSON receipt. Exit 0 means the selected component lanes passed with
 teardown; 64 means disabled/invalid inputs, 69 means isolation unavailable, 70
 means a fixture check failed, and 74 means teardown was not confirmed (the
@@ -58,14 +58,20 @@ private `corral-c3-qa-*` directory is quarantined instead of removed).
   `/proc`, capability/seccomp metadata, environment, argv and FD roles. The
   semantic tool gate and `/proc` measurements do not inject arbitrary code into
   Pi to test each syscall. No outer owner canary, state, vault or QA scripts
-  may reach the children. Daemon diagnostics must be empty or the fixed error.
+  may reach the children. Both launcher levels retain the verified namespace
+  init pidfd separately from Bubblewrap's waitable child; wrapper exit alone
+  cannot free the run slot or authorise scratch removal. Daemon diagnostics
+  must be empty or the fixed error.
 - **`happy`**: the HTTP peer checks the exact system and approved question,
   ordered registry and prior call IDs, arguments and structured results. It
   asks for search, then reads the live source handle and calculates using the
   visible metric selector, then derives `finish_report` text and UTF-8 spans
   from the actual `5100`, `2800`, captured `2300`, limitations and citations. The
-  terminal snapshot must be `failed/report_unavailable` with no offer and no
-  fourth turn. The responder checks at each actual POST that the exact body
+  Pi initiates the private shim's stdio MCP startup before the first POST;
+  the mediator relays only pinned JSON-RPC startup frames and verifies the
+  three evidence descriptors independently. The terminal snapshot must be
+  `failed/report_unavailable` with no offer and no fourth turn. The responder
+  checks at each actual POST that the exact body
   and permit were already durably consumed; after teardown, the three body
   hashes and 760 µUSD settled/acked charges are checked again.
 - **`pending`**: same three POSTs, with a pending metric reply followed by one
@@ -74,6 +80,9 @@ private `corral-c3-qa-*` directory is quarantined instead of removed).
 - **`forbidden`**: a first provider response attempts host-only `read_result`;
   no broker invocation and no second send. The POST has an invalid model
   response and settles conservatively, without falling back to another route.
+- **`repeated_id`**: the second complete SSE response reuses the first
+  turn's call ID, with valid tool arguments. No tool from the second batch
+  dispatches; the invalid exchange settles at the full synthetic hold.
 - **`registry`**: the fake peer adds `mitimind_read_note` to the evidence
   registry during negotiation. No reserve, provider request or broker effect.
 - **`reconnect`**: the first real POST gets an SSE response missing terminal

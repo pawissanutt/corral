@@ -28,12 +28,14 @@ const start = {
   tools: JSON.parse(read("tool-policy.json")).model_tools as Descriptor[],
 };
 
-async function withPi(check: (pi: {
+type Pi = {
   send: (frame: object) => void;
   raw: (bytes: string | Buffer) => void;
   receive: () => Promise<unknown>;
   expectExit: (code: number) => Promise<void>;
-}) => Promise<void>) {
+};
+
+async function withPi(check: (pi: Pi) => Promise<void>) {
   const cwd = mkdtempSync(join(tmpdir(), "corral-pi-lite-analyst-test-"));
   // Visible canaries outside Git: the narrow host must neither load extensions nor fold repo/home text into the prompt.
   const extensions = join(cwd, ".pi", "agent", "extensions");
@@ -77,6 +79,35 @@ writeFileSync(${JSON.stringify(marker)}, "unexpected"); export default () => {};
   }
 }
 
+const initializeRequest = {
+  type: "mcp", request: {
+    jsonrpc: "2.0", id: 1, method: "initialize", params: {
+      protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "corral-synthetic", version: "1" },
+    },
+  },
+};
+const shimInfo = {
+  protocolVersion: "2025-06-18", capabilities: { tools: {} },
+  serverInfo: { name: "corral-lite-mcp-shim", version: "1" },
+};
+const initializeReply = { jsonrpc: "2.0", id: 1, result: shimInfo };
+// Deliberately return the evidence descriptors in a different order than the provider registry.
+const evidenceTools = start.tools.slice(0, 3).reverse();
+const listReply = { jsonrpc: "2.0", id: 2, result: { tools: evidenceTools } };
+
+async function expectList(pi: Pi) {
+  expect(await pi.receive()).toEqual({ type: "mcp", request: { jsonrpc: "2.0", method: "notifications/initialized" } });
+  // The notification receives no reply; Pi must issue tools/list on its own.
+  expect(await pi.receive()).toEqual({ type: "mcp", request: { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} } });
+}
+
+async function negotiate(pi: Pi) {
+  expect(await pi.receive()).toEqual(initializeRequest);
+  pi.send({ type: "mcp", response: initializeReply });
+  await expectList(pi);
+  pi.send({ type: "mcp", response: listReply });
+}
+
 function call(id: string, name: string, args: string) {
   return { id, type: "function", function: { name, arguments: args } };
 }
@@ -94,13 +125,14 @@ function dispatch(request: ReturnType<typeof call>) {
   return { type: "tool", id: request.id, name: request.function.name, args: JSON.parse(request.function.arguments) };
 }
 
-test("Pi Agent executes the pinned four-tool registry and projects exact C1 history through finish", async () => {
+test("Pi starts via MCP, then executes the pinned four-tool Agent registry and projects exact C1 history", async () => {
   await withPi(async (pi) => {
     // Split the start frame in the middle of a UTF-8 code point.
     const raw = Buffer.from(`${JSON.stringify(start)}\n`);
     const offset = raw.indexOf(Buffer.from("’")) + 1;
     pi.raw(raw.subarray(0, offset));
     pi.raw(raw.subarray(offset));
+    await negotiate(pi);
     expect(await pi.receive()).toEqual({ type: "turn", body: pinnedTurn });
     const messages: object[] = [...pinnedTurn.messages];
     const step = async (entries: [ReturnType<typeof call>, string][]) => {
@@ -127,10 +159,45 @@ test("Pi Agent executes the pinned four-tool registry and projects exact C1 hist
   });
 });
 
-test("changed prompt bytes or registry order are refused before the first provider turn", async () => {
+test("changed prompt bytes or provider registry order are refused before MCP negotiation", async () => {
   for (const change of [{ prompt: start.prompt.trimEnd() }, { tools: start.tools.toReversed() }]) {
     await withPi(async (pi) => {
       pi.send({ ...start, ...change });
+      await pi.expectExit(1);
+    });
+  }
+});
+
+test("invalid shim initialize replies stop Pi before notification, listing, or provider", async () => {
+  for (const response of [
+    { ...initializeReply, id: 2 },
+    { ...initializeReply, jsonrpc: "1.0" },
+    { ...initializeReply, result: { ...shimInfo, protocolVersion: "2024-11-05" } },
+    { ...initializeReply, result: { ...shimInfo, serverInfo: { ...shimInfo.serverInfo, name: "mitimind-lite-analyst" } } },
+    { ...initializeReply, result: { ...shimInfo, capabilities: { tools: { listChanged: false } } } },
+  ]) {
+    await withPi(async (pi) => {
+      pi.send(start);
+      expect(await pi.receive()).toEqual(initializeRequest);
+      pi.send({ type: "mcp", response });
+      await pi.expectExit(1);
+    });
+  }
+});
+
+test("invalid shim tools/list replies stop Pi without a provider turn", async () => {
+  for (const response of [
+    { ...listReply, id: 1 },
+    { ...listReply, result: { ...listReply.result, nextCursor: "another-page" } },
+    { ...listReply, result: { tools: [{ ...evidenceTools[0]!, description: "changed" }, ...evidenceTools.slice(1)] } },
+    { ...listReply, result: { tools: [...evidenceTools, start.tools[3]!] } },
+  ]) {
+    await withPi(async (pi) => {
+      pi.send(start);
+      expect(await pi.receive()).toEqual(initializeRequest);
+      pi.send({ type: "mcp", response: initializeReply });
+      await expectList(pi);
+      pi.send({ type: "mcp", response });
       await pi.expectExit(1);
     });
   }
@@ -146,6 +213,7 @@ test("forbidden tools and invalid args reject the entire provider batch without 
   ]) {
     await withPi(async (pi) => {
       pi.send(start);
+      await negotiate(pi);
       expect(await pi.receive()).toEqual({ type: "turn", body: pinnedTurn });
       pi.send({ type: "provider", message: assistant(search, bad) });
       await pi.expectExit(1);
@@ -156,13 +224,15 @@ test("forbidden tools and invalid args reject the entire provider batch without 
 test("missing finish and an unacknowledged finish never trigger another provider turn", async () => {
   await withPi(async (pi) => {
     pi.send(start);
-    await pi.receive();
+    await negotiate(pi);
+    expect(await pi.receive()).toEqual({ type: "turn", body: pinnedTurn });
     pi.send({ type: "provider", message: { role: "assistant", content: "Not a sealed report." } });
     await pi.expectExit(1);
   });
   await withPi(async (pi) => {
     pi.send(start);
-    await pi.receive();
+    await negotiate(pi);
+    expect(await pi.receive()).toEqual({ type: "turn", body: pinnedTurn });
     pi.send({ type: "provider", message: assistant(finish) });
     expect(await pi.receive()).toEqual(dispatch(finish));
     pi.send({ type: "result", content: '{"status":"error"}' });

@@ -21,7 +21,7 @@ class Conversation:
         self.scenario = scenario
         self.question = question
         self.observe = observe
-        self.available_turns = {"happy": 3, "pending": 3, "forbidden": 1,
+        self.available_turns = {"happy": 3, "pending": 3, "forbidden": 1, "repeated_id": 2,
                                 "registry": 0, "reconnect": 1, "crash": 1}[scenario]
         self.calls = []
         self.digests = []
@@ -70,6 +70,10 @@ class Conversation:
             response = make_sse(step, [], truncated=True)
         else:
             issued = self.actions(step, tool_results, messages[1]["content"])
+            if self.scenario == "repeated_id" and step == 2:
+                # Complete SSE and schema-valid arguments, but this ID was
+                # already dispatched in turn 1. None of this batch may run.
+                issued[0]["id"] = self.calls[0][0]["id"]
             self.calls.append(issued)
             response = make_sse(step, issued)
         return response
