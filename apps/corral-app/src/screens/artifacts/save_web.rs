@@ -1,10 +1,10 @@
 //! A browser download. Where the browser offers its save picker (`showSaveFilePicker`), each
 //! page is written to the chosen file's writable stream before the next is read, so no more than
 //! a page waits in memory; the browser commits the file only on `close`, after the client has
-//! verified size and SHA-256, and an abandoned download is aborted: a file that held something
-//! keeps it, and the empty file the picker made for a new name is removed where the browser can
-//! (`FileSystemHandle.remove`). Elsewhere
-//! the bytes are staged as Blob parts, which the browser keeps in memory, so only artifacts up to
+//! verified size and SHA-256. An abandoned or failed download only aborts that stream: the
+//! destination is never removed, since no browser API says whether the picker created it or the
+//! owner chose an existing file, so it keeps what it held (a new name stays an empty file the
+//! browser made). Elsewhere the bytes are staged as Blob parts, which the browser keeps in memory, so only artifacts up to
 //! [`BLOB_MAX`] are offered that way.
 use js_sys::{Array, Function, Object, Promise, Reflect, Uint8Array};
 use wasm_bindgen::{JsCast as _, JsValue, closure::Closure};
@@ -51,10 +51,7 @@ async fn settle(value: Result<JsValue, JsValue>) -> Result<JsValue, JsValue> {
 /// The file the owner picked, written as its pages arrive.
 struct Picked {
     name: String,
-    handle: JsValue,
     writable: JsValue,
-    /// The picked file was empty, as the picker leaves a new name: removed if abandoned.
-    empty: bool,
     closed: bool,
 }
 
@@ -83,23 +80,12 @@ impl Picked {
             .ok()
             .and_then(|picked| picked.as_string())
             .unwrap_or_else(|| name.to_owned());
-        let empty = match settle(call(&handle, "getFile", &Array::new())).await {
-            Ok(file) => {
-                Reflect::get(&file, &"size".into())
-                    .ok()
-                    .and_then(|size| size.as_f64())
-                    == Some(0.0)
-            }
-            Err(_) => false,
-        };
         let writable = settle(call(&handle, "createWritable", &Array::new()))
             .await
             .map_err(|_| "The browser could not write the chosen file.")?;
         Ok(Some(Self {
             name: picked,
-            handle,
             writable,
-            empty,
             closed: false,
         }))
     }
@@ -130,16 +116,13 @@ impl SaveSink for Picked {
 
 impl Drop for Picked {
     fn drop(&mut self) {
-        // An unfinished stream is discarded: the chosen file keeps what it held before.
         if self.closed {
             return;
         }
-        let (handle, writable, empty) = (self.handle.clone(), self.writable.clone(), self.empty);
+        let writable = self.writable.clone();
+        // Discards the uncommitted stream only; the destination file is left as it was.
         wasm_bindgen_futures::spawn_local(async move {
             let _ = settle(call(&writable, "abort", &Array::new())).await;
-            if empty {
-                let _ = settle(call(&handle, "remove", &Array::new())).await;
-            }
         });
     }
 }
