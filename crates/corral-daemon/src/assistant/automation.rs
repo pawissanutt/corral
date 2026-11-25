@@ -142,24 +142,20 @@ pub(crate) fn allocated_chat(shared: &Shared, rule: &str) -> Result<Option<Strin
 
 /// Check the actual socket, including a launch that has not saved a host record yet.
 fn ready(shared: &Shared, chat: &Chat) -> Result<Option<SessionRef>> {
-    let host = sessions::host_record(&chat.dir)?;
-    let session = pi::chat_session(
-        &chat.dir,
-        host.as_ref().map_or(0, |host| host.pid),
-        socket_root(shared).as_deref(),
-    )?;
+    // Only a matching live hello supplies process identity. Transcript metadata
+    // can outlive the host; its saved PID is neither liveness nor stop authority.
+    let session = pi::chat_session(&chat.dir, 0, socket_root(shared).as_deref())?;
     let client = Client::for_session(&session)?;
     let timeout = Duration::from_millis(250);
     let hello = match client.hello_with_timeout(timeout) {
         Ok(hello) => hello,
         Err(error)
-            if host.is_none()
-                && error.downcast_ref::<std::io::Error>().is_some_and(|error| {
-                    matches!(
-                        error.kind(),
-                        ErrorKind::NotFound | ErrorKind::ConnectionRefused
-                    )
-                }) =>
+            if error.downcast_ref::<std::io::Error>().is_some_and(|error| {
+                matches!(
+                    error.kind(),
+                    ErrorKind::NotFound | ErrorKind::ConnectionRefused
+                )
+            }) =>
         {
             return Ok(None);
         }

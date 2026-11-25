@@ -104,6 +104,13 @@ fn stopped_chat_stays_stopped_and_changed_policy_rotates_cold_chat() {
             .stopped
     );
 
+    // An exited host leaves its transcript record but no socket. That stale
+    // record must not keep a resumed rule unavailable (or authorize a PID stop).
+    fs::write(
+        require(&shared, &first).unwrap().dir.join("session.json"),
+        r#"{"pid":0,"sessionFile":"transcript.jsonl"}"#,
+    )
+    .unwrap();
     // Simulate the persisted owner-resumed flag without requiring a real host.
     set_stopped(&shared, &mut require(&shared, &first).unwrap(), false).unwrap();
     assert!(fire(&shared, Some(&first)).is_err());
