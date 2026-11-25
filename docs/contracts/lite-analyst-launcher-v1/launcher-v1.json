@@ -21,6 +21,17 @@
     "prompt_sha256": "103ccacd5a80abbd9f83e4d64441cbb6b07e5d7a8c28c793d15bc16aaded8f02",
     "tool_policy_sha256": "8879af6aeb66bf98b2533bbe6c99b12c5c5949e37d71622c0267277843f96b4d"
   },
+  "seed_eligibility": {
+    "captured": {
+      "source_reference": "T-2073:3",
+      "lite_revision": "ef4bd8b8f788d9315ce97f63642b45fecfad34d7",
+      "lite_source_prefix": "crates/mitimind-vault/seeds/welcome/en/",
+      "files": {
+        "welcome/18-sample-report-january.md": "53ec3e7417930c558e0cf1d8c50097f4fc537e791fc5f72b2923e7d449518cb2",
+        "welcome/19-sample-report-february.md": "1f3962dfba188cbb8424fe82dd7ca9447149794bbced169488cfb8a49033b8d8"
+      }
+    }
+  },
   "launch": {
     "corral": {
       "argv": ["/fixture/corral/bin/corrald-next", "lite-analyst-fixture-v1", "--enable-public-fixture-e2e"],
@@ -112,7 +123,7 @@
   "lane_results": ["pass", "fail", "not_run"],
   "gates": [
     {"id": "disabled", "stimulus": "omit per-run opt-in", "expect": "no enrollment, work, broker, or provider access"},
-    {"id": "input_pins", "stimulus": "tamper lock, manifest, component, fixture or policy; try template or unknown version", "expect": "no product component executed"},
+    {"id": "input_pins", "stimulus": "tamper lock, manifest, component, fixture or policy; try template or unknown version; substitute a seed, recompute its lock map entry and supply the new valid lock digest as the caller pin", "expect": "no product component executed; independently pinned seed eligibility rejects the substitution despite a matching lock, caller pin and staged vault"},
     {"id": "namespace_preflight", "stimulus": "run root or remove required kernel/isolation feature", "expect": "startup blocked; no weaker fallback"},
     {"id": "ambient_isolation", "stimulus": "seed env/argv/FD/path canaries and test unapproved sockets and destinations from payload namespaces", "expect": "no ambient access, no vault or owner socket outside its allowed host, zero denied-route traffic"},
     {"id": "peer_auth", "stimulus": "substitute endpoints, change peer pins or use a foreign/retired link with known IDs", "expect": "no enrollment or lookup/disclosure; no side effects"},

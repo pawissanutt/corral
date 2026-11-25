@@ -25,7 +25,10 @@
         "files": {"$ref": "#/$defs/file_digests"}
       }
     },
-    "public_seed_files": {"$ref": "#/$defs/file_digests"},
+    "public_seed_files": {
+      "$ref": "#/$defs/file_digests",
+      "description": "Vault-relative seed file digests. Shape validation is not eligibility: the runner must require exact map equality with its independently pinned, reviewed launcher profile and verify the staged vault against that profile before product exec."
+    },
     "scripted_provider_sha256": {"$ref": "#/$defs/sha256"},
     "runtime_tools": {
       "type": "object", "minProperties": 1, "maxProperties": 64,

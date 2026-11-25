@@ -4,7 +4,7 @@
   "status": "template",
   "target": "linux-x86_64",
   "corral_revision": "0000000000000000000000000000000000000000",
-  "launcher_profile_sha256": "3faaaf527dbb691ae6857b5c17a99edb454f906d7ed88024f42c207207c0606e",
+  "launcher_profile_sha256": "c145f94492ad6683432aeb293b96be3385c1b0f7f603dfdb6e81f29de069388c",
   "build_recipe": "BUILD.txt",
   "host_requirements": {"landlock_tcp_abi_min": 4, "sysroot_abi": "example-not-a-runtime-pin", "sandbox_backend": "rootless-bubblewrap"},
   "entrypoints": {"daemon": "bin/corrald-next", "pi": "bin/corral-pi-lite-analyst", "shim": "bin/corral-lite-mcp-shim"},
