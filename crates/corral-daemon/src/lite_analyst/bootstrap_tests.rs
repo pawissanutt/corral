@@ -186,6 +186,16 @@ fn pipe_records_require_bounded_single_lf_and_live_driver() {
     assert!(expired.line(OwnedFd::from(unwritten), PIPE_MAX).is_err());
 
     drop(driver);
+    // Other tests can fork while this pipe is open. A child temporarily retains
+    // the CLOEXEC writer until exec; wait for the actual lifetime loss before
+    // checking that a simultaneously readable credential cannot bypass it.
+    let mut lifetime = [PollFd::new(&life, PollFlags::IN)];
+    let timeout = Timespec {
+        tv_sec: BOOTSTRAP_TIMEOUT.as_secs() as _,
+        tv_nsec: BOOTSTRAP_TIMEOUT.subsec_nanos().into(),
+    };
+    poll(&mut lifetime, Some(&timeout)).unwrap();
+    assert!(lifetime[0].revents().contains(PollFlags::HUP));
     assert!(line(credential.as_bytes()).is_err());
 }
 
