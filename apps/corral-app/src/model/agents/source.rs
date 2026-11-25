@@ -3,6 +3,7 @@
 //! working, idle, not running and ended; newest activity first within each, the pinned quick
 //! chat first among its equals. `lines` turns each into a Sessions line.
 
+use corral_protocol::build::BuildMode;
 use corral_protocol::rows::{
     AgentRow, AssistantKind, AssistantLocation, AssistantRow, AssistantState,
 };
@@ -17,6 +18,12 @@ use crate::model::{assistant, status::SessionState};
 
 use super::live;
 
+pub(crate) fn is_code(row: &AssistantRow) -> bool {
+    row.build
+        .as_ref()
+        .is_some_and(|facts| facts.mode == BuildMode::Code)
+}
+
 /// A session's source: a live run (keyed `<task>_<run>`), or a chat or build row.
 #[derive(Clone, Copy)]
 pub(super) struct Source<'a> {
@@ -29,6 +36,7 @@ impl<'a> Source<'a> {
     pub fn role(self) -> &'a str {
         match (self.run, self.chat) {
             (Some(run), _) => run.run.role.as_str(),
+            (None, Some(chat)) if is_code(chat) => "code",
             (None, Some(chat)) if chat.kind == AssistantKind::Build => "build",
             _ => "assistant",
         }
@@ -62,6 +70,7 @@ impl<'a> Source<'a> {
     pub(super) fn removable(self) -> bool {
         self.chat.is_some_and(|chat| {
             chat.kind == AssistantKind::Build
+                && !is_code(chat)
                 && matches!(chat.state, AssistantState::Cold | AssistantState::Ended)
         }) && !self.elsewhere()
     }
@@ -148,6 +157,9 @@ impl<'a> Source<'a> {
             .filter(|_| chat.state == AssistantState::Waiting || status_unavailable(chat))
         {
             return wait.text.lines().next().map(str::to_owned);
+        }
+        if is_code(chat) && self.elsewhere() {
+            return Some("open in another terminal".into());
         }
         let live = chat.build.as_ref().map_or(0, |build| build.children.live);
         (live > 0).then(|| {

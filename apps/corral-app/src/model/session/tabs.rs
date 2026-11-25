@@ -105,6 +105,7 @@ pub(super) fn load(
 pub fn tabs_for(role: &SessionRole, task_bound: bool, bare: bool) -> Vec<Tab> {
     match role {
         SessionRole::Child => vec![Tab::Chat],
+        SessionRole::Code => vec![Tab::Chat, Tab::Agents, Tab::Changes],
         SessionRole::Build => {
             let mut tabs = vec![Tab::Chat, Tab::Agents, Tab::Changes];
             if !bare {

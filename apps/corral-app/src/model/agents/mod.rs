@@ -19,6 +19,7 @@ mod lines;
 mod live;
 mod menu;
 mod source;
+pub(crate) use source::is_code;
 #[cfg(test)]
 pub(crate) mod source_tests;
 mod start;

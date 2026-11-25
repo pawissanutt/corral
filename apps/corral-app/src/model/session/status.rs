@@ -91,6 +91,7 @@ pub fn plan_tag(state: &SessionState) -> Option<&'static str> {
 pub fn role_pill(role: &SessionRole) -> RolePill {
     let (full, short) = match role {
         SessionRole::Build => ("BUILD", "BLD"),
+        SessionRole::Code => ("CODE", "CODE"),
         SessionRole::Assistant => ("ASSISTANT", "AST"),
         SessionRole::Worker => ("WORKER", "WRK"),
         SessionRole::Reviewer => ("REVIEWER", "REV"),

@@ -36,6 +36,14 @@ pub(super) fn page(feed: &mut Feed, scope: &str) -> bool {
     };
     let (role, task, run) = match host.role {
         Role::Chat => ("assistant", None, None),
+        Role::Build
+            if feed
+                .assistants
+                .get(id.as_str())
+                .is_some_and(crate::model::agents::is_code) =>
+        {
+            ("code", None, None)
+        }
         Role::Build => ("build", None, None),
         Role::Worker => {
             let (task, run) = id.split_once('_').unwrap_or((id.as_str(), ""));

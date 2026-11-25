@@ -50,6 +50,7 @@ pub enum Kind {
     Reviewer,
     Chat,
     Build,
+    Code,
 }
 
 impl Control {
@@ -131,6 +132,9 @@ impl Control {
 /// The session's role: a chat or build id, else its run's role; none for a run corrald does not
 /// list.
 pub fn kind(feed: &Feed, session: &str) -> Option<Kind> {
+    if feed.assistants.get(session).is_some_and(super::is_code) {
+        return Some(Kind::Code);
+    }
     let built = feed
         .assistants
         .get(session)
@@ -168,7 +172,7 @@ pub fn control_label(control: Control, kind: Option<Kind>) -> String {
 /// Relaunch is what applies to it, a new run of the same role and profile.
 pub fn controls(feed: &Feed, session: &str) -> Vec<Control> {
     match kind(feed, session) {
-        Some(Kind::Chat | Kind::Build) => chat_controls(feed, session),
+        Some(Kind::Chat | Kind::Build | Kind::Code) => chat_controls(feed, session),
         Some(kind) => feed
             .agents
             .get(session)
@@ -211,6 +215,17 @@ fn chat_controls(feed: &Feed, session: &str) -> Vec<Control> {
     let Some(row) = crate::model::assistant::row(feed, session) else {
         return Vec::new();
     };
+    if super::is_code(row) {
+        return if row.live_in != AssistantLocation::None
+            && matches!(
+                row.state,
+                AssistantState::Working | AssistantState::Waiting | AssistantState::Starting
+            ) {
+            vec![Control::Cancel]
+        } else {
+            Vec::new()
+        };
+    }
     if row.state == AssistantState::Cold && row.live_in == AssistantLocation::Pane {
         return Vec::new();
     }

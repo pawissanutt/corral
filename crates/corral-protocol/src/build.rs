@@ -49,8 +49,19 @@ pub struct BuildRemoved {
     pub lines: Vec<String>,
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BuildMode {
+    Code,
+    #[default]
+    #[serde(other)]
+    Build,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct BuildFacts {
+    #[serde(default)]
+    pub mode: BuildMode,
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,

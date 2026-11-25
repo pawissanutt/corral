@@ -159,6 +159,7 @@ pub use usage::{UsageAction, UsageLine, UsageTotalLine, UsageUi, UsageView, usag
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionRole {
     Build,
+    Code,
     /// The app's one chat agent (the PM and the assistant are the same agent).
     Assistant,
     Worker,
@@ -174,6 +175,7 @@ impl SessionRole {
     pub fn of(role: &str) -> Self {
         match role {
             "build" => Self::Build,
+            "code" => Self::Code,
             "assistant" | "chat" | "pm" => Self::Assistant,
             "worker" => Self::Worker,
             "reviewer" => Self::Reviewer,
@@ -195,6 +197,7 @@ impl SessionRole {
     pub fn label(&self) -> String {
         match self {
             Self::Build => "build".into(),
+            Self::Code => "code".into(),
             Self::Assistant => "assistant".into(),
             Self::Worker => "worker".into(),
             Self::Reviewer => "reviewer".into(),
@@ -460,6 +463,9 @@ fn role_of(
     row: Option<&AssistantRow>,
     run: Option<&Run>,
 ) -> SessionRole {
+    if row.is_some_and(crate::model::agents::is_code) {
+        return SessionRole::Code;
+    }
     if let Some(page) = page {
         return SessionRole::of(&page.role);
     }
@@ -754,6 +760,7 @@ fn empty_chat(cx: &Cx<'_>) -> EmptyChat {
                 cx.title()
             )
         }
+        SessionRole::Code => "This Code session works in the owner’s checkout.".into(),
         SessionRole::Assistant if cx.new_thread() => {
             "Ask the assistant about this workspace. Your first message starts a thread.".into()
         }

@@ -35,6 +35,18 @@ pub(super) fn populate(feed: &mut Feed) {
     super::parts_sample::seed(feed, BUILD);
     build(feed, STOPPED_BUILD, "docs-sweep", Some("site"), true);
     super::parts_sample::attach(feed, STOPPED_BUILD);
+    build(feed, "B-code", "checkout-notes", Some("corral"), true);
+    if let Some(facts) = feed
+        .assistants
+        .get_mut("B-code")
+        .and_then(|row| row.build.as_mut())
+    {
+        facts.mode = corral_protocol::build::BuildMode::Code;
+        facts.worktree.clone_from(&facts.repo_root);
+        facts.branch = Some("main".into());
+        facts.base = None;
+        facts.here = true;
+    }
 }
 
 fn row(
@@ -102,6 +114,7 @@ pub(super) fn build(feed: &mut Feed, id: &str, name: &str, project: Option<&str>
         .clone()
         .unwrap_or_else(|| "/preview/corral".into());
     session.build = Some(BuildFacts {
+        mode: corral_protocol::build::BuildMode::Build,
         name: name.into(),
         project: project.map(str::to_owned),
         worktree: format!("{root}/.worktrees/{name}"),

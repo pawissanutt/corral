@@ -912,6 +912,10 @@
           "here": {
             "type": "boolean"
           },
+          "mode": {
+            "$ref": "#/components/schemas/BuildMode",
+            "default": "build"
+          },
           "name": {
             "type": "string"
           },
@@ -979,6 +983,13 @@
           "text"
         ],
         "type": "object"
+      },
+      "BuildMode": {
+        "enum": [
+          "code",
+          "build"
+        ],
+        "type": "string"
       },
       "BuildOutcome": {
         "properties": {

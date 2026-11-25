@@ -6,9 +6,7 @@ use crate::model::agents::{SessionLine, removable, session_line, unix};
 use crate::model::daemon::{Feed, age};
 use crate::model::effect::Env;
 use crate::model::next::{NextStep, session_next_step};
-use crate::model::session::{
-    Cx, Facts, SessionRole, Ui, cost_text, quiet, role_word, spent, status,
-};
+use crate::model::session::{Cx, Facts, Ui, cost_text, quiet, role_word, spent, status};
 use crate::model::status::SessionState;
 use crate::model::{Id, Live};
 
@@ -108,7 +106,7 @@ pub fn row(feed: &Feed, id: &Id, env: Env) -> Option<SessionRow> {
         .filter(|branch| !branch.is_empty());
     Some(SessionRow {
         shown_id: cx.shown_id(),
-        role: role_word(&SessionRole::of(&line.role)),
+        role: role_word(&cx.role),
         title: if line.name.is_empty() {
             "untitled".into()
         } else {

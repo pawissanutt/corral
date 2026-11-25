@@ -130,6 +130,7 @@ fn a_cold_build_is_listed_and_can_be_relaunched() {
     build.state = AssistantState::Cold;
     build.live_in = AssistantLocation::None;
     build.build = Some(BuildFacts {
+        mode: corral_protocol::build::BuildMode::Build,
         name: "walk".into(),
         project: Some("one".into()),
         worktree: "/repo/.worktrees/walk".into(),
@@ -144,6 +145,51 @@ fn a_cold_build_is_listed_and_can_be_relaunched() {
     feed.assistants.insert("B-k3x9".into(), build);
     assert!(ids(&feed, &ProjectFilter::All).contains(&"B-k3x9".to_owned()));
     assert_eq!(controls(&feed, "B-k3x9"), [Control::Relaunch]);
+}
+
+#[test]
+fn a_cold_code_session_is_labelled_and_has_no_managed_controls() {
+    let mut feed = Feed::default();
+    let id = "B-code";
+    let mut row = assistant(id, AssistantKind::Build);
+    row.state = AssistantState::Cold;
+    row.live_in = AssistantLocation::None;
+    row.build = Some(
+        serde_json::from_value(serde_json::json!({
+            "mode": "code", "name": "walk", "worktree": "/repo", "repo_root": "/repo",
+            "here": true, "children": Counts::default(),
+        }))
+        .unwrap(),
+    );
+    assert_eq!(
+        super::source::Source {
+            id,
+            run: None,
+            chat: Some(&row)
+        }
+        .role(),
+        "code"
+    );
+    assert!(
+        !super::source::Source {
+            id,
+            run: None,
+            chat: Some(&row)
+        }
+        .removable()
+    );
+    feed.assistants.insert(id.into(), row);
+    assert!(controls(&feed, id).is_empty());
+    let page = crate::model::session::page(
+        &feed,
+        &Default::default(),
+        &id.into(),
+        crate::model::Env {
+            conn: crate::model::Conn::Healthy,
+            form: crate::model::nav::Form::Terminal,
+        },
+    );
+    assert!(page.bar.unwrap().action.is_none());
 }
 
 /// A build whose host runs in a terminal corrald cannot reach is not offered Resume here.

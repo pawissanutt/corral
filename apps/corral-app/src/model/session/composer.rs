@@ -167,6 +167,14 @@ pub fn host_bar(cx: &Cx<'_>) -> Option<HostBar> {
             },
             action: None,
         }),
+        Host::NotRunning if *cx.role == SessionRole::Code => Some(HostBar {
+            text: if cx.elsewhere() {
+                "This Code session runs in another terminal; continue it there.".into()
+            } else {
+                format!("Continue in a terminal with corral code --resume {}", cx.id)
+            },
+            action: None,
+        }),
         Host::NotRunning if cx.elsewhere() => Some(HostBar {
             text:
                 "This build runs in another terminal that corrald cannot reach; continue it there."

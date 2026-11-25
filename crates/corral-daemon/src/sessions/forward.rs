@@ -180,9 +180,20 @@ pub(crate) fn card_answer(
         answers,
         dismiss,
     } = request;
-    host_call(
-        shared,
-        &id,
+    let session = resolve(shared, &id)?;
+    let exit = card.strip_prefix("exit-").is_some_and(|suffix| {
+        suffix.len() == 36
+            && suffix.bytes().enumerate().all(|(i, byte)| {
+                if matches!(i, 8 | 13 | 18 | 23) {
+                    byte == b'-'
+                } else {
+                    byte.is_ascii_hexdigit()
+                }
+            })
+    });
+    crate::builds::reject_code(exit && session.role == "code")?;
+    host_call_on(
+        &session,
         "card_answer",
         ActArgs::Card {
             card,
@@ -225,7 +236,11 @@ pub(crate) fn job(shared: &Shared, request: SessionJobAct) -> Result<SessionJobA
 pub(crate) fn action(shared: &Shared, request: SessionActionRequest) -> Result<SessionActionDone> {
     let SessionActionRequest { id, action } = request;
     let (command, args) = match action {
-        SessionAction::ExitOpen => ("exit_open", None),
+        SessionAction::ExitOpen => {
+            let session = resolve(shared, &id)?;
+            crate::builds::reject_code(session.role == "code")?;
+            return host_call_on(&session, "exit_open", Map::new(), HostCall::Act);
+        }
         SessionAction::BoardRefresh => ("board_refresh", None),
         SessionAction::Compact { instructions } => {
             ("compact", Some(ActArgs::Compact { instructions }))

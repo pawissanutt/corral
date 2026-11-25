@@ -356,7 +356,6 @@ pub fn needs_you(cx: &Cx<'_>) -> u32 {
 fn target(cx: &Cx<'_>) -> String {
     let title = cx.title();
     match &cx.role {
-        SessionRole::Build => format!("build · {title}"),
         SessionRole::Assistant => format!("assistant · {title}"),
         SessionRole::Reviewer => match (&cx.task, cx.run_id()) {
             (Some(task), Some(run)) => format!("{task} review {run} · {title}"),

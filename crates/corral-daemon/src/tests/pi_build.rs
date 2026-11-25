@@ -400,6 +400,63 @@ fn a_terminal_started_build_is_listed_while_its_socket_answers_and_cold_after() 
 }
 
 #[test]
+fn trusted_code_is_listed_but_cannot_be_managed_as_a_build() {
+    let fixture = Fixture::new();
+    let id = "B-code";
+    let mut script = Script::default();
+    script.mode = "interactive";
+    let host = terminal(&fixture, id, script);
+    let record_path = dir(&fixture, id).join("session.json");
+    let checkout = fixture.root().join("checkout");
+    fs::create_dir(&checkout).unwrap();
+    let owner_file = checkout.join("owner-work");
+    fs::write(&owner_file, "owner's uncommitted work").unwrap();
+    let mut record: Value = serde_json::from_slice(&fs::read(&record_path).unwrap()).unwrap();
+    record["trustedCode"] = json!(true);
+    record["here"] = json!(true);
+    record["repoRoot"] = json!(checkout);
+    record["worktree"] = json!(checkout);
+    let saved = serde_json::to_vec(&record).unwrap();
+    fs::write(&record_path, &saved).unwrap();
+
+    let live = crate::builds::rows(fixture.shared()).unwrap();
+    assert_eq!(live.len(), 1);
+    assert_eq!(live[0].id, id);
+    assert_eq!(live[0].live_in, AssistantLocation::Pane);
+    assert_eq!(
+        serde_json::to_value(&live[0]).unwrap()["build"]["mode"],
+        "code"
+    );
+    let shared = fixture.shared();
+    let session = crate::sessions::resolve(shared, id).unwrap();
+    assert_eq!(session.role, "code");
+    assert!(session.session.is_some());
+    drop(host);
+
+    assert_eq!(
+        crate::builds::rows(shared).unwrap()[0].state,
+        AssistantState::Cold
+    );
+    for dry_run in [true, false] {
+        let error = crate::builds::remove_with(
+            shared,
+            BuildRemove {
+                id: id.into(),
+                dry_run,
+            },
+            |_| panic!("prune must never run for Code"),
+        )
+        .unwrap_err();
+        assert!(error.is::<Refusal>());
+    }
+    assert_eq!(fs::read(record_path).unwrap(), saved);
+    assert_eq!(
+        fs::read_to_string(owner_file).unwrap(),
+        "owner's uncommitted work"
+    );
+}
+
+#[test]
 fn a_build_of_another_workspace_is_not_listed() {
     let fixture = Fixture::new();
     let workspace = fixture.root().join("other-workspace");
@@ -772,46 +829,8 @@ fn a_child_scope_never_reads_outside_its_session_directory() {
     assert_eq!(refused.code, rpc::ErrorCode::Refused);
 }
 
-#[test]
-fn a_worker_send_records_the_reply_event() {
-    let fixture = Fixture::with_repository();
-    let socket = fixture.unix_server();
-    let mut owner = Client::connect(&socket);
-    let task = owner.new_task("record a worker reply", Vec::new());
-    owner.op(dispatch(&task), false);
-    let engine = fixture.shared().engine().unwrap();
-    let mut run = engine.store.list_runs(&task).unwrap().pop().unwrap();
-    let dir = fixture
-        .root()
-        .join(crate::STATE_DIR)
-        .join("runs")
-        .join(&task)
-        .join(&run.id);
-    let id = format!("{task}_{}", run.id);
-    let host = Host::start(
-        fixture.root().join("worker.sock"),
-        id.clone(),
-        "worker",
-        &dir,
-        Script::default(),
-    );
-    run.session = Some(SessionRef::Pi {
-        socket: host.socket.clone(),
-        inner: Box::new(run.session.take().unwrap()),
-        dir,
-    });
-    engine.store.update_run(&run).unwrap();
-    let ack: SessionSent = owner.ok(SESSION_SEND, json!({
-        "id": format!("{task}/{}", run.id), "cmd_id": "worker:1", "text": "continue the work", "policy": "steer",
-    }));
-    assert_eq!(ack.session, id);
-    assert_eq!(ack.entry, format!("{id}/input/worker:1"));
-    let events = engine.store.list_events(&task).unwrap();
-    assert!(events.iter().any(|event| event.kind == EventKind::Replied
-        && event.run.as_deref() == Some(run.id.as_str())
-        && event.actor == Actor::Owner
-        && event.detail["text"] == "continue the work"));
-}
-
 #[path = "pi_build/retained_child.rs"]
 mod retained_child;
+
+#[path = "pi_build/worker_send.rs"]
+mod worker_send;

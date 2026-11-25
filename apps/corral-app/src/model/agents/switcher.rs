@@ -138,7 +138,9 @@ fn entry(feed: &Feed, row: &AssistantRow, pinned: bool, ask: Option<&str>) -> En
         .map(|line| line.name.clone())
         .filter(|name| !name.is_empty())
         .unwrap_or_else(|| row.id.clone());
-    let role = if row.kind == AssistantKind::Build {
+    let role = if super::is_code(row) {
+        "code"
+    } else if row.kind == AssistantKind::Build {
         "build"
     } else {
         "chat"

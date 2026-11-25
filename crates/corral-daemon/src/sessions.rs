@@ -410,7 +410,7 @@ impl Session {
         if self.is_empty_quick() {
             return (None, HostPresence::NotRunning, None);
         }
-        if self.role == "build" && self.session.is_some() {
+        if matches!(self.role, "build" | "code") && self.session.is_some() {
             // Build resolution already observed hello and validated the socket's identity.
             return (self.transcript.clone(), HostPresence::Running, None);
         }
@@ -459,6 +459,7 @@ pub(crate) fn cancel(shared: &Shared, request: SessionCancel) -> Result<SessionC
 
 pub(crate) fn pause(shared: &Shared, id: &str) -> Result<SessionPauseReply> {
     let session = resolve(shared, id)?;
+    builds::reject_code(session.role == "code")?;
     let client = session.pi()?;
     if session.role == "reviewer" {
         return Err(refuse(
@@ -472,8 +473,10 @@ pub(crate) fn pause(shared: &Shared, id: &str) -> Result<SessionPauseReply> {
 }
 
 pub(crate) fn resume(shared: &Shared, id: &str) -> Result<SessionResumeReply> {
-    let reply = serde_json::from_value(resolve(shared, id)?.pi()?.resume()?)
-        .context("decode Pi resume reply")?;
+    let session = resolve(shared, id)?;
+    builds::reject_code(session.role == "code")?;
+    let reply =
+        serde_json::from_value(session.pi()?.resume()?).context("decode Pi resume reply")?;
     shared.publish();
     Ok(reply)
 }
