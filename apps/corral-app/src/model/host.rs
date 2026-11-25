@@ -325,8 +325,9 @@ pub fn compact(view: &HostView) -> String {
         .iter()
         .map(|m| format!("{} {}", m.kind.short(), m.value.as_deref().unwrap_or("—")))
         .collect();
+    // First, so a narrow line that cuts the end never hides it.
     if view.stale() {
-        parts.push("stale".into());
+        parts.insert(0, STALE.to_uppercase());
     }
     parts.join(" · ")
 }
@@ -342,7 +343,7 @@ fn metric(m: &HostMetrics, kind: Kind) -> Metric {
                 series: vec![series(m, "Busy", Some(100.0), |s| {
                     s.cpu_percent.map(f64::from)
                 })],
-                note: m.cpus.map(|cpus| format!("Busy share of all {cpus} CPUs.")),
+                note: Some("Busy share of every CPU the kernel counts.".into()),
                 ..absent(
                     kind,
                     why_rate(m, cpu.is_none(), |s| s.cpu_percent.is_some()),
@@ -352,14 +353,9 @@ fn metric(m: &HostMetrics, kind: Kind) -> Metric {
         Kind::Memory => {
             let pair = newest.and_then(|s| Some((s.memory_used?, s.memory_total?)));
             Metric {
-                value: pair.map(|(used, _)| bytes(used)),
-                detail: pair.map(|(used, total)| {
-                    format!(
-                        "of {} · {} available",
-                        bytes(total),
-                        bytes(total - used.min(total))
-                    )
-                }),
+                value: pair.map(|(used, total)| format!("{} of {}", bytes(used), bytes(total))),
+                detail: pair
+                    .map(|(used, total)| format!("{} available", bytes(total - used.min(total)))),
                 share: pair.and_then(|(used, total)| share(used, total)),
                 // Against the whole memory, as the gauge, so a steady 30 % does not draw as full.
                 series: vec![series(
@@ -374,8 +370,8 @@ fn metric(m: &HostMetrics, kind: Kind) -> Metric {
         }
         Kind::Space => match &m.filesystem {
             Some(fs) => Metric {
-                value: Some(format!("{} free", bytes(fs.free))),
-                detail: Some(format!("{} used of {}", bytes(fs.used), bytes(fs.total))),
+                value: Some(format!("{} used · {} free", bytes(fs.used), bytes(fs.free))),
+                detail: Some(format!("of {}", bytes(fs.total))),
                 share: share(fs.used, fs.total),
                 note: Some(match &fs.mount {
                     Some(mount) => format!("Capacity of {mount}, which holds {}.", fs.path),

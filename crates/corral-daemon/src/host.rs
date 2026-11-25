@@ -142,6 +142,8 @@ pub(crate) struct Sampler {
 
 struct Inner {
     latest: Arc<Rows>,
+    /// When `latest` was taken; `None` for an empty snapshot.
+    published: Option<Instant>,
     demand: Instant,
     running: bool,
     stopped: bool,
@@ -152,6 +154,7 @@ impl Default for Sampler {
         Self {
             inner: Mutex::new(Inner {
                 latest: Arc::new(Rows::Host(vec![empty(None)])),
+                published: None,
                 demand: Instant::now(),
                 running: false,
                 stopped: false,
@@ -174,6 +177,12 @@ impl Sampler {
                 .spawn(move || sampler.run(root));
             // A failed spawn leaves the empty snapshot; the next read tries again.
             inner.running = started.is_ok();
+        }
+        // A sampler stuck in a slow read must not have its last readings served as current.
+        let limit = Duration::from_millis(HOST_INTERVAL_MS) * MAX_GAP_INTERVALS;
+        if inner.published.is_some_and(|at| at.elapsed() > limit) {
+            inner.latest = Arc::new(Rows::Host(vec![empty(None)]));
+            inner.published = None;
         }
         Arc::clone(&inner.latest)
     }
@@ -200,6 +209,7 @@ impl Sampler {
                     inner.running = false;
                     // A later subscriber must not see this run's last values as current.
                     inner.latest = Arc::new(Rows::Host(vec![empty(None)]));
+                    inner.published = None;
                     return;
                 }
                 let wait = next.saturating_duration_since(Instant::now());
@@ -223,7 +233,13 @@ impl Sampler {
                 disk: probe.disk.clone(),
                 ..empty(None)
             };
-            self.lock().latest = Arc::new(Rows::Host(vec![metrics]));
+            let mut inner = self.lock();
+            if inner.stopped {
+                inner.running = false;
+                return;
+            }
+            inner.latest = Arc::new(Rows::Host(vec![metrics]));
+            inner.published = Some(started);
             // Measured from this reading, so a late wakeup never brings the next one closer.
             next = started + interval;
         }

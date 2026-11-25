@@ -109,5 +109,5 @@ fn readings_that_stop_arriving_or_a_lost_link_are_stale() {
     down.link = Link::Down;
     let shown = view(&down);
     assert!(shown.stale());
-    assert!(compact(&shown).ends_with("stale"));
+    assert!(compact(&shown).starts_with("STALE"));
 }
