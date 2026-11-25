@@ -1,3 +1,4 @@
+mod feed_filter;
 mod live_changes;
 mod live_context;
 mod live_task;
@@ -16,6 +17,7 @@ pub use verbs::{
     Choice, Record, Verb, VerbAction, VerbField, palette_record, record_verbs, session_task,
 };
 
+pub use feed_filter::*;
 pub use live_changes::*;
 pub use live_context::*;
 pub use live_task::*;
@@ -44,6 +46,8 @@ pub struct State {
     pub composer: Option<VerbComposer>,
     /// The selected record's keyboard-opened action menu.
     pub menu: Option<Record>,
+    /// Activity › Feed's own filters on this device.
+    pub feed: FeedFilter,
 }
 
 /// A canonical record action against owned feed identities.

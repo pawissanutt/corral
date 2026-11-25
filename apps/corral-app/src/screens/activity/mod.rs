@@ -6,6 +6,7 @@
 //! so the title stays put from one page to the next.
 
 mod feed;
+mod feed_filter;
 
 use nsh_core::prelude::*;
 

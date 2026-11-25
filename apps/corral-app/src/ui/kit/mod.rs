@@ -10,6 +10,7 @@ pub mod board_status;
 pub mod button;
 pub mod chip;
 pub mod entry;
+pub mod filters;
 pub mod hint;
 pub mod list;
 pub mod marks;
