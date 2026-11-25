@@ -1,4 +1,5 @@
-//! A session's Session menu, on its list row and its page head: the run controls that apply to
+//! A session's Session menu, on its list row and its page head: Open beside (the desktop
+//! pane), the run controls that apply to
 //! it (Cancel turn, Pause, Resume, Rewind…, Terminate or Stop, Relaunch or Resume), then for a
 //! run Reply (its task's engine operation) and its task's whole Actions menu. A chat's or a
 //! build's menu holds its controls, and a build stopped here also Remove…, so removal never
@@ -15,7 +16,14 @@ pub const SESSION_MENU_LABEL: &str = "Session";
 
 /// The Session menu of session `session` (`T-42_R1`, `A-3`, `B-k3x9`).
 pub fn session_verbs(feed: &daemon::Feed, session: &Id) -> Vec<VerbAction> {
-    let mut verbs = control_verbs(feed, session);
+    let mut verbs = vec![VerbAction {
+        slug: "open-beside",
+        label: crate::model::dock::OPEN_BESIDE.into(),
+        enabled: true,
+        reason: None,
+        press: Press::OpenBeside(session.clone()),
+    }];
+    verbs.extend(control_verbs(feed, session));
     if super::removable(feed, session.as_str()) {
         verbs.push(VerbAction {
             slug: "remove",
@@ -25,13 +33,6 @@ pub fn session_verbs(feed: &daemon::Feed, session: &Id) -> Vec<VerbAction> {
             press: Press::Remove(session.clone()),
         });
     }
-    verbs.push(VerbAction {
-        slug: "open-beside",
-        label: crate::model::dock::OPEN_BESIDE.into(),
-        enabled: true,
-        reason: None,
-        press: Press::OpenBeside(session.clone()),
-    });
     let Some(task) = session_task(session).map(Id::new) else {
         return verbs;
     };
@@ -90,18 +91,18 @@ mod tests {
         assert_eq!(
             slugs(&feed, "T-1_R1"),
             [
+                "open-beside",
                 "cancel-turn",
                 "pause",
                 "resume",
                 "rewind",
                 "terminate",
-                "open-beside",
                 "reply",
                 "task-actions"
             ]
         );
-        assert_eq!(slugs(&feed, "T-2_R2")[..2], ["cancel-turn", "terminate"]);
-        assert_eq!(slugs(&feed, "T-3_R1")[0], "relaunch");
+        assert_eq!(slugs(&feed, "T-2_R2")[1..3], ["cancel-turn", "terminate"]);
+        assert_eq!(slugs(&feed, "T-3_R1")[1], "relaunch");
     }
 
     /// A stopped build is resumed or removed from its menu, wherever the row or inspector has
@@ -114,7 +115,7 @@ mod tests {
         feed.assistants.insert("B-k3x9".into(), build);
         assert_eq!(
             slugs(&feed, "B-k3x9"),
-            ["relaunch", "remove", "open-beside"]
+            ["open-beside", "relaunch", "remove"]
         );
     }
 }
