@@ -139,9 +139,12 @@ fn attachment_pages_keep_all_facts_and_the_recorded_text_continuation() -> Resul
     }
     let (_dir, path) = fixture(
         [
-            json!({"id": "root", "parentId": null, "role": "assistant", "content": "before"}),
-            json!({"id": "abandoned", "parentId": "root", "role": "assistant", "content": "not on the branch"}),
-            json!({"id": "owner", "parentId": "root", "role": "user", "content": content}),
+            json!({"type": "message", "id": "root", "parentId": null,
+                   "message": {"role": "assistant", "content": "before"}}),
+            json!({"type": "message", "id": "abandoned", "parentId": "root",
+                   "message": {"role": "assistant", "content": "not on the branch"}}),
+            json!({"type": "message", "id": "owner", "parentId": "root",
+                   "message": {"role": "user", "content": content}}),
         ],
         "",
     )?;
