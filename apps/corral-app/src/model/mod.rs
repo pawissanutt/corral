@@ -12,6 +12,8 @@ pub mod artifacts;
 pub mod assistant;
 /// Shared board snapshot.
 pub mod board;
+/// The numbers every graphical chart shares: scales, scale labels, date ticks, bar widths.
+pub mod chart;
 /// Citations of tasks and artifacts in text, and what they open.
 pub mod cite;
 /// Palette commands and confirmation wording.

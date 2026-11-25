@@ -1,5 +1,6 @@
 pub mod ask;
 pub mod atoms;
+pub mod chart;
 pub mod composer;
 pub mod health_line;
 pub mod icons;

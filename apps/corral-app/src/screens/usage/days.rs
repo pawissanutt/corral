@@ -1,21 +1,39 @@
-//! The period's tokens per day: one bar a day against the busiest day, the first and last day
-//! under them. Desktop and phone draw the bars as views, each with its day's facts as its hover
-//! hint; a terminal draws block heights across the Cells it has, a Cell holding several days
-//! when the period is longer than the row. The bars are not keyboard stops: the Day grouping
-//! lists the same facts as rows. Screen readers hear the strip's summary. test_id "usage-days".
+//! The period's tokens per day. Desktop, web and phone draw a chart on a canvas measured to its
+//! container (`ui::chart`'s conventions): a token scale from a visible zero baseline with a
+//! gridline per round step, one bar a day no wider than `WIDEST` in its slot, the days under
+//! the baseline thinned from the newest so labels never collide. A readout line above the plot
+//! gives the exact figures of the day pointed at, touched, or reached with ← → Home End once the
+//! chart has the keyboard focus (the Day grouping's row in words). A terminal draws block
+//! heights across the Cells it has, a Cell holding several days when the period is longer than
+//! the row. Screen readers hear the strip's summary. test_ids "usage-days", "usage-days-chart",
+//! "usage-days-readout".
 
+use std::rc::Rc;
+
+use nsh_core::canvas::CanvasTextAlign;
+use nsh_core::keymap::Keystroke;
 use nsh_core::prelude::*;
 
 use crate::model::Form;
-use crate::model::usage::DayStrip;
+use crate::model::chart::{bar_width, compact, labelled, scale};
+use crate::model::usage::{DayBar, DayStrip};
 use crate::state::AppState;
-use crate::ui::kit::hint::tip;
+use crate::ui::chart::{AXIS_ADVANCE, AXIS_SIZE, PICKED, SERIES, grid, gutter, ink, mono_font};
 use crate::ui::kit::text::h3;
-use crate::ui::tokens::{FONT_MONO, Token, color};
+use crate::ui::tokens::{FONT_TEXT, Token, color};
 
-/// The bars' height at the busiest day; a quiet day keeps a hairline.
-const HEIGHT: f32 = 56.0;
-const HAIRLINE: f32 = 1.0;
+/// The canvas's height on desktop and web, and on the phone.
+const HEIGHT: f32 = 180.0;
+const PHONE_HEIGHT: f32 = 150.0;
+/// Room over the top gridline for its label, and under the baseline for the days.
+const TOP: f32 = 8.0;
+const FOOT: f32 = 22.0;
+/// The widest a bar gets, however wide the window.
+const WIDEST: f32 = 28.0;
+/// Gridlines over zero at most.
+const LINES: u64 = 4;
+/// Room kept between two day labels.
+const TICK_GAP: f32 = 12.0;
 /// Block heights from an eighth to full.
 const BLOCKS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
 /// From this many Cells a day, its last Cell is a gap, so neighbouring days read apart.
@@ -24,72 +42,266 @@ const GAPPED_DAY: usize = 3;
 /// The strip in `room` terminal Cells (unused on desktop and the phone, which measure).
 pub(super) fn strip(app: AppState, strip: &DayStrip, room: usize) -> AnyElement {
     let drawn = match app.form {
-        Form::Terminal => cells(strip, room),
-        Form::Desktop | Form::Phone => bars(app, strip),
+        Form::Terminal => view()
+            .accessible(true)
+            .role(AccessibilityRole::Image)
+            .label(strip.spoken.clone())
+            .child(cells(strip, room))
+            .into_element(),
+        Form::Desktop | Form::Phone => graphic(app, strip),
     };
     view()
         .test_id("usage-days")
         .child(h3(app, strip.title, Some(strip.note.clone())))
+        .child(drawn)
+        .into_element()
+}
+
+/// Where the plot and its labels fall at one width.
+struct Geometry {
+    left: f32,
+    right: f32,
+    base: f32,
+    slot: f32,
+    bar: f32,
+    top_value: u64,
+    lines: Vec<(String, f32)>,
+    ticks: Vec<usize>,
+    tick_width: f32,
+}
+
+fn geometry(bars: &[DayBar], peak: u64, room: f32, height: f32) -> Geometry {
+    let scale = scale(peak, LINES);
+    let base = (height - FOOT).round();
+    let y = |value: u64| base - value as f32 / scale.top as f32 * (base - TOP);
+    let lines: Vec<(String, f32)> = scale
+        .ticks
+        .iter()
+        .map(|&value| (compact(value), y(value)))
+        .collect();
+    let left = gutter(lines.iter().map(|(label, _)| label.as_str()));
+    let right = (room - 2.0).max(left + 1.0);
+    let slot = (right - left) / bars.len().max(1) as f32;
+    let tick_width = bars
+        .iter()
+        .map(|bar| bar.tick.chars().count())
+        .max()
+        .unwrap_or(0) as f32
+        * AXIS_ADVANCE;
+    Geometry {
+        left,
+        right,
+        base,
+        slot,
+        bar: bar_width(slot, WIDEST),
+        top_value: scale.top,
+        ticks: labelled(bars.len(), right - left, tick_width + TICK_GAP),
+        lines,
+        tick_width,
+    }
+}
+
+fn rect(x: f32, y: f32, w: f32, h: f32) -> Bounds<Points> {
+    bounds(point(px(x), px(y)), size(px(w), px(h)))
+}
+
+/// The plot with the day read now (`at`) banded and its bar and label in the picked colour.
+fn paint(g: &Geometry, bars: &[DayBar], at: Option<usize>) -> Painter {
+    let mut p = Painter::new();
+    if let Some(at) = at {
+        p = p
+            .fill_color(ink(Token::Hover))
+            .begin_path()
+            .round_rect(
+                rect(g.left + at as f32 * g.slot, TOP, g.slot, g.base - TOP),
+                px(3.0),
+            )
+            .fill();
+    }
+    p = grid(p, g.left, g.right, &g.lines);
+    for (index, day) in bars.iter().enumerate() {
+        if day.tokens == 0 {
+            continue;
+        }
+        let height = (day.tokens as f32 / g.top_value as f32 * (g.base - TOP)).max(1.0);
+        let x = g.left + index as f32 * g.slot + (g.slot - g.bar) / 2.0;
+        let fill = if at == Some(index) { PICKED } else { SERIES };
+        p = p
+            .fill_color(ink(fill))
+            .begin_path()
+            .round_rect(
+                rect(x, g.base - height, g.bar, height),
+                px((g.bar / 2.0).min(2.0)),
+            )
+            .fill();
+    }
+    let half = g.tick_width / 2.0;
+    let centre = |index: usize| {
+        (g.left + (index as f32 + 0.5) * g.slot).clamp(g.left + half, g.right - half)
+    };
+    p = p
+        .font(&mono_font(AXIS_SIZE))
+        .text_align(CanvasTextAlign::Center);
+    // A label too near the day read now gives way to that day's own.
+    let clear = |index: usize| {
+        at.is_none_or(|at| (centre(index) - centre(at)).abs() >= g.tick_width + TICK_GAP / 2.0)
+    };
+    for &index in &g.ticks {
+        if !clear(index) {
+            continue;
+        }
+        p = p.fill_color(ink(Token::Ink3)).fill_text(
+            &bars[index].tick,
+            centre(index),
+            g.base + 15.0,
+        );
+    }
+    // The day read now always shows its date, over any thinned label near it.
+    if let Some(at) = at.filter(|&at| at < bars.len()) {
+        let x = centre(at);
+        p = p
+            .fill_color(ink(PICKED))
+            .fill_text(&bars[at].tick, x, g.base + 15.0);
+    }
+    p
+}
+
+/// The chart, its readout over it, the days as hover and press targets over the canvas, and
+/// the keys that walk them once it has the focus.
+fn graphic(app: AppState, strip: &DayStrip) -> AnyElement {
+    let phone = app.form == Form::Phone;
+    let height = if phone { PHONE_HEIGHT } else { HEIGHT };
+    let width = signal(0.0_f32);
+    let hovered = signal(None::<usize>);
+    let picked = signal(None::<usize>);
+    let shown = computed(move || hovered.get().or(picked.get()));
+    let bars: Rc<[DayBar]> = strip.bars.clone().into();
+    let peak = strip.peak;
+    let last = bars.len().saturating_sub(1);
+
+    let words = bars.clone();
+    let prompt = strip.prompt;
+    let readout = dynamic(move || {
+        let day = shown.get().and_then(|at| words.get(at));
+        let line = day.map_or_else(|| prompt.to_owned(), |day| day.hint.clone());
+        text(line)
+            .test_id("usage-days-readout")
+            .font_family(FONT_TEXT)
+            .text_size(px(if phone { 12.5 } else { 12.0 }))
+            .line_height(px(16.0))
+            .tabular_nums()
+            .text_color(color(if day.is_some() {
+                Token::Ink
+            } else {
+                Token::Ink3
+            }))
+            .into_element()
+    });
+
+    let plot = dynamic(move || {
+        let room = width.get();
+        let bars = bars.clone();
+        (room > 0.0).then(|| untracked(|| plot(bars, peak, room, height, shown, hovered, picked)))
+    });
+
+    let keys = ["left", "right", "home", "end"]
+        .into_iter()
+        .filter_map(|key| Keystroke::parse_with(key, false).ok());
+    view()
+        .gap(px(6.0))
+        .child(view().min_h(px(32.0)).justify_end().child(readout))
         .child(
             view()
+                .test_id("usage-days-chart")
+                .w_full()
+                .h(px(height))
+                .rounded(px(4.0))
+                .on_layout(move |frame: &Bounds<Points>| {
+                    if width.get_untracked() != frame.size.width.0 {
+                        width.set(frame.size.width.0);
+                    }
+                })
+                .on_mouse_leave(move |_: &MouseEvent| hovered.set(None))
+                .focusable(true)
+                .focus_visible(|s| {
+                    s.outline(px(2.0))
+                        .outline_color(color(Token::Focus))
+                        .outline_offset(px(2.0))
+                })
+                .on_focus(move || {
+                    if picked.get_untracked().is_none() {
+                        picked.set(Some(last));
+                    }
+                })
+                .capture_keys(KeyCapture::keys(keys))
+                .on_key_down(move |event: &KeyEvent| {
+                    let now = shown.get_untracked();
+                    let next = match event.key.as_ref() {
+                        "ArrowLeft" => now.map_or(last, |at| at.saturating_sub(1)),
+                        "ArrowRight" => now.map_or(last, |at| (at + 1).min(last)),
+                        "Home" => 0,
+                        "End" => last,
+                        _ => return,
+                    };
+                    hovered.set(None);
+                    picked.set(Some(next));
+                })
                 .accessible(true)
                 .role(AccessibilityRole::Image)
                 .label(strip.spoken.clone())
-                .child(drawn),
+                .child(plot),
         )
         .into_element()
 }
 
-fn bars(app: AppState, strip: &DayStrip) -> AnyElement {
-    let form = app.form;
-    let gap = if strip.bars.len() > 62 { 0.0 } else { 2.0 };
-    let bars = strip.bars.iter().map(|bar| {
-        let height = (bar.fraction * HEIGHT).max(HAIRLINE);
-        let fill = if bar.fraction > 0.0 {
-            Token::Ink3
-        } else {
-            Token::Rule2
-        };
-        let column = view()
-            .flex_1()
-            .min_w(px(0.0))
-            .h(px(HEIGHT))
-            .justify_end()
-            .child(
-                view()
-                    .h(px(height))
-                    .rounded_t(px(1.5))
-                    .bg(color(fill))
-                    .hover(|s| s.bg(color(Token::Ink))),
-            );
-        tip(form, column, bar.hint.clone().into()).into_element()
-    });
-    let axis = |words: &str| {
-        text(words.to_owned())
-            .number_of_lines(1u32)
-            .font_family(FONT_MONO)
-            .text_size(px(10.5))
-            .tabular_nums()
-            .text_color(color(Token::Ink3))
-    };
+fn hover_on(hovered: Signal<Option<usize>>, index: usize) {
+    if hovered.get_untracked() != Some(index) {
+        hovered.set(Some(index));
+    }
+}
+
+/// The canvas at `room` wide, redrawn when the day read now changes, under one target a day.
+fn plot(
+    bars: Rc<[DayBar]>,
+    peak: u64,
+    room: f32,
+    height: f32,
+    shown: Memo<Option<usize>>,
+    hovered: Signal<Option<usize>>,
+    picked: Signal<Option<usize>>,
+) -> AnyElement {
+    let g = Rc::new(geometry(&bars, peak, room, height));
+    let targets: Vec<AnyElement> = (0..bars.len())
+        .map(|index| {
+            view()
+                .absolute()
+                .top(px(0.0))
+                .left(px(g.left + index as f32 * g.slot))
+                .w(px(g.slot))
+                .h(px(height))
+                .accessibility_elements_hidden(true)
+                .on_mouse_enter(move |_: &MouseEvent| hover_on(hovered, index))
+                .on_mouse_move(move |_: &MouseEvent| hover_on(hovered, index))
+                .on_press(move || picked.set(Some(index)))
+                .focusable(false)
+                .into_element()
+        })
+        .collect();
+    let painted = g.clone();
     view()
-        .gap(px(4.0))
+        .relative()
+        .w(px(room))
+        .h(px(height))
         .child(
-            view()
-                .flex_row()
-                .items_end()
-                .gap(px(gap))
-                .accessibility_elements_hidden(true)
-                .children(bars.collect::<Vec<_>>()),
+            canvas(move || paint(&painted, &bars, shown.get()))
+                .absolute()
+                .top(px(0.0))
+                .left(px(0.0))
+                .w(px(room))
+                .h(px(height))
+                .accessibility_elements_hidden(true),
         )
-        .child(
-            view()
-                .flex_row()
-                .justify_between()
-                .accessibility_elements_hidden(true)
-                .child(axis(&strip.first))
-                .child(axis(&strip.last)),
-        )
+        .children(targets)
         .into_element()
 }
 

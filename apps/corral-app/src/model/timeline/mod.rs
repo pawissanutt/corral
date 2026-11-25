@@ -460,29 +460,15 @@ pub struct Burnup {
 }
 /// Baseline distance between the burn-up's two end labels.
 const LABEL_LINE: f32 = 12.0;
-/// The smallest round grid step that puts the top of the series under three steps.
-fn grid_step(max: u32) -> u32 {
-    let need = max.div_ceil(3).max(1);
-    let mut magnitude = 1;
-    loop {
-        for factor in [1, 2, 5] {
-            if factor * magnitude >= need {
-                return factor * magnitude;
-            }
-        }
-        magnitude *= 10;
-    }
-}
 /// Build chart points for the requested canvas dimensions (desktop 404×150, phone 354×140).
 pub fn burnup(series: &BurnupSeries, width: f32, height: f32) -> Burnup {
-    let step = grid_step(
-        series
-            .points
-            .iter()
-            .map(|p| p.1.max(p.2))
-            .max()
-            .unwrap_or(0),
-    );
+    let most = series
+        .points
+        .iter()
+        .map(|p| p.1.max(p.2))
+        .max()
+        .unwrap_or(0);
+    let step = u32::try_from(crate::model::chart::step(u64::from(most), 3)).unwrap_or(u32::MAX);
     let top = step * 3;
     let x = |fraction: f32| 26.0 + fraction.clamp(0.0, 1.0) * (width - 32.0);
     let y = |v: u32| 8.0 + (1.0 - v as f32 / top as f32) * (height - 30.0);

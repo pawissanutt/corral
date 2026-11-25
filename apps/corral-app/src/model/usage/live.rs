@@ -571,12 +571,18 @@ fn day_strip(days: Days, series: &UsageSeries) -> DayStrip {
         .iter()
         .map(|(day, summary)| {
             let total = &summary.total;
-            let mut hint = format!(
-                "{}: {} tokens · {}",
-                short_day(*day),
-                used_words(total),
-                plural(total.requests, "request", "requests")
-            );
+            let mut hint = if total.requests == 0 {
+                format!("{}: no requests reported", short_day(*day))
+            } else {
+                format!(
+                    "{}: {} tokens · {} in · {} out · {}",
+                    short_day(*day),
+                    used_words(total),
+                    figure_of(input_evidence(total), total.input),
+                    figure_of(output_evidence(total), total.output),
+                    plural(total.requests, "request", "requests")
+                )
+            };
             if total.usd.is_some() {
                 hint.push_str(&format!(" · reported {}", cost(total)));
             }
@@ -595,6 +601,8 @@ fn day_strip(days: Days, series: &UsageSeries) -> DayStrip {
                 } else {
                     used(summary) as f32 / peak as f32
                 },
+                tokens: used(summary),
+                tick: day.strftime("%-d %b").to_string(),
                 hint,
             }
         })
@@ -649,6 +657,8 @@ fn day_strip(days: Days, series: &UsageSeries) -> DayStrip {
         ),
         note,
         bars,
+        peak,
+        prompt: "Point at, touch or focus the chart and use ← → for a day's figures",
         first: days.first.strftime("%-d %b").to_string(),
         last: days.last.strftime("%-d %b").to_string(),
     }

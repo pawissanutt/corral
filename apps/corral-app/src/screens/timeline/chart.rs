@@ -18,7 +18,8 @@ use crate::model::timeline::{self, Burnup, BurnupSeries, Kind, Layout};
 use crate::model::{Form, Hue};
 use crate::state::AppState;
 use crate::ui::kit::marks::{hue_fill, hue_ink};
-use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
+use crate::ui::chart::{grid, ink, mono_font, now, text_font, tip};
+use crate::ui::tokens::{Token, color};
 
 /// A segment bar's height.
 const BAR: f32 = 12.0;
@@ -165,28 +166,6 @@ impl Rect {
     fn bounds(self) -> Bounds<Points> {
         bounds(point(px(self.x), px(self.y)), size(px(self.w), px(self.h)))
     }
-}
-
-/// The colour of a theme colour in the appearance shown now. Reading it inside a canvas's
-/// drawing redraws the canvas when the appearance changes.
-fn now(adaptive: AdaptiveColor) -> Hsla {
-    if dark() {
-        adaptive.dark
-    } else {
-        adaptive.light
-    }
-}
-
-fn ink(token: Token) -> Hsla {
-    now(color(token))
-}
-
-fn mono_font(px_size: f32) -> String {
-    format!("{px_size}px {FONT_MONO}")
-}
-
-fn text_font(weight: u16, px_size: f32) -> String {
-    format!("{weight} {px_size}px {FONT_TEXT}")
 }
 
 /// Top of a bar `height` high in the lane starting at `lane_y`: centred in the lane on desktop,
@@ -643,24 +622,6 @@ fn hit(form: Form, area: Rect, spoken: &str, press: Option<(AppState, &Live)>) -
         .into_element()
 }
 
-/// The hover hint: the label on the raised surface in 11.5 pt ink.
-fn tip(words: SharedString) -> AnyElement {
-    view()
-        .px(px(8.0))
-        .py(px(4.0))
-        .rounded(px(6.0))
-        .bg(color(Token::Surface))
-        .border_1()
-        .border_color(color(Token::Rule2))
-        .child(
-            text(words)
-                .font_family(FONT_TEXT)
-                .text_size(px(11.5))
-                .text_color(color(Token::Ink)),
-        )
-        .into_element()
-}
-
 fn polyline(p: Painter, points: &[timeline::Point]) -> Painter {
     points
         .iter()
@@ -681,20 +642,12 @@ fn paint_burnup(chart: &Burnup) -> Painter {
     let [first_day, last_day] = &chart.axis_labels;
     let left = first_day.1;
     let right = last_day.1;
-    let mut p = Painter::new()
-        .stroke_color(ink(Token::Rule))
-        .line_width(1.0)
-        .font(&mono_font(9.5))
-        .fill_color(ink(Token::Ink4))
-        .text_align(CanvasTextAlign::Start);
-    for &(value, y) in &chart.grid {
-        p = p
-            .begin_path()
-            .move_to(left, y)
-            .line_to(right, y)
-            .stroke()
-            .fill_text(&value.to_string(), 0.0, y + 3.0);
-    }
+    let lines: Vec<(String, f32)> = chart
+        .grid
+        .iter()
+        .map(|&(value, y)| (value.to_string(), y))
+        .collect();
+    let mut p = grid(Painter::new(), left, right, &lines);
     p = p
         .stroke_color(quiet)
         .line_width(1.4)

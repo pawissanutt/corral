@@ -67,6 +67,11 @@ pub const HIDE_DETAILS: &str = "Hide details";
 pub struct DayBar {
     /// 0 for a day with no tokens, 1 for the busiest day.
     pub fraction: f32,
+    /// Input and output tokens reported, which a graphical chart plots against its scale.
+    pub tokens: u64,
+    /// The day under its bar: `25 Nov`.
+    pub tick: String,
+    /// The day's figures in words, as the Day grouping's row gives them.
     pub hint: String,
 }
 
@@ -77,6 +82,10 @@ pub struct DayStrip {
     /// The busiest day, or that no day reported any tokens.
     pub note: String,
     pub bars: Vec<DayBar>,
+    /// The most tokens any day reported, which a graphical chart's scale reaches.
+    pub peak: u64,
+    /// What a graphical chart says until a day is pointed at, touched or reached by the keys.
+    pub prompt: &'static str,
     /// The first and last day under the strip.
     pub first: String,
     pub last: String,

@@ -282,7 +282,8 @@ fn meter((used, limit): (u64, u64)) -> AnyElement {
         .into_element()
 }
 
-/// The last days as small bars, against the costliest.
+/// The last days as small bars against the costliest, on a zero baseline (`ui::chart`'s
+/// inline form: the series colour and the baseline, no scale): a day without cost is no bar.
 fn spark(days: &[f32]) -> AnyElement {
     view()
         .flex_row()
@@ -290,13 +291,20 @@ fn spark(days: &[f32]) -> AnyElement {
         .flex_shrink_0()
         .gap(px(2.0))
         .h(px(14.0))
+        .border_b_1()
+        .border_color(color(Token::Rule2))
         .accessibility_elements_hidden(true)
         .children(days.iter().map(|&share| {
+            let share = if share > 0.0 {
+                share.clamp(0.08, 1.0)
+            } else {
+                0.0
+            };
             view()
                 .w(px(4.0))
-                .h(relative(share.clamp(0.08, 1.0)))
-                .rounded(px(1.0))
-                .bg(color(Token::Ink4))
+                .h(relative(share))
+                .rounded_t(px(1.0))
+                .bg(color(crate::ui::chart::SERIES))
                 .into_element()
         }))
         .into_element()
