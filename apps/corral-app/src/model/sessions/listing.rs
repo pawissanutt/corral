@@ -41,6 +41,14 @@ impl Sort {
         }
     }
 
+    /// The label where room is short (a phone, a terminal's section heading).
+    pub fn short(self) -> &'static str {
+        match self {
+            Self::Activity => "Activity",
+            other => other.label(),
+        }
+    }
+
     pub fn phone_fact(self, row: &SessionRow) -> Option<String> {
         let value = match self {
             Self::Activity => row.activity.as_ref(),

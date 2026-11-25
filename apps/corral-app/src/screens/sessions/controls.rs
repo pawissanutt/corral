@@ -7,7 +7,7 @@
 //! chosen one raised. Phone: the field over a wrapping row of modes. Terminal: the field and
 //! modes on one row; NSH bands a pressed option itself.
 
-use nsh_base::toggle;
+use nsh_base::{toggle, toggle_group};
 use nsh_core::element::color as for_appearance;
 use nsh_core::prelude::*;
 
@@ -21,6 +21,8 @@ use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color, text_size};
 /// The search field's width on a desktop toolbar.
 const FIELD_WIDTH: f32 = 280.0;
 const FIELD_CELLS: f32 = 22.0;
+/// The least touch target on a phone.
+const TARGET: f32 = 44.0;
 
 /// How large an option is drawn.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -53,7 +55,7 @@ pub(super) fn filter_bar(app: AppState, shown: Memo<sessions::Listing>) -> AnyEl
                         move || app.agents.update(|state| state.list.set_mode(&mode)),
                     )
                 });
-            track(app, Size::Bar).children(options).into_element()
+            track(app, Size::Bar, "Session mode", options.collect())
         })
     });
     let bar = view().flex_none();
@@ -163,7 +165,7 @@ pub(super) fn sort_bar(app: AppState, group: String) -> AnyElement {
         let sort = app.agents.with(|state| state.list.sort(&group));
         let group = group.clone();
         untracked(move || {
-            let lead = (app.form != Form::Phone).then(|| {
+            let lead = (app.form == Form::Desktop).then(|| {
                 let words = text("Sort")
                     .number_of_lines(1u32)
                     .text_color(color(Token::Ink4));
@@ -180,7 +182,12 @@ pub(super) fn sort_bar(app: AppState, group: String) -> AnyElement {
                 option(
                     app,
                     Size::Small,
-                    choice.label().to_owned(),
+                    if app.form == Form::Desktop {
+                        choice.label()
+                    } else {
+                        choice.short()
+                    }
+                    .to_owned(),
                     None,
                     sort == choice,
                     format!("seg-sort-{group}-{}", choice.slug()),
@@ -196,20 +203,29 @@ pub(super) fn sort_bar(app: AppState, group: String) -> AnyElement {
                 .items_center()
                 .gap(px(if app.form == Form::Terminal { 0.0 } else { 6.0 }))
                 .children(lead)
-                .child(track(app, Size::Small).children(options))
+                .child(track(
+                    app,
+                    Size::Small,
+                    format!("Sort {group}"),
+                    options.collect(),
+                ))
                 .into_element()
         })
     })
     .into_element()
 }
 
-/// The row the options of one control sit in: a sunk track on a desktop toolbar.
-fn track(app: AppState, size: Size) -> View {
-    let row = view()
-        .role(AccessibilityRole::Toolbar)
-        .flex_row()
-        .items_center();
-    match (app.form, size) {
+/// The group the options of one control sit in, a toggle group (one tab stop, the arrow keys
+/// move between its options) inside a group that names it for screen readers: a sunk track on
+/// a desktop toolbar.
+fn track(
+    app: AppState,
+    size: Size,
+    name: impl Into<String>,
+    options: Vec<AnyElement>,
+) -> AnyElement {
+    let row = toggle_group().flex_row().items_center();
+    let row = match (app.form, size) {
         (Form::Terminal, _) => row.gap(term::cells(1.0)),
         (Form::Desktop, Size::Bar) => row
             .flex_wrap()
@@ -219,9 +235,17 @@ fn track(app: AppState, size: Size) -> View {
             .bg(color(Token::BgSunk))
             .border_1()
             .border_color(color(Token::Rule)),
-        (Form::Phone, Size::Bar) => row.flex_wrap().gap(px(6.0)),
+        // Wrapped rows keep apart by what each option reaches beyond its face.
+        (Form::Phone, Size::Bar) => row.flex_wrap().gap_x(px(6.0)).gap_y(px(TARGET - 32.0)),
         (Form::Desktop | Form::Phone, Size::Small) => row.gap(px(2.0)),
-    }
+    };
+    view()
+        .role(AccessibilityRole::Group)
+        .label(name.into())
+        .flex_row()
+        .items_center()
+        .child(row.children(options))
+        .into_element()
 }
 
 /// One option: its words and, for a mode, how many sessions it holds; the chosen one raised
@@ -240,7 +264,7 @@ fn option(
         (Form::Desktop, Size::Bar) => (24.0, 12.0, 10.0, 5.0),
         (Form::Desktop, Size::Small) => (20.0, 11.0, 7.0, 4.0),
         (Form::Phone, Size::Bar) => (32.0, 13.5, 12.0, 16.0),
-        (Form::Phone, Size::Small) => (28.0, 12.5, 8.0, 6.0),
+        (Form::Phone, Size::Small) => (32.0, 12.5, 8.0, 6.0),
         (Form::Terminal, _) => (16.0, text_size(form), 1.0, 0.0),
     };
     let words = text(label)
@@ -294,6 +318,16 @@ fn option(
             .into_element(),
         Form::Desktop | Form::Phone => target
             .h(px(height))
+            // A phone option reaches the 44 pt target above and below, never into its neighbours.
+            .when(form == Form::Phone, |t| {
+                let slop = px((TARGET - height) / 2.0);
+                t.hit_slop(EdgeInsets {
+                    top: slop,
+                    right: px(0.0),
+                    bottom: slop,
+                    left: px(0.0),
+                })
+            })
             .px(px(pad))
             .rounded(px(radius))
             .border_1()

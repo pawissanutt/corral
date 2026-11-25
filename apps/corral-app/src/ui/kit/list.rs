@@ -35,6 +35,11 @@ const GAP: f32 = 8.0;
 const RING: f32 = 2.0;
 /// The phone row's least height.
 const PHONE_ROW: f32 = 60.0;
+/// The least a section heading keeps beside a trailing control before the control wraps under
+/// it: desktop and phone points, terminal Cells.
+const HEAD_LEAST: f32 = 200.0;
+const HEAD_LEAST_PHONE: f32 = 170.0;
+const HEAD_LEAST_CELLS: f32 = 22.0;
 
 /// One row as the page fills it. Desktop and terminal: a cell per column, in the columns'
 /// order. Phone: what the row shows, laid out in a row (a mark, a column of two lines, a
@@ -419,7 +424,20 @@ fn section_head(
         }
         None => head.role(AccessibilityRole::Header),
     };
-    let line = view().flex_row().items_center().flex_none();
+    // With a trailing control the line wraps it under the heading once the heading would get
+    // less than its least: a narrow phone or a terminal list beside the inspector.
+    let wraps = trailing.is_some();
+    let least = match form {
+        Form::Terminal => cells(HEAD_LEAST_CELLS),
+        Form::Desktop => px(HEAD_LEAST),
+        Form::Phone => px(HEAD_LEAST_PHONE),
+    };
+    let head = head.when(wraps, |head| head.min_w(least));
+    let line = view()
+        .flex_row()
+        .items_center()
+        .flex_none()
+        .when(wraps, |line| line.flex_wrap());
     let trailing = trailing.map(|trailing| {
         view()
             .flex_row()
@@ -429,9 +447,11 @@ fn section_head(
     });
     match form {
         Form::Terminal => line
-            .h(term::rows(1.0))
+            .min_h(term::rows(1.0))
+            .gap_x(px(GAP))
             .child(
-                head.gap(px(GAP))
+                head.h(term::rows(1.0))
+                    .gap(px(GAP))
                     .child(term::space(1.0))
                     .children(caret)
                     .children(mark)
@@ -439,31 +459,35 @@ fn section_head(
                     .child(count)
                     .children(note),
             )
-            .children(trailing.map(|trailing| trailing.pr(cells(1.0))))
+            .children(
+                trailing.map(|trailing| trailing.h(term::rows(1.0)).pl(cells(1.0)).pr(cells(1.0))),
+            )
             .into_element(),
         Form::Desktop => line
-            .h(px(row_height(form)))
+            .min_h(px(row_height(form)))
             .pl(px(PAD_LEFT))
             .pr(px(PAD_RIGHT))
-            .gap(px(GAP))
+            .gap_x(px(GAP))
             .border_b(px(1.0))
             .border_color(color(Token::Rule))
             .child(
-                head.gap(px(GAP))
+                head.h(px(row_height(form)))
+                    .gap(px(GAP))
                     .children(caret)
                     .children(mark)
                     .child(label.font_family(FONT_TEXT).text_size(px(12.0)))
                     .child(count.font_family(FONT_MONO).text_size(px(11.0)))
                     .children(note.map(|note| note.font_family(FONT_TEXT).text_size(px(11.5)))),
             )
-            .children(trailing)
+            .children(trailing.map(|trailing| trailing.h(px(row_height(form)))))
             .into_element(),
         Form::Phone => line
             .min_h(px(36.0))
             .pt(px(14.0))
             .pb(px(6.0))
             .px(px(18.0))
-            .gap(px(GAP))
+            .gap_x(px(GAP))
+            .gap_y(px(6.0))
             .child(
                 head.gap(px(GAP))
                     .children(caret)
