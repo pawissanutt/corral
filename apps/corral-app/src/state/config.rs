@@ -113,7 +113,7 @@ impl AppState {
     /// Escape on Configuration with a profile shown alone, once nothing stands over the page (a
     /// sheet, an overlay, a menu, the sidebar's labels): back to the list; whether it did.
     pub(super) fn escape_profile(&self) -> bool {
-        let covered = untracked(|| self.sheet_open())
+        let covered = untracked(|| self.sheet_open() || self.dock_overlays_page())
             || self.nav.with_untracked(|nav| nav.newest().is_some())
             || self.work.with_untracked(|state| state.menu.is_some())
             || self.menus.get_untracked() > 0

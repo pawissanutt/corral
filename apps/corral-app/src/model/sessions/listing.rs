@@ -125,21 +125,19 @@ fn groups(feed: &Feed, state: &State, matching: &[SessionRow]) -> Vec<Section> {
                 .filter(|row| row.line.state == group)
                 .collect();
             let sort = state.sort(group.slug());
-            if sort != Sort::Activity {
-                rows.sort_by(|a, b| {
-                    match sort {
-                        Sort::Started => row::started(feed, b.line.id.as_str())
-                            .cmp(&row::started(feed, a.line.id.as_str())),
-                        Sort::Cost => match (a.spent.0, b.spent.0) {
-                            (Some(a), Some(b)) => b.total_cmp(&a),
-                            (a, b) => b.is_some().cmp(&a.is_some()),
-                        },
-                        Sort::Name => a.title.to_lowercase().cmp(&b.title.to_lowercase()),
-                        Sort::Activity => std::cmp::Ordering::Equal,
-                    }
-                    .then_with(|| a.line.id.cmp(&b.line.id))
-                });
-            }
+            rows.sort_by(|a, b| {
+                match sort {
+                    Sort::Activity => b.line.activity(feed).cmp(&a.line.activity(feed)),
+                    Sort::Started => row::started(feed, b.line.id.as_str())
+                        .cmp(&row::started(feed, a.line.id.as_str())),
+                    Sort::Cost => match (a.spent.0, b.spent.0) {
+                        (Some(a), Some(b)) => b.total_cmp(&a),
+                        (a, b) => b.is_some().cmp(&a.is_some()),
+                    },
+                    Sort::Name => a.title.to_lowercase().cmp(&b.title.to_lowercase()),
+                }
+                .then_with(|| a.line.id.cmp(&b.line.id))
+            });
             let count = rows.len();
             let open = state.unfolded.contains(group.slug());
             let section = Section {

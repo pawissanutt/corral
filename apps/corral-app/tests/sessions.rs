@@ -409,6 +409,7 @@ fn an_image_pasted_into_a_build_page_reaches_its_attachments() {
 #[test]
 fn a_stopped_build_is_removed_after_its_dry_run() {
     let mut app = sessions(desktop());
+    app.press("id:seg-mode-build").unwrap();
     app.press("id:section-gone").unwrap();
     app.wait_for("id:btn-remove-B-k2a1").unwrap();
     app.press("id:btn-remove-B-k2a1").unwrap();

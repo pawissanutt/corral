@@ -5,6 +5,7 @@
 
 mod address;
 mod attach;
+mod commands;
 mod config;
 mod devices;
 mod dock;
@@ -29,7 +30,6 @@ use nsh_core::prelude::*;
 use nsh_core::storage::Storage;
 
 use crate::model::act::RefusalSheet;
-use crate::model::commands::Action;
 use crate::model::{
     Act, Conn, DataState, Destination, Effect, Env, Form, Id, NavState, Overlay, SettingsSection,
     SidebarPref, Snapshot, ThemeChoice, agents, artifacts, assistant, daemon, review, session,
@@ -526,6 +526,9 @@ impl AppState {
             self.close(overlay);
             return;
         }
+        if self.dismiss_dock_overlay() {
+            return;
+        }
         // Escape leaves Home's docked composer, so Home's keys walk its cards again.
         if let Some(field) = self.docked_field.get_untracked() {
             self.docked_field.set(None);
@@ -696,52 +699,6 @@ impl AppState {
         let mut effects = Vec::new();
         state.into().update(|state| effects = reduce(state, env));
         self.run(effects);
-    }
-
-    /// Executes a model palette action after closing the palette.
-    pub fn run_command(&self, action: Action) {
-        self.close(Overlay::Palette);
-        match action {
-            Action::Go(destination) => self.go(destination),
-            Action::Settings(section) => self.go_settings(section),
-            Action::OpenLive(live) => self.open_live(live),
-            Action::Project(id) => self.open_project(id),
-            Action::AllProjects => self.set_scope(crate::model::projects::Scope::All),
-            Action::PreviewNoProjects => self.preview_no_projects(),
-            Action::Ask(text) => match text {
-                Some(text) => self.open_ask_with(&text),
-                None => self.open_ask(),
-            },
-            Action::NewBuild => {
-                self.go(Destination::Sessions);
-                let filter = untracked(|| self.scope_filter());
-                self.reduce(self.agents, |state, feed, _, _| {
-                    state.act(
-                        agents::Action::Start(agents::StartAction::Open),
-                        feed,
-                        &filter,
-                    )
-                });
-            }
-            Action::NewAssistant => self.new_assistant(),
-            Action::Agents => self.open_agents(),
-            Action::Theme(theme) => self.set_theme(theme),
-            Action::Data(data) => self.set_data(data),
-            Action::Hotkey => self.hotkey.set(true),
-            Action::Share => {
-                self.lock.set(false);
-                self.close(Overlay::Ask);
-                self.share.set(true);
-            }
-            Action::Lock => {
-                self.share.set(false);
-                self.lock.set(true);
-            }
-            Action::Work(press) => self.press_work(press),
-            Action::Session(action) => {
-                self.reduce(self.session, |state, feed, _, _| state.act(action, feed))
-            }
-        }
     }
 
     /// Applies a navigation, unless it leaves Configuration with unsaved edits: then the

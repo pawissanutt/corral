@@ -27,8 +27,12 @@ impl AppState {
         let opens = effects
             .iter()
             .any(|effect| !matches!(effect, crate::model::Effect::Toast(_)));
-        if opens && self.is_open(crate::model::Overlay::Ask) {
-            self.close(crate::model::Overlay::Ask);
+        if opens {
+            if self.dock_panel().is_some() {
+                self.dismiss_dock_overlay();
+            } else if self.is_open(crate::model::Overlay::Ask) {
+                self.close(crate::model::Overlay::Ask);
+            }
         }
         self.run(effects);
     }

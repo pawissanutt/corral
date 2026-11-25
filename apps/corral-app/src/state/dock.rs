@@ -19,6 +19,7 @@ type Contexts = BTreeMap<((bool, String), Id), ContextRef>;
 pub(super) struct DockUi {
     contexts: Signal<Contexts>,
     panel: Option<Signal<Panel>>,
+    hidden: Signal<bool>,
 }
 
 impl DockUi {
@@ -26,6 +27,7 @@ impl DockUi {
         Self {
             contexts: signal(BTreeMap::new()),
             panel: None,
+            hidden: signal(false),
         }
     }
 }
@@ -59,7 +61,7 @@ impl AppState {
                 _ => {}
             }
             if let Some(page) = dock::page_for(&action) {
-                self.open_live(page);
+                self.open_dock_page(page);
             }
         }
         if let Some(crate::model::Live::Session(id)) = dock::page_for(&action)
@@ -143,10 +145,41 @@ impl AppState {
     }
 
     pub fn shown_dock(&self) -> Option<Id> {
-        if self.is_open(Overlay::Ask) {
+        if self.dock_ui.hidden.get() || self.is_open(Overlay::Ask) {
             return None;
         }
         self.visible_dock()
+    }
+
+    pub fn can_show_dock(&self) -> bool {
+        self.dock_ui.hidden.get() && self.visible_dock().is_some() && !self.is_open(Overlay::Ask)
+    }
+
+    pub fn show_dock(&self) {
+        self.dock_ui.hidden.set(false);
+    }
+
+    pub fn hide_dock(&self) {
+        self.dock_ui.hidden.set(true);
+        self.pane.focused.set(false);
+    }
+
+    pub(super) fn dock_overlays_page(&self) -> bool {
+        self.pane.placement() == crate::model::pane::Placement::Over && self.shown_dock().is_some()
+    }
+
+    pub(super) fn dismiss_dock_overlay(&self) -> bool {
+        if untracked(|| self.dock_overlays_page()) {
+            self.hide_dock();
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn open_dock_page(&self, page: crate::model::Live) {
+        self.open_live(page);
+        self.dismiss_dock_overlay();
     }
 
     /// Distinguishes identical session IDs belonging to different sources when mounting a watch.
@@ -191,9 +224,11 @@ impl AppState {
         if self.change_dock(|saved| {
             let id = exact.ok_or(dock::UNAVAILABLE)?;
             saved.show_docked(&id).then_some(()).ok_or(dock::FULL)
-        }) && untracked(|| self.is_open(Overlay::Ask))
-        {
-            self.close(Overlay::Ask);
+        }) {
+            self.show_dock();
+            if untracked(|| self.is_open(Overlay::Ask)) {
+                self.close(Overlay::Ask);
+            }
         }
     }
 

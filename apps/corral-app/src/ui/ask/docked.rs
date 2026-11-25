@@ -89,9 +89,14 @@ fn session(app: AppState, id: Id) -> AnyElement {
                     dock::OPEN_PAGE,
                     ButtonKind::Quiet,
                     "btn-open-page",
-                    move || {
-                        app.open_live(Live::Session(open.clone()));
-                    },
+                    move || app.open_dock_page(Live::Session(open.clone())),
+                ))
+                .child(button(
+                    app,
+                    dock::HIDE,
+                    ButtonKind::Quiet,
+                    "btn-dock-hide",
+                    move || app.hide_dock(),
                 ))
                 .child(button(
                     app,

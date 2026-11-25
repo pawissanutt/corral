@@ -276,6 +276,30 @@ mod tests {
         }
     }
 
+    #[test]
+    fn activity_sort_does_not_pin_quick_chat_and_puts_unknown_times_last() {
+        use crate::model::agents::source_tests::assistant;
+        use corral_protocol::rows::{AssistantKind, AssistantState};
+
+        let mut feed = Feed::default();
+        for (id, kind, time) in [
+            ("A-0", AssistantKind::Session, None),
+            ("A-1", AssistantKind::Quick, Some("2025-01-01T00:00:01Z")),
+            ("A-3", AssistantKind::Session, Some("2025-01-01T00:00:02Z")),
+            ("A-2", AssistantKind::Session, Some("2025-01-01T00:00:02Z")),
+        ] {
+            let mut chat = assistant(id, kind);
+            chat.state = AssistantState::Ready;
+            chat.created = None;
+            chat.updated = time.map(str::to_owned);
+            feed.assistants.insert(Id::from(id), chat);
+        }
+        assert_eq!(
+            sections(&feed, &Scope::All, &State::default())[0].rows,
+            ["A-2", "A-3", "A-1", "A-0"].map(Id::from)
+        );
+    }
+
     /// A failed sessions subscription read as an empty list, so the owner was told there were
     /// no sessions when corrald could not say.
     #[test]

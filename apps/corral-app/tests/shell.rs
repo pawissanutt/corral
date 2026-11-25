@@ -722,13 +722,44 @@ fn build_opened_beside_stays_visible_after_navigation() {
 }
 
 #[test]
+fn narrow_dock_dismisses_without_undocking_or_leaving_the_page() {
+    let mut config = desktop();
+    config.viewport = Size::new(Points(800.0), Points(900.0));
+    let mut app = preview(config, &[]);
+    app.press("id:nav-sessions").unwrap();
+    app.press("id:agent-B-k3x9").unwrap();
+    app.press("id:btn-dock-side").unwrap();
+    app.press("id:btn-dock-hide").unwrap();
+    app.wait_for("id:btn-dock-show").unwrap();
+    assert_eq!(app.screen().count("id:dock-pane").unwrap(), 0);
+    app.press("id:nav-tasks").unwrap();
+    app.press("id:btn-dock-show").unwrap();
+    app.wait_for("id:dock-tab-B-k3x9").unwrap();
+    app.press("id:dock-pane >> id:btn-open-page").unwrap();
+    app.wait_for("id:btn-dock-show").unwrap();
+    assert_eq!(app.screen().count("id:list-tasks").unwrap(), 0);
+    app.press("id:btn-dock-show").unwrap();
+    app.wait_for("id:dock-transcript").unwrap();
+    app.press_key("escape").unwrap();
+    app.wait_for("id:btn-dock-show").unwrap();
+    assert_eq!(app.screen().count("id:dock-pane").unwrap(), 0);
+    assert_eq!(app.screen().count("id:list-sessions").unwrap(), 0);
+    app.press("id:btn-dock-show").unwrap();
+    app.wait_for("id:dock-tab-B-k3x9").unwrap();
+    app.wait_for("id:dock-transcript").unwrap();
+    app.press("id:dock-details-toggle").unwrap();
+    app.press("id:dock-pane >> id:side-step-0").unwrap();
+    app.wait_for("id:ledger").unwrap();
+    app.wait_for("id:btn-dock-show").unwrap();
+}
+
+#[test]
 fn docked_plan_and_file_open_in_page_without_replacing_the_pane() {
     let mut app = preview(desktop(), &[]);
     app.press("id:nav-sessions").unwrap();
     app.press("id:agent-B-k3x9").unwrap();
-    app.press("id:list-sessions >> id:more-B-k3x9").unwrap();
-    app.wait_for("id:btn-open-beside").unwrap();
-    app.press("id:btn-open-beside").unwrap();
+    app.press("id:agent-B-k3x9").unwrap();
+    app.press("id:btn-dock-side").unwrap();
     app.wait_for("id:dock-details-toggle").unwrap();
     app.press("id:nav-tasks").unwrap();
     app.press("id:dock-details-toggle").unwrap();

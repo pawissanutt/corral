@@ -11,7 +11,7 @@ use crate::ui::ask::drawer;
 pub(super) fn group(app: AppState, page: AnyElement) -> AnyElement {
     let placement = computed(move || app.pane.placement());
     let beside = move || {
-        (app.is_open(Overlay::Ask) || app.visible_dock().is_some())
+        (app.is_open(Overlay::Ask) || app.shown_dock().is_some())
             && matches!(placement.get(), Placement::Beside { .. })
     };
     let focus = element_ref();
@@ -20,6 +20,19 @@ pub(super) fn group(app: AppState, page: AnyElement) -> AnyElement {
     view()
         .flex_1()
         .min_h(px(0.0))
+        .child(when(
+            move || app.can_show_dock(),
+            move || {
+                use crate::ui::kit::button::{ButtonKind, button};
+                view().flex_row().justify_end().child(button(
+                    app,
+                    crate::model::dock::SHOW,
+                    ButtonKind::Quiet,
+                    "btn-dock-show",
+                    move || app.show_dock(),
+                ))
+            },
+        ))
         .child(
             h_resizable()
                 .handle_class("bg-border")
@@ -55,7 +68,7 @@ pub(super) fn group(app: AppState, page: AnyElement) -> AnyElement {
 pub(super) fn overlay(app: AppState) -> AnyElement {
     when(
         move || {
-            (app.is_open(Overlay::Ask) || app.visible_dock().is_some())
+            (app.is_open(Overlay::Ask) || app.shown_dock().is_some())
                 && app.pane.placement() == Placement::Over
         },
         move || untracked(|| drawer::overlay(app)),
