@@ -500,15 +500,6 @@ impl Engine {
         let max_rounds = project
             .as_ref()
             .map_or(self.config.defaults.max_rounds, |p| p.max_rounds);
-        if self.worker_slot_full(store, task, project.as_ref())? {
-            if task.status == Status::Review
-                && let SendBack::Automatic { onto } = reason
-            {
-                store.queue_repair(&task.id, notes, onto)?;
-                return Ok(None);
-            }
-            return Err(refuse("no free worker slot for changes", vec![]));
-        }
         let (actor, reset) = match reason {
             SendBack::Requested => (self.actor, true),
             SendBack::Automatic { .. } => (Actor::Auto, false),
@@ -529,13 +520,22 @@ impl Engine {
                 task,
                 Some(&worker.id),
                 Blocked {
-                    reason: "automatic change rounds exhausted".into(),
+                    reason: crate::repair_queue::EXHAUSTED.into(),
                     detail: Some(notes.into()),
                     next,
                 },
                 actor,
             )?;
             return Ok(None);
+        }
+        if self.worker_slot_full(store, task, project.as_ref())? {
+            if task.status == Status::Review
+                && let SendBack::Automatic { onto } = reason
+            {
+                store.queue_repair(&task.id, notes, onto)?;
+                return Ok(None);
+            }
+            return Err(refuse("no free worker slot for changes", vec![]));
         }
         let origin = if reset && actor != Actor::Auto {
             Origin::Owner

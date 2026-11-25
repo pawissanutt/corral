@@ -67,15 +67,7 @@ impl Engine {
         }
         let next_force = || Next::force(approve_op(id, onto));
         let mut skipped = Vec::new();
-        if self.store.has_queued_repair(id)? {
-            if !force {
-                return Err(refuse(
-                    "repair is waiting for a worker slot",
-                    vec![next_force()],
-                ));
-            }
-            skipped.push("queued repair");
-        } else if !reviewable(&task) {
+        if !check_queued_repair(&self.store, id, onto, force, &mut skipped)? && !reviewable(&task) {
             if !force {
                 let next = if matches!(task.status, Status::Running | Status::Blocked) {
                     next_done(id)
@@ -169,7 +161,7 @@ impl Engine {
                                 onto,
                                 &gate_notes(&check),
                                 false,
-                                &[],
+                                &skipped,
                                 actor,
                             );
                         }
@@ -189,6 +181,7 @@ impl Engine {
             );
             self.store.transaction(|store| {
                 let mut task = store.require_task(id)?;
+                check_queued_repair(store, id, onto, force, &mut skipped)?;
                 if !force && !reviewable(&task) {
                     return Err(refuse(
                         "task left Review before landing",
@@ -236,6 +229,15 @@ impl Engine {
                 if current.status != task.status
                     || self.last_worker(store, &current)?.id != worker.id
                 {
+                    return Ok(false);
+                }
+                // Blocking would leave Review and delete the queued feedback.
+                if store.has_queued_repair(id)? {
+                    if force {
+                        self.record_forced_approve(
+                            store, &current, &worker.id, force, &skipped, actor,
+                        )?;
+                    }
                     return Ok(false);
                 }
                 self.record_operation_failure(
@@ -303,6 +305,10 @@ impl Engine {
     ) -> Result<()> {
         self.launch_transaction(|store, pending| {
             let mut task = store.require_task(&worker.task)?;
+            // A failed landing must not replace feedback already waiting to run.
+            if store.has_queued_repair(&worker.task)? {
+                return Err(queued_repair_refusal(&worker.task, onto));
+            }
             if force || reviewable(&task) {
                 self.send_back_in(
                     store,
@@ -338,6 +344,32 @@ impl Engine {
         }
         Ok(())
     }
+}
+
+fn check_queued_repair(
+    store: &Store,
+    id: &str,
+    onto: Option<&str>,
+    force: bool,
+    skipped: &mut Vec<&str>,
+) -> Result<bool> {
+    let queued = store.has_queued_repair(id)?;
+    if queued {
+        if !force {
+            return Err(queued_repair_refusal(id, onto));
+        }
+        if !skipped.contains(&"queued repair") {
+            skipped.push("queued repair");
+        }
+    }
+    Ok(queued)
+}
+
+fn queued_repair_refusal(id: &str, onto: Option<&str>) -> anyhow::Error {
+    refuse(
+        "repair is waiting for a worker slot",
+        vec![Next::force(approve_op(id, onto))],
+    )
 }
 
 fn approve_op(id: &str, onto: Option<&str>) -> Op {

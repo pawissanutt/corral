@@ -622,6 +622,9 @@ fn rejected_review_waits_for_a_worker_slot_before_delivering_notes() {
     assert_eq!(cx.events(&first, EventKind::SentBack).len(), 1);
 }
 
+#[path = "land_queue_tests.rs"]
+mod queue_tests;
+
 #[test]
 fn unchanged_head_reuses_green_gate_and_rebase_conflict_sends_back() {
     let cx = Fixture::new(&["true"]);

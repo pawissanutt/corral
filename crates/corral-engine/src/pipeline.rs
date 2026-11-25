@@ -33,6 +33,9 @@ impl Engine {
         let Some(_lock) = self.pipeline_lock(id, false, true)? else {
             return Ok(());
         };
+        if self.advance_queued_repair(id)? {
+            return self.unlink_terminal_pipeline_lock(id);
+        }
         let mut effects_started = false;
         let result = self.advance_locked(id, &mut effects_started);
         if let Err(error) = &result
@@ -40,7 +43,7 @@ impl Engine {
         {
             self.store.transaction(|store| {
                 let mut task = store.require_task(id)?;
-                if task.status == Status::Review {
+                if task.status == Status::Review && !store.has_queued_repair(id)? {
                     self.record_operation_failure(
                         store,
                         &mut task,
@@ -97,9 +100,6 @@ impl Engine {
     fn advance_locked(&self, id: &str, effects_started: &mut bool) -> Result<()> {
         let task = self.store.require_task(id)?;
         if task.status != Status::Review {
-            return Ok(());
-        }
-        if self.advance_queued_repair(id)? {
             return Ok(());
         }
         let worker = self.last_worker(&self.store, &task)?;

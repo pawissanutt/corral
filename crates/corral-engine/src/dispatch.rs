@@ -260,6 +260,11 @@ impl Engine {
             if matches!(task.status, Status::Done | Status::Dropped) {
                 return Err(refuse("reply requires a live worker", vec![next_retry(id)]));
             }
+            if task.status == Status::Blocked
+                && self.worker_slot_full(store, &task, self.project_for(&task)?.as_ref())?
+            {
+                return Err(refuse("no free worker slot for reply", vec![]));
+            }
             let Some(session) = self.live_session(&run)? else {
                 return Err(refuse("reply requires a live worker", vec![next_retry(id)]));
             };
