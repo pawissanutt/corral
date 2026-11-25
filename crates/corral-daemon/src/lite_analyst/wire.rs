@@ -361,6 +361,11 @@ pub(super) struct Binding {
 pub(super) struct Bound {
     pub(super) bound: bool,
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Fenced {
+    pub(super) fenced: bool,
+}
 
 pub(super) fn params<T: DeserializeOwned>(value: Value) -> Result<T> {
     serde_json::from_value(value).map_err(|_| Fault::Invalid)

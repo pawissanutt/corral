@@ -45,6 +45,7 @@ fn new_session<'a>(store: &'a mut Store, work: &'a Work) -> Session<'a> {
         work,
         clock: Clock::new().unwrap(),
         pending_bind: None,
+        pending_fence: None,
     }
 }
 
@@ -272,6 +273,55 @@ fn local_cancel_advances_while_reverse_permit_is_in_flight() {
             Err(Fault::Stopped)
         ));
         let _peer = reply.join().unwrap();
+    });
+}
+
+#[test]
+fn conflicting_permit_fences_bound_lite_after_local_stop_without_waiting_for_ack() {
+    let dir = state_root();
+    let wall = wall_ms().unwrap();
+    let mut store = Store::enroll(dir.path(), &enrollment(), wall).unwrap();
+    let start = wire::params(approval(wall, "conflicting_permit", "Public fixture")).unwrap();
+    let run = store.start(&start, wall).unwrap().snapshot.run_id;
+    let (work, peer, _life) = work_pair();
+    let mut session = new_session(&mut store, &work);
+    std::thread::scope(|s| {
+        let run = run.as_str();
+        let exchange = s.spawn(move || {
+            let Message::Request { id, op, params, .. } = peer.receive_message(deadline()).unwrap() else { panic!("expected bind"); };
+            assert_eq!((op.as_str(), params["run_id"].as_str()), ("bind_session", Some(run)));
+            peer.respond(id, Ok(json!({"bound":true})), deadline()).unwrap();
+            let Message::Request { id, op, .. } = peer.receive_message(deadline()).unwrap() else { panic!("expected reserve"); };
+            assert_eq!(op, "reserve_turn");
+            peer.respond(id, Ok(json!({"permit_id":"permit","expires_ms":wall_ms().unwrap()+1500,"reserve_digest":"0".repeat(64)})), deadline()).unwrap();
+            let Message::Request { id, op, params, .. } = peer.receive_message(deadline()).unwrap() else { panic!("expected fence"); };
+            assert_eq!(op, "fence_session");
+            assert_eq!(params, json!({"run_id":run,"generation":1,"reason":"stopped"}));
+            // The reverse call must service this read before its fence receipt;
+            // it cannot wait for Lite to confirm before committing our stop.
+            peer.send(&Message::Request { v:1, id:"before_ack".into(), op:"read_investigation".into(), params:json!({"run_id":run}) }, deadline()).unwrap();
+            let Message::Success { id: read, result, .. } = peer.receive_message(deadline()).unwrap() else { panic!("expected snapshot before ack"); };
+            assert_eq!(read, "before_ack");
+            assert_eq!(result["state"], "stop_requested");
+            peer.respond(id, Err(Fault::Unavailable), deadline()).unwrap();
+            peer
+        });
+        session.bind_at_lite(run).unwrap();
+        let launch = session.store.submit_launch(run, 1, wall).unwrap();
+        session.store.attach_launch(run, 1, &launch, wall).unwrap();
+        assert!(
+            session
+                .reserve_turn(run, 1, &launch, b"final body")
+                .is_err()
+        );
+        let peer = exchange.join().unwrap();
+        assert!(matches!(
+            session
+                .reserve_turn(run, 1, &launch, b"final body")
+                .unwrap(),
+            Err(Fault::Stopped)
+        ));
+        assert!(!peer.readable(Instant::now()).unwrap());
     });
 }
 

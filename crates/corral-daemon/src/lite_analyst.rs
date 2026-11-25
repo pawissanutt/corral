@@ -17,7 +17,7 @@ use std::{
 };
 use store::Store;
 use turns::{Outcome, PermitLease, ReserveTurn, SettleTurn};
-use wire::{Fault, FenceReason, Message};
+use wire::{Fault, Fence, FenceReason, Message};
 use work::{FRAME_TIMEOUT, Work};
 
 /// Enter the launcher-provisioned fixture daemon only on explicit opt-in.
@@ -76,6 +76,7 @@ fn serve(mut bootstrap: Bootstrap) -> anyhow::Result<()> {
             work: &work,
             clock,
             pending_bind: None,
+            pending_fence: None,
         })
         .run()
         {
@@ -104,16 +105,18 @@ struct Session<'a> {
     work: &'a Work,
     clock: Clock,
     pending_bind: Option<String>,
+    pending_fence: Option<Fence>,
 }
 
 impl Session<'_> {
     fn run(&mut self) -> anyhow::Result<()> {
         self.replay_settlements()?;
         loop {
+            self.drain_control()?;
             if let Some(id) = self.pending_bind.take() {
                 self.bind_at_lite(&id)?;
+                continue;
             }
-            self.tick()?;
             if self
                 .work
                 .readable(Instant::now() + Duration::from_millis(200))?
@@ -140,10 +143,59 @@ impl Session<'_> {
     fn tick(&mut self) -> anyhow::Result<()> {
         self.work.check_live()?;
         let (earliest, latest) = self.clock.times()?;
-        self.store
+        let notice = self
+            .store
             .maintenance(latest)
-            .and_then(|()| self.store.finalize_turns(earliest).map(|_| ()))
-            .map_err(|_| anyhow::anyhow!("maintain fixture lifecycle and accounting"))
+            .map_err(|_| anyhow::anyhow!("maintain fixture lifecycle"))?;
+        if let Some(notice) = notice {
+            self.queue_fence(notice)?;
+        }
+        self.store
+            .finalize_turns(earliest)
+            .map(|_| ())
+            .map_err(|_| anyhow::anyhow!("maintain fixture accounting"))
+    }
+
+    // An idle channel sends local fences before starting any unrelated reverse RPC.
+    // call() only ticks while in flight; it must never drain recursively.
+    fn drain_control(&mut self) -> anyhow::Result<()> {
+        self.tick()?;
+        self.flush_local_fence()
+    }
+
+    fn queue_fence(&mut self, notice: Fence) -> anyhow::Result<()> {
+        // Only one bound launch slot; no new bind is submitted before draining it.
+        ensure!(self.pending_fence.is_none(), "undelivered fixture fence");
+        self.pending_fence = Some(notice);
+        Ok(())
+    }
+
+    fn stop_local(&mut self, id: &str, generation: u64, reason: FenceReason) -> anyhow::Result<()> {
+        if let Some(notice) = self
+            .store
+            .stop_local(id, generation, reason)
+            .map_err(|_| anyhow::anyhow!("commit local fixture fence"))?
+        {
+            self.queue_fence(notice)?;
+        }
+        Ok(())
+    }
+
+    // Run only when no reverse request is in flight. The row is already stopped;
+    // an absent/refused receipt closes work, never rolls back the local fence.
+    fn flush_local_fence(&mut self) -> anyhow::Result<()> {
+        if let Some(notice) = self.pending_fence.take() {
+            let reply = self.call::<wire::Fenced>(
+                "fence_session",
+                &notice,
+                Instant::now() + FRAME_TIMEOUT,
+            )?;
+            ensure!(
+                matches!(reply, Ok(wire::Fenced { fenced: true })),
+                "fixture fence receipt refused"
+            );
+        }
+        Ok(())
     }
 
     fn handle(&mut self, request: Message, deadline: Instant) -> anyhow::Result<()> {
@@ -236,7 +288,7 @@ impl Session<'_> {
     }
 
     fn bind_at_lite(&mut self, id: &str) -> anyhow::Result<()> {
-        self.tick()?;
+        self.drain_control()?;
         let binding = match self.store.binding(id) {
             Ok(b) => b,
             Err(Fault::Stopped) => return Ok(()),
@@ -247,7 +299,31 @@ impl Session<'_> {
         // A stop might have been handled in call(); a positive reply must not revive it.
         if matches!(result, Ok(wire::Bound { bound: true })) {
             match self.store.bind(id, binding.generation, self.clock.now()?) {
-                Ok(()) | Err(Fault::Stopped) => return Ok(()),
+                Ok(()) => return Ok(()),
+                Err(Fault::Stopped) => {
+                    // Lite installed its binding but local stop/expiry won before we
+                    // could record bound_epoch; there is no stored binding to notify.
+                    let reason = match self
+                        .store
+                        .read(id)
+                        .map_err(|_| anyhow::anyhow!("read fenced fixture"))?
+                        .reason
+                        .as_deref()
+                    {
+                        Some("stale_scope") => FenceReason::StaleScope,
+                        Some("stopped") => FenceReason::Stopped,
+                        _ => FenceReason::Expired,
+                    };
+                    self.store
+                        .stop(id, binding.generation, reason)
+                        .map_err(|_| anyhow::anyhow!("commit fence for late fixture bind"))?;
+                    self.queue_fence(Fence {
+                        run_id: id.to_owned(),
+                        generation: binding.generation,
+                        reason,
+                    })?;
+                    return Ok(());
+                }
                 Err(_) => anyhow::bail!("fixture binding could not commit"),
             }
         }
@@ -256,10 +332,7 @@ impl Session<'_> {
             Err(Fault::StaleScope) => FenceReason::StaleScope,
             _ => FenceReason::Stopped,
         };
-        self.store
-            .stop(id, binding.generation, reason)
-            .map_err(|_| anyhow::anyhow!("fence refused fixture binding"))?;
-        Ok(())
+        self.stop_local(id, binding.generation, reason)
     }
 
     // Handles and exact body remain host-only. C3 invokes these methods from this
@@ -272,7 +345,7 @@ impl Session<'_> {
         launch: &str,
         body: &[u8],
     ) -> anyhow::Result<wire::Result<(ReserveTurn, PermitLease)>> {
-        self.tick()?;
+        self.drain_control()?;
         let now = Instant::now();
         let now_ms = self.clock.reserve_time()?;
         let held =
@@ -288,17 +361,15 @@ impl Session<'_> {
         let checked_at = Instant::now();
         let checked_ms = self.clock.reserve_time()?;
         if checked_ms / clock::DAY_MS != now_ms / clock::DAY_MS {
-            self.store
-                .stop(run, generation, FenceReason::Expired)
-                .map_err(|_| anyhow::anyhow!("fence hold across UTC rollover"))?;
+            self.stop_local(run, generation, FenceReason::Expired)?;
+            self.flush_local_fence()?;
             return Ok(Err(Fault::Expired));
         }
         let request = match held.reserve_request(checked_ms, checked_at) {
             Ok(request) => request,
             Err(fault) => {
-                self.store
-                    .stop(run, generation, FenceReason::Expired)
-                    .map_err(|_| anyhow::anyhow!("fence expired local hold"))?;
+                self.stop_local(run, generation, FenceReason::Expired)?;
+                self.flush_local_fence()?;
                 return Ok(Err(fault));
             }
         };
@@ -326,9 +397,13 @@ impl Session<'_> {
         match accepted {
             Ok(lease) => Ok(Ok((request.clone(), lease))),
             Err(fault) => {
-                self.store
-                    .stop(run, generation, FenceReason::Stopped)
-                    .map_err(|_| anyhow::anyhow!("fence unavailable permit"))?;
+                let reason = match fault {
+                    Fault::Expired => FenceReason::Expired,
+                    Fault::StaleScope => FenceReason::StaleScope,
+                    _ => FenceReason::Stopped,
+                };
+                self.stop_local(run, generation, reason)?;
+                self.flush_local_fence()?;
                 Ok(Err(fault))
             }
         }
@@ -377,6 +452,7 @@ impl Session<'_> {
     }
 
     fn record_settlement(&mut self, settlement: &SettleTurn) -> anyhow::Result<()> {
+        self.drain_control()?;
         let result = self.call("settle_turn", settlement, Instant::now() + FRAME_TIMEOUT)?;
         if let Ok(receipt) = result {
             let (earliest, latest) = self.clock.times()?;

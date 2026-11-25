@@ -1,7 +1,7 @@
 //! Separate, private SQLite ledger. No project, worktree, transcript or owner RPC access.
 use super::{
     bootstrap::Enrollment,
-    wire::{self, Binding, Fault, FenceReason, Result, Start},
+    wire::{self, Binding, Fault, Fence, FenceReason, Result, Start},
 };
 use anyhow::{Context, ensure};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior::Immediate, params};
@@ -272,6 +272,27 @@ impl Store {
         generation: u64,
         reason: FenceReason,
     ) -> Result<Snapshot> {
+        self.stop_run(id, generation, reason, false)
+            .map(|(snapshot, _)| snapshot)
+    }
+
+    pub(super) fn stop_local(
+        &mut self,
+        id: &str,
+        generation: u64,
+        reason: FenceReason,
+    ) -> Result<Option<Fence>> {
+        self.stop_run(id, generation, reason, true)
+            .map(|(_, notice)| notice)
+    }
+
+    fn stop_run(
+        &mut self,
+        id: &str,
+        generation: u64,
+        reason: FenceReason,
+        notify_lite: bool,
+    ) -> Result<(Snapshot, Option<Fence>)> {
         if !wire::valid_id(id) {
             return Err(Fault::Invalid);
         }
@@ -281,24 +302,44 @@ impl Store {
         if before.generation != generation {
             return Err(Fault::StaleGeneration);
         }
-        tx.execute(
+        let bound = notify_lite
+            && tx.query_row(
+                "SELECT bound_epoch IS ?2 FROM runs WHERE run_id=?1",
+                params![id, self.epoch],
+                |r| r.get::<_, bool>(0),
+            )?;
+        let changed = tx.execute(
             "UPDATE runs SET state='stop_requested',seq=seq+1,reason=?2,bound_epoch=NULL
             WHERE run_id=?1 AND state IN ('admitted','working','waiting_for_source')",
             params![id, reason.code()],
         )?;
         let after = snapshot(&tx, &self.link_id, id)?;
         tx.commit()?;
-        Ok(after)
+        Ok((
+            after,
+            (bound && changed != 0).then(|| Fence {
+                run_id: id.to_owned(),
+                generation,
+                reason,
+            }),
+        ))
     }
 
-    pub(super) fn maintenance(&mut self, now_ms: u64) -> Result<()> {
+    pub(super) fn maintenance(&mut self, now_ms: u64) -> Result<Option<Fence>> {
         let tx = self.db.transaction_with_behavior(Immediate)?;
+        // At most one admitted/working launch slot can have a bound generation.
+        let notice = tx.query_row(
+            "SELECT run_id,generation FROM runs WHERE link_id=?1 AND deadline_ms<=?2 AND bound_epoch=?3
+              AND state IN ('admitted','working','waiting_for_source')",
+            params![self.link_id, now_ms, self.epoch],
+            |r| Ok(Fence { run_id:r.get(0)?, generation:r.get(1)?, reason:FenceReason::Expired }),
+        ).optional()?;
         tx.execute("UPDATE runs SET state='stop_requested',seq=seq+1,reason='expired',bound_epoch=NULL
             WHERE link_id=?1 AND deadline_ms<=?2 AND state IN ('admitted','working','waiting_for_source')",
             params![self.link_id, now_ms])?;
         clean_unsubmitted(&tx, &self.link_id)?;
         tx.commit()?;
-        Ok(())
+        Ok(notice)
     }
 
     pub(super) fn disconnected(&mut self) -> Result<()> {
