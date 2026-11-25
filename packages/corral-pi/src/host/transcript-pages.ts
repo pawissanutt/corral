@@ -76,10 +76,16 @@ function project(entry: Record<string, unknown>): Item[] {
   return stop ? [...items, { kind: "stop", stop, text: typeof msg.errorMessage === "string" ? msg.errorMessage : "" }] : items;
 }
 
+/**
+ * One page of the branch that ends at `position`, read back towards `floor`. `leaf` is the key of the record a page
+ * that starts at a record's end began with; `parent` is the key of the record the branch continues at below what was
+ * read, and `root` says the page reached the branch's first record.
+ */
 export async function conversationPage(bytes: TranscriptBytes, floor: number, position: BranchPosition) {
   let { end, parent, skip = 0, offset } = position;
   const rows: TranscriptRow[] = [];
-  let remaining = BYTES, records = 0;
+  let remaining = BYTES, records = 0, met = false, root = false, leaf: string | undefined;
+  const page = (next: BranchPosition | undefined) => ({ rows: rows.reverse(), next, leaf, parent, root });
   while (end > floor && records < RECORDS && remaining > 0) {
     const start = await bytes.boundary(end - 1, floor);
     let entry: Record<string, unknown> | undefined;
@@ -94,6 +100,10 @@ export async function conversationPage(bytes: TranscriptBytes, floor: number, po
     if (entry && parent !== undefined && (typeof entry.id !== "string" || parent !== idKey(entry.id))) {
       end = start;
       continue;
+    }
+    if (!met) {
+      met = true;
+      if (position.parent === undefined && typeof entry?.id === "string") leaf = idKey(entry.id);
     }
     const malformed = !entry || (entry.type === "message" && (!entry.message || typeof entry.message !== "object" || Array.isArray(entry.message)));
     const items = malformed ? [{ kind: "note" as const, text: `[Malformed transcript record at byte ${start}; inspect raw transcript]` }] : project(entry!);
@@ -119,11 +129,12 @@ export async function conversationPage(bytes: TranscriptBytes, floor: number, po
           record: start, item: index, ...(begin > 0 ? { from: begin } : {}), ...(stop < item.text.length ? { more: true } : {}) });
         remaining -= Math.max(1, cost);
       }
-      if (begin > 0) return { rows: rows.reverse(), next: { end, parent, skip, offset: begin } };
-      if (remaining <= 0 && skip + 1 < items.length) return { rows: rows.reverse(), next: { end, parent, skip: skip + 1 } };
+      if (begin > 0) return page({ end, parent, skip, offset: begin });
+      if (remaining <= 0 && skip + 1 < items.length) return page({ end, parent, skip: skip + 1 });
     }
     if (entry?.parentId === null && typeof entry.id === "string") {
       end = floor;
+      root = true;
       break;
     }
     if (typeof entry?.parentId === "string" && typeof entry.id === "string") parent = idKey(entry.parentId);
@@ -131,7 +142,7 @@ export async function conversationPage(bytes: TranscriptBytes, floor: number, po
     skip = 0;
     offset = undefined;
   }
-  return { rows: rows.reverse(), next: end > floor ? { end, parent } : undefined };
+  return page(end > floor ? { end, parent } : undefined);
 }
 
 export async function rawPage(bytes: TranscriptBytes, end: number, start: number) {

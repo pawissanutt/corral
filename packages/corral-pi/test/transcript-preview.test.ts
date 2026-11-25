@@ -124,7 +124,7 @@ test("evicted snapshots require loading latest, even after the same snapshot is 
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("header-only sessions are empty; unfinished appends wait and changed reads fail", async () => {
+test("header-only sessions are empty; unfinished appends wait, a cursor reads on through appends and fails once the file is written over", async () => {
   const dir = mkdtempSync(join(tmpdir(), "transcript-change-")), file = join(dir, "session.jsonl");
   const header = '{"type":"session","id":"existing"}\n';
   const read = (cursor?: string) => readTranscriptPage(file, "existing", { mode: "raw", cursor });
@@ -136,7 +136,7 @@ test("header-only sessions are empty; unfinished appends wait and changed reads 
     appendFileSync(file, "\n" + "{}\n".repeat(40));
     const malformed = await readTranscriptPage(file, "existing", { mode: "conversation" });
     expect(malformed.rows[0]?.text).toContain("Malformed transcript record");
-    const { newer } = await read();
+    const { newer, stamp } = await read();
     expect(newer).toBeDefined();
     await expect(read(`${newer}x`)).rejects.toThrow("Invalid transcript cursor");
     await expect(readTranscriptPage(file, "existing", { mode: "conversation", cursor: newer })).rejects.toThrow("cursor mode");
@@ -150,9 +150,50 @@ test("header-only sessions are empty; unfinished appends wait and changed reads 
       }
       return data;
     };
-    try { await expect(read(newer)).rejects.toThrow("Transcript changed"); }
+    // A session only appends to its recording: the snapshot's cursor reads on, during the append and after it.
+    try { expect((await read(newer)).stamp).toBe(stamp); }
     finally { TranscriptBytes.prototype.read = original; }
+    expect(mutated).toBeTrue();
+    expect((await read(newer)).stamp).toBe(stamp);
+    // A file written over is another recording, however long it is.
+    writeFileSync(file, header + "[]\n".repeat(80));
     await expect(read(newer)).rejects.toThrow("Transcript changed");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("a recording that grows keeps its pages: their cursors still read, and the growth cursor reads only what was added", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "transcript-grow-")), file = join(dir, "session.jsonl");
+  const line = (id: string, parentId: string | null, text: string) =>
+    JSON.stringify({ type: "message", id, parentId, message: { role: "assistant", content: [{ type: "text", text }] } }) + "\n";
+  const read = (cursor?: string) => readTranscriptPage(file, "existing", { mode: "conversation", cursor });
+  try {
+    writeFileSync(file, '{"type":"session","id":"existing"}\n' + Array.from({ length: 40 }, (_, index) => line(`m${index}`, index ? `m${index - 1}` : null, `old ${index}`)).join(""));
+    const latest = await read();
+    expect((await read(latest.grow)).rows).toEqual([]);
+    appendFileSync(file, line("m40", "m39", "new 40") + line("m41", "m40", "new 41"));
+    // The page above the newest is read by the cursor handed out before the file grew.
+    const older = await read(latest.older);
+    expect(older.stamp).toBe(latest.stamp);
+    expect(older.rows.at(-1)?.text).toBe("old 7");
+    const grown = await read(latest.grow);
+    expect(grown.stamp).toBe(latest.stamp);
+    expect(grown.rows.map(row => row.text)).toEqual(["new 40", "new 41"]);
+    expect((await read(grown.grow)).rows).toEqual([]);
+    // A record that continues from another one than the pages end at is another branch: it is read from its end.
+    appendFileSync(file, line("fork", "m3", "forked"));
+    await expect(read(grown.grow)).rejects.toThrow("load latest");
+    // Rows a growth read handed over and that were then written over: the cursor that ends on them reads no further.
+    const fresh = await read();
+    appendFileSync(file, line("m42", "fork", "new 42"));
+    const more = await read(fresh.grow);
+    expect(more.rows.map(row => row.text)).toEqual(["new 42"]);
+    writeFileSync(file, readFileSync(file, "utf8").replace("new 42", "NEW 42"));
+    await expect(read(more.grow)).rejects.toThrow("load latest");
+    // A snapshot that ends on a record without an id cannot show that what follows continues it.
+    appendFileSync(file, JSON.stringify({ type: "message", message: { role: "assistant", content: [{ type: "text", text: "loose" }] } }) + "\n");
+    const loose = await read();
+    appendFileSync(file, line("m43", "m3", "elsewhere"));
+    await expect(read(loose.grow)).rejects.toThrow("load latest");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

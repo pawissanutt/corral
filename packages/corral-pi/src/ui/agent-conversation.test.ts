@@ -344,6 +344,34 @@ test("a running agent's unrecorded work follows its recording once, and the sett
   expect(final).not.toContain("TYPING_NOW");
 });
 
+test("what a running agent records joins the end of the pages already read, and coming back reads nothing again", async () => {
+  const row = recorded({ phase: "running", messages: [] });
+  let turns = 3;
+  const reads: string[] = [];
+  const turn = (index: number): TranscriptRow => ({ id: `a${index}`, kind: "assistant", text: `RECORDED_${index}_REPLY`, record: index * 100, item: 0 });
+  // The host's growth cursor names the turn the reader's pages end at and reads the turns after it.
+  const { view, open, rest } = reader(() => row, async (_id, request) => {
+    reads.push(request.cursor ?? "latest");
+    const from = request.cursor === undefined ? 0 : Number(request.cursor.split(":")[1]);
+    return { stamp: "base", rows: Array.from({ length: turns - from }, (_, index) => turn(from + index + 1)), grow: `grow:${turns}` };
+  });
+  await open();
+  turns = 5;
+  view.refresh(); await rest();
+  expect(reads).toEqual(["latest", "grow:3"]);
+  const text = whole(view);
+  for (let index = 1; index <= 5; index++) expect(times(text, `RECORDED_${index}_REPLY`)).toBe(1);
+  expect(view.following).toBeTrue();
+  // Leaving and coming back shows the pages read before, and reads on from their end.
+  view.remember();
+  turns = 6;
+  view.restore(row.key);
+  expect(whole(view)).toContain("RECORDED_5_REPLY");
+  view.refresh(); await rest();
+  expect(reads).toEqual(["latest", "grow:3", "grow:5"]);
+  expect(times(whole(view), "RECORDED_6_REPLY")).toBe(1);
+});
+
 test("a reply that ends while the recording is read is drawn once: only a read that none ended during is shown", async () => {
   let row = recorded({ messages: [{ id: "assistant-1", kind: "assistant", text: "REPLY_1" }] });
   let rows: TranscriptRow[] = [{ id: "u", kind: "user", text: "RECORDED_PROMPT", record: 0, item: 0 }];
