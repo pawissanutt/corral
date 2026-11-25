@@ -135,6 +135,15 @@ impl AppState {
                 });
                 Topic::Settings
             }
+            SubDelta::Host { delta } => {
+                feed.update(|feed| {
+                    if let Some(row) = delta.rows.into_iter().last() {
+                        feed.daemon_host = Some(row);
+                        feed.daemon_host_at = Some(feed.now);
+                    }
+                });
+                Topic::Host
+            }
             SubDelta::Session {
                 scope,
                 generation,

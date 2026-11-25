@@ -131,6 +131,7 @@ impl Icon {
             Destination::Usage => Icon::Usage,
             Destination::Artifacts => Icon::Files,
             Destination::System => Icon::System,
+            Destination::Host => Icon::Usage,
             Destination::Settings => Icon::Settings,
         }
     }

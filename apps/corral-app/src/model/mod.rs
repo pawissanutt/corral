@@ -31,6 +31,8 @@ pub mod effect;
 pub mod health;
 /// Home: what waits on the owner, then what is working.
 pub mod home;
+/// Host performance of the machine running corrald.
+pub mod host;
 /// Semantic state colours.
 pub mod hue;
 /// Owned daemon identifiers.

@@ -79,6 +79,7 @@ fn row_key(topic: Topic, row: &Value) -> Option<String> {
         Topic::System => text(&row["project"]),
         Topic::Usage => Some("usage".into()),
         Topic::Settings => Some("settings".into()),
+        Topic::Host => Some("host".into()),
         _ => text(&row["id"]),
     }
 }

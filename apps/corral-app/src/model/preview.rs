@@ -12,6 +12,7 @@ mod details;
 mod effects;
 mod engine;
 mod explorer;
+mod host;
 mod fleet;
 mod parts;
 mod parts_ops;
@@ -56,6 +57,7 @@ pub use pi_hosted_tools::pi_hosted_tools;
 
 pub fn feed(now: u64, date: String, clock: String, time_zone: Option<jiff::tz::TimeZone>) -> Feed {
     let mut feed = base(now, date, clock, time_zone);
+    host::populate(&mut feed);
     workspace::populate(&mut feed, true);
     sessions::populate(&mut feed);
     pi_script::populate(&mut feed);
@@ -146,6 +148,7 @@ fn base(now: u64, date: String, clock: String, time_zone: Option<jiff::tz::TimeZ
         corral_protocol::app::SYSTEM_RUNTIME_V1,
         corral_protocol::app::SYSTEM_ENTRIES_V1,
         corral_protocol::app::SYSTEM_LENSES_V1,
+        corral_protocol::host::HOST_V1,
         USAGE_V1,
         corral_protocol::config::PI_HOSTED_TOOLS_V1,
         SETTINGS_V1,

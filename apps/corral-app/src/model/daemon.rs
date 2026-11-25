@@ -174,6 +174,10 @@ pub struct Feed {
     pub usage: Option<UsageSummary>,
     /// Parsed `corral.toml`, the listener and the devices.
     pub settings: Option<SettingsSnapshot>,
+    /// The daemon host's performance (`Topic::Host`, `host.v1`), never this device's.
+    pub daemon_host: Option<corral_protocol::host::HostMetrics>,
+    /// `now` when the last host page arrived, by this device's clock.
+    pub daemon_host_at: Option<u64>,
     pub topics: BTreeMap<String, TopicState>,
     pub details: BTreeMap<String, DetailCache>,
     pub transcript_windows: BTreeMap<u64, ReaderPage>,

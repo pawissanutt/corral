@@ -46,13 +46,15 @@ pub enum Destination {
     Artifacts,
     /// Activity › System: the map of one project's packages, modules, files and definitions.
     System,
+    /// Activity › Host performance: the machine running corrald, host-wide.
+    Host,
     /// Settings.
     Settings,
 }
 
 impl Destination {
     /// Destinations in navigation order.
-    pub const ALL: [Destination; 9] = [
+    pub const ALL: [Destination; 10] = [
         Self::Home,
         Self::Tasks,
         Self::Sessions,
@@ -61,15 +63,17 @@ impl Destination {
         Self::Usage,
         Self::Artifacts,
         Self::System,
+        Self::Host,
         Self::Settings,
     ];
     /// Activity's pages, in the order the sidebar lists them.
-    pub const ACTIVITY: [Destination; 5] = [
+    pub const ACTIVITY: [Destination; 6] = [
         Self::Feed,
         Self::Timeline,
         Self::Usage,
         Self::Artifacts,
         Self::System,
+        Self::Host,
     ];
     /// The display label.
     pub const fn label(self) -> &'static str {
@@ -82,6 +86,7 @@ impl Destination {
             Self::Usage => "Usage",
             Self::Artifacts => "Artifacts",
             Self::System => "System",
+            Self::Host => "Host performance",
             Self::Settings => "Settings",
         }
     }
@@ -96,6 +101,7 @@ impl Destination {
             Self::Usage => "usage",
             Self::Artifacts => "artifacts",
             Self::System => "system",
+            Self::Host => "host",
             Self::Settings => "settings",
         }
     }
@@ -116,9 +122,12 @@ impl Destination {
             Self::Home => Area::Home,
             Self::Tasks => Area::Tasks,
             Self::Sessions => Area::Sessions,
-            Self::Feed | Self::Timeline | Self::Usage | Self::Artifacts | Self::System => {
-                Area::Activity
-            }
+            Self::Feed
+            | Self::Timeline
+            | Self::Usage
+            | Self::Artifacts
+            | Self::System
+            | Self::Host => Area::Activity,
             Self::Settings => Area::Settings,
         }
     }

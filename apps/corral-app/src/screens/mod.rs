@@ -11,6 +11,7 @@ pub mod artifacts;
 pub mod assistant;
 pub(crate) mod cites;
 pub mod home;
+pub mod host;
 pub mod landing;
 pub(crate) mod markdown;
 pub mod sessions;
@@ -160,7 +161,8 @@ fn screen(app: AppState, destination: Destination) -> AnyElement {
         | Destination::Timeline
         | Destination::Usage
         | Destination::Artifacts
-        | Destination::System => activity::screen(app, destination),
+        | Destination::System
+        | Destination::Host => activity::screen(app, destination),
         Destination::Settings => settings::screen(app),
     }
 }

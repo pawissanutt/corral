@@ -11,7 +11,7 @@ mod feed_filter;
 use nsh_core::prelude::*;
 
 use crate::model::Destination;
-use crate::screens::{artifacts, system, timeline, usage};
+use crate::screens::{artifacts, host, system, timeline, usage};
 use crate::state::AppState;
 
 /// The Activity page `page` names; Feed for a destination that is not one of Activity's.
@@ -21,6 +21,7 @@ pub fn screen(app: AppState, page: Destination) -> AnyElement {
         Destination::Usage => usage::screen(app),
         Destination::Artifacts => artifacts::screen(app),
         Destination::System => system::screen(app),
+        Destination::Host => host::screen(app),
         _ => feed::screen(app),
     }
 }

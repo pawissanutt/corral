@@ -217,6 +217,7 @@ pub const fn capability(destination: Destination) -> Option<&'static str> {
         Destination::Timeline => Some(wire::TIMELINE_V1),
         Destination::Usage => Some(wire::USAGE_V1),
         Destination::System => Some(wire::SYSTEM_V1),
+        Destination::Host => Some(corral_protocol::host::HOST_V1),
         // Artifacts are a detail of the core wire, which every corrald serves.
         Destination::Home | Destination::Tasks | Destination::Artifacts | Destination::Settings => {
             None

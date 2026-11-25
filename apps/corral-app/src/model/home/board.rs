@@ -42,11 +42,13 @@ pub enum Widget {
     Events,
     Finished,
     Burnup,
+    /// The daemon host's CPU, memory, disk and network (`model::host`).
+    Host,
 }
 
 impl Widget {
     /// Every widget, in the order Add widget lists them.
-    pub const ALL: [Widget; 14] = [
+    pub const ALL: [Widget; 15] = [
         Widget::NeedsYou,
         Widget::Working,
         Widget::ByStatus,
@@ -55,6 +57,7 @@ impl Widget {
         Widget::Events,
         Widget::Finished,
         Widget::Burnup,
+        Widget::Host,
         Widget::StatNeeds,
         Widget::StatWorking,
         Widget::StatReady,
@@ -80,6 +83,7 @@ impl Widget {
             Widget::Events => "events",
             Widget::Finished => "finished",
             Widget::Burnup => "burnup",
+            Widget::Host => "host",
         }
     }
 
@@ -104,6 +108,7 @@ impl Widget {
             Widget::Events => "Latest events",
             Widget::Finished => "Just finished",
             Widget::Burnup => "Burn-up",
+            Widget::Host => "Host performance",
         }
     }
 
@@ -133,7 +138,7 @@ impl Widget {
     pub const fn span(self) -> u8 {
         match self {
             Widget::NeedsYou | Widget::Working | Widget::Events | Widget::Finished => 6,
-            Widget::Burnup => 12,
+            Widget::Burnup | Widget::Host => 12,
             _ if self.tile().is_some() => 2,
             _ => 4,
         }
@@ -165,7 +170,8 @@ pub struct Board {
 
 impl Default for Board {
     /// Rows that each fill the grid: the six numbers; Needs you beside Working; status, cost
-    /// and project; events beside what just finished; the burn-up across.
+    /// and project; events beside what just finished; the burn-up across; the daemon host's
+    /// performance across.
     fn default() -> Self {
         Self {
             items: [
@@ -183,6 +189,7 @@ impl Default for Board {
                 Widget::Events,
                 Widget::Finished,
                 Widget::Burnup,
+                Widget::Host,
             ]
             .into_iter()
             .map(|w| Item::new(w, w.span()))

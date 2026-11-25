@@ -642,6 +642,7 @@ pub const fn destination_key(destination: Destination) -> Option<&'static str> {
         Destination::Usage => Some("u"),
         Destination::Artifacts => Some("f"),
         Destination::System => Some("m"),
+        Destination::Host => None,
         Destination::Settings => Some(","),
     }
 }

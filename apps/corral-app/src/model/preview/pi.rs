@@ -360,6 +360,7 @@ pub fn tick(feed: &mut Feed) {
         step(feed, &id);
     }
     super::build_ops::tick(feed);
+    super::host::tick(feed);
 }
 
 /// What a beat left to do once its events are out.

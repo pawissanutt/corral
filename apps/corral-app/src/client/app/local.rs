@@ -22,6 +22,8 @@ impl AppState {
             feed.plans.clear();
             feed.projects.clear();
             feed.systems.clear();
+            feed.daemon_host = None;
+            feed.daemon_host_at = None;
             feed.topics.remove("projects");
             feed.health = None;
             feed.drafts.clear();

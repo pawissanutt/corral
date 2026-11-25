@@ -198,6 +198,7 @@ fn content(app: AppState, scope: Memo<Scope>, widget: Widget) -> AnyElement {
         Widget::Events => panels::events(app, scope),
         Widget::Finished => panels::finished(app, scope),
         Widget::Burnup => panels::burnup(app, scope),
+        Widget::Host => crate::screens::host::widget(app),
         Widget::StatNeeds
         | Widget::StatWorking
         | Widget::StatReady

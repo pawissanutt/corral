@@ -53,6 +53,7 @@ pub(super) const CAPS: &[&str] = &[
     SYSTEM_ENTRIES_V1,
     SYSTEM_LENSES_V1,
     SYSTEM_DATA_V1,
+    corral_protocol::host::HOST_V1,
     USAGE_V1,
     SETTINGS_V1,
     AUTOMATION_V1,
@@ -246,6 +247,8 @@ impl AppState {
                 feed.assistants.clear();
                 feed.usage = None;
                 feed.settings = None;
+                feed.daemon_host = None;
+                feed.daemon_host_at = None;
                 feed.details.clear();
                 feed.transcript_windows.clear();
                 feed.items.clear();
@@ -303,6 +306,7 @@ impl AppState {
             (Topic::Assistant, ASSISTANT_V1),
             (Topic::Usage, USAGE_V1),
             (Topic::Settings, SETTINGS_V1),
+            (Topic::Host, corral_protocol::host::HOST_V1),
         ] {
             // Build sessions are rows of the assistant topic: it opens for either grant.
             let granted = feed.with_untracked(|feed| {
