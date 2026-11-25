@@ -30,6 +30,11 @@ mod unix {
 
     #[derive(Subcommand)]
     enum Command {
+        #[command(name = "lite-analyst-fixture-v1", hide = true)]
+        LiteAnalystFixtureV1 {
+            #[arg(long)]
+            enable_public_fixture_e2e: bool,
+        },
         Run {
             #[arg(long)]
             listen: Option<SocketAddr>,
@@ -78,6 +83,24 @@ mod unix {
 
     pub(super) fn run() -> Result<()> {
         let cli = Cli::parse();
+        if let Command::LiteAnalystFixtureV1 {
+            enable_public_fixture_e2e,
+        } = cli.command
+        {
+            anyhow::ensure!(
+                cli.root.is_none(),
+                "public Lite fixture does not accept a workspace root"
+            );
+            #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+            // SAFETY: this is the fresh CLI, not the owner daemon. It has not opened
+            // other resources or started threads; the launcher owns provisioning.
+            return unsafe { corral_daemon::run_fixture(enable_public_fixture_e2e) };
+            #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+            {
+                let _ = enable_public_fixture_e2e;
+                anyhow::bail!("public Lite fixture requires Linux x86-64");
+            }
+        }
         let root = Engine::discover_root(
             &env::current_dir().context("read current directory")?,
             cli.root.as_deref(),
@@ -175,7 +198,9 @@ mod unix {
                             CONTROL_WAIT,
                         ),
                     },
-                    Command::Run { .. } | Command::Status => unreachable!("already handled"),
+                    Command::Run { .. }
+                    | Command::Status
+                    | Command::LiteAnalystFixtureV1 { .. } => unreachable!("already handled"),
                 }
             }
         }

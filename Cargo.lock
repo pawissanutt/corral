@@ -515,6 +515,8 @@ dependencies = [
  "httparse",
  "isahc",
  "jiff 0.2.46",
+ "libc",
+ "rusqlite",
  "rustix",
  "serde",
  "serde_json",

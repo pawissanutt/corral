@@ -19,7 +19,7 @@ clap.workspace = true
 tempfile.workspace = true
 
 [target.'cfg(unix)'.dependencies]
-rustix = { version = "1.1", features = ["event", "fs", "net", "process", "system"] }
+rustix = { version = "1.1", features = ["event", "fs", "net", "pipe", "process", "system", "thread", "time"] }
 snow.workspace = true
 tungstenite.workspace = true
 httparse = "1"
@@ -30,6 +30,10 @@ toml.workspace = true
 web-push = { version = "0.11", default-features = false, features = ["isahc-client"] }
 isahc = { version = "1.7", default-features = false }
 futures-lite = "2"
+
+[target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dependencies]
+libc = "0.2"
+rusqlite = { version = "0.40", features = ["bundled", "fallible_uint"] }
 
 [[bin]]
 name = "corrald-next"
