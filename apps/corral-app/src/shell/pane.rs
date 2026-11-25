@@ -10,8 +10,10 @@ use crate::ui::ask::drawer;
 
 pub(super) fn group(app: AppState, page: AnyElement) -> AnyElement {
     let placement = computed(move || app.pane.placement());
-    let beside =
-        move || app.is_open(Overlay::Ask) && matches!(placement.get(), Placement::Beside { .. });
+    let beside = move || {
+        (app.is_open(Overlay::Ask) || app.visible_dock().is_some())
+            && matches!(placement.get(), Placement::Beside { .. })
+    };
     let focus = element_ref();
     focus.on_focus_in(move || app.pane.focused.set(true));
     focus.on_focus_out(move || app.pane.focused.set(false));
@@ -52,7 +54,10 @@ pub(super) fn group(app: AppState, page: AnyElement) -> AnyElement {
 
 pub(super) fn overlay(app: AppState) -> AnyElement {
     when(
-        move || app.is_open(Overlay::Ask) && app.pane.placement() == Placement::Over,
+        move || {
+            (app.is_open(Overlay::Ask) || app.visible_dock().is_some())
+                && app.pane.placement() == Placement::Over
+        },
         move || untracked(|| drawer::overlay(app)),
     )
     .into_element()

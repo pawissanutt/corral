@@ -60,6 +60,7 @@ pub fn pressable(app: AppState, button: &Button, wide: bool) -> AnyElement {
 /// The test id of any control by what it does.
 pub fn press_id(press: &Press) -> String {
     match press {
+        Press::OpenBeside(_) => "btn-open-beside".into(),
         Press::Open(Live::Task(id)) => format!("task-{id}"),
         Press::Open(Live::Plan(id)) => format!("plan-{id}"),
         Press::Open(Live::Session(_)) => "btn-open-session".into(),

@@ -703,3 +703,20 @@ fn desktop_ask_does_not_block_page_keys_after_focus_leaves_the_pane() {
     app.wait_for("id:list-sessions").unwrap();
     assert_eq!(app.screen().count("id:ask-close").unwrap(), 1);
 }
+
+#[test]
+fn build_opened_beside_stays_visible_after_navigation() {
+    let mut app = preview(desktop(), &[]);
+    app.press("id:nav-sessions").unwrap();
+    app.press("id:agent-B-k3x9").unwrap();
+    app.press("id:list-sessions >> id:more-B-k3x9").unwrap();
+    app.press("id:btn-open-beside").unwrap();
+    app.wait_for("id:dock-tab-B-k3x9").unwrap();
+    app.press("id:nav-tasks").unwrap();
+    app.wait_for("id:list-tasks").unwrap();
+    app.wait_for("id:dock-transcript").unwrap();
+    app.wait_for("id:dock-tab-B-k3x9").unwrap();
+    app.press("id:dock-pane >> id:btn-open-page").unwrap();
+    app.wait_for("id:conversation-beside").unwrap();
+    app.wait_for("id:dock-transcript").unwrap();
+}

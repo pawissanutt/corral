@@ -36,6 +36,10 @@ pub struct StoreAgents {
     pub pinned: Vec<String>,
     #[serde(default)]
     pub last: Option<String>,
+    #[serde(default)]
+    pub docked: Vec<String>,
+    #[serde(default)]
+    pub visible_dock: Option<String>,
 }
 
 /// Pins keyed by an unambiguous authenticated enrollment and store pair.
@@ -52,6 +56,9 @@ impl Pins {
     }
     pub fn get(&self, store: &str) -> Option<&StoreAgents> {
         self.0.get(store)
+    }
+    pub(crate) fn store_mut(&mut self, store: &str) -> &mut StoreAgents {
+        self.0.entry(store.to_owned()).or_default()
     }
     pub fn pinned(&self, store: &str, id: &str) -> bool {
         self.get(store)

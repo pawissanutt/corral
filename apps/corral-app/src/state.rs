@@ -7,6 +7,7 @@ mod address;
 mod attach;
 mod config;
 mod devices;
+mod dock;
 mod finder;
 mod keys;
 mod live;
@@ -734,9 +735,7 @@ impl AppState {
                 self.share.set(false);
                 self.lock.set(true);
             }
-            Action::Work(press) => self.reduce(self.work, |state, feed, _, env| {
-                state.press(press, feed, env)
-            }),
+            Action::Work(press) => self.press_work(press),
             Action::Session(action) => {
                 self.reduce(self.session, |state, feed, _, _| state.act(action, feed))
             }

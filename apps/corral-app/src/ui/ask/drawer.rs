@@ -282,12 +282,23 @@ pub(crate) fn side(app: AppState, focus: ElementRef) -> AnyElement {
 }
 
 fn desktop_body(app: AppState) -> View {
-    view()
-        .test_id("ask-pane")
-        .role(AccessibilityRole::Region)
-        .label("Ask")
-        .bg(color(Token::Bg))
-        .child(body(app, Compact::Drawer, desktop_head))
+    view().bg(color(Token::Bg)).child(
+        when(
+            move || app.is_open(crate::model::Overlay::Ask),
+            move || {
+                untracked(|| {
+                    view()
+                        .test_id("ask-pane")
+                        .role(AccessibilityRole::Region)
+                        .label("Ask")
+                        .flex_1()
+                        .min_h(px(0.0))
+                        .child(body(app, Compact::Drawer, desktop_head))
+                })
+            },
+        )
+        .otherwise(move || super::docked::pane(app)),
+    )
 }
 
 /// The narrow desktop fallback: the original drawer over the right of the page.

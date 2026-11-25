@@ -12,7 +12,7 @@ use crate::model::{DataState, Id, Live, Overlay, assistant};
 // Store-only preferences cannot be attributed to an authenticated daemon safely.
 const AGENTS_KEY: &str = "corral.agents.v2";
 
-fn pin_key(feed: &crate::model::daemon::Feed, preview: bool) -> Option<String> {
+pub(super) fn pin_key(feed: &crate::model::daemon::Feed, preview: bool) -> Option<String> {
     let store = feed.store.as_deref()?;
     let identity = if preview {
         "preview"
@@ -37,7 +37,7 @@ pub(super) fn load_pins() -> Pins {
 
 impl AppState {
     /// Tracked: the pins of the source in view: the saved ones, or the preview's own.
-    fn pins_in_view(&self) -> Signal<Pins> {
+    pub(super) fn pins_in_view(&self) -> Signal<Pins> {
         if self.data.get() == DataState::Fixture {
             self.preview_pins
         } else {

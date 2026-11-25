@@ -117,21 +117,52 @@ pub fn page(app: AppState, id: Id) -> AnyElement {
     });
     // Details widens with the page; BESIDE reads the whole page, before Details takes its share.
     let panel_width = computed(move || sidebar::panel_width(room.get()));
+    let conversation_beside = computed(move || {
+        let shown = app.shown_dock();
+        page.with(|p| {
+            shown.as_ref() == Some(&p.id) && matches!(p.body, Body::Chat(_) | Body::Log(_))
+        })
+    });
     let talk = view()
         .flex_1()
         .min_w(px(0.0))
         .min_h(px(0.0))
         .flex_col()
         .child(view_bar(app, page))
-        .child(main(app, page))
-        .child(dock::dock(app, page, true))
-        .child(conversation(
-            app,
-            true,
-            command_menu::menu(app, page, commands, false),
+        .child(
+            when(
+                move || !conversation_beside.get(),
+                move || untracked(|| main(app, page)),
+            )
+            .otherwise(move || {
+                text(crate::model::dock::CONVERSATION_BESIDE)
+                    .test_id("conversation-beside")
+                    .p(px(16.0))
+                    .text_color(color(Token::Ink2))
+            }),
+        )
+        .child(when(
+            move || {
+                let shown = app.shown_dock();
+                page.with(|p| shown.as_ref() != Some(&p.id))
+            },
+            {
+                let id = id.clone();
+                move || {
+                    untracked(|| {
+                        view()
+                            .child(dock::dock(app, page, true))
+                            .child(conversation(
+                                app,
+                                true,
+                                command_menu::menu(app, page, commands, false),
+                            ))
+                            .child(bottom(app, page, id.clone(), commands, false, true, true))
+                            .child(alerts(app, page))
+                    })
+                }
+            },
         ))
-        .child(bottom(app, page, id.clone(), commands, false, true, true))
-        .child(alerts(app, page))
         .style_when(move || panel.get() == Panel::Instead, |s| s.hidden());
     view()
         .size_full()
@@ -232,6 +263,7 @@ pub fn phone(app: AppState, id: Id) -> PhonePage {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Compact {
     Drawer,
+    Dock,
     Sheet,
     Composer,
     /// A Home card or the Sessions inspector: the dock and the session's own composer (or the
@@ -253,32 +285,44 @@ pub fn compact(app: AppState, id: Id, page: Memo<SessionPage>, form: Compact) ->
     // A card answers in place on Home or in the inspector: its composer takes the keys only
     // when pressed, so the list's keys keep walking the cards.
     let card = form == Compact::Card;
+    let ask = !matches!(form, Compact::Card | Compact::Dock);
     let tail = view()
         .flex_none()
         .when(!card, |tail| {
             tail.child(header::local_notice(app, id.clone(), page))
         })
         .child(dock::dock(app, page, false))
-        .child(command_menu::menu(app, page, commands, !card))
-        .child(bottom(app, page, id.clone(), commands, !card, !card, false))
+        .child(command_menu::menu(app, page, commands, ask))
+        .child(bottom(app, page, id.clone(), commands, ask, !card, false))
         .when(!matches!(form, Compact::Composer | Compact::Card), |tail| {
             tail.child(status::bar(app, page, false))
         });
     match form {
-        Compact::Drawer => view()
+        Compact::Drawer | Compact::Dock => view()
             .flex_1()
             .min_h(px(0.0))
             .flex_col()
             .child(banner(app, page))
             .child(
                 view()
-                    .test_id("ask-transcript")
+                    .test_id(if ask {
+                        "ask-transcript"
+                    } else {
+                        "dock-transcript"
+                    })
                     .flex_1()
                     .min_h(px(0.0))
                     .flex_col()
-                    .child(chat(app, page)),
+                    .child(if ask {
+                        chat(app, page)
+                    } else {
+                        main(app, page)
+                    }),
             )
-            .child(tail)
+            .child(when(
+                move || ask || page.with(|p| !matches!(p.body, Body::Log(_))),
+                move || tail.clone(),
+            ))
             .into_element(),
         Compact::Sheet => view()
             .flex_col()
@@ -443,7 +487,7 @@ fn bind_keys(app: AppState, id: Id) {
         let id = id.clone();
         let key = binding.key;
         on_key_with(key, options, move |_| {
-            if app.nav.with_untracked(|nav| nav.newest().is_some()) {
+            if untracked(|| app.overlay_blocks_page_keys()) {
                 return;
             }
             let env = untracked(|| app.env());

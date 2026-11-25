@@ -295,6 +295,13 @@ pub(super) fn head(app: AppState, page: Memo<SessionPage>, wide: Memo<bool>) -> 
         .child(crate::shell::agents_trigger(app, "agents-open-head"))
         .child(views(app, page, wide))
         .child(details_button(app, page))
+        .child(crate::ui::kit::button::button(
+            app,
+            crate::model::dock::DOCK_SIDE,
+            ButtonKind::Quiet,
+            "btn-dock-side",
+            move || app.dock_session(&page.with_untracked(|p| p.id.clone())),
+        ))
         .child(more(app, page))
         .child(actions(app, page))
         .into_element()

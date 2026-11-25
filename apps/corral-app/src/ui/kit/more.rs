@@ -31,9 +31,7 @@ use crate::ui::tokens::{FONT_TEXT, Token, color};
 /// Runs any press: local actions through the work reducer, record presses into root effects
 /// against the feed.
 pub fn press(app: AppState, press: Press) {
-    app.reduce(app.work, move |state, feed, _selection, env| {
-        state.press(press, feed, env)
-    });
+    app.press_work(press);
 }
 
 /// What marks a row as the record's one next step.
@@ -119,6 +117,10 @@ fn items(app: AppState, record: &Record) -> AnyElement {
         .children(
             verbs
                 .into_iter()
+                .filter(|verb| {
+                    crate::model::dock::supported(app.form)
+                        || !matches!(verb.press, Press::OpenBeside(_))
+                })
                 .map(|verb| match &verb.press {
                     Press::Menu(inner) => task_menu(app, inner.clone(), verb.label, verb.slug),
                     _ => {
@@ -376,6 +378,9 @@ fn command_menu(app: AppState) -> Modal {
     let mut walked = Vec::new();
     let rows: Vec<AnyElement> = verbs
         .into_iter()
+        .filter(|verb| {
+            crate::model::dock::supported(app.form) || !matches!(verb.press, Press::OpenBeside(_))
+        })
         .map(|verb| {
             let focus = verb.enabled.then(|| {
                 let handle = element_ref();

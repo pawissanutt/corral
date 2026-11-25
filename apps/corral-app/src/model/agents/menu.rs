@@ -25,6 +25,13 @@ pub fn session_verbs(feed: &daemon::Feed, session: &Id) -> Vec<VerbAction> {
             press: Press::Remove(session.clone()),
         });
     }
+    verbs.push(VerbAction {
+        slug: "open-beside",
+        label: crate::model::dock::OPEN_BESIDE.into(),
+        enabled: true,
+        reason: None,
+        press: Press::OpenBeside(session.clone()),
+    });
     let Some(task) = session_task(session).map(Id::new) else {
         return verbs;
     };
@@ -88,6 +95,7 @@ mod tests {
                 "resume",
                 "rewind",
                 "terminate",
+                "open-beside",
                 "reply",
                 "task-actions"
             ]
@@ -104,6 +112,9 @@ mod tests {
         let mut build = assistant("B-k3x9", AssistantKind::Build);
         build.state = AssistantState::Cold;
         feed.assistants.insert("B-k3x9".into(), build);
-        assert_eq!(slugs(&feed, "B-k3x9"), ["relaunch", "remove"]);
+        assert_eq!(
+            slugs(&feed, "B-k3x9"),
+            ["relaunch", "remove", "open-beside"]
+        );
     }
 }

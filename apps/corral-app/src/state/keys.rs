@@ -16,7 +16,7 @@ use crate::model::list::{self, ListKey};
 use crate::model::projects::WorkspaceMode;
 use crate::model::session::{self, Cx, Facts, Focus, KeyAction};
 use crate::model::{
-    DataState, Destination, Effect, Form, Live, Overlay, commands, home, nav, sessions, tasks, work,
+    DataState, Destination, Effect, Form, Live, Overlay, commands, home, nav, tasks, work,
 };
 
 /// The Agents switcher's chord on every form (Ctrl+G, ⌘G on a Mac).
@@ -343,7 +343,13 @@ impl AppState {
         }
     }
 
-    fn overlay_blocks_page_keys(&self) -> bool {
+    pub(crate) fn overlay_blocks_page_keys(&self) -> bool {
+        if self.shown_dock().is_some()
+            && (self.pane.focused.get()
+                || self.pane.placement() == crate::model::pane::Placement::Over)
+        {
+            return true;
+        }
         self.nav.with(|nav| {
             nav.blocks_page_keys(
                 self.form == Form::Desktop
@@ -432,11 +438,8 @@ impl AppState {
                     self.agents.update(|state| state.start.open = true);
                     return Some(Vec::new());
                 }
-                let order = self.feed.with_untracked(|feed| {
-                    self.agents.with_untracked(|state| {
-                        list::order(&sessions::sections(feed, &scope, &state.list))
-                    })
-                });
+                let order =
+                    untracked(|| list::order(&crate::screens::sessions::listing(*self).sections));
                 let selected = list::settled(&order, selection.session.as_ref());
                 Some(match list::key(key, &order, selected.as_ref())? {
                     ListKey::Select(id) => vec![Effect::Select(Live::Session(id))],

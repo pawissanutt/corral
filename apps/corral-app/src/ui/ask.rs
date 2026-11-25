@@ -2,6 +2,7 @@
 //! with the model pill and list they share.
 
 mod attach;
+mod docked;
 pub(crate) mod drawer;
 mod hotkey;
 pub(crate) mod models;

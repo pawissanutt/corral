@@ -22,6 +22,7 @@ pub mod daemon;
 pub mod devices;
 /// Honest shell snapshot without a daemon or an explicitly chosen preview.
 pub mod disconnected;
+pub mod dock;
 /// Reducer effects and environment switches.
 pub mod effect;
 /// Snapshot and health types.

@@ -49,6 +49,7 @@ pub struct State {
 /// A canonical record action against owned feed identities.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Press {
+    OpenBeside(Id),
     /// Open a live record (a task page, a session, a question, a plan, a review).
     Open(Live),
     /// Open session `session`'s page with the card `asked` names open: a Pi host's question.
@@ -187,7 +188,7 @@ impl State {
                 self.composer = None;
                 Vec::new()
             }
-            Press::CloseMenu => {
+            Press::CloseMenu | Press::OpenBeside(_) => {
                 self.menu = None;
                 Vec::new()
             }
