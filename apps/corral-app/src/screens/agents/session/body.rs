@@ -6,7 +6,7 @@
 use nsh_core::prelude::*;
 
 use crate::model::Form;
-use crate::model::session::{self, Body, Chat, SessionPage};
+use crate::model::session::{self, Body, EmptyChat, SessionPage};
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, button};
 use crate::ui::kit::page::{measure, measure_fill};
@@ -183,17 +183,24 @@ pub(super) fn main(app: AppState, page: Memo<SessionPage>) -> AnyElement {
 /// the owner scrolled up (then a control counts what arrived and returns to the end); before
 /// the first row, who receives the message.
 pub(super) fn chat(app: AppState, page: Memo<SessionPage>) -> AnyElement {
-    let chat = computed(move || {
+    let said = computed(move || {
         page.with(|p| match &p.body {
-            Body::Chat(chat) => Some(chat.clone()),
+            Body::Chat(chat) => Some(chat.transcript.clone()),
+            _ => None,
+        })
+    });
+    let empty = computed(move || {
+        page.with(|p| match &p.body {
+            Body::Chat(chat) => Some(chat.empty.clone()),
             _ => None,
         })
     });
     let shown = dynamic(move || {
-        chat.with(|chat| {
-            chat.as_ref()
-                .map(|chat| untracked(|| chat_content(app, chat)))
-        })
+        let empty = empty.get()?;
+        Some(untracked(|| match empty {
+            Some(empty) => chat_empty(app, &empty),
+            None => transcript::transcript(app, said),
+        }))
     });
     let content = if app.form == Form::Terminal {
         view().px(term::cells(1.0)).child(shown).into_element()
@@ -207,17 +214,14 @@ pub(super) fn chat(app: AppState, page: Memo<SessionPage>) -> AnyElement {
             .flex_1()
             .min_h(px(0.0))
             .child(content),
-        move || chat.with(|c| c.as_ref().map(|c| c.transcript.following())),
-        move || chat.with(|c| c.as_ref().map(|c| transcript::Earlier::of(&c.transcript))),
-        move |key| chat.with(|chat| chat.as_ref()?.transcript.rows_below(key)),
+        move || said.with(|t| t.as_ref().map(|t| t.following())),
+        move || said.with(|t| t.as_ref().map(transcript::Earlier::of)),
+        move |key| said.with(|t| t.as_ref()?.rows_below(key)),
         move || page.with(|p| p.jump),
     )
 }
 
-fn chat_content(app: AppState, chat: &Chat) -> AnyElement {
-    let Some(empty) = &chat.empty else {
-        return transcript::transcript(app, &chat.transcript);
-    };
+fn chat_empty(app: AppState, empty: &EmptyChat) -> AnyElement {
     let form = app.form;
     let sentence = text(empty.sentence.clone()).text_color(color(Token::Ink2));
     let keys = view()

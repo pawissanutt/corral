@@ -131,11 +131,20 @@ pub(super) fn page(
             }))
         })
     });
-    let said = tab.part(|t| of(t).map(|c| (c.transcript.clone(), c.end.clone())));
-    let body = dynamic(move || {
-        let (transcript, end) = said.get().flatten()?;
-        Some(untracked(|| content(app, &transcript, end)))
+    let said = computed(move || {
+        tab.steady
+            .with(|t| t.as_ref().and_then(of).map(|c| c.transcript.clone()))
     });
+    let end = tab.part(|t| of(t).and_then(|c| c.end.clone()));
+    let end = dynamic(move || {
+        end.get()
+            .flatten()
+            .map(|end| untracked(|| end_line(app, end)))
+    });
+    let body = view()
+        .gap(px(if form == Form::Terminal { 0.0 } else { 10.0 }))
+        .child(transcript::transcript(app, said))
+        .child(end);
     // Keep the measured transcript wrapper directly in the scroll-content column:
     // its layout then includes the top padding and the phone header (including More).
     let column = match form {
@@ -154,15 +163,9 @@ pub(super) fn page(
             .flex_1()
             .min_h(px(0.0))
             .child(body),
-        move || said.with(|said| said.as_ref()?.as_ref().map(|(t, _)| t.following())),
-        move || {
-            said.with(|said| {
-                said.as_ref()?
-                    .as_ref()
-                    .map(|(t, _)| transcript::Earlier::of(t))
-            })
-        },
-        move |key| said.with(|said| said.as_ref()?.as_ref()?.0.rows_below(key)),
+        move || said.with(|t| t.as_ref().map(Transcript::following)),
+        move || said.with(|t| t.as_ref().map(transcript::Earlier::of)),
+        move |key| said.with(|t| t.as_ref()?.rows_below(key)),
         jump,
     );
     view()
@@ -319,28 +322,21 @@ fn waiting(app: AppState, tab: Tab) -> AnyElement {
     }
 }
 
-/// The transcript, then how the agent stands after it (a question presses to its card).
-fn content(app: AppState, said: &Transcript, end: Option<EndLine>) -> AnyElement {
+/// How the agent stands after the transcript (a question presses to its card).
+fn end_line(app: AppState, end: EndLine) -> AnyElement {
     let form = app.form;
-    let end = end.map(|end| {
-        let line = words(form, end.words.clone(), hue_words(form, end.hue))
-            .when(end.hue == Hue::You, |t| t.font_weight(FontWeight::SEMIBOLD));
-        let line = view().test_id("btn-child-end").child(line);
-        match end.action {
-            Some(action) => line
-                .role(AccessibilityRole::Button)
-                .label(format!("{}; press to answer", end.words))
-                .cursor_pointer()
-                .on_press(move || run(app, action.clone()))
-                .into_element(),
-            None => line.into_element(),
-        }
-    });
-    view()
-        .gap(px(if form == Form::Terminal { 0.0 } else { 10.0 }))
-        .child(transcript::transcript(app, said))
-        .children(end)
-        .into_element()
+    let line = words(form, end.words.clone(), hue_words(form, end.hue))
+        .when(end.hue == Hue::You, |t| t.font_weight(FontWeight::SEMIBOLD));
+    let line = view().test_id("btn-child-end").child(line);
+    match end.action {
+        Some(action) => line
+            .role(AccessibilityRole::Button)
+            .label(format!("{}; press to answer", end.words))
+            .cursor_pointer()
+            .on_press(move || run(app, action.clone()))
+            .into_element(),
+        None => line.into_element(),
+    }
 }
 
 #[cfg(test)]
