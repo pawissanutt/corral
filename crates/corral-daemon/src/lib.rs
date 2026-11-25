@@ -3,6 +3,7 @@
 
 mod app;
 mod assistant;
+mod automation;
 mod builds;
 mod config;
 mod conn;
@@ -144,6 +145,7 @@ fn run_with_runner(root: &Path, options: RunOptions, runner: Option<RunnerFactor
         Ok(sync) => {
             harnesses::start_sampler(&shared);
             react::start(&shared);
+            automation::start(&shared);
             poll_loop(&shared, &store, seq, version);
             shared.stop();
             sync.join()
