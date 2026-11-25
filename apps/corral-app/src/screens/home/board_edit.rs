@@ -123,7 +123,7 @@ pub(super) fn drop_mark(widget: Widget, moving: Signal<Option<Moving>>) -> AnyEl
     .into_element()
 }
 
-/// Over one widget while Customize is on: a veil that keeps presses off the widget, its head
+/// Over one widget while Customize is on (the widget itself is laid out but not shown): its frame, its head
 /// to drag it by with its buttons, and its right edge to resize it by.
 pub(super) fn handles(
     app: AppState,
@@ -172,7 +172,7 @@ pub(super) fn handles(
         .border_2()
         .border_dashed()
         .border_color(color(Token::Focus))
-        .bg(color(Token::Bg).opacity(0.55))
+        .bg(color(Token::Surface))
         .child(head)
         // Only where a span shows as itself does the edge follow the pointer; narrower, the
         // buttons still resize.
@@ -190,6 +190,15 @@ fn grip(app: AppState, widget: Widget, moving: Signal<Option<Moving>>, cells: Ce
     let measured = frames.clone();
     let moved = frames.clone();
     let dropped = frames;
+    // Removed mid-drag (its Remove pressed from the keyboard): no other widget stays marked.
+    cleanup(move || {
+        if untracked(|| moving.try_get())
+            .flatten()
+            .is_some_and(|m| m.widget == widget)
+        {
+            moving.try_set(None);
+        }
+    });
     let follow = move |x: f32, y: f32| {
         let drop = drop_at(&moved.borrow(), widget, x, y);
         let next = Some(Moving { widget, drop });

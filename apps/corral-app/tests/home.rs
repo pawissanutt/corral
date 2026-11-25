@@ -174,6 +174,15 @@ fn customize_arranges_the_board_and_keeps_it_on_this_device() {
     );
     app.press("id:btn-board-edit").unwrap();
     app.wait_for("id:board-tray").unwrap();
+    // Under Customize a widget keeps its frame but is not shown, so it takes no presses or focus.
+    let covered = app.screen().layout_nodes();
+    assert!(
+        covered
+            .iter()
+            .find(|node| node.test_id.as_deref() == Some("list-home"))
+            .is_some_and(|node| node.hidden),
+        "the Needs you cards are inert while arranging"
+    );
 
     let grip = bounds(&app, "board-grip-stat-cost").center();
     let target = bounds(&app, "board-stat-needs");
@@ -222,6 +231,17 @@ fn customize_arranges_the_board_and_keeps_it_on_this_device() {
     app.press("id:nav-home").unwrap();
     app.wait_for("id:board-stat-cost").unwrap();
     assert_eq!(app.screen().count("id:board-tray").unwrap(), 0);
+
+    // Opened again on this device, Home reads the arrangement back: order and span.
+    drop(app);
+    let app = preview_kept(desktop(), storage, "id:list-home");
+    assert_eq!(&widgets(&app)[..2], ["stat-cost", "stat-needs"]);
+    let cost = bounds(&app, "board-stat-cost").size.width.0;
+    let needs = bounds(&app, "board-stat-needs").size.width.0;
+    assert!(
+        cost > needs * 1.3,
+        "three columns beside two: {cost} vs {needs}"
+    );
 }
 
 /// A board kept on this device is the one Home opens with, and with Needs you off the board the

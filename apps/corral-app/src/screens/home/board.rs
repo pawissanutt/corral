@@ -173,6 +173,9 @@ fn cell(
                 .flex_grow(1.0)
                 .flex_col()
                 .min_w(px(0.0))
+                // Under Customize the widget keeps its frame but takes no presses or keyboard
+                // focus, so arranging never opens a page or runs a step.
+                .style_with(move |s| if editing.get() { s.invisible() } else { s })
                 .child(content(app, scope, widget)),
         )
         .child(dynamic(move || {
