@@ -1,0 +1,129 @@
+{
+  "v": 1,
+  "kind": "corral_lite_fixture_launcher",
+  "activation": {
+    "default": "off",
+    "switch": "--enable-public-fixture-e2e",
+    "platform": "linux-x86_64",
+    "non_root": true,
+    "non_git_cwd": true,
+    "work_profile": "lite-analyst-v1",
+    "mcp_version": "2025-06-18"
+  },
+  "pins": {
+    "corral_fixture": "T-2069:2",
+    "corral_fixture_tar_sha256": "e6bad8198ed07bb71a7f57d5a381d3ba509cf9f6a9ac47eecacaa03c10de74e5",
+    "corral_fixture_sha256sums_sha256": "9a0376354d43efe1b72ffef0be9ee333cedf95cd50890a096f9c891c0b4607a5",
+    "lite_fixture": "T-2073:3",
+    "lite_fixture_tar_sha256": "69342ce69d61d3a17be02ec8277df71e9d09e1d8c1880b3d5fb8b94b50fbf5f8",
+    "lite_fixture_packet_sha256": "12bf636c36606452e362b5c454de12284a77738fb20dfc0e7fcbfe1aab1f46a5",
+    "policy_ref": "b363edfa14cbf9f9f32cf9578d260c99e762e12719df2b0505358f12e94e0104",
+    "prompt_sha256": "103ccacd5a80abbd9f83e4d64441cbb6b07e5d7a8c28c793d15bc16aaded8f02",
+    "tool_policy_sha256": "8879af6aeb66bf98b2533bbe6c99b12c5c5949e37d71622c0267277843f96b4d"
+  },
+  "launch": {
+    "corral": {
+      "argv": ["/fixture/corral/bin/corrald-next", "lite-analyst-fixture-v1", "--enable-public-fixture-e2e"],
+      "cwd": "/scratch",
+      "fd": {"enrollment": 3, "work": 4, "broker_bootstrap": 5, "ready": 6, "lifetime": 7, "provider_credential": 8}
+    },
+    "lite": {
+      "entrypoint_role": "first_party_fixture_host",
+      "required_argv_tail": ["lite-analyst-fixture-v1", "--enable-public-fixture-e2e"],
+      "cwd": "/scratch",
+      "fd": {"enrollment": 3, "work": 4, "broker_bootstrap": 5, "ready": 6, "lifetime": 7}
+    },
+    "scripted_provider": {
+      "argv": ["/fixture/driver/bin/scripted-provider"],
+      "cwd": "/scratch",
+      "fd": {"provider_credential": 3, "ready": 4, "lifetime": 5}
+    },
+    "mounts": {
+      "corral_package": "/fixture/corral", "lite_package": "/fixture/lite", "private_state": "/state", "lite_only_vault": "/vault",
+      "launcher_profile": "/fixture/meta/launcher-v1.json", "corral_manifest": "/fixture/meta/build-manifest.json"
+    },
+    "deadlines_ms": {"bootstrap": 15000, "run_max": 120000, "broker_target_strictly_below": 10000, "mcp_client_timeout": 15000, "stop_grace": 5000, "reap_after_kill": 5000}
+  },
+  "channels": {
+    "work": {"socket": "AF_UNIX/SOCK_STREAM", "framing": "u32be-length-json", "max_payload_bytes": 131072, "in_flight_each_direction": 1},
+    "broker_bootstrap": {"socket": "AF_UNIX/SOCK_SEQPACKET", "max_payload_bytes": 4096, "attach_fds_order": ["evidence", "host_poll"]},
+    "broker_data": {
+      "socket": "AF_UNIX/SOCK_SEQPACKET", "max_payload_bytes": 131072, "in_flight_total": 1,
+      "startup_per_fd": ["initialize", "notifications/initialized", "tools/list"], "startup_fd_order": ["evidence", "host_poll"],
+      "startup_framing": "raw-json-rpc", "call_framing": "t-2069-wrapped-json-rpc"
+    },
+    "bootstrap_pipe_max_bytes": 4096,
+    "evidence_tools": ["search_materials", "read_evidence", "calculate_metric"],
+    "host_poll_tools": ["read_result"],
+    "model_tools": ["search_materials", "read_evidence", "calculate_metric", "finish_report"]
+  },
+  "provider": {
+    "route": {"provider": "scripted", "model": "fixture-v1", "recipient": "synthetic-local", "external": false, "tariff_revision": "demo-1"},
+    "method": "POST",
+    "url": "http://127.0.0.1:43173/v1/chat/completions",
+    "request": "application/json",
+    "response": "text/event-stream",
+    "auth": "Authorization: Bearer <64 lowercase hex digits>",
+    "max_body_bytes": 262144,
+    "max_sse_bytes": 262144,
+    "max_sse_events": 128,
+    "max_sse_event_bytes": 32768,
+    "sdk_retries": 0,
+    "redirects": 0,
+    "synthetic_cost_microusd": {"max_per_turn": 1000, "completed": 760, "not_sent": 0, "indeterminate": 1000, "run_max": 4000, "utc_day_max": 5000},
+    "max_concurrent_runs": 1,
+    "sse_example": [
+      {"id": "chatcmpl_example", "object": "chat.completion.chunk", "created": 1, "model": "fixture-v1", "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": null}]},
+      {"id": "chatcmpl_example", "object": "chat.completion.chunk", "created": 1, "model": "fixture-v1", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call_example", "type": "function", "function": {"name": "search_materials", "arguments": "{\"query\":\"February\",\"limit\":2}"}}]}, "finish_reason": null}]},
+      {"id": "chatcmpl_example", "object": "chat.completion.chunk", "created": 1, "model": "fixture-v1", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+      "[DONE]"
+    ]
+  },
+  "bootstrap_examples": {
+    "enrollment": {
+      "v": 1, "type": "enrollment", "role": "corral", "link_id": "example_link", "lite_instance": "example_lite", "corral_instance": "example_corral", "channel_epoch": "example_epoch", "prior_channel_epoch": null,
+      "profile_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "corral_manifest_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "joint_lock_sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+    },
+    "link_ready": {
+      "v": 1, "type": "link_ready", "role": "lite", "link_id": "example_link", "lite_instance": "example_lite", "corral_instance": "example_corral", "channel_epoch": "example_epoch", "prior_channel_epoch": null,
+      "profile_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "corral_manifest_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "joint_lock_sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+    },
+    "broker_attach": {
+      "v": 1, "type": "broker_attach", "link_id": "example_link", "channel_epoch": "example_epoch", "request_id": "example_request", "run_id": "example_run", "generation": 1,
+      "grant_id": "example_grant", "grant_generation": 1,
+      "request_digest": "4444444444444444444444444444444444444444444444444444444444444444",
+      "policy_ref": "b363edfa14cbf9f9f32cf9578d260c99e762e12719df2b0505358f12e94e0104"
+    },
+    "ready": {
+      "v": 1, "type": "ready", "role": "corral", "link_id": "example_link", "channel_epoch": "example_epoch",
+      "profile_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "corral_manifest_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "joint_lock_sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+    },
+    "failed": {"v": 1, "type": "failed", "role": "corral", "error": "startup_failed"},
+    "provider_ready": {"v": 1, "type": "provider_ready", "url": "http://127.0.0.1:43173/v1/chat/completions"}
+  },
+  "driver_exit": {"pass": 0, "invalid_or_disabled": 64, "unsupported_isolation": 69, "failed": 70, "teardown_unconfirmed": 74},
+  "lanes": ["happy", "fault", "isolation", "compute"],
+  "lane_results": ["pass", "fail", "not_run"],
+  "gates": [
+    {"id": "disabled", "stimulus": "omit per-run opt-in", "expect": "no enrollment, work, broker, or provider access"},
+    {"id": "input_pins", "stimulus": "tamper lock, manifest, component, fixture or policy; try template or unknown version", "expect": "no product component executed"},
+    {"id": "namespace_preflight", "stimulus": "run root or remove required kernel/isolation feature", "expect": "startup blocked; no weaker fallback"},
+    {"id": "ambient_isolation", "stimulus": "seed env/argv/FD/path canaries and test unapproved sockets and destinations from payload namespaces", "expect": "no ambient access, no vault or owner socket outside its allowed host, zero denied-route traffic"},
+    {"id": "peer_auth", "stimulus": "substitute endpoints, change peer pins or use a foreign/retired link with known IDs", "expect": "no enrollment or lookup/disclosure; no side effects"},
+    {"id": "framing_and_purpose", "stimulus": "oversize/truncate frame, inject wrong or excess FDs/epoch, use evidence channel for poll or work", "expect": "reject before cache, ledger, provider or broker effect; close unexpected FDs"},
+    {"id": "readiness", "stimulus": "withhold ready/hello or deny broker attach/registry after ready", "expect": "bounded startup/run failure, zero tool releases or sends before binding"},
+    {"id": "captured_round_trip", "stimulus": "real first-party approved run with captured public February fixture", "expect": "one report and durable delivery; actual calls/turns/permit sends match; 0 metric executions; opens retained cell 2300 with no authored edit or rerun"},
+    {"id": "approved_fresh_round_trip", "stimulus": "separately authorized fresh run and fresh changed-operands run", "expect": "1 actual execution per run and exact distinct retained results; absent Lite authority reports not_run/blocked"},
+    {"id": "drop_start", "stimulus": "drop committed start reply and retry identical request, then change digest", "expect": "same run, one launch only; changed digest conflicts"},
+    {"id": "turn_ambiguity", "stimulus": "permit loss, stop-before-send, response loss after send followed by restart, and lost settlement acknowledgement", "expect": "no send without permit; at most one per consumed step, settlement receipt replay only, no provider replay or fallback"},
+    {"id": "stop_and_publication", "stimulus": "race stop against effect, fresh/cached handoff and report CAS; change approved source mid-run", "expect": "winning fence blocks effects/disclosure/offers; winning report stays immutable; drift refuses"},
+    {"id": "report_delivery", "stimulus": "drop ack reply; attempt wrong link, offer and tampered bytes", "expect": "one durable valid intake; refusals have no new copies; offline reopen reads only retained bytes"},
+    {"id": "teardown", "stimulus": "success, failed boot, timeout, signal, peer crash and driver death", "expect": "prove owned child/wrapper/listener/channel teardown before cleanup and success; quarantine and nonzero if uncertain"}
+  ]
+}

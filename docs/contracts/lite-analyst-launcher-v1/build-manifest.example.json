@@ -1,0 +1,20 @@
+{
+  "v": 1,
+  "kind": "corral_lite_fixture_build",
+  "status": "template",
+  "target": "linux-x86_64",
+  "corral_revision": "0000000000000000000000000000000000000000",
+  "launcher_profile_sha256": "3faaaf527dbb691ae6857b5c17a99edb454f906d7ed88024f42c207207c0606e",
+  "build_recipe": "BUILD.txt",
+  "host_requirements": {"landlock_tcp_abi_min": 4, "sysroot_abi": "example-not-a-runtime-pin", "sandbox_backend": "rootless-bubblewrap"},
+  "entrypoints": {"daemon": "bin/corrald-next", "pi": "bin/corral-pi-lite-analyst", "shim": "bin/corral-lite-mcp-shim"},
+  "components": {
+    "bin/corrald-next": {"role": "daemon", "bytes": 1, "sha256": "0000000000000000000000000000000000000000000000000000000000000000", "executable": true},
+    "bin/corral-pi-lite-analyst": {"role": "pi", "bytes": 1, "sha256": "0000000000000000000000000000000000000000000000000000000000000000", "executable": true},
+    "bin/corral-lite-mcp-shim": {"role": "shim", "bytes": 1, "sha256": "0000000000000000000000000000000000000000000000000000000000000000", "executable": true},
+    "bin/runtime": {"role": "runtime", "bytes": 1, "sha256": "0000000000000000000000000000000000000000000000000000000000000000", "executable": true},
+    "BUILD.txt": {"role": "build_recipe", "bytes": 1, "sha256": "0000000000000000000000000000000000000000000000000000000000000000", "executable": false},
+    "assets/synthetic-prompt.txt": {"role": "prompt", "bytes": 291, "sha256": "103ccacd5a80abbd9f83e4d64441cbb6b07e5d7a8c28c793d15bc16aaded8f02", "executable": false},
+    "assets/tool-policy.json": {"role": "tool_policy", "bytes": 12570, "sha256": "38fae11185d2b48302d026ed788b04f1e5e6340fced8aa08f9d24707f9607de5", "executable": false}
+  }
+}

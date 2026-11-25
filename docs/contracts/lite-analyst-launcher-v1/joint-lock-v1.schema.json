@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Lite runner build lock for the public-fixture E2E v1",
+  "type": "object", "additionalProperties": false,
+  "required": ["v", "kind", "launcher_profile_sha256", "corral", "lite", "public_seed_files", "scripted_provider_sha256", "runtime_tools"],
+  "properties": {
+    "v": {"const": 1},
+    "kind": {"const": "corral_lite_fixture_joint_lock"},
+    "launcher_profile_sha256": {"$ref": "#/$defs/sha256"},
+    "corral": {
+      "type": "object", "additionalProperties": false,
+      "required": ["revision", "archive_sha256", "manifest_sha256"],
+      "properties": {
+        "revision": {"$ref": "#/$defs/revision"},
+        "archive_sha256": {"$ref": "#/$defs/sha256"},
+        "manifest_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "lite": {
+      "type": "object", "additionalProperties": false,
+      "required": ["revision", "entrypoint", "files"],
+      "properties": {
+        "revision": {"$ref": "#/$defs/revision"},
+        "entrypoint": {"$ref": "#/$defs/path"},
+        "files": {"$ref": "#/$defs/file_digests"}
+      }
+    },
+    "public_seed_files": {"$ref": "#/$defs/file_digests"},
+    "scripted_provider_sha256": {"$ref": "#/$defs/sha256"},
+    "runtime_tools": {
+      "type": "object", "minProperties": 1, "maxProperties": 64,
+      "propertyNames": {"pattern": "^[a-z0-9_-]{1,64}$"},
+      "required": ["sandbox"],
+      "additionalProperties": {
+        "type": "object", "additionalProperties": false,
+        "required": ["version", "sha256"],
+        "properties": {
+          "version": {"type": "string", "minLength": 1, "maxLength": 128},
+          "sha256": {"$ref": "#/$defs/sha256"}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "path": {"type": "string", "pattern": "^[A-Za-z0-9_-][A-Za-z0-9_.-]*(/[A-Za-z0-9_-][A-Za-z0-9_.-]*)*$", "maxLength": 256},
+    "file_digests": {
+      "type": "object", "minProperties": 1, "maxProperties": 16384,
+      "propertyNames": {"$ref": "#/$defs/path"},
+      "additionalProperties": {"$ref": "#/$defs/sha256"}
+    }
+  }
+}

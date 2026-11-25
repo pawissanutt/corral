@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Corral public-fixture E2E package v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["v", "kind", "status", "target", "corral_revision", "launcher_profile_sha256", "build_recipe", "host_requirements", "entrypoints", "components"],
+  "properties": {
+    "v": {"const": 1},
+    "kind": {"const": "corral_lite_fixture_build"},
+    "status": {"enum": ["template", "runnable"]},
+    "target": {"const": "linux-x86_64"},
+    "corral_revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "launcher_profile_sha256": {"$ref": "#/$defs/sha256"},
+    "build_recipe": {"$ref": "#/$defs/path"},
+    "host_requirements": {
+      "type": "object", "additionalProperties": false,
+      "required": ["landlock_tcp_abi_min", "sysroot_abi", "sandbox_backend"],
+      "properties": {
+        "landlock_tcp_abi_min": {"const": 4},
+        "sysroot_abi": {"type": "string", "minLength": 1, "maxLength": 128},
+        "sandbox_backend": {"enum": ["rootless-bubblewrap", "equivalent-rootless"]}
+      }
+    },
+    "entrypoints": {
+      "type": "object", "additionalProperties": false,
+      "required": ["daemon", "pi", "shim"],
+      "properties": {
+        "daemon": {"const": "bin/corrald-next"},
+        "pi": {"const": "bin/corral-pi-lite-analyst"},
+        "shim": {"const": "bin/corral-lite-mcp-shim"}
+      }
+    },
+    "components": {
+      "type": "object", "minProperties": 7, "maxProperties": 16384,
+      "propertyNames": {"$ref": "#/$defs/path"},
+      "additionalProperties": {"$ref": "#/$defs/component"}
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "path": {"type": "string", "pattern": "^[A-Za-z0-9_-][A-Za-z0-9_.-]*(/[A-Za-z0-9_-][A-Za-z0-9_.-]*)*$", "maxLength": 256},
+    "component": {
+      "type": "object", "additionalProperties": false,
+      "required": ["role", "bytes", "sha256", "executable"],
+      "properties": {
+        "role": {"enum": ["daemon", "pi", "shim", "runtime", "asset", "build_recipe", "prompt", "tool_policy"]},
+        "bytes": {"type": "integer", "minimum": 1, "maximum": 1073741824},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "executable": {"type": "boolean"}
+      }
+    }
+  }
+}
