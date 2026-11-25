@@ -20,7 +20,6 @@ use nsh_core::prelude::*;
 use crate::model::text::span;
 use crate::model::usage::{Page, Status, TITLE};
 use crate::model::{Form, Hue};
-use crate::screens::activity::subnav;
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, button};
 use crate::ui::kit::notice::notice;
@@ -210,7 +209,6 @@ fn desktop(app: AppState, data: Memo<Page>) -> AnyElement {
         .child(page_head(app, data, |app| {
             vec![controls::period_seg(app), controls::grouping_seg(app)]
         }))
-        .children(subnav(app, Some(MEASURE_PAGE)))
         .child(pane(app, "usage", measure(app, MEASURE_PAGE, scroll)))
         .into_element()
 }
@@ -248,7 +246,6 @@ fn terminal(app: AppState, data: Memo<Page>) -> AnyElement {
         .min_w(px(0.0))
         .min_h(px(0.0))
         .child(page_head(app, data, |_| Vec::new()))
-        .children(subnav(app, Some(MEASURE_PAGE)))
         .child(body(app, "usage", scroll))
         .into_element()
 }

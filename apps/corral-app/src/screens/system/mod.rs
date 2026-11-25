@@ -35,17 +35,18 @@ use crate::model::system::{
 };
 use crate::model::text::span;
 use crate::model::{Form, Hue, Id};
-use crate::screens::activity::subnav;
 use crate::state::AppState;
 use crate::ui::composer::copyable_input;
 use crate::ui::kit::button::{ButtonKind, button, seg};
 use crate::ui::kit::marks::hue_ink;
 use crate::ui::kit::notice::{empty, notice};
-use crate::ui::kit::page::{Width, body, columns, context, head, pane};
+use crate::ui::kit::page::{
+    Width, body, columns, context, head, measure_fill, measured_head, pane,
+};
 use crate::ui::kit::rows::list_row;
 use crate::ui::kit::text::{h3, label_value, plain};
 use crate::ui::term;
-use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color, text_size};
+use crate::ui::tokens::{FONT_MONO, FONT_TEXT, MEASURE_PAGE, Token, color, text_size};
 
 /// Whose state a map draws and picks: Activity › System's, or a task page's Impact, which
 /// marks what its change touched.
@@ -141,8 +142,8 @@ pub fn screen(app: AppState) -> AnyElement {
         .min_w(px(0.0))
         .min_h(px(0.0))
         .child(head)
-        .children(subnav(app, None))
-        .child(content)
+        // A desktop keeps the map to the page's measure, as every Activity page does.
+        .child(measure_fill(app, MEASURE_PAGE, content.into_element()))
         .into_element()
 }
 
@@ -249,7 +250,13 @@ fn page_head(app: AppState, data: Memo<Shown>) -> AnyElement {
             )
             .into_element();
     }
-    head(app, TITLE, None, vec![view_seg, overlay, window])
+    measured_head(
+        app,
+        MEASURE_PAGE,
+        TITLE,
+        None,
+        vec![view_seg, overlay, window],
+    )
 }
 
 /// All projects in scope: the page asks for one.

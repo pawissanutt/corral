@@ -20,7 +20,6 @@ use crate::model::timeline::{
     LIVE_SUBTITLE, LegendItem, Range, RangeOption, TallyEntry,
 };
 use crate::model::{Form, Hue};
-use crate::screens::activity::subnav;
 use crate::state::AppState;
 use crate::ui::kit::button::seg;
 use crate::ui::kit::marks::hue_ink;
@@ -96,7 +95,6 @@ fn desktop(app: AppState, data: Memo<Shown>) -> AnyElement {
             Some(LIVE_SUBTITLE.to_owned()),
             head_actions(app, &page),
         ))
-        .children(subnav(app, Some(MEASURE_PAGE)))
         .child(pane(
             app,
             "timeline-pane",
@@ -163,7 +161,6 @@ fn terminal(app: AppState, data: Memo<Shown>) -> AnyElement {
         .min_w(px(0.0))
         .min_h(px(0.0))
         .child(head(app, page.title, None, head_actions(app, &page)))
-        .children(subnav(app, Some(MEASURE_PAGE)))
         .child(body(app, "timeline-pane", content.into_element()))
         .into_element()
 }

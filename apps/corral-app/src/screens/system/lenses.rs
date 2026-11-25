@@ -163,7 +163,15 @@ pub(super) fn page(app: AppState, project: String) -> AnyElement {
         Form::Desktop => columns(
             app,
             vec![
-                (Width::Fixed(260.0), pane(app, "lens-list-pane", list)),
+                // The list keeps the drawing's paddings, so neither touches the page's edge.
+                (
+                    Width::Fixed(260.0),
+                    pane(
+                        app,
+                        "lens-list-pane",
+                        view().px(px(16.0)).py(px(12.0)).child(list).into_element(),
+                    ),
+                ),
                 (Width::Fill, pane(app, "system-map", main)),
                 (Width::Fixed(inspector_width(1200.0, false)), side),
             ],

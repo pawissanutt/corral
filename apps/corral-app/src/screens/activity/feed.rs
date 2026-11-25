@@ -15,16 +15,14 @@ use crate::ui::kit::page::{group_head, measure, measured_head, pane};
 use crate::ui::kit::text::dim;
 use crate::ui::kit::work::pressable;
 use crate::ui::term::cells;
-use crate::ui::tokens::{FONT_MONO, FONT_TEXT, MEASURE_FEED, Token, color};
-
-use super::subnav;
+use crate::ui::tokens::{FONT_MONO, FONT_TEXT, MEASURE_PAGE, Token, color};
 
 const RING: f32 = 2.0;
 
-/// The Feed on every form: the head with Mark seen, the strip, then the days in one scroll.
+/// The Feed on every form: the head with Mark seen, then the days in one scroll.
 /// The phone's shell heads the pushed page; there this is its scrolling body. A desktop keeps
-/// head, strip and rows to [`MEASURE_FEED`], centred, so Mark seen stays near the title and a
-/// row's words near its time; the scroll spans the window, so its bar stays at the edge.
+/// head and rows to [`MEASURE_PAGE`], centred, as every Activity page does, so the title does
+/// not move between them; the scroll spans the window, so its bar stays at the edge.
 pub(super) fn screen(app: AppState) -> AnyElement {
     let page = computed(move || {
         let scope = app.project_scope();
@@ -51,15 +49,14 @@ pub(super) fn screen(app: AppState) -> AnyElement {
             untracked(|| {
                 measured_head(
                     app,
-                    MEASURE_FEED,
+                    MEASURE_PAGE,
                     FEED_TITLE,
                     Some(FEED_SUB.to_owned()),
                     actions,
                 )
             })
         }))
-        .children(subnav(app, Some(MEASURE_FEED)))
-        .child(pane(app, "feed", measure(app, MEASURE_FEED, body)))
+        .child(pane(app, "feed", measure(app, MEASURE_PAGE, body)))
         .into_element()
 }
 

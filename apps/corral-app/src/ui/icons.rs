@@ -119,13 +119,14 @@ pub enum Icon {
 }
 
 impl Icon {
-    /// The destination's own icon.
+    /// The destination's own icon. Feed's is the filled triangle, so it differs from the
+    /// Activity place's outline one it is listed under.
     pub const fn destination(destination: Destination) -> Icon {
         match destination {
             Destination::Home => Icon::Now,
             Destination::Tasks => Icon::Plans,
             Destination::Sessions => Icon::Agents,
-            Destination::Feed => Icon::Changes,
+            Destination::Feed => Icon::Events,
             Destination::Timeline => Icon::Timeline,
             Destination::Usage => Icon::Usage,
             Destination::Artifacts => Icon::Files,

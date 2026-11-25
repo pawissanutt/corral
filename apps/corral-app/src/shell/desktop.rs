@@ -390,7 +390,7 @@ fn rail(app: AppState, current: Memo<Area>, shown: Memo<Vec<Area>>) -> AnyElemen
 }
 
 /// A place in the rail: its icon and count, and under Activity, while one of its pages
-/// shows, the pages as short names.
+/// shows, the pages as icons.
 fn rail_place(app: AppState, current: Memo<Area>, area: Area) -> AnyElement {
     let ink = color(Token::ShellInk);
     let button = rail_button(
@@ -427,55 +427,41 @@ fn rail_place(app: AppState, current: Memo<Area>, area: Area) -> AnyElement {
         .into_element()
 }
 
-/// Activity's pages in the rail, each its short name under its full one for assistive
-/// technology.
+/// Activity's pages in the rail: each its own icon, smaller than a place's, the five on one
+/// faint ground so they read as Activity's; the hint and assistive technology give the name.
 fn rail_pages(app: AppState) -> AnyElement {
     let pages = computed(move || activity_pages(app));
+    let ink = color(Token::ShellInk);
     dynamic(move || {
         let pages = pages.get();
         untracked(move || {
             view()
                 .items_center()
                 .gap(px(2.0))
+                .py(px(3.0))
+                .rounded(px(RADIUS_CONTROL))
+                .bg(ink.opacity(0.05))
                 .children(pages.into_iter().map(|page| {
-                    let selected = move || app.destination() == page;
                     let name = page.label();
                     rail_button(
                         app,
                         Hint { name, key: None },
                         move || SharedString::from(name),
                         format!("nav-{}", page.slug()),
-                        selected,
+                        move || app.destination() == page,
                         move || app.go(page),
                     )
                     .h(px(control_height(row_height(app.form))))
-                    .child(
-                        text(page_short(page))
-                            .text_size(px(text_size(app.form) - 2.5))
-                            .text_color(move || {
-                                if selected() {
-                                    color(Token::ShellInk)
-                                } else {
-                                    color(Token::ShellInk2)
-                                }
-                            }),
-                    )
+                    .child(icon(
+                        Icon::destination(page),
+                        15.0,
+                        color(Token::ShellInk2),
+                    ))
                     .into_element()
                 }))
                 .into_element()
         })
     })
-}
-
-/// An Activity page's short name in the folded sidebar.
-const fn page_short(page: Destination) -> &'static str {
-    match page {
-        Destination::Timeline => "Time",
-        Destination::Usage => "Use",
-        Destination::Artifacts => "Files",
-        Destination::System => "Map",
-        _ => "Feed",
-    }
 }
 
 /// The Settings sections in the rail, each its short name under its full one for assistive
