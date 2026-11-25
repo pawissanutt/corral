@@ -36,6 +36,7 @@ pub const CITATIONS_V1: &str = "citations.v1";
 pub const REVIEW_V1: &str = "review.v1";
 pub const TIMELINE_V1: &str = "timeline.v1";
 pub const USAGE_V1: &str = "usage.v1";
+pub const AUTOMATION_V1: &str = "automation.v1";
 pub const SETTINGS_V1: &str = "settings.v1";
 pub const ASSISTANT_V1: &str = "assistant.v1";
 /// Grants build operations and build rows whenever requested.

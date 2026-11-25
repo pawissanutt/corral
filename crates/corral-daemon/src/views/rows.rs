@@ -231,9 +231,14 @@ fn read(shared: &Shared, topic: Topic, builds: bool) -> Result<Rows> {
 
 fn settings(shared: &Shared) -> Result<Rows> {
     let document = crate::config::get(shared)?;
-    let (config, problem, extensions) = match Config::parse(&document.toml) {
-        Ok(parsed) => (object(&parsed)?, None, extensions(shared, &parsed)),
-        Err(problem) => (Default::default(), Some(problem), Vec::new()),
+    let (config, problem, extensions, automations) = match Config::parse(&document.toml) {
+        Ok(parsed) => (
+            object(&parsed)?,
+            None,
+            extensions(shared, &parsed),
+            automations(shared, &parsed),
+        ),
+        Err(problem) => (Default::default(), Some(problem), Vec::new(), Vec::new()),
     };
     let built_in = Config::default();
     let (harness_facts, pi_config) = shared.harness_inventory.facts(document.revision.as_deref());
@@ -249,7 +254,12 @@ fn settings(shared: &Shared) -> Result<Rows> {
         harness_facts,
         pi_config,
         extensions,
+        automations,
     };
+    // Extra health data must not displace the editable settings or existing observations.
+    if !row.automations.is_empty() && super::json_len(&row)? > super::REPLY_MAX {
+        row.automations.clear();
+    }
     // These optional facts must not make an otherwise serveable settings row too large.
     if (row.harness_facts.is_some() || row.pi_config.is_some())
         && super::json_len(&row)? > super::REPLY_MAX
@@ -258,6 +268,35 @@ fn settings(shared: &Shared) -> Result<Rows> {
         row.pi_config = None;
     }
     Ok(Rows::Settings(vec![row]))
+}
+
+fn automations(shared: &Shared, config: &Config) -> Vec<AutomationHealth> {
+    let state_dir = shared.root().join(crate::STATE_DIR);
+    match crate::automation::health(&state_dir, config) {
+        Ok(health) => health
+            .into_iter()
+            .map(|(rule, health)| AutomationHealth {
+                rule,
+                last_at: health.last_at,
+                outcome: health.outcome,
+                error: health.error,
+                chat: health.chat,
+            })
+            .collect(),
+        // A read failure must not expose paths or state-file contents, or fail Settings.
+        Err(_) => config
+            .automation
+            .rules
+            .keys()
+            .map(|rule| AutomationHealth {
+                rule: rule.clone(),
+                last_at: None,
+                outcome: None,
+                error: Some("automation health unavailable".into()),
+                chat: None,
+            })
+            .collect(),
+    }
 }
 
 fn extensions(shared: &Shared, config: &Config) -> Vec<ExtensionHealth> {

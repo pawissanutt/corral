@@ -562,6 +562,41 @@
         ],
         "type": "object"
       },
+      "AutomationHealth": {
+        "properties": {
+          "chat": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "outcome": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rule": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "rule"
+        ],
+        "type": "object"
+      },
       "BoardBrief": {
         "properties": {
           "blocked": {
@@ -9191,6 +9226,14 @@
       },
       "SettingsSnapshot": {
         "properties": {
+          "automations": {
+            "default": [],
+            "description": "Scheduler health for configured rules in name order.",
+            "items": {
+              "$ref": "#/components/schemas/AutomationHealth"
+            },
+            "type": "array"
+          },
           "built_in_defaults": {
             "additionalProperties": true,
             "description": "Built-in engine configuration with no workspace overrides.",

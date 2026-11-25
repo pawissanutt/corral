@@ -225,6 +225,18 @@ pub struct SettingsSnapshot {
     /// Each configured extension in name order; empty on a parse error.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub extensions: Vec<ExtensionHealth>,
+    /// Scheduler health for configured rules in name order.
+    #[serde(default)]
+    pub automations: Vec<AutomationHealth>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct AutomationHealth {
+    pub rule: String,
+    pub last_at: Option<String>,
+    pub outcome: Option<String>,
+    pub error: Option<String>,
+    pub chat: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -299,4 +311,30 @@ pub struct ListenerInfo {
     /// The address actually bound by the daemon, including its port.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub address: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settings_accepts_old_snapshots_and_round_trips_automation_health() {
+        let mut json = serde_json::json!({"config": {}, "devices": []});
+        let old: SettingsSnapshot = serde_json::from_value(json.clone()).unwrap();
+        assert!(old.automations.is_empty());
+
+        json["automations"] = serde_json::json!([{
+            "rule": "nightly",
+            "last_at": "2026-01-01T00:00:00Z",
+            "outcome": "sent",
+            "error": null,
+            "chat": "42"
+        }]);
+        let current: SettingsSnapshot = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(current.automations[0].rule, "nightly");
+        assert_eq!(
+            serde_json::to_value(current).unwrap()["automations"],
+            json["automations"]
+        );
+    }
 }

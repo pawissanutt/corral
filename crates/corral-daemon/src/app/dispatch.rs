@@ -63,6 +63,7 @@ pub(crate) fn welcome(shared: &Shared, hello: wire::Hello) -> wire::Welcome {
                         | wire::TIMELINE_V1
                         | wire::USAGE_V1
                         | wire::SETTINGS_V1
+                        | wire::AUTOMATION_V1
                         | settings::PI_STARTUP_V1
                         | wire::CLOSED_V1
                         | app::CITATIONS_V1
