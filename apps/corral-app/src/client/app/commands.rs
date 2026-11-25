@@ -164,6 +164,11 @@ impl AppState {
                 self.cancel_html(&id);
                 vec![]
             }
+            ClientRequest::SaveArtifact(request) => self.save_artifact(request),
+            ClientRequest::CancelSave(id) => {
+                self.cancel_save(&id);
+                vec![]
+            }
             ClientRequest::TranscriptStep(intent) => self.reader_step(feed, intent),
             ClientRequest::TranscriptReading {
                 scope,

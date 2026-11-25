@@ -56,6 +56,8 @@ pub enum ClientRequest {
     OpenHtml(super::html::OpenHtml),
     CancelHtml(String),
     TranscriptStep(crate::model::daemon::ReaderIntent),
+    SaveArtifact(super::download::SaveArtifact),
+    CancelSave(String),
     /// Local, paired registration of a mounted view away from the transcript's end.
     TranscriptReading {
         scope: String,

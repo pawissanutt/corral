@@ -2,6 +2,10 @@ use super::*;
 
 const MAX_PAGES: usize = 256;
 pub(super) const MAX_DETAIL_BYTES: usize = 8 * 1024 * 1024;
+/// Bytes of a text artifact's pages the preview reads before it stops at the head; the rest is
+/// had through a download. Binary content reads up to the device's bound, so an image within it
+/// still draws whole.
+const ARTIFACT_TEXT_PREVIEW: usize = 64 * 1024;
 /// How many times in a row a detail that changed between two of its pages is read again from
 /// its first page before it is reported stale with the conflict.
 const MAX_RESTARTS: u8 = 3;
@@ -347,12 +351,26 @@ impl AppState {
         }
         let next = page.next.clone();
         let held = self.detail_pages.get(&key).map_or(0, Vec::len);
-        if self.over_budget(feed, &key, &id, &page, held) {
+        // An artifact is shown from its head: past its preview bound the pages held so far
+        // are published, still marked truncated, rather than the whole artifact being read.
+        let artifact = matches!(request.target, DetailRef::Artifact { .. });
+        if !self.count_detail_page(&key, &page, held) {
+            if artifact && held > 0 {
+                let pages = self.detail_pages.remove(&key).unwrap_or_default();
+                self.detail_restarts.remove(&key);
+                self.publish(feed, &key, &id, &request.target, pages);
+            } else {
+                self.too_large(feed, &key, &id);
+            }
             return Ok(vec![]);
         }
+        let text = matches!(&page.body, Some(DetailBody::Artifact(part)) if part.encoding == ArtifactEncoding::Text);
         let pages = self.detail_pages.entry(key.clone()).or_default();
         pages.push(page);
-        if let Some(next) = next {
+        let previewed = artifact
+            && text
+            && self.detail_bytes.get(&key).copied().unwrap_or_default() >= ARTIFACT_TEXT_PREVIEW;
+        if let Some(next) = next.filter(|_| !previewed) {
             self.touch_detail(feed, &request.target);
             self.trim_retained(feed);
             if self.detail_inflight.get(&key) != Some(&id) {
@@ -465,6 +483,11 @@ impl AppState {
         if self.count_detail_page(key, page, held) {
             return false;
         }
+        self.too_large(feed, key, id);
+        true
+    }
+
+    fn too_large(&mut self, feed: Signal<Feed>, key: &str, id: &str) {
         self.detail_failed(
             feed,
             key,
@@ -474,7 +497,6 @@ impl AppState {
                 message: "Detail exceeds this device's bounded cache (8 MiB or 256 pages).".into(),
             },
         );
-        true
     }
 
     /// Accounts for one page of an operation, not the manually walked pages already held.

@@ -3,6 +3,7 @@ mod app;
 mod core;
 #[cfg(unix)]
 mod credentials;
+pub(crate) mod download;
 #[cfg(unix)]
 mod driver;
 mod durable;

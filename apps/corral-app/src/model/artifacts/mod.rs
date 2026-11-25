@@ -7,11 +7,13 @@
 //! from either, its task opens.
 
 mod content;
+pub mod download;
 #[cfg(test)]
 mod tests;
 
 pub use content::{
-    Body, Content, Line, PREVIEW_LINES, content, content_of, target as content_target,
+    Body, Content, Line, PREVIEW_BYTES, PREVIEW_LINES, content, content_of,
+    target as content_target,
 };
 pub(crate) use content::{log_hue, plain_text, utf8_text};
 
@@ -518,6 +520,17 @@ pub struct Preview {
     pub content: Content,
     /// The button that opens its task; none for a project's library artifact.
     pub open_task: Option<String>,
+    /// What Download saves: the whole artifact's bytes, checked against its catalog row.
+    pub save: Save,
+}
+
+/// The whole artifact a download saves, and what its bytes must match.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Save {
+    pub reference: String,
+    pub file_name: String,
+    pub bytes: u64,
+    pub sha256: String,
 }
 
 /// The finder as every form shows it: the results and the selected artifact's preview, or that
@@ -647,6 +660,12 @@ fn preview(feed: &Feed, artifact: &Artifact, form: Form, full: bool) -> Preview 
         facts,
         summary,
         content: content(feed, artifact, form, full),
+        save: Save {
+            reference: artifact.reference(),
+            file_name: download::file_name(artifact),
+            bytes: artifact.bytes,
+            sha256: artifact.sha256.clone(),
+        },
     }
 }
 

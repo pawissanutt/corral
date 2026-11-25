@@ -7,6 +7,7 @@
 
 use nsh_core::prelude::*;
 
+use super::save::{self, Downloads};
 use crate::model::Form;
 use crate::model::artifacts::{
     Action, BACK, Body, Content, LOADING_CONTENT, Line, OPEN_FULL, PREVIEW_LABEL, Page, Preview,
@@ -36,7 +37,7 @@ const PREVIEW_MEASURE: f32 = IMAGE_MAX;
 
 /// The selected artifact beside or under the results: test ids "artifact-preview",
 /// "btn-open-full", "btn-open-task".
-pub(super) fn preview(app: AppState, page: Memo<Page>) -> AnyElement {
+pub(super) fn preview(app: AppState, page: Memo<Page>, downloads: Downloads) -> AnyElement {
     let shown = computed(move || page.with(|page| page.preview.clone()));
     let terminal = app.form == Form::Terminal;
     view()
@@ -65,7 +66,8 @@ pub(super) fn preview(app: AppState, page: Memo<Page>) -> AnyElement {
                     )
                     .child(dim(app, preview.summary.clone()))
                     .when(terminal, |part| part.child(term::blank()))
-                    .child(actions(app, &preview, full))
+                    .child(actions(app, &preview, full, downloads))
+                    .child(save::note(app, downloads, &preview.save.reference))
                     .when(terminal, |part| part.child(term::blank()))
                     .child(content(app, &preview.content));
                 measure(app, PREVIEW_MEASURE, shown.into_element())
@@ -74,8 +76,13 @@ pub(super) fn preview(app: AppState, page: Memo<Page>) -> AnyElement {
         .into_element()
 }
 
-/// Open full size (or Back) and Open its task, in a row.
-fn actions(app: AppState, preview: &Preview, first: AnyElement) -> AnyElement {
+/// Open full size (or Back), Download and Open its task, in a row.
+fn actions(
+    app: AppState,
+    preview: &Preview,
+    first: AnyElement,
+    downloads: Downloads,
+) -> AnyElement {
     let task = preview.task.clone();
     let open_task = preview.open_task.clone().map(|label| {
         button_with(
@@ -97,6 +104,7 @@ fn actions(app: AppState, preview: &Preview, first: AnyElement) -> AnyElement {
             8.0
         }))
         .child(first)
+        .child(save::control(app, downloads, &preview.save))
         .children(open_task)
         .into_element()
 }
@@ -104,7 +112,7 @@ fn actions(app: AppState, preview: &Preview, first: AnyElement) -> AnyElement {
 /// The artifact full size in the results' place: its title and reference in the head with Back
 /// and Open its task, then its facts and all of its content, kept to the record's measure on a
 /// desktop, centred. test ids "artifact-full", "btn-artifact-back", "btn-open-task".
-pub(super) fn full(app: AppState, page: Memo<Page>) -> AnyElement {
+pub(super) fn full(app: AppState, page: Memo<Page>, downloads: Downloads) -> AnyElement {
     let shown = computed(move || page.with(|page| page.full.clone()));
     dynamic(move || {
         let Some(preview) = shown.get() else {
@@ -135,7 +143,8 @@ pub(super) fn full(app: AppState, page: Memo<Page>) -> AnyElement {
             );
             let scroll = view()
                 .gap(px(if terminal { 0.0 } else { 14.0 }))
-                .child(actions(app, &preview, back))
+                .child(actions(app, &preview, back, downloads))
+                .child(save::note(app, downloads, &preview.save.reference))
                 .when(terminal, |part| part.child(term::blank()))
                 .child(facts)
                 .when(terminal, |part| part.child(term::blank()))

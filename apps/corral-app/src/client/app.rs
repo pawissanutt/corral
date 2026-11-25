@@ -3,6 +3,7 @@ mod cache;
 mod commands;
 mod details;
 mod devices;
+mod download;
 mod events;
 mod html;
 mod local;
@@ -152,6 +153,7 @@ pub(super) struct AppState {
     device_walk: Option<(String, Vec<DeviceInfo>)>,
     uploads: BTreeMap<String, uploads::Upload>,
     html: Option<html::HtmlTransfer>,
+    save: Option<download::SaveTransfer>,
 }
 impl AppState {
     pub fn new() -> Self {
@@ -182,11 +184,13 @@ impl AppState {
             device_walk: None,
             uploads: BTreeMap::new(),
             html: None,
+            save: None,
         }
     }
     pub fn welcomed(&mut self, feed: Signal<Feed>, welcome: &wire::Welcome) {
         self.interrupt_html();
         self.interrupt_readers(feed);
+        self.interrupt_save();
         self.ready = false;
         feed.update(|feed| {
             feed.mark_stale();
@@ -197,6 +201,7 @@ impl AppState {
     pub fn disconnected(&mut self, feed: Signal<Feed>) {
         self.interrupt_html();
         self.interrupt_readers(feed);
+        self.interrupt_save();
         self.ready = false;
         self.changes_inflight = false;
         self.device_walk = None;
@@ -231,6 +236,7 @@ impl AppState {
         let refresh_only = self.ready && same_namespace;
         if !same_namespace && self.namespace.is_some() {
             self.interrupt_html();
+            self.interrupt_save();
             self.session_scopes.clear();
             self.terminal_scopes.clear();
             self.transcript_readers.clear();
@@ -532,6 +538,17 @@ impl AppState {
             {
                 tag.as_deref().is_some_and(|tag| {
                     self.html
+                        .as_ref()
+                        .is_some_and(|transfer| transfer.accepts(tag))
+                })
+            }
+            DETAIL_GET
+                if tag
+                    .as_deref()
+                    .is_some_and(|tag| tag.starts_with(download::TAG_PREFIX)) =>
+            {
+                tag.as_deref().is_some_and(|tag| {
+                    self.save
                         .as_ref()
                         .is_some_and(|transfer| transfer.accepts(tag))
                 })

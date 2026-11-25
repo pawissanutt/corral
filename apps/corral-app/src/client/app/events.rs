@@ -111,6 +111,12 @@ impl AppState {
             if let Some(tag) = tag.as_ref().filter(|tag| tag.starts_with(html::TAG_PREFIX)) {
                 return Ok(self.html_reply(tag, params, outcome).await);
             }
+            if let Some(tag) = tag
+                .as_ref()
+                .filter(|tag| tag.starts_with(download::TAG_PREFIX))
+            {
+                return Ok(self.save_reply(tag, params, outcome).await);
+            }
             return self.detail_reply(feed, tag, params, outcome);
         }
         if matches!(

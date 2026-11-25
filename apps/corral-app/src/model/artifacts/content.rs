@@ -15,14 +15,17 @@ use crate::model::{Form, Hue};
 
 /// Lines the preview beside the results shows before it says how many more there are.
 pub const PREVIEW_LINES: usize = 40;
+/// Bytes of text the preview shows at most, so one very long line stays bounded too.
+pub const PREVIEW_BYTES: usize = 4 * 1024;
 
-const BINARY: &str = "Binary content: the app shows its facts, not its bytes.";
+const BINARY: &str =
+    "Binary content: the app shows its facts, not its bytes. Download saves the bytes.";
 const HTML: &str = "An HTML page: the app shows its facts here rather than its markup. Open it full size to read the source.";
 const IMAGE: &str = "An image: open it full size to see it.";
 const TERMINAL_IMAGE: &str =
     "A terminal cannot draw images; open this artifact in the desktop or web app to see it.";
-const CUT: &str =
-    "corrald stops this artifact at its size bound; the rest is not served to the app.";
+const PARTIAL_IMAGE: &str =
+    "An image too large to preview here: the app draws only a whole picture. Download saves it.";
 
 /// The request that reads an artifact's content.
 pub fn target(reference: &str) -> DetailRef {
@@ -241,7 +244,7 @@ pub fn content_of(
                 // The device's bound, not corrald's: what is cited exists and is too large to
                 // read here.
                 Some(error) if error.code == "too_large" => Body::Failed(format!(
-                    "{reference} is larger than this device reads ({}). `corral artifact show {reference}` shows all of it.",
+                    "{reference} is larger than this device previews ({}). Download saves all of it; `corral artifact show {reference}` shows it too.",
                     error.message.trim_end_matches('.')
                 )),
                 Some(error) => Body::Failed(format!(
@@ -253,16 +256,24 @@ pub fn content_of(
             return Content { body, cut: None };
         }
     };
-    let bounded = page.truncated.then(|| CUT.to_owned());
+    // What the whole is, when the reference names the whole artifact rather than a section.
+    let total = (!reference.contains('#')).then_some(artifact.bytes);
     let text = match served(page) {
         Served::Text(text) => text,
+        // An image is drawn only whole: incomplete bytes would draw a broken picture.
+        Served::Image(_) if page.truncated => {
+            return Content {
+                body: Body::Facts(PARTIAL_IMAGE),
+                cut: None,
+            };
+        }
         Served::Image(media) => {
             let body = match (full, form) {
                 (_, Form::Terminal) => Body::Facts(TERMINAL_IMAGE),
                 (false, _) => Body::Facts(IMAGE),
                 (true, _) => Body::Image(format!("data:{media};base64,{}", page.content)),
             };
-            return Content { body, cut: bounded };
+            return Content { body, cut: None };
         }
         Served::Binary => {
             return Content {
@@ -278,7 +289,8 @@ pub fn content_of(
             cut: None,
         };
     }
-    let (text, total) = first_lines(&text, (!full).then_some(PREVIEW_LINES));
+    let held = text.len();
+    let (text, lines_cut) = head(&text, !full);
     let lines = |hue: fn(&str) -> Hue| {
         text.lines()
             .map(|line| Line {
@@ -293,12 +305,79 @@ pub fn content_of(
         Shape::Log => Body::Log(lines(log_hue)),
         Shape::Html | Shape::Text => Body::Text(text.clone()),
     };
-    let cut = total
-        .map(|total| {
-            format!("The first {PREVIEW_LINES} of {total} lines; open it full size for the rest.")
-        })
-        .or(bounded);
+    let cut = cut_note(&lines_cut, held, page.truncated, total, full);
     Content { body, cut }
+}
+
+/// How a shown head was cut from what the app holds: by lines, or by bytes (one long line).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Cut {
+    Whole,
+    Lines { total: usize },
+    Bytes { shown: usize },
+}
+
+/// The text the view draws: full size all that is held, in the preview at most
+/// [`PREVIEW_LINES`] lines and [`PREVIEW_BYTES`] bytes, cut at a character's boundary.
+fn head(text: &str, preview: bool) -> (String, Cut) {
+    if !preview {
+        return (text.to_owned(), Cut::Whole);
+    }
+    let (lined, total) = first_lines(text, Some(PREVIEW_LINES));
+    if lined.len() > PREVIEW_BYTES {
+        let end = lined.floor_char_boundary(PREVIEW_BYTES);
+        return (lined[..end].to_owned(), Cut::Bytes { shown: end });
+    }
+    match total {
+        Some(total) => (lined, Cut::Lines { total }),
+        None => (lined, Cut::Whole),
+    }
+}
+
+/// What the note under the content says is left out: the lines or bytes the preview leaves to
+/// full size, and whether corrald holds more than the app read (a partial preview, with the size
+/// of the whole when the reference names the whole artifact).
+fn cut_note(
+    cut: &Cut,
+    held: usize,
+    partial: bool,
+    total: Option<u64>,
+    full: bool,
+) -> Option<String> {
+    let size = |bytes: u64| crate::model::session::transcript::size(bytes);
+    if partial {
+        let shown = match cut {
+            Cut::Bytes { shown } => *shown,
+            Cut::Lines { .. } | Cut::Whole => held,
+        };
+        let of = total
+            .map(|total| format!(" of {}", size(total)))
+            .unwrap_or_default();
+        let lines = match cut {
+            Cut::Lines { .. } => format!("{PREVIEW_LINES} lines, "),
+            Cut::Bytes { .. } | Cut::Whole => String::new(),
+        };
+        let more = if full {
+            ""
+        } else {
+            " Open it full size for more of the head;"
+        };
+        return Some(format!(
+            "Partial preview: the first {lines}{}{of}.{more} Download saves the whole artifact.",
+            size(shown as u64)
+        ));
+    }
+    match cut {
+        Cut::Whole => None,
+        Cut::Lines { total } => Some(format!(
+            "The first {PREVIEW_LINES} of {total} lines; open it full size for the rest."
+        )),
+        Cut::Bytes { shown } => Some(format!(
+            "The first {} of {}; open it full size for the rest.",
+            size(*shown as u64),
+            size(held as u64)
+        )),
+    }
 }
 
 #[cfg(test)]

@@ -301,3 +301,57 @@ fn a_library_is_found_by_its_project_and_offers_no_task() {
         "the task T-42's artifact is not the project t-42's"
     );
 }
+
+/// The content corrald served for `artifact` so far, and whether more of it waits.
+fn content_served(feed: &mut Feed, artifact: &Artifact, text: &str, truncated: bool) {
+    let target = content_target(&artifact.reference());
+    let body = DetailBody::Artifact(corral_protocol::detail::ArtifactPage {
+        task: artifact.task.clone(),
+        key: artifact.id.to_string(),
+        media_type: Some("text/plain".into()),
+        encoding: corral_protocol::detail::ArtifactEncoding::Text,
+        content: text.into(),
+        truncated,
+    });
+    feed.details.insert(
+        detail_key(&target),
+        DetailCache {
+            transcript_seams: Default::default(),
+            target,
+            pages: Vec::new(),
+            loading: false,
+            stale: false,
+            error: None,
+            merged: Some(body),
+        },
+    );
+}
+
+/// A head read past the preview bound must say it is partial; one long line must not reach the
+/// preview whole; a small artifact still shows all of itself with no note.
+#[test]
+fn previews_stay_bounded_and_say_when_they_are_partial() {
+    let mut feed = Feed::default();
+    let mut large = artifact("T-1", 1, ArtifactKind::Report, "run.txt", 1);
+    large.bytes = 50 * 1024 * 1024;
+    let line = "x".repeat(70 * 1024);
+    content_served(&mut feed, &large, &line, true);
+    for full in [false, true] {
+        let shown = content(&feed, &large, Form::Desktop, full);
+        let Body::Text(text) = &shown.body else {
+            panic!("a text head draws as text");
+        };
+        assert!(text.len() <= if full { line.len() } else { PREVIEW_BYTES });
+        assert!(
+            shown
+                .cut
+                .is_some_and(|cut| cut.starts_with("Partial preview"))
+        );
+    }
+
+    let small = artifact("T-1", 2, ArtifactKind::Report, "notes.txt", 2);
+    content_served(&mut feed, &small, "one\ntwo\n", false);
+    let shown = content(&feed, &small, Form::Desktop, false);
+    assert_eq!(shown.body, Body::Text("one\ntwo\n".into()));
+    assert_eq!(shown.cut, None);
+}
