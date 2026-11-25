@@ -63,6 +63,10 @@ impl AppState {
                     });
                     return;
                 }
+                Action::Sidebar(SidebarAction::Preview) => {
+                    panel.update(|panel| panel.preview = !panel.preview);
+                    return;
+                }
                 _ => {}
             }
             if let Some(page) = dock::page_for(&action) {

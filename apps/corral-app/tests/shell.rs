@@ -803,6 +803,14 @@ fn docked_plan_and_file_open_in_page_without_replacing_the_pane() {
     app.wait_for("id:ledger").unwrap();
     app.wait_for("id:dock-transcript").unwrap();
     app.press("id:dock-pane >> id:details-changes").unwrap();
+    assert_eq!(
+        app.screen()
+            .count("id:dock-pane >> id:side-file-0")
+            .unwrap(),
+        0,
+        "the file list stays folded under the summary"
+    );
+    app.press("id:dock-pane >> id:side-files-preview").unwrap();
     app.wait_for("id:dock-pane >> id:side-file-0").unwrap();
     app.press("id:dock-pane >> id:side-file-0").unwrap();
     app.wait_for("id:session-changes").unwrap();

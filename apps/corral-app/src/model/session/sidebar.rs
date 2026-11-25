@@ -99,6 +99,8 @@ pub struct Panel {
     /// The page is wide enough for Details beside the conversation, as the page last measured.
     pub wide: bool,
     pub folded: BTreeSet<Section>,
+    /// Changes lists its first files (`files::PREVIEW_ROWS`) under its summary.
+    pub preview: bool,
 }
 
 impl Panel {
@@ -137,6 +139,8 @@ pub enum SidebarAction {
     Toggle,
     /// Fold or unfold a section.
     Fold(Section),
+    /// Unfold or fold the preview of the changed files.
+    Preview,
     /// The page measured whether Details fits beside the conversation.
     Wide(bool),
     /// Open a child agent in the Agents view.
@@ -173,7 +177,7 @@ pub struct DetailSection {
 /// The rows of an unfolded section.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SectionContent {
-    Files(FilesTab),
+    Files(Box<FilesTab>),
     /// The agents and jobs of the context read.
     Agents(ContextTab),
     Plan(PlanTab),
@@ -330,9 +334,13 @@ fn view(cx: &Cx<'_>, section: Section) -> Option<Action> {
     })
 }
 
-fn content(cx: &Cx<'_>, section: Section) -> Option<SectionContent> {
+fn content(cx: &Cx<'_>, panel: &Panel, section: Section) -> Option<SectionContent> {
     Some(match section {
-        Section::Changes => SectionContent::Files(files::files_tab(cx, &changes::target(cx))),
+        Section::Changes => SectionContent::Files(Box::new(files::files_tab(
+            cx,
+            &changes::target(cx),
+            panel.preview,
+        ))),
         Section::Agents => SectionContent::Agents(context::context_tab(cx, &context_target(cx))),
         Section::Plan => SectionContent::Plan(plan::plan_tab(cx)),
         Section::Context => SectionContent::Context(context::context_tab(cx, &context_target(cx))),
@@ -376,7 +384,7 @@ pub fn details(cx: &Cx<'_>, panel: &Panel) -> Option<Details> {
                 folded,
                 fold: Action::Sidebar(SidebarAction::Fold(section)),
                 view: view(cx, section),
-                content: (!folded).then(|| content(cx, section)).flatten(),
+                content: (!folded).then(|| content(cx, panel, section)).flatten(),
             }
         })
         .collect();
@@ -425,6 +433,10 @@ pub(super) fn act(state: &mut State, action: SidebarAction, feed: &Feed) -> Vec<
             if !state.panel.folded.remove(&section) {
                 state.panel.folded.insert(section);
             }
+            return Vec::new();
+        }
+        SidebarAction::Preview => {
+            state.panel.preview = !state.panel.preview;
             return Vec::new();
         }
         SidebarAction::Wide(wide) => {
