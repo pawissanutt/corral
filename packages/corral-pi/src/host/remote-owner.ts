@@ -11,6 +11,7 @@ import type { HostSession } from "./session.ts";
 /** One ordering point for pause and input admission; provider turns run outside it. */
 export class RemoteOwner {
   private transitions: Promise<unknown> = Promise.resolve();
+  private automationRetired = false;
   private flushing: HeldInput | undefined;
 
   constructor(private readonly host: HostSession, private readonly events: EventLog, private readonly record: SessionRecord,
@@ -34,9 +35,26 @@ export class RemoteOwner {
       : this.host.submitOpened(input, answers));
   }
 
+  startAutomation(input: SessionInput, requestId: string): Promise<SubmitResult> {
+    return this.order(async () => this.paused ? { disposition: "rejected", reason: "paused" }
+      : this.host.submitAutomation(input, requestId));
+  }
+
+  retireAutomation(): Promise<{ retired: boolean; reason?: string }> {
+    return this.order(async () => {
+      if (this.automationRetired) return { retired: true };
+      if (this.paused) return { retired: false, reason: "paused" };
+      if (this.record.held.length) return { retired: false, reason: "busy" };
+      const result = this.host.retireAutomation();
+      this.automationRetired = result.retired;
+      return result;
+    });
+  }
+
   submit(input: SessionInput, images?: ImageContent[], requestId?: string, pane = false): Promise<SubmitResult> {
     const inputId = input.inputId ?? requestId;
     return this.order(async () => {
+      if (this.automationRetired) return { disposition: "rejected", reason: "retired" };
       if (inputId !== undefined && (this.host.queue.has(inputId) || this.record.held.some(item => item.queueKey === inputId))) {
         return { disposition: "rejected", reason: "input_already_queued" };
       }

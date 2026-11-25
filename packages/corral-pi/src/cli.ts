@@ -1,6 +1,7 @@
 import { codeWorkerFlag, receiveCodeBootstrap, superviseCode, type CodeBootstrap } from "./host/code-handoff.ts";
 import { fileURLToPath } from "node:url";
 import pkg from "../package.json" with { type: "json" };
+import { takeAutomationPolicy } from "./host/automation-policy.ts";
 import { checkRuntime } from "./host/runtime.ts";
 import { restrictEnvironment } from "./host/restrict.ts";
 
@@ -25,6 +26,8 @@ Code explicitly trusts the parent agent to work directly in the current director
 export async function main(argv = process.argv.slice(2), compiled = fileURLToPath(import.meta.url).startsWith("/$bunfs/")): Promise<void> {
   if (!compiled) checkRuntime();
   let [command, ...args] = argv;
+  const automation = takeAutomationPolicy(command, process.env);
+  if (automation) command = "chat";
   let codeBootstrap: CodeBootstrap | undefined;
   if (command === codeWorkerFlag) {
     codeBootstrap = await receiveCodeBootstrap();
@@ -60,7 +63,10 @@ export async function main(argv = process.argv.slice(2), compiled = fileURLToPat
     case "run": case "chat": {
       const { parseRunFlags } = await import("./host/config.ts");
       const config = parseRunFlags(command, args, assets);
-      await (await import("./host/main.ts")).runHost(config);
+      if (automation && (!config.local.headless || config.terminalChat)) {
+        throw new Error("automation requires a dedicated headless chat");
+      }
+      await (await import("./host/main.ts")).runHost(config, automation ? { automation } : {});
       return;
     }
     default: throw new Error(`unknown command ${command}; see corral-pi --help`);

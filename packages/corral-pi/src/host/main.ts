@@ -39,6 +39,7 @@ import { resolveStartupModel } from "./startup-model.ts";
 import { writeCodeSeed, type CodeBootstrap, type CodeHandoff, type CodeHandoffRequest, type CodeLaunch } from "./code-handoff.ts";
 
 interface HostOverrides {
+  automation?: import("./automation-policy.ts").AutomationPolicy;
   codeBootstrap?: CodeBootstrap;
   prepareHandoff?: (request: CodeHandoffRequest, model: string, effort: string) => Promise<CodeLaunch>;
   commitHandoff?: (next: CodeLaunch) => Promise<void>;
@@ -230,6 +231,7 @@ async function runSession(config: HostConfig, overrides: HostOverrides, events: 
       }
     } : undefined;
   host = await HostSession.create({
+    ...(overrides.automation ? { automation: overrides.automation } : {}),
     sdk, identity: config.identity, cwd: config.cwd, agentDir, model, provider, ...(aws ? { aws } : {}),
     ...(workerLaunch ? { workerLaunch } : {}),
     routes, fallback: config.fallback,
@@ -299,6 +301,10 @@ async function runSession(config: HostConfig, overrides: HostOverrides, events: 
       }),
       state: () => session.controlState(owner.paused),
       submit: (input, requestId) => owner.submit(input, undefined, requestId),
+      ...(overrides.automation ? {
+        submitAutomation: (input, requestId) => owner.startAutomation(input, requestId),
+        retireAutomation: () => owner.retireAutomation(),
+      } : {}),
       answer: input => owner.answer(input),
       pause: () => owner.pause(),
       resume: () => owner.resume(),

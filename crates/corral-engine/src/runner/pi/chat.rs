@@ -11,6 +11,8 @@ pub struct ChatLaunch<'a> {
     pub profile: &'a Profile,
     pub task: Option<&'a str>,
     pub project: Option<&'a str>,
+    /// Owner-saved policy for this rule-bound invocation only.
+    pub automation: Option<(&'a str, &'a str)>,
 }
 
 impl Client<'_> {
@@ -34,6 +36,7 @@ impl PiRunner<'_> {
             profile,
             task,
             project,
+            automation,
         } = launch;
         private_dir(dir, true)?;
         let dir = dir.canonicalize().context("resolve Pi chat directory")?;
@@ -46,7 +49,11 @@ impl PiRunner<'_> {
         }
         let mut command = Command::new("corral-pi");
         command
-            .arg("chat")
+            .arg(if automation.is_some() {
+                "--automation-chat"
+            } else {
+                "chat"
+            })
             .arg("--dir")
             .arg(&dir)
             .arg("--socket")
@@ -59,7 +66,14 @@ impl PiRunner<'_> {
             .env("CORRAL_ACTOR", "assistant")
             .env_remove("CORRAL_TASK")
             .env_remove("CORRAL_RUN")
-            .env_remove("CORRAL_FRESH");
+            .env_remove("CORRAL_FRESH")
+            .env_remove("CORRAL_PI_AUTOMATION_POLICY");
+        if let Some(policy) = automation {
+            command.env(
+                "CORRAL_PI_AUTOMATION_POLICY",
+                serde_json::to_string(&policy).context("encode Pi automation policy")?,
+            );
+        }
         if let Some(task) = task {
             command.env("CORRAL_TASK", task);
         }
