@@ -60,7 +60,11 @@ fn an_older_daemon_is_not_served_rather_than_zero() {
     feed.capabilities.insert(corral_protocol::TASKS_V1.into());
     let view = view(&feed);
     assert_eq!(view.standing, Standing::NotServed);
-    assert!(view.metrics.iter().all(|m| m.value.is_none() && m.absent.is_some()));
+    assert!(
+        view.metrics
+            .iter()
+            .all(|m| m.value.is_none() && m.absent.is_some())
+    );
 }
 
 #[test]
@@ -72,7 +76,10 @@ fn the_first_sample_waits_and_missing_counters_say_why() {
     assert!(cpu.absent.is_some());
     let io = view.metric(Kind::DiskIo).unwrap();
     assert_eq!(io.value, None);
-    assert_eq!(io.absent.as_deref(), Some("Not sampled on this operating system."));
+    assert_eq!(
+        io.absent.as_deref(),
+        Some("Not sampled on this operating system.")
+    );
     assert!(view.metric(Kind::Memory).unwrap().value.is_some());
 }
 
@@ -91,13 +98,13 @@ fn a_gap_in_the_trend_stays_a_gap() {
 
 #[test]
 fn readings_that_stop_arriving_or_a_lost_link_are_stale() {
-    let samples = vec![sample(994, Some(5.0), Some(1)), sample(996, Some(6.0), Some(1))];
+    let samples = vec![
+        sample(994, Some(5.0), Some(1)),
+        sample(996, Some(6.0), Some(1)),
+    ];
     let mut late = feed(samples.clone());
     late.now = 1_030;
-    assert_eq!(
-        view(&late).standing,
-        Standing::Stale { age_secs: Some(30) }
-    );
+    assert_eq!(view(&late).standing, Standing::Stale { age_secs: Some(30) });
     let mut down = feed(samples);
     down.link = Link::Down;
     let shown = view(&down);

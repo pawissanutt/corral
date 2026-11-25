@@ -97,6 +97,8 @@ pub(super) fn dashboard(app: AppState, scope: Memo<Scope>) -> AnyElement {
         .gap(gap)
         .min_w(px(0.0))
         .child(tiles(app, scope))
+        // The corrald host's figures in numbers, under the six: host-wide, whatever the scope.
+        .children((form == Form::Terminal).then(|| crate::screens::host::line(app)))
         .child(
             view()
                 .flex_row()

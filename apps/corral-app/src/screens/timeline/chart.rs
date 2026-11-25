@@ -17,8 +17,8 @@ use crate::model::Live;
 use crate::model::timeline::{self, Burnup, BurnupSeries, Kind, Layout};
 use crate::model::{Form, Hue};
 use crate::state::AppState;
-use crate::ui::kit::marks::{hue_fill, hue_ink};
 use crate::ui::chart::{grid, ink, mono_font, now, text_font, tip};
+use crate::ui::kit::marks::{hue_fill, hue_ink};
 use crate::ui::tokens::{Token, color};
 
 /// A segment bar's height.

@@ -25,9 +25,7 @@ use crate::ui::composer::copyable_input;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::button::{ButtonKind, button, seg};
 use crate::ui::kit::notice::notice;
-use crate::ui::kit::page::{
-    Width, columns, context, measure, measure_fill, measured_head, pane,
-};
+use crate::ui::kit::page::{Width, columns, context, measure, measure_fill, measured_head, pane};
 use crate::ui::kit::rows::{list_row_tall, revealing, titled, walked_row};
 use crate::ui::kit::text::{dim, mono, plain};
 use crate::ui::term;

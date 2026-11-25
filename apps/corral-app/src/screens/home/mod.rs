@@ -17,6 +17,7 @@ mod parts;
 mod phone;
 
 pub(crate) use dash::tile;
+pub(crate) use parts::{Link, panel};
 
 use nsh_core::prelude::*;
 

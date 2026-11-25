@@ -65,6 +65,7 @@ pub(super) fn screen(app: AppState, scope: Memo<Scope>) -> AnyElement {
         .flex_none()
         .child(page_head)
         .child(board_status(app))
+        .child(crate::screens::host::line(app))
         .into_element();
     let page = list_page(
         app,

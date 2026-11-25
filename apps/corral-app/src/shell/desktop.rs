@@ -452,11 +452,7 @@ fn rail_pages(app: AppState) -> AnyElement {
                         move || app.go(page),
                     )
                     .h(px(control_height(row_height(app.form))))
-                    .child(icon(
-                        Icon::destination(page),
-                        15.0,
-                        color(Token::ShellInk2),
-                    ))
+                    .child(icon(Icon::destination(page), 15.0, color(Token::ShellInk2)))
                     .into_element()
                 }))
                 .into_element()

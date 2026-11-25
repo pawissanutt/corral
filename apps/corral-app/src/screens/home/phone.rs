@@ -122,7 +122,9 @@ pub(super) fn screen(app: AppState, scope: Memo<Scope>) -> AnyElement {
                 .element_ref(&app.list_keys)
                 .flex_1()
                 .min_h(px(0.0))
-                .child(dim_stale(app, view()).child(rows).child(notice)),
+                .child(dim_stale(app, view()).child(rows).child(notice))
+                // The corrald host's figures, host-wide whatever the scope, under the list.
+                .child(crate::screens::host::phone_row(app)),
         )
         .into_element()
 }

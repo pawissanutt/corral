@@ -84,7 +84,7 @@ pub(super) fn figure(form: Form, content: impl Into<SharedString>, size: f32, in
 }
 
 /// The page a panel's head links to: its words and where they go.
-pub(super) struct Link {
+pub(crate) struct Link {
     pub words: String,
     pub test_id: String,
     pub press: Box<dyn Fn()>,
@@ -93,7 +93,7 @@ pub(super) struct Link {
 /// One panel (`.panel`): its name and count, a quiet note or link at the trailing edge, then
 /// its body. Desktop: surface, a rule line, radius 8. Terminal: a framed region with the name
 /// set into its top line and the link, when there is one, after it.
-pub(super) fn panel(
+pub(crate) fn panel(
     app: AppState,
     test_id: &str,
     name: String,

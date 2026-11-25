@@ -49,6 +49,7 @@ const HELD: ImageAsset = asset!("icons/actor-diamond.svg");
 const EVENTS: ImageAsset = asset!("icons/delta.svg");
 const FILES: ImageAsset = asset!("icons/note.svg");
 const SYSTEM: ImageAsset = asset!("icons/system.svg");
+const HOST: ImageAsset = asset!("icons/host.svg");
 
 /// The mock's sprite (`ui.js`, `i-*`). `Ask` is the sprite's `i-chat` speech bubble.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -116,6 +117,8 @@ pub enum Icon {
     Files,
     /// Three linked boxes: Activity › System, the map.
     System,
+    /// A machine with a pulse: Activity › Host performance, the daemon host.
+    Host,
 }
 
 impl Icon {
@@ -131,7 +134,7 @@ impl Icon {
             Destination::Usage => Icon::Usage,
             Destination::Artifacts => Icon::Files,
             Destination::System => Icon::System,
-            Destination::Host => Icon::Usage,
+            Destination::Host => Icon::Host,
             Destination::Settings => Icon::Settings,
         }
     }
@@ -193,6 +196,7 @@ impl Icon {
             Icon::Events => EVENTS,
             Icon::Files => FILES,
             Icon::System => SYSTEM,
+            Icon::Host => HOST,
         }
     }
 }

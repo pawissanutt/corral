@@ -106,6 +106,18 @@ fn a_tile_opens_the_page_holding_its_detail() {
     app.wait_for("id:list-tasks").unwrap();
 }
 
+/// Home's Host performance widget leads to Activity › Host performance, which shows a card per
+/// figure with Disk space and Disk I/O apart.
+#[test]
+fn the_host_widget_opens_host_performance() {
+    let mut app = preview(desktop());
+    app.press("id:btn-open-host").unwrap();
+    app.wait_for("id:host-page").unwrap();
+    app.wait_for("id:host-status").unwrap();
+    app.wait_for("id:host-space").unwrap();
+    app.wait_for("id:host-disk-io").unwrap();
+}
+
 /// A project row on Home scopes every page to it, so Home shows that project's facts in place
 /// of the project list.
 #[test]
