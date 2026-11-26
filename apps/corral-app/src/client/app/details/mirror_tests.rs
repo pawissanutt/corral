@@ -9,7 +9,6 @@ fn put(id: &str, words: &[&str], replaces: Option<&str>, open: bool) -> Transcri
         replaces: replaces.map(str::to_owned),
         open,
         cut: false,
-        again: false,
     }
 }
 
@@ -112,21 +111,6 @@ fn transcript_operations_splice_replace_write_and_drop_in_order() {
             ("record".into(), vec!["updated".into()])
         ]
     );
-    // Only the last items of a record too large to carry: what is held before it no
-    // longer joins it, and its earlier items are a page back.
-    let mut last = put("record", &["last"], None, false);
-    if let TranscriptOp::Put { cut, .. } = &mut last {
-        *cut = true;
-    }
-    apply(feed, vec![last], false);
-    assert_eq!(shown(feed), [("record".into(), vec!["last".into()])]);
-    feed.with_untracked(|feed| {
-        let Some(DetailBody::Session(page)) = feed.detail(&target()).and_then(DetailCache::body)
-        else {
-            panic!("session")
-        };
-        assert_eq!(page.older.as_deref(), Some("before-record"));
-    });
     apply(
         feed,
         vec![
@@ -141,10 +125,10 @@ fn transcript_operations_splice_replace_write_and_drop_in_order() {
     );
 }
 
-/// A cut message came again with a tool result folded in and took back the items and the
-/// messages the reader had paged to, each time.
+/// Only the last items of an oversized journal record arrive in a cut put. Older history
+/// must start at the cursor inside that record and join the rest under the same id.
 #[test]
-fn a_cut_message_keeps_what_was_paged_back_when_it_comes_again() {
+fn history_joins_the_earlier_items_of_a_cut_put() {
     let runtime = nsh_core::element::Runtime::default();
     let _entered = runtime.enter();
     let feed = signal(Feed::default());
@@ -162,41 +146,26 @@ fn a_cut_message_keeps_what_was_paged_back_when_it_comes_again() {
         None,
         page("a", &[("start", &["prompt"])], Some("before-start")),
     );
-    let last = |words: &str| {
-        let mut last = put("big", &[words], None, false);
-        if let TranscriptOp::Put { cut, .. } = &mut last {
-            *cut = true;
-        }
-        last
-    };
-    apply(
-        feed,
-        vec![
-            TranscriptOp::Reset {
-                older: Some("before-big".into()),
-            },
-            last("last"),
-        ],
-        false,
-    );
+    let mut last = put("big", &["last"], None, false);
+    if let TranscriptOp::Put { cut, before, .. } = &mut last {
+        *cut = true;
+        *before = Some("inside-big".into());
+    }
+    apply(feed, vec![last], false);
     assert_eq!(shown(feed), [("big".into(), vec!["last".into()])]);
-    let history = read(&mut app, feed, Some("before-big"));
+    let history = read(&mut app, feed, Some("inside-big"));
     reply(
         &mut app,
         feed,
         history,
-        Some("before-big"),
+        Some("inside-big"),
         page("b", &[("start", &["prompt"]), ("big", &["first"])], None),
     );
-    apply(feed, vec![last("last, with its result")], false);
     assert_eq!(
         shown(feed),
         [
             ("start".into(), vec!["prompt".into()]),
-            (
-                "big".into(),
-                vec!["first".into(), "last, with its result".into()]
-            )
+            ("big".into(), vec!["first".into(), "last".into()])
         ]
     );
 }
@@ -269,44 +238,69 @@ fn latest_reads(reader: bool) {
     );
 }
 
-/// A tool result folded into a call from before the client's messages begin put that call
-/// again. It went at the end, after messages written later, and history gave it a second
-/// time in its place.
 #[test]
-fn a_changed_record_from_before_the_held_messages_is_not_added() {
-    let runtime = nsh_core::element::Runtime::default();
-    let _entered = runtime.enter();
-    let feed = signal(Feed::default());
-    feed.update(|f| {
-        f.capabilities.insert(SESSION_TRANSCRIPT_V1.into());
-    });
-    let mut app = AppState::new();
-    app.ready = true;
-    app.session_scopes.insert("B-1".into(), 1);
-    read(&mut app, feed, None);
-    let again = |id: &str, words: &[&str]| {
-        let mut again = put(id, words, None, false);
-        if let TranscriptOp::Put { again, .. } = &mut again {
-            *again = true;
-        }
-        again
+fn a_folded_history_copy_must_match_the_streamed_result() {
+    use crate::model::session::{
+        Ui,
+        transcript::{MessageItem, More, transcript},
     };
-    apply(
-        feed,
-        vec![
-            TranscriptOp::Reset {
-                older: Some("before-late".into()),
-            },
-            put("late", &["call"], None, false),
-            again("early", &["call", "result"]),
-            again("late", &["call", "result"]),
-        ],
-        false,
-    );
-    assert_eq!(
-        shown(feed),
-        [("late".into(), vec!["call".into(), "result".into()])]
-    );
+
+    let detail = |id, part| {
+        let wire = with_tool(page("a", &[(id, &[])], Some("older")), 0, part);
+        decode::<DetailReply>(wire).unwrap()
+    };
+    // A common call may survive a branch change with its old folded result. Prefer
+    // a complete result over a preview only when they come from the same result body.
+    for (raw, output, shown, whole) in [
+        ("result JSON", "ans", "answer", true),
+        ("replacement result JSON", "changed", "changed", false),
+    ] {
+        let mut cache = DetailCache {
+            target: target(),
+            pages: Vec::new(),
+            transcript_seams: Default::default(),
+            merged: detail("call", "call").body,
+            loading: false,
+            stale: false,
+            error: None,
+        };
+        let mut preview = session(&detail("result", "result")).unwrap().messages[0].clone();
+        if let SessionItem::ToolCall {
+            output: field,
+            result,
+            ..
+        } = &mut preview.items[0]
+        {
+            *field = Some(output.into());
+            *result = Some(raw.into());
+        }
+        preview.items.push(SessionItem::Continuation {
+            token: "rest".into(),
+            bytes: 3000,
+        });
+        mirror::apply(
+            &mut cache,
+            vec![TranscriptOp::Put {
+                message: preview,
+                before: Some("before-result".into()),
+                replaces: None,
+                open: false,
+                cut: false,
+            }],
+            false,
+        );
+        mirror::rejoin(&mut cache, session(&detail("call", "paired")).unwrap());
+
+        let view = transcript(&Id::from("B-1"), &Ui::EMPTY, Some(&cache), &Feed::default());
+        let [message] = view.messages.as_slice() else {
+            panic!("the separate result adds no rendered row")
+        };
+        let [MessageItem::Tool(tool)] = message.items.as_slice() else {
+            panic!("one card for the call")
+        };
+        assert_eq!(tool.detail.as_deref(), Some(shown));
+        assert_eq!(matches!(tool.more, More::Whole), whole);
+    }
 }
 
 /// A page that begins inside a record resumes inside it. When the record then came whole
@@ -416,9 +410,6 @@ fn a_long_reply_keeps_its_words_when_its_record_carries_a_preview() {
         ],
         false,
     );
-    assert_eq!(held(), [whole.clone()]);
-    // The record comes again when a tool result is folded into it.
-    apply(feed, vec![record(size)], false);
     assert_eq!(held(), [whole]);
     // Words that are not the record's are not kept in its place.
     apply(feed, vec![record(size + 1)], false);

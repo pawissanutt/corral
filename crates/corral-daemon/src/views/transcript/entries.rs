@@ -7,7 +7,7 @@ use corral_protocol::{
 };
 use serde_json::{Value, json};
 
-use super::json_len;
+use super::{json_len, tool_call_id};
 use crate::{assistant, sessions::valid_input_id, views::fingerprint};
 
 fn field<'a>(value: &'a Value, key: &str) -> &'a str {
@@ -139,13 +139,15 @@ fn tool(block: &Value, result: bool, stop_reason: &str) -> SessionItem {
         }
     };
     SessionItem::ToolCall {
-        call_id: block
-            .get("toolCallId")
-            .or_else(|| block.get("tool_use_id"))
-            .or_else(|| block.get("id"))
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .into(),
+        call_id: tool_call_id(
+            block
+                .get("toolCallId")
+                .or_else(|| block.get("tool_use_id"))
+                .or_else(|| block.get("id"))
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+        )
+        .into_owned(),
         name: block
             .get("toolName")
             .or_else(|| block.get("name"))
@@ -550,7 +552,6 @@ pub(super) fn clip_item(item: &mut SessionItem, limit: usize) {
     match item {
         SessionItem::Text { text } | SessionItem::Thinking { text } => clip(text),
         SessionItem::ToolCall {
-            call_id,
             name,
             arguments,
             summary,
@@ -561,7 +562,7 @@ pub(super) fn clip_item(item: &mut SessionItem, limit: usize) {
             content,
             ..
         } => {
-            for field in [call_id, name, arguments, summary] {
+            for field in [name, arguments, summary] {
                 clip(field);
             }
             for field in [call, output, result, diff, content] {

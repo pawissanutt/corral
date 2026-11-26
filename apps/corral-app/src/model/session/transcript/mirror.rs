@@ -13,8 +13,6 @@ pub(crate) struct Mirror {
     pub identity: BTreeMap<String, String>,
     before: BTreeMap<String, Option<String>>,
     sizes: BTreeMap<String, usize>,
-    /// How many items the last cut `put` of a message held: its last ones.
-    cuts: BTreeMap<String, usize>,
     reset: Option<Option<String>>,
 }
 
@@ -58,9 +56,7 @@ pub(crate) fn apply(cache: &mut DetailCache, ops: Vec<TranscriptOp>, more: bool)
                 replaces,
                 open,
                 cut,
-                again,
             } => {
-                let fresh = mirror.reset.is_some();
                 if let Some(older) = mirror.reset.take() {
                     splice(page, mirror, Some(&message.id), older);
                     spliced = true;
@@ -70,47 +66,23 @@ pub(crate) fn apply(cache: &mut DetailCache, ops: Vec<TranscriptOp>, more: bool)
                     let replaces = replaces.as_deref()?;
                     page.messages.iter().position(|m| m.id == replaces)
                 });
-                if again && at.is_none() {
-                    // A record put before these messages begin has changed. It is not
-                    // one of them: a history page returns it where it belongs.
-                    continue;
-                }
-                if let Some(at) = at {
+                let at = if let Some(at) = at {
                     keep_words(&page.messages[at], &mut message);
-                }
-                // A cut message comes again, still cut, when a result is folded into it:
-                // the same last items. The earlier ones this client paged back to stay
-                // before them, with what it holds before the message.
-                let earlier = at
-                    .filter(|_| cut && !fresh)
-                    .map(|at| &page.messages[at])
-                    .filter(|held| held.id == id)
-                    .and_then(|held| {
-                        let last = *mirror.cuts.get(&id)?;
-                        held.items.get(..held.items.len().checked_sub(last)?)
-                    })
-                    .map(<[SessionItem]>::to_vec);
-                if cut {
-                    mirror.cuts.insert(id.clone(), message.items.len());
-                } else {
-                    mirror.cuts.remove(&id);
-                }
-                let rejoined = earlier.is_some();
-                if let Some(mut items) = earlier {
-                    items.append(&mut message.items);
-                    message.items = items;
-                }
-                mirror.sizes.insert(id.clone(), size(&message));
-                if let Some(at) = at {
                     let old = &page.messages[at].id;
                     if old != &id {
                         let key = mirror.identity.remove(old).unwrap_or_else(|| old.clone());
                         mirror.forget(old);
                         mirror.identity.insert(id.clone(), key);
                     }
-                    page.messages[at] = message;
+                    at
                 } else {
+                    page.messages.len()
+                };
+                mirror.sizes.insert(id.clone(), size(&message));
+                if at == page.messages.len() {
                     page.messages.push(message);
+                } else {
+                    page.messages[at] = message;
                 }
                 if open {
                     mirror.open = Some(id.clone());
@@ -121,27 +93,20 @@ pub(crate) fn apply(cache: &mut DetailCache, ops: Vec<TranscriptOp>, more: bool)
                 } else if mirror.open.as_ref() == Some(&id) {
                     mirror.open = None;
                 }
-                if rejoined {
-                    // Where its earlier items begin is no longer this cursor.
-                    mirror.before.remove(&id);
-                } else if cut {
+                if cut {
                     // Only the record's last items: its earlier ones are a page back, so
                     // nothing held before it joins it. The document starts here again.
-                    let at = page.messages.iter().position(|m| m.id == id).unwrap_or(0);
                     for message in page.messages.drain(..at) {
                         mirror.forget(&message.id);
                     }
                     page.older.clone_from(&before);
                     restarted = true;
-                    mirror.before.insert(id, before);
-                } else {
-                    // The first message came whole: what is before it is before all of
-                    // it, wherever a page that began inside its record resumed.
-                    if !open && page.messages.first().is_some_and(|first| first.id == id) {
-                        page.older.clone_from(&before);
-                    }
-                    mirror.before.insert(id, before);
+                } else if !open && at == 0 {
+                    // The record came whole, so `before` is authoritative even if the
+                    // held history page began partway through that record.
+                    page.older.clone_from(&before);
                 }
+                mirror.before.insert(id, before);
             }
             TranscriptOp::Append {
                 id,
@@ -178,8 +143,7 @@ pub(crate) fn apply(cache: &mut DetailCache, ops: Vec<TranscriptOp>, more: bool)
 
 /// A record carries a long item as a preview and where the rest is read. Words this client
 /// was sent whole while they were written are those same words, so they stay: a reply does
-/// not shrink to its preview and grow back when its record arrives, or when a tool result
-/// is folded into it later.
+/// not shrink to its preview and grow back when its record arrives.
 fn keep_words(held: &SessionMessage, message: &mut SessionMessage) {
     for whole in &held.items {
         let (SessionItem::Text { text: words } | SessionItem::Thinking { text: words }) = whole
@@ -257,7 +221,6 @@ pub(crate) fn rejoin(cache: &mut DetailCache, head: &SessionPage) {
     {
         // The page may begin inside this message, where its cursor resumes.
         mirror.sizes.remove(&first.id);
-        mirror.cuts.remove(&first.id);
         *held = first.clone();
     }
     let mut messages = head.messages[..fresh].to_vec();
@@ -301,7 +264,6 @@ impl Mirror {
         self.identity.remove(id);
         self.before.remove(id);
         self.sizes.remove(id);
-        self.cuts.remove(id);
     }
 }
 

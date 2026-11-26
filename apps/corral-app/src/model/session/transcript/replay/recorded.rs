@@ -121,17 +121,17 @@ fn projected_result(anchor: &str, pairs: &[&pairs::Pair<'_>], cx: Cx<'_>) -> Mes
 pub(super) type RecordedView = (Vec<Message>, Vec<(String, usize)>, Option<String>);
 
 /// Recorded surface only; anchor reconciliation need not render the live turn and echoes.
-pub(super) fn recorded_view(
-    recorded: &[SessionMessage],
-    cache: Option<&DetailCache>,
-    cx: Cx<'_>,
+pub(super) fn recorded_view<'a>(
+    recorded: &'a [SessionMessage],
+    cache: Option<&'a DetailCache>,
+    pairs: &pairs::Pairs<'a>,
+    cx: Cx<'a>,
     mut keep_cut: impl FnMut(&str, &str) -> bool,
 ) -> RecordedView {
-    let pairs = pairs::collect(recorded, cache, cx.feed);
     let first_user = recorded.iter().position(|m| avatar(&m.author).0 == "Y");
     // Physical starts protect a prepend; retained displayed starts protect a moving seam.
     let boundaries = seams::boundaries(cache);
-    let projection = seams::Projection::of(recorded, cache, &pairs);
+    let projection = seams::Projection::of(recorded, cache, pairs);
     let mut cuts = Vec::new();
     // A split record keeps its anchor but gains items at its front. Track the first recorded
     // row before adding child steers or mail, which can stay ahead of it across pages.
@@ -139,6 +139,7 @@ pub(super) fn recorded_view(
     let mut timed = Vec::new();
     let mut push = |id: &str, at: Option<u64>, shown: Message, slots: usize| {
         cuts.extend(boundaries.get(id).copied());
+        // A separate result record that settled a visible call has no row of its own.
         if shown.items.is_empty() && shown.footer.is_none() {
             return;
         }
@@ -166,7 +167,7 @@ pub(super) fn recorded_view(
         let shown = message(
             m,
             cx,
-            &pairs,
+            pairs,
             Some(n) == first_user,
             placed,
             &projection.moved,

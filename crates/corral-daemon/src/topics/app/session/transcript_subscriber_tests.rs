@@ -44,7 +44,6 @@ fn long_put() -> Op {
         replaces: None,
         open: false,
         cut: false,
-        again: false,
     }
 }
 
@@ -163,7 +162,6 @@ fn capable_subscriber_snapshots_and_recovers_without_live_words() {
         replaces: None,
         open: false,
         cut: false,
-        again: false,
     };
     let receive = |subscriber: &mut Subscriber, cap| {
         let frame = subscriber.next(7, false, false, cap).unwrap().unwrap();

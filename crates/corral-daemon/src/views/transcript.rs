@@ -2,9 +2,9 @@
 
 mod entries;
 pub(crate) mod tail;
-use tail::Row;
 mod tokens;
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fs::{File, Metadata};
 use std::io::{BufReader, Read, Seek, SeekFrom};
@@ -24,6 +24,16 @@ const RECORDS: usize = 32;
 const PAGE_BYTES: usize = 28 * 1024;
 const ITEM_BYTES: usize = 2048;
 const CONTINUED_BYTES: usize = 4096;
+
+/// A pairing key must survive even the smallest preview. Bound unusual journal IDs
+/// independently of the item budget, reserving the digest prefix from raw IDs.
+pub(crate) fn tool_call_id(id: &str) -> Cow<'_, str> {
+    if id.len() <= 256 && !id.starts_with("sha256:") {
+        Cow::Borrowed(id)
+    } else {
+        Cow::Owned(format!("sha256:{:x}", Sha256::digest(id.as_bytes())))
+    }
+}
 
 struct Transcript {
     file: File,
@@ -284,7 +294,13 @@ pub(super) fn page(
         }
         result => result?,
     };
-    read_page(id, &mut file, page, false).map(|(page, ..)| page)
+    read_page(id, &mut file, page, true).map(|(page, ..)| page)
+}
+
+struct Row {
+    before: Option<String>,
+    /// Only the record's last items, as a history page cut it: `before` resumes inside it.
+    cut: bool,
 }
 
 /// Where the record a page cut starts, and the entry it follows.
@@ -295,7 +311,7 @@ fn read_page(
     id: &str,
     transcript: &mut Transcript,
     page: Option<&str>,
-    keep_calls: bool,
+    pair_results: bool,
 ) -> Result<PageRead> {
     // The same open handle supplies the snapshot stamp, byte limit and records.
     let meta = &transcript.metadata;
@@ -397,14 +413,15 @@ fn read_page(
     ensure!(!pin_pending, StaleTranscriptCursor);
     selected.reverse();
     rows.reverse();
-    pair_tools(&mut selected);
+    if pair_results {
+        pair_tools(&mut selected);
+    }
     let mut messages = Vec::with_capacity(selected.len());
     let mut retained = Vec::new();
     for (selection, before) in selected.into_iter().zip(rows) {
-        let keep_calls = page.is_none() && keep_calls;
-        let (message, row) = tail::render(id, selection, before, keep_calls, ITEM_BYTES)?;
+        let message = render(id, selection, ITEM_BYTES)?;
         if !message.items.is_empty() || !message.attachments.is_empty() {
-            retained.push(row);
+            retained.push(Row { before, cut: false });
             messages.push(message);
         }
     }
@@ -535,6 +552,13 @@ fn pair_tools(messages: &mut [Selection]) {
             }
         }
     }
+}
+
+fn render(id: &str, (mut message, items): Selection, bound: usize) -> Result<SessionMessage> {
+    for item in items {
+        append_preview(id, &mut message.items, item, bound)?;
+    }
+    Ok(message)
 }
 
 /// The item whole when it is at most `bound` bytes, else a preview of it and where the rest

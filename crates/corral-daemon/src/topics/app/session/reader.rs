@@ -108,8 +108,6 @@ pub(super) struct LiveReader {
     journal_id: String,
     follower: Follower,
     operations: Vec<TranscriptOp>,
-    /// For the records put again among them: see `Follower::take_alone`.
-    alone: Vec<(String, TranscriptOp)>,
     open: Option<HostOpen>,
     /// A journal was followed: its messages are what subscribers were last given.
     shown: bool,
@@ -129,7 +127,6 @@ impl Default for LiveReader {
             journal_id: String::new(),
             follower: Follower::default(),
             operations: Vec::new(),
-            alone: Vec::new(),
             open: None,
             shown: false,
             cursors: Cursors::default(),
@@ -144,7 +141,6 @@ impl LiveReader {
     /// past it, so a visit whose page is not published must not lose it.
     fn followed(&mut self, ops: Vec<TranscriptOp>) {
         self.operations.extend(ops);
-        self.alone.extend(self.follower.take_alone());
     }
 
     pub(super) fn read(&mut self, shared: &Shared, scope: &str) -> Result<LivePage> {
@@ -345,11 +341,17 @@ impl LiveReader {
                 "noncontiguous Pi live events"
             );
             prior = event.seq;
+            let mut kind = event.kind;
+            if let SessionLiveKind::LiveTool { call, .. } = &mut kind
+                && let std::borrow::Cow::Owned(key) = crate::views::transcript::tool_call_id(call)
+            {
+                *call = key;
+            }
             let event = SessionLiveEvent {
                 seq: event.seq,
                 generation,
                 at: event.at,
-                kind: event.kind,
+                kind,
             };
             let bytes = event_bytes(&event)?;
             events.push((event, bytes));
@@ -622,7 +624,7 @@ pub(super) fn pass(
             }
             let reader = &mut source.reader;
             let ops = std::mem::take(&mut reader.operations);
-            buffer.publish_followed(ops, std::mem::take(&mut reader.alone));
+            buffer.publish_transcript(ops);
             match page {
                 Ok(page) => buffer.publish(page),
                 Err(_) => {

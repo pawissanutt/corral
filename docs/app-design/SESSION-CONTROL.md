@@ -462,10 +462,17 @@ tool or a turn ends, by the two rules above, and no words while a reply is writt
 keeps no second way to draw them from `live_text` events. A connection that does not
 request the capability is sent those events as before.
 
-corrald is the one producer. It reads the same journal `detail.get` pages and projects
-records with the same code, so a message is the same `SessionMessage` with the same id
-whichever way it arrived, and it lays the host's live words over the journal's tail
-itself. No client stitches the two.
+corrald is the one producer. It projects the same journal records with the same message
+ids as `detail.get`, and lays the host's live words over the journal's tail itself. No
+client stitches the live words to the journal. The stream puts each projected journal
+record separately, in journal order. Unlike a history page, the stream does not fold a
+later tool result into its call's message: a subscriber's tail may start between the two.
+When both messages are loaded, the app pairs them by call id and draws one tool card,
+with no extra row for a result already shown on that card. The pairing key is not
+clipped in previews: oversized journal call ids use the same bounded key in calls,
+results and live progress. If the call is outside the loaded history, the result can
+still be shown on its own. Upgrade the app and daemon together from the earlier folding
+implementation of this stream.
 
 - `reset { older }`: what the client holds does not continue into what follows. It is the
   first operation of a subscription, and is sent again when the journal's branch changes
@@ -474,22 +481,13 @@ itself. No client stitches the two.
   messages (at most one history page of them) and `older` is the `detail.get` page before
   the first. A client that already holds that first message, by id, keeps everything it
   holds before it and replaces what follows; otherwise it replaces all it holds.
-- `put { message, before, replaces, open, cut, again }`: the message takes the place of the held
+- `put { message, before, replaces, open, cut }`: the message takes the place of the held
   message with the same id, or of the open message `replaces`, or else goes at the end.
   `before` is the `detail.get` page before this message, so a client that drops its oldest
   messages to stay within its own budget can still page back to them. When the message
   is the client's first, `before` is its cursor for earlier messages from then on: a
   history page may have begun inside that record, and the record now comes whole. `cut`
-  is described below. A record is sent again with the same id when it changes: a tool
-  result that arrives is folded into the call's message exactly as a history page folds
-  it. That `put` has `again: true`, and a client that does not hold the message ignores
-  it. corrald puts a call's message again only while that message is in the tail every
-  subscriber was given. Once it is not, a subscriber that joined since does not hold it,
-  and no page before its messages reads the result, so the result is put as its own
-  message instead, as on a history page that parts a call from its result; the client
-  shows the two as one tool by their call id. The same holds for the tail a later
-  subscriber is given: when it comes to begin after a call's message but before the
-  record of a result folded into it, that record is in the tail as its own message.
+  is described below.
 - An open message (`open: true`) is the assistant message being written. Its id is
   `<session>/open/<generation>.<turn>.<ordinal>` and names no record; it has at most one
   `thinking` item followed by at most one `text` item. `append { id, part, offset, text }`
@@ -509,25 +507,21 @@ A `put` carries a whole record. Its items are previews with continuation tokens,
 history page, but where a history page would cut a record of many items (seven tool calls
 can be enough) the stream does not: the client holds what came before the record and
 could never reach the items a cut left out. A record of many items has smaller previews
-instead, so that all of them fit one operation with every call's result folded in. The
-tail after a `reset` begins with a whole record for the same reason.
+instead, so that all of them fit one operation. The tail after a `reset` begins with a
+whole record for the same reason.
 
 Only a record that fits one operation at no preview size (more than about sixty long
 items) is cut. corrald then sends a `put` with `cut: true` that holds the record's last
 items, as a history page would; its `before` resumes inside the record. A client drops
 everything it holds before a cut message, which is its first message again, and pages
 back from `before`: the earlier items join the message under the same id, as when a
-history page splits a record. The cut message is sent again, still cut, when a result is
-folded into it: those are the same last items, so a client that has paged back keeps the
-earlier items and the messages before them. A cut message that follows a `reset` starts
-the client's messages there again. A result that would take a message past one operation
-is not folded in: it follows as its own message, as on a history page that parts a call
-from its result.
+history page splits a record. A cut message that follows a `reset` starts the client's
+messages there again.
 
 A client that was sent an item's words whole keeps them when a `put` carries a preview of
 that same item (the words begin with the preview, and the continuation's `bytes` is the
 whole item's size). A long reply therefore does not shrink to its preview when its record
-arrives, or when a tool result is folded into the record later.
+arrives.
 
 corrald carries at most 128 KiB of each of an open message's `thinking` and `text`. Past
 that the part stops growing for every subscriber until the record arrives, so the tail a

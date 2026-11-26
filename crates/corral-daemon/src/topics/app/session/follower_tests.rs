@@ -107,23 +107,29 @@ fn journal_and_live_words_share_one_tail() -> Result<()> {
             replaces: Some(replaces),
             open: false,
             cut: false,
-            again: false,
         },
     ] = ops.as_slice()
     else {
         panic!("{ops:?}");
     };
     assert_eq!(replaces, "s/open/1.2.1");
-    let id = message.id.clone();
+    assert_eq!(message.id, "s/entry/a");
+    assert!(message.items.iter().any(|item| matches!(
+        item,
+        SessionItem::ToolCall { call_id, result: None, .. } if call_id == "c"
+    )));
 
     append(
         &path,
         json!({"type":"message", "id":"r", "parentId":"a","message":{"role":"toolResult","toolCallId":"c","toolName":"edit","content":"changed"}}),
     )?;
     let ops = follower.visit("s", &path, None, Some(&page(vec![])), None);
-    // Put again with its result: a reader that does not hold the call's message ignores it.
+    // The result has its record's id, not the id of the call or the open message.
     assert!(
-        matches!(ops.as_slice(), [Op::Put {message, again: true, ..}] if message.id == id && message.items.iter().any(|item| matches!(item, SessionItem::ToolCall {result: Some(_),..})))
+        matches!(ops.as_slice(), [Op::Put { message, replaces: None, open: false, .. }]
+            if message.id == "s/entry/r" && matches!(message.items.as_slice(),
+                [SessionItem::ToolCall { call_id, result: Some(_), .. }] if call_id == "c")),
+        "{ops:?}"
     );
 
     append(
@@ -303,10 +309,7 @@ fn a_message_of_many_calls_is_carried_whole_until_it_cannot_be() -> Result<()> {
     assert_eq!((id.as_str(), cut), ("s/entry/c", true));
     assert!((1..120).contains(&count));
     let mut buffer = super::transcript_buffer::TranscriptBuffer::default();
-    buffer.publish(
-        vec![joined.clone(), followed.clone(), last.clone()],
-        Vec::new(),
-    );
+    buffer.publish(vec![joined.clone(), followed.clone(), last.clone()]);
     let tail: Vec<Op> = buffer.snapshot().into_iter().map(|(op, _)| op).collect();
     assert!(matches!(
         tail.as_slice(),
@@ -539,9 +542,8 @@ fn a_reply_recorded_before_the_tail_read_again_is_not_put_as_being_written() -> 
     Ok(())
 }
 
-/// A result folded into a call that subscribers' messages no longer begin with was put as
-/// that call again. A subscriber that joined since ignores it, and no page before its
-/// messages reads the result: it had the result by neither.
+/// A large enough journal suffix pushes an older call out of a new subscriber's tail.
+/// Its late result must still be delivered at the end, both live and at join.
 #[test]
 fn a_result_for_a_call_before_the_tail_goes_as_its_own_message() -> Result<()> {
     let dir = tempfile::tempdir()?;
@@ -557,7 +559,7 @@ fn a_result_for_a_call_before_the_tail_goes_as_its_own_message() -> Result<()> {
     let mut follower = Follower::default();
     let mut buffer = super::transcript_buffer::TranscriptBuffer::default();
     let ops = follower.visit("s", &path, None, Some(&page(vec![])), None);
-    buffer.publish(ops, follower.take_alone());
+    buffer.publish(ops);
     // Enough after the call for the tail subscribers are given to begin past it.
     let long: Vec<Value> = (0..12)
         .map(|_| json!({"type":"text","text":"x".repeat(4000)}))
@@ -572,7 +574,7 @@ fn a_result_for_a_call_before_the_tail_goes_as_its_own_message() -> Result<()> {
         parent = id;
     }
     let ops = follower.visit("s", &path, None, Some(&page(vec![])), None);
-    buffer.publish(ops, follower.take_alone());
+    buffer.publish(ops);
     let ids = |buffer: &super::transcript_buffer::TranscriptBuffer| -> Vec<String> {
         let rows = buffer.snapshot().into_iter();
         rows.filter_map(|(op, _)| match op {
@@ -581,21 +583,23 @@ fn a_result_for_a_call_before_the_tail_goes_as_its_own_message() -> Result<()> {
         })
         .collect()
     };
-    assert!(!ids(&buffer).contains(&"s/entry/a".to_owned()));
+    let held = ids(&buffer);
+    assert!(!held.iter().any(|id| id == "s/entry/a"), "{held:?}");
+    assert_eq!(held.last().map(String::as_str), Some("s/entry/f5"));
     append(
         &path,
         json!({"type":"message", "id":"r", "parentId":parent,"message":{"role":"toolResult","toolCallId":"c","toolName":"edit","content":"changed"}}),
     )?;
     let ops = follower.visit("s", &path, None, Some(&page(vec![])), None);
     assert!(
-        matches!(ops.as_slice(), [Op::Put { message, again: true, .. }] if message.id == "s/entry/a"),
+        matches!(ops.as_slice(), [Op::Put { message, replaces: None, .. }] if message.id == "s/entry/r"),
         "{ops:?}"
     );
-    buffer.publish(ops, follower.take_alone());
-    let Some((Op::Put { message, again, .. }, _)) = buffer.operations.back() else {
+    buffer.publish(ops);
+    let Some((Op::Put { message, .. }, _)) = buffer.operations.back() else {
         panic!("a put");
     };
-    assert_eq!((message.id.as_str(), *again), ("s/entry/r", false));
+    assert_eq!(message.id, "s/entry/r");
     assert!(
         matches!(
             message.items.as_slice(),
@@ -853,7 +857,7 @@ fn a_long_reply_stops_at_the_bound_its_tail_holds() -> Result<()> {
     ops.extend(follower.visit("s", &path, None, Some(&long), None));
     assert_eq!(written(&ops), OPEN_PART_BYTES - 1);
     let mut buffer = TranscriptBuffer::default();
-    buffer.publish(ops, Vec::new());
+    buffer.publish(ops);
     let snapshot: Vec<Op> = buffer.snapshot().into_iter().map(|(op, _)| op).collect();
     assert_eq!(written(&snapshot), OPEN_PART_BYTES - 1);
     Ok(())

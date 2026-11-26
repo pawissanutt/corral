@@ -19,6 +19,8 @@ pub(super) struct Pair<'a> {
     page: usize,
 }
 
+pub(super) type Pairs<'a> = BTreeMap<&'a str, Pair<'a>>;
+
 /// Cache pages are newest first. A joined record can straddle a seam, but joining records
 /// preserves the order and number of raw items, including continuations.
 fn page_starts(cache: Option<&DetailCache>) -> Vec<usize> {
@@ -46,15 +48,16 @@ pub(super) fn collect<'a>(
     messages: &'a [SessionMessage],
     cache: Option<&'a DetailCache>,
     feed: &'a Feed,
-) -> BTreeMap<&'a str, Pair<'a>> {
+) -> Pairs<'a> {
     let starts = page_starts(cache);
     let mut base = 0;
-    let mut pairs: BTreeMap<&str, Pair<'_>> = BTreeMap::new();
+    let mut pairs = Pairs::new();
     for message in messages {
         for (at, item, rest) in resolve_at(&message.items, feed) {
             let SessionItem::ToolCall {
                 call_id,
                 paired,
+                call,
                 result,
                 ..
             } = item
@@ -94,6 +97,24 @@ pub(super) fn collect<'a>(
                         pair.anchor = &message.id;
                         pair.result_position = !paired && result.is_some();
                         pair.page = page;
+                    }
+                    // Keep the complete REST copy only if this is the same raw result.
+                    // One call can survive a branch reset with a different result.
+                    if !paired
+                        && call.is_none()
+                        && let Some(result) = result.as_ref().filter(|raw| !raw.is_empty())
+                        && !matches!(rest, Rest::Whole)
+                        && matches!(pair.rest, Rest::Whole)
+                        && matches!(
+                            pair.item.as_ref(),
+                            SessionItem::ToolCall {
+                                paired: true,
+                                result: Some(prior),
+                                ..
+                            } if prior == result
+                        )
+                    {
+                        continue;
                     }
                     merge(pair.item.to_mut(), item);
                     if !matches!(rest, Rest::Whole) {

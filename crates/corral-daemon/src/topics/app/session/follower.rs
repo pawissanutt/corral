@@ -49,7 +49,6 @@ pub(super) struct Follower {
     /// When the first message of the tail last read again was written, unless that tail
     /// was the whole journal: records before it were not read.
     held: Option<jiff::Timestamp>,
-    alone: Vec<(String, Op)>,
 }
 
 /// Where the journal's clock parts a turn's records: the assistant records stamped at
@@ -103,13 +102,6 @@ impl Follower {
         self.from_start = true;
     }
 
-    /// For each `again` put of the last visit, in order: the message it is of, and the
-    /// record whose result was folded into it as that record's own message. Subscribers
-    /// who do not hold the first are given the second.
-    pub(super) fn take_alone(&mut self) -> Vec<(String, Op)> {
-        std::mem::take(&mut self.alone)
-    }
-
     pub(super) fn visit(
         &mut self,
         id: &str,
@@ -118,7 +110,6 @@ impl Follower {
         page: Option<&LivePage>,
         seed: Option<HostOpen>,
     ) -> Vec<Op> {
-        self.alone.clear();
         let generation = page.and_then(|p| p.generation);
         let from_start = std::mem::take(&mut self.from_start);
         // Joining the host's stream. Reading the journal again alone (another branch, or a
@@ -199,7 +190,6 @@ impl Follower {
                     replaces: None,
                     open: false,
                     cut,
-                    again: false,
                 }));
                 if !join {
                     // Only the journal was read again: the turn the host is in goes on. A
@@ -406,32 +396,7 @@ impl Follower {
 
     /// Pairs records appended to the journal with the messages being written.
     fn pair(&mut self, changes: Vec<Change>, starts: &mut [Start], ops: &mut Vec<Op>) {
-        for change in changes {
-            let (row, assistant) = match change {
-                Change::Record(row, assistant) => (row, assistant),
-                Change::Again((message, before, cut), own) => {
-                    if let Some((own, before, cut)) = own.map(|own| *own) {
-                        let own = Op::Put {
-                            message: own,
-                            before,
-                            replaces: None,
-                            open: false,
-                            cut,
-                            again: false,
-                        };
-                        self.alone.push((message.id.clone(), own));
-                    }
-                    ops.push(Op::Put {
-                        message,
-                        before,
-                        replaces: None,
-                        open: false,
-                        cut,
-                        again: true,
-                    });
-                    continue;
-                }
-            };
+        for Change { row, assistant } in changes {
             let replaces = if assistant {
                 // When the record was written, and its message.
                 let written: Option<(jiff::Timestamp, String)> =
@@ -470,7 +435,6 @@ impl Follower {
                     replaces,
                     open: false,
                     cut,
-                    again: false,
                 });
             } else if let Some(id) = replaces {
                 ops.push(Op::Drop { id });
@@ -608,7 +572,6 @@ fn put_open(id: &str, at: Option<String>) -> Op {
         replaces: None,
         open: true,
         cut: false,
-        again: false,
     }
 }
 

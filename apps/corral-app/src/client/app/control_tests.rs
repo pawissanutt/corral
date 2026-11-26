@@ -120,7 +120,6 @@ fn a_new_quick_thread_loads_its_metadata_without_replacing_the_stream() {
                 replaces: None,
                 open: true,
                 cut: false,
-                again: false,
             },
         ],
         false,
@@ -289,7 +288,6 @@ fn a_quick_host_start_refreshes_metadata_after_an_inflight_older_page() {
             replaces: None,
             open: true,
             cut: false,
-            again: false,
         }],
         false,
     );

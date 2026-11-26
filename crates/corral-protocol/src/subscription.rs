@@ -396,7 +396,8 @@ pub enum TranscriptOp {
         older: Option<String>,
     },
     /// The message with this id: in place of the held message with the same id, or of the
-    /// open message `replaces` whose record it is, or else at the end.
+    /// open message `replaces` whose record it is, or else at the end. Journal records
+    /// occupy separate messages, including tool results.
     Put {
         message: crate::detail::SessionMessage,
         /// The `detail.get` page before this message; absent when nothing precedes it or
@@ -413,12 +414,6 @@ pub enum TranscriptOp {
         /// inside it, and the client holds nothing before this message until it pages back.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         cut: bool,
-        /// A record put before that has changed: a tool result was folded into it. A
-        /// client that does not hold the message ignores the put. corrald sends it only
-        /// while every subscriber was given the message, and otherwise puts the result as
-        /// its own message.
-        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-        again: bool,
     },
     /// Words of the open message `id`, at a UTF-8 byte offset of its one `text` or
     /// `thinking` item, which the first chunk makes (thinking goes before text). Writing a

@@ -11145,12 +11145,8 @@
             "type": "object"
           },
           {
-            "description": "The message with this id: in place of the held message with the same id, or of the\nopen message `replaces` whose record it is, or else at the end.",
+            "description": "The message with this id: in place of the held message with the same id, or of the\nopen message `replaces` whose record it is, or else at the end. Journal records\noccupy separate messages, including tool results.",
             "properties": {
-              "again": {
-                "description": "A record put before that has changed: a tool result was folded into it. A\nclient that does not hold the message ignores the put. corrald sends it only\nwhile every subscriber was given the message, and otherwise puts the result as\nits own message.",
-                "type": "boolean"
-              },
               "before": {
                 "description": "The `detail.get` page before this message; absent when nothing precedes it or\nthe message is open.",
                 "type": [

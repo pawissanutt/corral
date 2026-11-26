@@ -406,7 +406,7 @@ fn quiet_message(
 fn message(
     message: &SessionMessage,
     cx: Cx<'_>,
-    pairs: &std::collections::BTreeMap<&str, super::pairs::Pair<'_>>,
+    pairs: &super::pairs::Pairs<'_>,
     first_user: bool,
     placed: &[&super::pairs::Pair<'_>],
     moved: &BTreeSet<&str>,
@@ -753,7 +753,8 @@ pub(super) fn recorded_layout(
         return RecordedLayout::default();
     };
     let id = Id::from(id.as_str());
-    let journal = Journal::of(&id, &body.messages, feed);
+    let pairs = super::pairs::collect(&body.messages, Some(cache), feed);
+    let journal = Journal::of(&id, &body.messages, &pairs, feed);
     let cx = Cx {
         id: &id,
         ui: &Ui::EMPTY,
@@ -763,7 +764,7 @@ pub(super) fn recorded_layout(
         detached: false,
         mirror: Some(&cache.transcript_seams.mirror),
     };
-    let (messages, ends, _) = recorded_view(&body.messages, Some(cache), cx, keep_cut);
+    let (messages, ends, _) = recorded_view(&body.messages, Some(cache), &pairs, cx, keep_cut);
     RecordedLayout {
         starts: messages.into_iter().map(|m| m.anchor).collect(),
         ends,
@@ -793,7 +794,8 @@ fn replay(
 ) -> Transcript {
     let body = page(cache);
     let recorded: &[SessionMessage] = body.map_or(&[], |page| page.messages.as_slice());
-    let journal = Journal::of(id, recorded, feed);
+    let pairs = super::pairs::collect(recorded, cache, feed);
+    let journal = Journal::of(id, recorded, &pairs, feed);
     let cx = Cx {
         id,
         ui,
@@ -841,7 +843,7 @@ fn replay(
             })
         }
     });
-    let (messages, message_ends, first) = recorded_view(recorded, cache, cx, |_, _| true);
+    let (messages, message_ends, first) = recorded_view(recorded, cache, &pairs, cx, |_, _| true);
     let after = match feed.live.get(id.as_str()) {
         Some(turn) if body.is_some() && !detached => overlay::notices(turn, recorded),
         _ => Vec::new(),

@@ -12,6 +12,7 @@ use serde_json::Value;
 use crate::model::Id;
 use crate::model::daemon::Feed;
 
+use super::pairs::Pairs;
 use super::replay::{Rest, resolve};
 
 /// Entries whose facts settle another row; they are never rows themselves.
@@ -45,7 +46,7 @@ pub(super) struct Journal {
 }
 
 impl Journal {
-    pub fn of(id: &Id, messages: &[SessionMessage], feed: &Feed) -> Journal {
+    pub fn of(id: &Id, messages: &[SessionMessage], pairs: &Pairs<'_>, feed: &Feed) -> Journal {
         let mut journal = Journal {
             cwd: feed
                 .assistants
@@ -60,7 +61,16 @@ impl Journal {
         };
         for message in messages {
             for (item, rest) in resolve(&message.items, feed) {
-                journal.read(item, rest);
+                // Job labels need both the command from the call and the id from its result.
+                if let SessionItem::ToolCall { call_id, .. } = item
+                    && let Some(pair) = pairs.get(call_id.as_str())
+                {
+                    if std::ptr::eq(item, pair.position) {
+                        journal.read(pair.item.as_ref(), pair.rest);
+                    }
+                } else {
+                    journal.read(item, rest);
+                }
             }
         }
         journal

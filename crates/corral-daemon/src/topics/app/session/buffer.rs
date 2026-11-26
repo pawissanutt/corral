@@ -66,23 +66,13 @@ impl Buffer {
         }
     }
 
-    #[cfg(test)]
+    /// Publishes what a follower's visit made of the journal and the host.
     pub(super) fn publish_transcript(
         &mut self,
         ops: Vec<corral_protocol::subscription::TranscriptOp>,
     ) {
-        self.publish_followed(ops, Vec::new());
-    }
-
-    /// What a follower's visit made of the journal and the host: its operations, and for
-    /// each record put again the record whose result it gained (`Follower::take_alone`).
-    pub(super) fn publish_followed(
-        &mut self,
-        ops: Vec<corral_protocol::subscription::TranscriptOp>,
-        alone: Vec<(String, corral_protocol::subscription::TranscriptOp)>,
-    ) {
         if !ops.is_empty() {
-            self.transcript.publish(ops, alone);
+            self.transcript.publish(ops);
             self.wake();
         }
     }

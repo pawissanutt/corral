@@ -1,7 +1,7 @@
 use corral_protocol::detail::{
     DetailBody, DetailRef, HostPresence, SessionItem, SessionMessage, SessionPage, SessionToolState,
 };
-use corral_protocol::subscription::{SessionAgentMessage, SessionFleet};
+use corral_protocol::subscription::{SessionAgentMessage, SessionFleet, TranscriptOp};
 
 use super::super::Ui;
 use super::replay::transcript;
@@ -144,14 +144,14 @@ fn provider_error_item_is_dropped() {
 }
 
 #[test]
-fn recorded_tool_calls_settle_from_their_result_by_call_id() {
+fn a_streamed_tool_result_settles_only_its_call_without_a_row() {
     use super::ToolState;
 
-    let call = |id: &str, arguments: &str, state| SessionItem::ToolCall {
+    let call = |id: &str, name: &str, arguments: &str, state| SessionItem::ToolCall {
         call_id: id.into(),
-        name: "corral_session".into(),
+        name: name.into(),
         arguments: arguments.into(),
-        summary: arguments.into(),
+        summary: String::new(),
         state,
         paired: false,
         call: None,
@@ -161,75 +161,68 @@ fn recorded_tool_calls_settle_from_their_result_by_call_id() {
         diff: None,
         content: None,
     };
-    for (state, expected) in [
-        (SessionToolState::Done, ToolState::Ok),
-        (SessionToolState::Failed, ToolState::Failed),
+    for (state, expected, exit_code) in [
+        (SessionToolState::Done, ToolState::Ok, 0),
+        (SessionToolState::Failed, ToolState::Failed, 1),
     ] {
+        let id = "finished";
         let mut feed = feed(vec![
             call(
-                "finished",
-                r#"{"command":"echo ready\nmore"}"#,
+                id,
+                "bash",
+                r#"{"command":"echo ready"}"#,
                 SessionToolState::Running,
             ),
             call(
                 "still-running",
-                r#"{"command":"wait"}"#,
+                "job_wait",
+                r#"{"job":"j1-abc"}"#,
                 SessionToolState::Running,
             ),
         ]);
-        let mut result = call("finished", "", state);
+        let mut result = call(id, "bash", "", state);
         if let SessionItem::ToolCall { output, result, .. } = &mut result {
             *output = Some("ready".into());
-            *result = Some(r#"{"ok":true}"#.into());
+            *result = Some(
+                serde_json::json!({"details":{"job":"j1-abc","state":"exited","exit_code":exit_code}})
+                    .to_string(),
+            );
         }
         let target = DetailRef::Session { id: ID.into() };
-        let DetailBody::Session(page) = feed
-            .details
-            .get_mut(&daemon::detail_key(&target))
-            .unwrap()
-            .merged
-            .as_mut()
-            .unwrap()
-        else {
+        let cache = feed.details.get_mut(&daemon::detail_key(&target)).unwrap();
+        let Some(DetailBody::Session(page)) = cache.merged.as_mut() else {
             panic!("session page")
         };
-        page.messages.push(SessionMessage {
-            id: String::new(),
-            author: "tool".into(),
+        page.messages[0].id = "calls".into();
+        let result = SessionMessage {
+            id: "result".into(),
+            author: "toolResult".into(),
             at: Some("2026-11-15T10:00:01Z".into()),
             items: vec![result],
-            model: None,
-            stop_reason: None,
-            usage: None,
-            input: None,
-            attachments: Vec::new(),
-        });
+            ..page.messages[0].clone()
+        };
+        super::mirror::apply(
+            cache,
+            vec![TranscriptOp::Put {
+                message: result,
+                before: None,
+                replaces: None,
+                open: false,
+                cut: false,
+            }],
+            false,
+        );
         let page = shown(&feed);
-        let tools: Vec<_> = page
-            .messages
-            .iter()
-            .flat_map(|message| &message.items)
-            .filter_map(|item| match item {
-                MessageItem::Tool(tool) => Some(tool),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(
-            tools.len(),
-            2,
-            "the result must settle the call, not add a second row"
-        );
-        assert_eq!(tools[0].state, expected);
-        assert_eq!(
-            tools[0].outcome_hue == Hue::Fail,
-            state == SessionToolState::Failed
-        );
-        assert_eq!(tools[0].summary, "echo ready");
-        assert_eq!(
-            tools[1].state,
-            ToolState::Running,
-            "a different id must stay running"
-        );
+        let [message] = page.messages.as_slice() else {
+            panic!("the paired result should have no bubble of its own")
+        };
+        let [MessageItem::Tool(done), MessageItem::Tool(waiting)] = message.items.as_slice() else {
+            panic!("one card per call")
+        };
+        assert_eq!(done.state, expected);
+        assert_eq!(done.outcome_hue == Hue::Fail, exit_code != 0);
+        assert_eq!(waiting.state, ToolState::Running);
+        assert!(waiting.summary.contains("echo ready"));
     }
 }
 
