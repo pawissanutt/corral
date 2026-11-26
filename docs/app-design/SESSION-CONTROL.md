@@ -474,15 +474,17 @@ itself. No client stitches the two.
   messages (at most one history page of them) and `older` is the `detail.get` page before
   the first. A client that already holds that first message, by id, keeps everything it
   holds before it and replaces what follows; otherwise it replaces all it holds.
-- `put { message, before, replaces, open }`: the message takes the place of the held
+- `put { message, before, replaces, open, cut, again }`: the message takes the place of the held
   message with the same id, or of the open message `replaces`, or else goes at the end.
   `before` is the `detail.get` page before this message, so a client that drops its oldest
   messages to stay within its own budget can still page back to them. When the message
   is the client's first, `before` is its cursor for earlier messages from then on: a
   history page may have begun inside that record, and the record now comes whole. `cut`
-  is described below. A record is sent
-  again with the same id when it changes: a tool result that arrives is folded into the
-  call's message exactly as a history page folds it.
+  is described below. A record is sent again with the same id when it changes: a tool
+  result that arrives is folded into the call's message exactly as a history page folds
+  it. That `put` has `again: true`, and a client that does not hold the message ignores
+  it: the call was put before the client's messages begin, and a history page returns it,
+  with its result, in its place.
 - An open message (`open: true`) is the assistant message being written. Its id is
   `<session>/open/<generation>.<turn>.<ordinal>` and names no record; it has at most one
   `thinking` item followed by at most one `text` item. `append { id, part, offset, text }`
@@ -551,7 +553,10 @@ still fits the bridge's frame. A host that sends no `open` (an older one) has it
 left out until its next turn starts; its records still arrive.
 
 corrald reads the journal and the host at different moments at every step, not only when
-it joins: the journal to its end, the host a page at a time. The host stamps its events
+it joins: the host a page at a time, and the journal to its end before it follows that
+page, so a record never follows an event the host emitted after it was written (an
+earlier turn's last record after the next turn's start). When more was appended than a
+few bounded reads hold, it reads the tail again, as a `reset`. The host stamps its events
 and the journal's entries with one clock, and that clock is what pairs them. A turn's
 records are the assistant entries stamped at or after its `live_turn started`, so one
 read before that event's page is counted when the turn starts, and its words are not
@@ -572,6 +577,12 @@ Operations share the page's byte budget with its events. A subscriber's operatio
 bounded backlog beside the buffered events; one that falls behind it is sent `reset` and
 the current tail again, never a hole. Acknowledging a page acknowledges its operations.
 
+An operation that does not fit beside the fleet and the state is sent on a page of
+operations alone: no events, no state, no fleet. Such a page says nothing about the
+fleet, so a client keeps the one it holds (a change to the fleet always comes with its
+`live_fleet` event or a gap), and corrald follows the page with one that carries the
+fleet without waiting for anything else to change.
+
 History cursors (`SessionPage.older`, `reset.older`, `put.before`) stay valid while the
 journal is appended to. They are stamped with the journal's identity, not its size or
 modification time, and pinned to a record by its id, so only a replaced journal or a
@@ -586,8 +597,9 @@ so the message being written and anything put since the page was read stay.
 ### Children and agent messages
 
 A connection that requests `session.fleet.v1` receives the watched session's child agents
-and their messages with every page (`fleet`, absent when the session has neither). Each
-value replaces the previous one; the app never merges them. It clears the fleet when the
+and their messages with every page (`fleet`, absent when the session has neither), except
+a page of transcript operations alone, which says nothing about them (see Transcript
+stream). Each value replaces the previous one; the app never merges them. It clears the fleet when the
 watch ends, on a namespace switch, on Forget and on revocation, and shows a held fleet as
 stale whenever the session topic is stale. Against a daemon without the capability the
 page shows what it showed before, with no children placeholder.

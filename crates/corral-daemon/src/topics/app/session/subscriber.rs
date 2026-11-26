@@ -183,6 +183,7 @@ pub(super) fn subscribe(
         operation: 0,
         snapshot: VecDeque::new(),
         prefer_transcript: false,
+        fleet_owed: false,
     })
 }
 
@@ -199,6 +200,9 @@ pub(super) struct Subscriber {
     operation: u64,
     snapshot: VecDeque<SizedOp>,
     prefer_transcript: bool,
+    /// A page of transcript operations had no room for the fleet: a page that carries it
+    /// follows without waiting for anything else to change.
+    fleet_owed: bool,
 }
 
 impl Subscriber {
@@ -286,6 +290,7 @@ impl Subscriber {
             None
         };
         if !initial_fleet
+            && !self.fleet_owed
             && !send_empty_quick
             && state.is_none()
             && !pending
@@ -370,6 +375,7 @@ impl Subscriber {
             && !send_empty_quick
             && gap.is_none()
             && !initial_fleet
+            && !self.fleet_owed
             && state.is_none()
             && transcript.is_empty()
         {
@@ -380,6 +386,9 @@ impl Subscriber {
         let next = buffer.next;
         let source_more = buffer.more;
         let fleet = fleet.map(|(fleet, _)| fleet.clone());
+        // A page without a fleet says the session has none, so one that only had no room
+        // for it is followed by one that carries it.
+        let fleet_owed = transcript_only && include_fleet && buffer.fleet.is_some();
         let state_pending = transcript_only
             && include_state
             && buffer.state.is_some()
@@ -415,7 +424,7 @@ impl Subscriber {
                 generation,
                 events,
                 cursor: cursor.clone(),
-                more: seq < next || source_more || transcript_more || state_pending,
+                more: seq < next || source_more || transcript_more || state_pending || fleet_owed,
                 gap,
                 transcript,
                 fleet,
@@ -430,6 +439,7 @@ impl Subscriber {
         self.version = Some(version);
         self.seq = seq;
         self.force_gap = false;
+        self.fleet_owed = fleet_owed;
         self.state_version = state_version;
         self.in_flight = Some(cursor);
         Ok(Some(frame))

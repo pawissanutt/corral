@@ -352,6 +352,7 @@ fn apply_words(feed: &mut Feed, scope: &str, generation: u32, events: &[SessionL
                 replaces: None,
                 open: true,
                 cut: false,
+                again: false,
             });
         }
         ops.push(TranscriptOp::Append {

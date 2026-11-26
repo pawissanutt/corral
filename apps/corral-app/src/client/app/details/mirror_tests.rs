@@ -9,6 +9,7 @@ fn put(id: &str, words: &[&str], replaces: Option<&str>, open: bool) -> Transcri
         replaces: replaces.map(str::to_owned),
         open,
         cut: false,
+        again: false,
     }
 }
 
@@ -268,10 +269,56 @@ fn latest_reads(reader: bool) {
     );
 }
 
+/// A tool result folded into a call from before the client's messages begin put that call
+/// again. It went at the end, after messages written later, and history gave it a second
+/// time in its place.
+#[test]
+fn a_changed_record_from_before_the_held_messages_is_not_added() {
+    let runtime = nsh_core::element::Runtime::default();
+    let _entered = runtime.enter();
+    let feed = signal(Feed::default());
+    feed.update(|f| {
+        f.capabilities.insert(SESSION_TRANSCRIPT_V1.into());
+    });
+    let mut app = AppState::new();
+    app.ready = true;
+    app.session_scopes.insert("B-1".into(), 1);
+    read(&mut app, feed, None);
+    let again = |id: &str, words: &[&str]| {
+        let mut again = put(id, words, None, false);
+        if let TranscriptOp::Put { again, .. } = &mut again {
+            *again = true;
+        }
+        again
+    };
+    apply(
+        feed,
+        vec![
+            TranscriptOp::Reset {
+                older: Some("before-late".into()),
+            },
+            put("late", &["call"], None, false),
+            again("early", &["call", "result"]),
+            again("late", &["call", "result"]),
+        ],
+        false,
+    );
+    assert_eq!(
+        shown(feed),
+        [("late".into(), vec!["call".into(), "result".into()])]
+    );
+}
+
 /// A page that begins inside a record resumes inside it. When the record then came whole
 /// the cursor still did, and the page before it gave the record's first items again.
 #[test]
 fn a_first_message_that_comes_whole_moves_the_cursor_before_it() {
+    // The page is read before the record is put whole, or answered after it.
+    whole_first_message(false);
+    whole_first_message(true);
+}
+
+fn whole_first_message(put_first: bool) {
     let runtime = nsh_core::element::Runtime::default();
     let _entered = runtime.enter();
     let feed = signal(Feed::default());
@@ -283,18 +330,18 @@ fn a_first_message_that_comes_whole_moves_the_cursor_before_it() {
     app.session_scopes.insert("B-1".into(), 1);
     let get = read(&mut app, feed, None);
     let rows: &[(&str, &[&str])] = &[("big", &["last"])];
-    reply(
-        &mut app,
-        feed,
-        get,
-        None,
-        page("a", rows, Some("inside-big")),
-    );
-    apply(
-        feed,
-        vec![put("big", &["first", "last"], None, false)],
-        false,
-    );
+    let split = page("a", rows, Some("inside-big"));
+    let whole = put("big", &["first", "last"], None, false);
+    if put_first {
+        let reset = TranscriptOp::Reset {
+            older: Some("before-big".into()),
+        };
+        apply(feed, vec![reset, whole], false);
+        reply(&mut app, feed, get, None, split);
+    } else {
+        reply(&mut app, feed, get, None, split);
+        apply(feed, vec![whole], false);
+    }
     let get = read(&mut app, feed, Some("before-big"));
     let rows: &[(&str, &[&str])] = &[("start", &["prompt"])];
     reply(

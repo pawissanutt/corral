@@ -57,12 +57,22 @@ struct Mark {
     past: bool,
 }
 
+impl Mark {
+    /// Whether a record written at `at` is one of the turn's after `base`.
+    fn counts(&self, at: jiff::Timestamp) -> bool {
+        at > self.since || (!self.past && at == self.since)
+    }
+}
+
 enum Journal {
     Changes(Vec<Change>),
     Snapshot(Option<String>, Vec<Message>),
 }
 
 const SEEN: usize = 64;
+/// Steps of the tail read to reach the journal's end on one visit, before it is read again
+/// as a tail instead.
+const STEPS: usize = 8;
 
 struct Open {
     id: String,
@@ -172,6 +182,7 @@ impl Follower {
                     replaces: None,
                     open: false,
                     cut,
+                    again: false,
                 }));
                 if !join {
                     // Only the journal was read again: the turn the host is in goes on. A
@@ -365,11 +376,22 @@ impl Follower {
         scope: Option<&Path>,
         join: bool,
     ) -> Result<Journal> {
-        if !join
-            && let Some(tail) = &mut self.tail
-            && let Some(changes) = tail.advance(id, path, scope)?
-        {
-            return Ok(Journal::Changes(changes));
+        if !join && let Some(tail) = &mut self.tail {
+            // The tail reads a bounded step at a time. The host's page is followed only
+            // once the journal is read to its end, so a record is never read after an
+            // event the host emitted later: an earlier turn's last record after the next
+            // turn's start, or a prompt after the words that answer it.
+            let mut read = Vec::new();
+            for _ in 0..STEPS {
+                let Some(changes) = tail.advance(id, path, scope)? else {
+                    break;
+                };
+                read.extend(changes);
+                if !tail.has_pending_records() {
+                    return Ok(Journal::Changes(read));
+                }
+            }
+            // Another branch, or more appended than these steps read: the tail again.
         }
         let (tail, older, messages) = Tail::snapshot(id, path, scope)?;
         self.tail = Some(tail);
@@ -378,19 +400,35 @@ impl Follower {
 
     /// Pairs records appended to the journal with the messages being written.
     fn pair(&mut self, changes: Vec<Change>, starts: &mut [Start], ops: &mut Vec<Op>) {
-        for (row, assistant) in changes {
+        for change in changes {
+            let (row, assistant) = match change {
+                Change::Record(row, assistant) => (row, assistant),
+                Change::Again((message, before, cut)) => {
+                    ops.push(Op::Put {
+                        message,
+                        before,
+                        replaces: None,
+                        open: false,
+                        cut,
+                        again: true,
+                    });
+                    continue;
+                }
+            };
             let replaces = if assistant {
-                let at = row
+                let at: Option<jiff::Timestamp> = row
                     .as_ref()
                     .and_then(|(message, ..)| message.at.as_deref())
                     .and_then(|at| at.parse().ok());
                 if let Some(at) = at {
                     self.see(at);
                 }
+                // A record written before the turn's mark is not one of its uncounted ones.
+                let earlier = self.mark.zip(at).is_some_and(|(mark, at)| !mark.counts(at));
                 if let Some(start) = locate_start(starts, at, self.turn.is_some()) {
                     start.records += 1;
                     None
-                } else if self.turn.is_some() {
+                } else if self.turn.is_some() && !earlier {
                     self.recorded += 1;
                     if let Some(since) = at {
                         self.mark = Some(Mark {
@@ -413,6 +451,7 @@ impl Follower {
                     replaces,
                     open: false,
                     cut,
+                    again: false,
                 });
             } else if let Some(id) = replaces {
                 ops.push(Op::Drop { id });
@@ -434,11 +473,7 @@ impl Follower {
         if self.turn.is_some()
             && let Some(mark) = self.mark
         {
-            let records = self
-                .seen
-                .iter()
-                .filter(|at| **at > mark.since || (!mark.past && **at == mark.since))
-                .count() as u64;
+            let records = self.seen.iter().filter(|at| mark.counts(**at)).count() as u64;
             self.recorded = self.recorded.max(mark.base + records);
         }
     }
@@ -526,6 +561,7 @@ fn put_open(id: &str, at: Option<String>) -> Op {
         replaces: None,
         open: true,
         cut: false,
+        again: false,
     }
 }
 

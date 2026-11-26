@@ -165,6 +165,10 @@ impl AppState {
                 let state =
                     state.filter(|_| feed.with_untracked(|feed| feed.capable(SESSION_STATE_V1)));
                 let reset = gap.is_some();
+                // A page of transcript operations alone may have had no room for the fleet:
+                // it says nothing about it. A change to the fleet comes with its event.
+                let keeps_fleet =
+                    fleet.is_none() && !reset && events.is_empty() && !transcript.is_empty();
                 let target = DetailRef::Session { id: scope.clone() };
                 let mut transcript_changed = false;
                 feed.update(|feed| {
@@ -204,7 +208,9 @@ impl AppState {
                         live.clear_host();
                     } else {
                         live.apply_page(generation, events, reset);
-                        live.replace_fleet(fleet);
+                        if !keeps_fleet {
+                            live.replace_fleet(fleet);
+                        }
                         live.replace_state(state);
                     }
                     // After a gap or a new generation no part event can be trusted to have

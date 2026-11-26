@@ -68,6 +68,36 @@ fn a_fleet_page_replaces_the_previous_fleet_instead_of_appending() {
     assert_eq!(children(feed), None);
 }
 
+/// A page of transcript operations that had no room for the fleet came without one, and
+/// the children and their messages were cleared as if the session had none.
+#[test]
+fn a_page_of_transcript_operations_alone_keeps_the_fleet() {
+    let runtime = nsh_core::element::Runtime::default();
+    let _entered = runtime.enter();
+    let feed = signal(capable());
+    let mut app = AppState::new();
+    watch(&mut app, feed, true);
+    app.rows(feed, page(fleet(vec![child("a")])), false)
+        .unwrap();
+    let mut operations = json!({
+        "topic": "session", "scope": "T-1", "epoch": 1, "generation": 1,
+        "events": [], "cursor": {"rev": 0, "after": null}, "more": false, "gap": null,
+        "transcript": [{"op": "drop", "id": "T-1/open/1.1.1"}]
+    });
+    app.rows(
+        feed,
+        serde_json::from_value(operations.clone()).unwrap(),
+        false,
+    )
+    .unwrap();
+    assert_eq!(children(feed), Some(vec!["a".to_owned()]));
+    // With an event the page speaks for the fleet again.
+    operations["events"] = json!([{"seq": 1, "generation": 1, "at": "", "kind": "live_fleet"}]);
+    app.rows(feed, serde_json::from_value(operations).unwrap(), false)
+        .unwrap();
+    assert_eq!(children(feed), None);
+}
+
 #[test]
 fn ending_the_watch_clears_the_fleet() {
     let runtime = nsh_core::element::Runtime::default();

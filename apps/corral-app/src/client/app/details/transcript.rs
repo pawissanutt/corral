@@ -240,7 +240,10 @@ impl AppState {
                             if request.page == held.older {
                                 let mirror = &mut cache.transcript_seams.mirror;
                                 mirror.remember_edge(held);
-                                if let Some(first) = held.messages.first() {
+                                if let (Some(first), Some(last)) =
+                                    (held.messages.first(), current.messages.last())
+                                    && first.id == last.id
+                                {
                                     mirror.joined_fragment(&first.id);
                                 }
                                 prepend(held, current.clone());
@@ -256,7 +259,10 @@ impl AppState {
                                 .position(|m| Some(m.id.as_str()) == first)
                             {
                                 head.messages.truncate(at);
-                                if cache.pages.is_empty() && held.older.is_some() {
+                                // A page with nothing before the held messages keeps
+                                // their cursor: its own may resume inside its first
+                                // record, which the stream put whole.
+                                if at > 0 && cache.pages.is_empty() && held.older.is_some() {
                                     prepend(held, head);
                                 }
                             }

@@ -95,7 +95,13 @@ impl Row {
 
 /// A message, the page before it, and whether it is only the last items of its record.
 pub(crate) type Message = (SessionMessage, Option<String>, bool);
-pub(crate) type Change = (Option<Message>, bool);
+/// What a record appended to the journal changes.
+pub(crate) enum Change {
+    /// The record's message, none when it shows nothing, and whether it is an assistant's.
+    Record(Option<Message>, bool),
+    /// A message of an earlier record, with this record's tool result folded into it.
+    Again(Message),
+}
 
 pub(crate) struct Tail {
     journal: (u64, u64),
@@ -134,7 +140,11 @@ impl Tail {
             (tail.offset, tail.leaf, tail.pending) = (start, follows, true);
             let mut messages: Vec<Message> = Vec::new();
             let changes = tail.advance(id, path, scope)?.into_iter().flatten();
-            for message in changes.filter_map(|(row, _)| row) {
+            let messages_of = |change| match change {
+                Change::Record(row, _) => row,
+                Change::Again(message) => Some(message),
+            };
+            for message in changes.filter_map(messages_of) {
                 // A call's message comes again with each result folded in.
                 match messages.iter_mut().find(|held| held.0.id == message.0.id) {
                     Some(held) => *held = message,
@@ -276,7 +286,7 @@ impl Tail {
                 row.cut = true;
             }
             if !message.items.is_empty() || !message.attachments.is_empty() {
-                changes.push((
+                changes.push(Change::Record(
                     Some((message.clone(), row.before.clone(), row.cut)),
                     assistant,
                 ));
@@ -285,7 +295,7 @@ impl Tail {
             }
         }
         if assistant {
-            changes.push((None, true));
+            changes.push(Change::Record(None, true));
         }
         Ok(true)
     }
@@ -349,7 +359,11 @@ impl Tail {
             self.bytes -= *cost;
             *cost = row.cost(message)?;
             self.bytes += *cost;
-            changes.push((Some((message.clone(), row.before.clone(), row.cut)), false));
+            changes.push(Change::Again((
+                message.clone(),
+                row.before.clone(),
+                row.cut,
+            )));
             break;
         }
         self.trim();

@@ -10266,7 +10266,7 @@
                     "type": "null"
                   }
                 ],
-                "description": "Current fleet replacement for capable clients; omission means no current fleet."
+                "description": "Current fleet replacement for capable clients; omission means no current fleet,\nexcept on a page of transcript operations alone (no events, no gap), which says\nnothing about the fleet."
               },
               "gap": {
                 "anyOf": [
@@ -10824,6 +10824,10 @@
           {
             "description": "The message with this id: in place of the held message with the same id, or of the\nopen message `replaces` whose record it is, or else at the end.",
             "properties": {
+              "again": {
+                "description": "A record put before that has changed: a tool result was folded into it. A\nclient that does not hold the message ignores the put, since it was put before\nthe client's messages begin and a history page returns it in its place.",
+                "type": "boolean"
+              },
               "before": {
                 "description": "The `detail.get` page before this message; absent when nothing precedes it or\nthe message is open.",
                 "type": [
@@ -11976,7 +11980,7 @@
                 "type": "null"
               }
             ],
-            "description": "Current fleet replacement for capable clients; omission means no current fleet."
+            "description": "Current fleet replacement for capable clients; omission means no current fleet,\nexcept on a page of transcript operations alone (no events, no gap), which says\nnothing about the fleet."
           }
         },
         {

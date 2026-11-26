@@ -124,6 +124,7 @@ pub(super) fn page(feed: &mut Feed, scope: &str) -> bool {
                 before: None,
                 open: false,
                 cut: false,
+                again: false,
                 replaces: (message.author == "assistant" && index >= records.len())
                     .then(|| replaces.take())
                     .flatten(),

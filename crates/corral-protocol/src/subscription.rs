@@ -117,7 +117,9 @@ pub enum SubDelta {
         /// clients only.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         transcript: Vec<TranscriptOp>,
-        /// Current fleet replacement for capable clients; omission means no current fleet.
+        /// Current fleet replacement for capable clients; omission means no current fleet,
+        /// except on a page of transcript operations alone (no events, no gap), which says
+        /// nothing about the fleet.
         #[serde(default, skip_serializing_if = "fleet_is_empty")]
         fleet: Option<SessionFleet>,
         /// Replacement for capable clients on the first page, after discontinuity, or when
@@ -411,6 +413,11 @@ pub enum TranscriptOp {
         /// inside it, and the client holds nothing before this message until it pages back.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         cut: bool,
+        /// A record put before that has changed: a tool result was folded into it. A
+        /// client that does not hold the message ignores the put, since it was put before
+        /// the client's messages begin and a history page returns it in its place.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        again: bool,
     },
     /// Words of the open message `id`, at a UTF-8 byte offset of its one `text` or
     /// `thinking` item, which the first chunk makes (thinking goes before text). Writing a

@@ -107,6 +107,7 @@ fn journal_and_live_words_share_one_tail() -> Result<()> {
             replaces: Some(replaces),
             open: false,
             cut: false,
+            again: false,
         },
     ] = ops.as_slice()
     else {
@@ -120,8 +121,9 @@ fn journal_and_live_words_share_one_tail() -> Result<()> {
         json!({"type":"message", "id":"r", "parentId":"a","message":{"role":"toolResult","toolCallId":"c","toolName":"edit","content":"changed"}}),
     )?;
     let ops = follower.visit("s", &path, None, Some(&page(vec![])), None);
+    // Put again with its result: a reader that does not hold the call's message ignores it.
     assert!(
-        matches!(ops.as_slice(), [Op::Put {message,..}] if message.id == id && message.items.iter().any(|item| matches!(item, SessionItem::ToolCall {result: Some(_),..})))
+        matches!(ops.as_slice(), [Op::Put {message, again: true, ..}] if message.id == id && message.items.iter().any(|item| matches!(item, SessionItem::ToolCall {result: Some(_),..})))
     );
 
     append(
@@ -531,6 +533,61 @@ fn a_reply_recorded_before_the_tail_read_again_is_not_put_as_being_written() -> 
             "{ops:?}"
         );
     }
+    Ok(())
+}
+
+/// The tail reads a bounded number of records at a time. The last record of a turn, left
+/// for the visit after the page that starts the next turn, was counted as that turn's first
+/// and took the place of the message it was writing.
+#[test]
+fn the_journal_is_read_to_its_end_before_the_hosts_page_is_followed() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("journal.jsonl");
+    let entry = |id: &str, parent: Option<&str>, role: &str, second: u8| {
+        json!({"type":"message", "id":id, "parentId":parent,
+            "timestamp":format!("2026-11-18T12:00:0{second}Z"),
+            "message":{"role":role,"content":"words"}})
+    };
+    append(&path, entry("u", None, "user", 0))?;
+    let mut follower = Follower::default();
+    follower.visit("s", &path, None, Some(&page(vec![])), None);
+    // More than one read holds, then the earlier turn's last reply.
+    let mut parent = "u".to_owned();
+    for n in 0..33 {
+        let id = format!("n{n}");
+        append(&path, entry(&id, Some(&parent), "user", 1))?;
+        parent = id;
+    }
+    append(&path, entry("last", Some(&parent), "assistant", 2))?;
+    let mut started = page(vec![
+        Kind::LiveTurn {
+            turn: 2,
+            state: SessionLiveTurnState::Started,
+        },
+        Kind::LiveText {
+            turn: 2,
+            message: 1,
+            offset: 0,
+            text: "words".into(),
+        },
+    ]);
+    started.events[0].0.at = "2026-11-18T12:00:03Z".into();
+    let ops = follower.visit("s", &path, None, Some(&started), None);
+    // Every record first, then the message the new turn is writing.
+    let [records @ .., record, open, Op::Append { .. }] = ops.as_slice() else {
+        panic!("{ops:?}");
+    };
+    assert_eq!(records.len(), 33, "{ops:?}");
+    assert!(
+        matches!(record, Op::Put { message, replaces: None, open: false, .. } if message.author == "assistant"),
+        "{ops:?}"
+    );
+    assert!(
+        matches!(open, Op::Put { message, open: true, .. } if message.id == "s/open/1.2.1"),
+        "{ops:?}"
+    );
+    let ops = follower.visit("s", &path, None, Some(&page_after(2, vec![])), None);
+    assert!(ops.is_empty(), "{ops:?}");
     Ok(())
 }
 

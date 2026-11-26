@@ -23,7 +23,6 @@ pub(super) struct TranscriptBuffer {
     bytes: usize,
     older: Option<String>,
     rows: Vec<SizedOp>,
-    trimmed: VecDeque<String>,
 }
 
 fn sized(op: Op) -> SizedOp {
@@ -39,28 +38,25 @@ impl TranscriptBuffer {
                     self.revision += 1;
                     self.older.clone_from(older);
                     self.rows.clear();
-                    self.trimmed.clear();
                     self.operations.clear();
                     self.bytes = 0;
                 }
-                Op::Put {message, replaces, ..} => {
+                Op::Put {message, replaces, again, ..} => {
                     let mut entry = op.clone();
-                    if let Op::Put {replaces, ..} = &mut entry { *replaces = None; }
+                    if let Op::Put {replaces, again, ..} = &mut entry { *replaces = None; *again = false; }
                     // The tail is measured like a history page, without per-operation
                     // envelopes. Snapshots measure those separately for delivery.
                     let entry = (entry, json_len(message).map_or(usize::MAX, |n| n + 1));
                     if let Some(at) = self.rows.iter().position(|(row, _)| matches!(row, Op::Put { message: old, .. } if old.id == message.id || replaces.as_ref() == Some(&old.id))) {
                         self.rows[at] = entry;
-                    } else if !self.trimmed.contains(&message.id) {
+                    } else if !*again {
                         self.rows.push(entry);
                     }
                     // A cut message is where a reader's messages start again.
                     if let Op::Put {cut: true, before, ..} = &op
                         && let Some(at) = self.rows.iter().position(|(row, _)| matches!(row, Op::Put { message: held, .. } if held.id == message.id))
                     {
-                        for (row, _) in self.rows.drain(..at) {
-                            if let Op::Put {message, ..} = row { self.trimmed.push_back(message.id); }
-                        }
+                        self.rows.drain(..at);
                         self.older.clone_from(before);
                     }
                     self.trim();
@@ -98,12 +94,7 @@ impl TranscriptBuffer {
                 bytes = bytes.saturating_add(*cost);
                 // Keep at least the newest complete message, even with its envelope.
                 if count > 32 || (count > 1 && bytes > TAIL_BYTES) {
-                    if let (Op::Put { message, .. }, _) = self.rows.remove(i) {
-                        self.trimmed.push_back(message.id);
-                        if self.trimmed.len() > 64 {
-                            self.trimmed.pop_front();
-                        }
-                    }
+                    self.rows.remove(i);
                     removed = true;
                 }
             }

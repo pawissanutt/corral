@@ -58,6 +58,7 @@ pub(crate) fn apply(cache: &mut DetailCache, ops: Vec<TranscriptOp>, more: bool)
                 replaces,
                 open,
                 cut,
+                again,
             } => {
                 let fresh = mirror.reset.is_some();
                 if let Some(older) = mirror.reset.take() {
@@ -69,6 +70,11 @@ pub(crate) fn apply(cache: &mut DetailCache, ops: Vec<TranscriptOp>, more: bool)
                     let replaces = replaces.as_deref()?;
                     page.messages.iter().position(|m| m.id == replaces)
                 });
+                if again && at.is_none() {
+                    // A record put before these messages begin has changed. It is not
+                    // one of them: a history page returns it where it belongs.
+                    continue;
+                }
                 if let Some(at) = at {
                     keep_words(&page.messages[at], &mut message);
                 }
@@ -280,8 +286,12 @@ impl Mirror {
         }
     }
 
+    /// A history page is about to add the earlier items of the first message `id`. The
+    /// cursor that resumed inside it is no longer where it begins, so the messages are
+    /// never dropped back to it.
     pub(crate) fn joined_fragment(&mut self, id: &str) {
         self.sizes.remove(id);
+        self.before.remove(id);
     }
 
     fn forget(&mut self, id: &str) {
