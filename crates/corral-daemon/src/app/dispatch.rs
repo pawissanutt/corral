@@ -73,6 +73,7 @@ pub(crate) fn welcome(shared: &Shared, hello: wire::Hello) -> wire::Welcome {
                         | wire::CLOSED_V1
                         | app::CITATIONS_V1
                         | app::ARTIFACT_DIAGRAM_V1
+                        | app::ARTIFACT_DIAGRAM_COMPARE_V1
                         | device::DEVICE_V1
                         | device::PUSH_V1
                 ) || system
@@ -283,6 +284,14 @@ pub(crate) fn serve(
                 return Err(Failure::new(
                     ErrorCode::InvalidParams,
                     "artifact.diagram.v1 required",
+                ));
+            }
+            if matches!(query.target, DetailRef::ArtifactDiagramCompare { .. })
+                && !topics.has_artifact_diagram_compare()
+            {
+                return Err(Failure::new(
+                    ErrorCode::InvalidParams,
+                    "artifact.diagram.v1 and artifact.diagram.compare.v1 required",
                 ));
             }
             if matches!(

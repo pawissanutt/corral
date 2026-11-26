@@ -37,6 +37,22 @@ fn submission(engine: &Engine, task: &str) -> Result<(Option<Run>, Option<Artifa
     Ok((run, diff))
 }
 
+/// The latest worker submission's run and the paths its stored patch holds, which the task's
+/// Changes diff (`DetailRef::ReviewFile`) and Impact describe.
+pub(super) fn submitted_paths(
+    engine: &Engine,
+    task: &str,
+) -> Result<Option<(Run, std::collections::BTreeSet<String>)>> {
+    let (Some(run), Some(diff)) = submission(engine, task)? else {
+        return Ok(None);
+    };
+    let paths = sections(&patch(engine, &diff)?)
+        .into_iter()
+        .map(|section| section.file.path)
+        .collect();
+    Ok(Some((run, paths)))
+}
+
 fn patch(engine: &Engine, diff: &Artifact) -> Result<String> {
     let mut patch = String::new();
     engine

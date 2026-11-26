@@ -24,6 +24,7 @@ use crate::{server, state::Shared};
 
 mod attachments;
 mod diagram;
+mod diagram_compare;
 mod fake_host;
 mod pi_build;
 mod pi_chat;

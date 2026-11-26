@@ -2079,6 +2079,177 @@
         ],
         "type": "string"
       },
+      "CompareLink": {
+        "oneOf": [
+          {
+            "description": "The task's submitted patch for `path` (`DetailRef::ReviewFile`).",
+            "properties": {
+              "kind": {
+                "const": "diff",
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "task": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "task",
+              "path"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The task's System Impact (`DetailRef::SystemReview`).",
+            "properties": {
+              "kind": {
+                "const": "impact",
+                "type": "string"
+              },
+              "task": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "task"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "CompareOrigin": {
+        "enum": [
+          "observed_head",
+          "candidate"
+        ],
+        "type": "string"
+      },
+      "CompareResolution": {
+        "oneOf": [
+          {
+            "description": "The observed head is not known yet; ask again.",
+            "properties": {
+              "status": {
+                "const": "pending",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "reason": {
+                "type": "string"
+              },
+              "status": {
+                "const": "unavailable",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "reason"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "candidate": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/DiagramCandidate"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The submission identity when `origin` is `candidate`."
+              },
+              "commit": {
+                "description": "Full commit ID; echo it in `CompareTarget::Pinned`.",
+                "type": "string"
+              },
+              "current_candidate": {
+                "description": "Whether `candidate` is still the task's latest submission, so its Changes diff and\nImpact describe this commit. Always false for an observed head.",
+                "type": "boolean"
+              },
+              "origin": {
+                "$ref": "#/components/schemas/CompareOrigin"
+              },
+              "status": {
+                "const": "resolved",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "origin",
+              "commit",
+              "current_candidate"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "CompareTarget": {
+        "description": "What the recipe's pinned commit is compared with.",
+        "oneOf": [
+          {
+            "description": "Resolve the project's observed head now. Echo the reply's commit as `pinned` for every\nlater read of the same comparison, so a moving head never changes it mid-read.",
+            "properties": {
+              "kind": {
+                "const": "observed_head",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Resolve the latest submission of the artifact's own task worker run.",
+            "properties": {
+              "kind": {
+                "const": "candidate",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Re-read a comparison an earlier reply resolved, at exactly that commit.",
+            "properties": {
+              "commit": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "pinned",
+                "type": "string"
+              },
+              "origin": {
+                "$ref": "#/components/schemas/CompareOrigin"
+              }
+            },
+            "required": [
+              "kind",
+              "origin",
+              "commit"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "ComparisonInfo": {
         "properties": {
           "id": {
@@ -2861,6 +3032,22 @@
               },
               "kind": {
                 "const": "artifact_diagram_element",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "body": {
+                "$ref": "#/components/schemas/DiagramCompareDetail"
+              },
+              "kind": {
+                "const": "artifact_diagram_compare",
                 "type": "string"
               }
             },
@@ -3767,6 +3954,37 @@
             "type": "object"
           },
           {
+            "description": "`artifact.diagram.compare.v1`: the recipe's evidence at its pinned commit beside the\nsame bindings at `target`, and the selected element's evidence on both sides.",
+            "properties": {
+              "element": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "const": "artifact_diagram_compare",
+                "type": "string"
+              },
+              "reference": {
+                "type": "string"
+              },
+              "sha256": {
+                "type": "string"
+              },
+              "target": {
+                "$ref": "#/components/schemas/CompareTarget"
+              }
+            },
+            "required": [
+              "kind",
+              "reference",
+              "sha256",
+              "target"
+            ],
+            "type": "object"
+          },
+          {
             "description": "Whether an artifact citation (`T-12:3`, `T-12:3#goal`) resolves, without its content\n(`citations.v1`).",
             "properties": {
               "kind": {
@@ -4163,6 +4381,49 @@
         ],
         "type": "object"
       },
+      "DiagramCompareDetail": {
+        "properties": {
+          "elements": {
+            "description": "Source-binding changes for every element with a source binding, in recipe order\n(nodes, then edges). Empty unless the target resolved.",
+            "items": {
+              "$ref": "#/components/schemas/ElementSourceChange"
+            },
+            "type": "array"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "selected": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ElementCompare"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The selected element's evidence on both sides, when the selector named one."
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "subject": {
+            "$ref": "#/components/schemas/DiagramSubject",
+            "description": "The base side: the recipe's own pinned subject, never rewritten."
+          },
+          "target": {
+            "$ref": "#/components/schemas/CompareResolution"
+          }
+        },
+        "required": [
+          "reference",
+          "sha256",
+          "subject",
+          "target",
+          "elements"
+        ],
+        "type": "object"
+      },
       "DiagramDiagnostic": {
         "properties": {
           "at": {
@@ -4403,6 +4664,181 @@
           "branch_prefix"
         ],
         "type": "object"
+      },
+      "ElementCompare": {
+        "properties": {
+          "base_entity": {
+            "$ref": "#/components/schemas/EntityResult"
+          },
+          "base_source": {
+            "$ref": "#/components/schemas/SourceResult",
+            "description": "At the pinned base commit, still inspectable when the target removed it."
+          },
+          "element": {
+            "$ref": "#/components/schemas/SelectedElement"
+          },
+          "entity_change": {
+            "$ref": "#/components/schemas/EntityChange"
+          },
+          "links": {
+            "description": "Existing views of the candidate's changes, when they describe the target commit.",
+            "items": {
+              "$ref": "#/components/schemas/CompareLink"
+            },
+            "type": "array"
+          },
+          "source_change": {
+            "$ref": "#/components/schemas/SourceChange"
+          },
+          "target_entity": {
+            "$ref": "#/components/schemas/EntityResult"
+          },
+          "target_source": {
+            "$ref": "#/components/schemas/SourceResult",
+            "description": "At the target commit (at the moved or renamed location when one was found)."
+          }
+        },
+        "required": [
+          "element",
+          "base_source",
+          "target_source",
+          "source_change",
+          "base_entity",
+          "target_entity",
+          "entity_change",
+          "links"
+        ],
+        "type": "object"
+      },
+      "ElementSourceChange": {
+        "properties": {
+          "change": {
+            "$ref": "#/components/schemas/SourceChange"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "change"
+        ],
+        "type": "object"
+      },
+      "EntityChange": {
+        "description": "Whether Corral's derived facts about a bound entity changed. A delta is claimed only when\nboth sides resolved with complete coverage and the same basis.",
+        "oneOf": [
+          {
+            "properties": {
+              "status": {
+                "const": "not_provided",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Facts for one side are still being prepared; ask again.",
+            "properties": {
+              "status": {
+                "const": "pending",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Evidence is insufficient to say whether anything changed.",
+            "properties": {
+              "reason": {
+                "type": "string"
+              },
+              "status": {
+                "const": "insufficient",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "reason"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "status": {
+                "const": "unchanged",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "added": {
+                "description": "Inbound file references found only at the target.",
+                "items": {
+                  "$ref": "#/components/schemas/DiagramRelated"
+                },
+                "type": "array"
+              },
+              "location": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/LocationChange"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Base and target locations, when the definition moved."
+              },
+              "removed": {
+                "description": "Inbound file references found only at the base.",
+                "items": {
+                  "$ref": "#/components/schemas/DiagramRelated"
+                },
+                "type": "array"
+              },
+              "status": {
+                "const": "changed",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "added",
+              "removed"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Resolved at the base; absent at the target within complete coverage.",
+            "properties": {
+              "reason": {
+                "type": "string"
+              },
+              "status": {
+                "const": "removed",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "reason"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "EntityEvidence": {
         "properties": {
@@ -5613,6 +6049,21 @@
         "required": [
           "port",
           "origins"
+        ],
+        "type": "object"
+      },
+      "LocationChange": {
+        "properties": {
+          "base": {
+            "$ref": "#/components/schemas/EntityLocation"
+          },
+          "target": {
+            "$ref": "#/components/schemas/EntityLocation"
+          }
+        },
+        "required": [
+          "base",
+          "target"
         ],
         "type": "object"
       },
@@ -10645,6 +11096,120 @@
         ],
         "type": "object"
       },
+      "SourceChange": {
+        "description": "How a source binding's committed text differs between the two commits. Only Git objects at\nboth pinned commits are compared; no claim is made about anything else.",
+        "oneOf": [
+          {
+            "properties": {
+              "status": {
+                "const": "not_provided",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "At least one side could not be read, so no change is claimed.",
+            "properties": {
+              "reason": {
+                "type": "string"
+              },
+              "status": {
+                "const": "unknown",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "reason"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "status": {
+                "const": "unchanged",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The same text now lives at `path` (one-based `first` line, when a span was bound).",
+            "properties": {
+              "first": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "path": {
+                "type": "string"
+              },
+              "status": {
+                "const": "moved",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "path"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The text differs; `path` is the renamed file when Git found a rename.",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "status": {
+                "const": "changed",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "path"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The file is absent at the target and Git found no rename of it.",
+            "properties": {
+              "status": {
+                "const": "removed",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The binding did not resolve at the base but does at the target.",
+            "properties": {
+              "status": {
+                "const": "added",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "SourceExcerpt": {
         "type": "object",
         "x-rust-type": "corral_types::SourceExcerpt"
@@ -14214,7 +14779,17 @@
           "name": "element",
           "required": false,
           "schema": {
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            ]
           },
           "x-required-in": [
             38
@@ -14227,7 +14802,7 @@
             "type": "string"
           },
           "x-required-in": [
-            41
+            42
           ]
         },
         {
@@ -14311,7 +14886,7 @@
             30,
             31,
             32,
-            41
+            42
           ]
         },
         {
@@ -14496,6 +15071,10 @@
                 "type": "string"
               },
               {
+                "const": "artifact_diagram_compare",
+                "type": "string"
+              },
+              {
                 "const": "citation",
                 "type": "string"
               },
@@ -14575,7 +15154,7 @@
             7,
             8,
             9,
-            43
+            44
           ]
         },
         {
@@ -14588,7 +15167,8 @@
             36,
             37,
             38,
-            39
+            39,
+            40
           ]
         },
         {
@@ -14629,7 +15209,18 @@
             "type": "string"
           },
           "x-required-in": [
-            38
+            38,
+            39
+          ]
+        },
+        {
+          "name": "target",
+          "required": false,
+          "schema": {
+            "$ref": "#/components/schemas/CompareTarget"
+          },
+          "x-required-in": [
+            39
           ]
         },
         {

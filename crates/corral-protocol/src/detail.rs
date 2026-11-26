@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 pub mod artifact;
 pub mod closed;
 pub mod diagram;
+pub mod diagram_compare;
 pub mod plan;
 pub mod question;
 pub mod review;
@@ -20,6 +21,7 @@ pub mod usage;
 pub use artifact::*;
 pub use closed::*;
 pub use diagram::*;
+pub use diagram_compare::*;
 pub use plan::*;
 pub use question::*;
 pub use review::*;
@@ -228,6 +230,15 @@ pub enum DetailRef {
         sha256: String,
         element: String,
     },
+    /// `artifact.diagram.compare.v1`: the recipe's evidence at its pinned commit beside the
+    /// same bindings at `target`, and the selected element's evidence on both sides.
+    ArtifactDiagramCompare {
+        reference: String,
+        sha256: String,
+        target: CompareTarget,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        element: Option<String>,
+    },
     /// Whether an artifact citation (`T-12:3`, `T-12:3#goal`) resolves, without its content
     /// (`citations.v1`).
     Citation {
@@ -321,6 +332,7 @@ pub enum DetailBody {
     Artifact(ArtifactPage),
     ArtifactDiagram(ArtifactDiagramDetail),
     ArtifactDiagramElement(DiagramElementDetail),
+    ArtifactDiagramCompare(DiagramCompareDetail),
     Citation(CitationDetail),
     Artifacts(ArtifactsPage),
     Closed(ClosedPage),

@@ -36,6 +36,8 @@ pub const SYSTEM_LENSES_V1: &str = "system.lenses.v1";
 pub const SYSTEM_DATA_V1: &str = "system.data.v1";
 /// Bounded artifact workflow recipes and per-element evidence through `detail.get`.
 pub const ARTIFACT_DIAGRAM_V1: &str = "artifact.diagram.v1";
+/// With `artifact.diagram.v1`: compare a recipe's evidence with a pinned later commit.
+pub const ARTIFACT_DIAGRAM_COMPARE_V1: &str = "artifact.diagram.compare.v1";
 /// Resolve task-text citations without their content (`DetailRef::Citation`).
 pub const CITATIONS_V1: &str = "citations.v1";
 pub const REVIEW_V1: &str = "review.v1";

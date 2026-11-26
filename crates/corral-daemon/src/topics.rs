@@ -27,6 +27,7 @@ pub(crate) struct Subscriptions<'a> {
     build_rows: bool,
     system: bool,
     artifact_diagram: bool,
+    artifact_diagram_compare: bool,
     host: bool,
     system_features: SystemFeatures,
 }
@@ -45,6 +46,7 @@ impl<'a> Subscriptions<'a> {
             build_rows: false,
             system: false,
             artifact_diagram: false,
+            artifact_diagram_compare: false,
             host: false,
             system_features: SystemFeatures::default(),
         }
@@ -59,6 +61,10 @@ impl<'a> Subscriptions<'a> {
         self.build_rows = caps.iter().any(|cap| cap == wire::app::BUILD_V1);
         self.system = caps.iter().any(|cap| cap == wire::app::SYSTEM_V1);
         self.artifact_diagram = caps.iter().any(|cap| cap == wire::app::ARTIFACT_DIAGRAM_V1);
+        self.artifact_diagram_compare = self.artifact_diagram
+            && caps
+                .iter()
+                .any(|cap| cap == wire::app::ARTIFACT_DIAGRAM_COMPARE_V1);
         self.host = caps.iter().any(|cap| cap == wire::host::HOST_V1);
         self.system_features = SystemFeatures {
             runtime: self.system && caps.iter().any(|cap| cap == wire::app::SYSTEM_RUNTIME_V1),
@@ -80,6 +86,10 @@ impl<'a> Subscriptions<'a> {
 
     pub(crate) fn has_artifact_diagram(&self) -> bool {
         self.artifact_diagram
+    }
+
+    pub(crate) fn has_artifact_diagram_compare(&self) -> bool {
+        self.artifact_diagram_compare
     }
 
     pub(crate) fn system_features(&self) -> SystemFeatures {

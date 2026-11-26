@@ -45,6 +45,22 @@ pub(super) fn read(
                 element,
             )?)
         }
+        DetailRef::ArtifactDiagramCompare {
+            reference,
+            sha256,
+            target,
+            element,
+        } => {
+            no_page(query)?;
+            DetailBody::ArtifactDiagramCompare(super::diagram_compare::compare(
+                shared,
+                engine,
+                reference,
+                sha256,
+                target,
+                element.as_deref(),
+            )?)
+        }
         _ => return Ok(None),
     };
     let etag = fingerprint(&(&query.target, &body))?;
@@ -59,7 +75,7 @@ fn no_page(query: &DetailGet) -> Result<()> {
     Ok(())
 }
 
-fn load(
+pub(super) fn load(
     engine: &Engine,
     reference: &str,
     digest: Option<&str>,
@@ -115,26 +131,8 @@ fn select(
     recipe: WorkflowRecipe,
     id: &str,
 ) -> Result<DiagramElementDetail> {
-    let element = recipe
-        .nodes
-        .into_iter()
-        .find(|node| node.id == id)
-        .map(|node| SelectedElement::Node { node })
-        .or_else(|| {
-            recipe
-                .edges
-                .into_iter()
-                .find(|edge| edge.id == id)
-                .map(|edge| SelectedElement::Edge { edge })
-        })
-        .context(NotFound("diagram element not found"))?;
-    let bindings = match &element {
-        SelectedElement::Node { node } => node.bindings.as_ref(),
-        SelectedElement::Edge { edge } => edge.bindings.as_ref(),
-    };
-    let (source_request, entity_request) = bindings.map_or((None, None), |bindings| {
-        (bindings.source.as_ref(), bindings.entity.as_ref())
-    });
+    let element = find_element(&recipe, id).context(NotFound("diagram element not found"))?;
+    let (source_request, entity_request) = requests(&element);
     let subject = recipe.subject;
     let (mut source, mut entity) = (SourceResult::NotProvided, EntityResult::NotProvided);
     let scope = project_scope(engine, &artifact, &subject);
@@ -195,13 +193,42 @@ fn select(
     })
 }
 
-enum PinProblem {
+/// The recipe's node or edge with this ID.
+pub(super) fn find_element(recipe: &WorkflowRecipe, id: &str) -> Option<SelectedElement> {
+    recipe
+        .nodes
+        .iter()
+        .find(|node| node.id == id)
+        .map(|node| SelectedElement::Node { node: node.clone() })
+        .or_else(|| {
+            recipe
+                .edges
+                .iter()
+                .find(|edge| edge.id == id)
+                .map(|edge| SelectedElement::Edge { edge: edge.clone() })
+        })
+}
+
+/// What an element's bindings ask for.
+pub(super) fn requests(
+    element: &SelectedElement,
+) -> (Option<&SourceRequest>, Option<&EntityRequest>) {
+    let bindings = match element {
+        SelectedElement::Node { node } => node.bindings.as_ref(),
+        SelectedElement::Edge { edge } => edge.bindings.as_ref(),
+    };
+    bindings.map_or((None, None), |bindings| {
+        (bindings.source.as_ref(), bindings.entity.as_ref())
+    })
+}
+
+pub(super) enum PinProblem {
     OutOfScope,
     Missing,
 }
 
 impl PinProblem {
-    fn reason(&self) -> &'static str {
+    pub(super) fn reason(&self) -> &'static str {
         match self {
             Self::OutOfScope => "the subject must match the artifact's configured owning project",
             Self::Missing => "the exact pinned commit is not available locally as a Git commit",
@@ -209,7 +236,7 @@ impl PinProblem {
     }
 }
 
-fn project_scope(
+pub(super) fn project_scope(
     engine: &Engine,
     artifact: &Artifact,
     subject: &DiagramSubject,
@@ -230,7 +257,7 @@ fn project_scope(
     Ok((repo, provider_enabled))
 }
 
-fn submission(
+pub(super) fn submission(
     engine: &Engine,
     artifact: &Artifact,
     subject: &DiagramSubject,
@@ -263,7 +290,7 @@ fn submission(
         }))
 }
 
-fn read_source(repo: &Path, rev: &Revision, request: &SourceRequest) -> SourceResult {
+pub(super) fn read_source(repo: &Path, rev: &Revision, request: &SourceRequest) -> SourceResult {
     let span = request
         .span
         .as_ref()
@@ -285,7 +312,7 @@ fn read_source(repo: &Path, rev: &Revision, request: &SourceRequest) -> SourceRe
     }
 }
 
-fn read_entity(
+pub(super) fn read_entity(
     shared: &Shared,
     repo: &Path,
     rev: &Revision,

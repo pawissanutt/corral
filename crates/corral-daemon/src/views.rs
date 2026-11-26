@@ -3,6 +3,7 @@ mod chat;
 mod citation;
 mod details;
 mod diagram;
+mod diagram_compare;
 mod review;
 pub(crate) mod rows;
 mod session_files;

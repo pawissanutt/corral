@@ -171,6 +171,20 @@ impl CommittedFile {
         })
     }
 
+    /// The entry's Git object ID; equal IDs at two commits mean identical bytes.
+    pub fn blob(&self) -> &str {
+        &self.blob
+    }
+
+    /// The whole file as text within the excerpt's 1 MiB blob limit, or `None` when it is
+    /// unreadable, too large or not NUL-free UTF-8.
+    pub fn text(&self, repo: &Path) -> Option<String> {
+        let bytes = self.read_blob(repo).ok()?;
+        (!bytes.contains(&0))
+            .then(|| String::from_utf8(bytes).ok())
+            .flatten()
+    }
+
     fn read_blob(&self, repo: &Path) -> Result<Vec<u8>> {
         // Ask for type and size before asking for contents, so Git is not told
         // to emit an oversized blob. Only a full object ID enters this protocol.
@@ -194,6 +208,44 @@ impl CommittedFile {
         ensure!(bytes.len() == size, "incomplete Git blob");
         Ok(bytes)
     }
+}
+
+/// Every file Git's rename detection (default similarity) finds renamed from `base` to
+/// `target`, old path to new. The diff reads Git objects only, without the checkout's config,
+/// attributes or diff helpers. Paths that are not UTF-8 are left out.
+pub fn renames(
+    repo: &Path,
+    base: &Revision,
+    target: &Revision,
+) -> Result<std::collections::BTreeMap<String, String>> {
+    let bytes = super::DiffContext::new(repo, target.commit(), &[])?.output(&[
+        "diff-tree",
+        "-r",
+        "-z",
+        "--no-commit-id",
+        "--name-status",
+        "-M",
+        "--diff-filter=R",
+        "--no-textconv",
+        "--no-ext-diff",
+        "--ignore-submodules=none",
+        "--no-relative",
+        "--no-color",
+        base.commit(),
+        target.commit(),
+        "--",
+    ])?;
+    let mut fields = records(&bytes)?;
+    let mut renames = std::collections::BTreeMap::new();
+    while let Some(status) = fields.next() {
+        let from = fields.next().context("missing Git rename source")?;
+        let to = fields.next().context("missing Git rename target")?;
+        ensure!(status.first() == Some(&b'R'), "unexpected Git diff status");
+        if let (Ok(from), Ok(to)) = (std::str::from_utf8(from), std::str::from_utf8(to)) {
+            renames.insert(from.to_owned(), to.to_owned());
+        }
+    }
+    Ok(renames)
 }
 
 fn bounded_output(repo: &Path, args: &[&str], input: Option<&str>, cap: usize) -> Result<Vec<u8>> {

@@ -23,7 +23,9 @@ pub use cache::FactsCache;
 pub use data::DataFacts;
 pub use delta::compare_data;
 pub use entries::compare as compare_entry_points;
-pub use git::diagram::{CommittedExcerpt, CommittedFile, committed_file, resolve_local_commit};
+pub use git::diagram::{
+    CommittedExcerpt, CommittedFile, committed_file, renames, resolve_local_commit,
+};
 pub use model::*;
 pub use structure::is_manifest;
 
