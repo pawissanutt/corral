@@ -116,7 +116,12 @@ test("a joining reader's page fits the frame with a full fleet, state and open t
 
 test("a reader's first page says where the open turn is without a gap", () => {
   const live = new LiveEvents();
-  start(live);
+  live.observe({ type: "agent_start" }, 7);
+  // Before the first message the turn's own start parts its records from earlier ones.
+  const waiting = live.since(0, EVENT_PAGE_BYTES).open!;
+  expect(waiting).toMatchObject({ turn: 7, message: 0, ended: true });
+  expect(Date.parse(waiting.message_at!)).toBeLessThanOrEqual(Date.now());
+  live.observe({ type: "message_start", message }, 7);
   delta(live, "so far");
   const page = live.since(0, EVENT_PAGE_BYTES);
   expect(page.gap).toBeUndefined();

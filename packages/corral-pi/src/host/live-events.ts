@@ -57,9 +57,10 @@ export interface OpenTurn {
   /** Ordinal of the turn's latest assistant message; 0 before the first. */
   readonly message: number;
   readonly ended: boolean;
-  /** When that message started, on the clock that stamps journal entries: its record is the
-   * assistant entry stamped at or after this, so a reader can tell whether the journal it
-   * reads already holds it. Absent before the turn's first message. */
+  /** When that message started (the turn, before its first message), on the clock that
+   * stamps journal entries: the records of that message and of those after it are the
+   * assistant entries stamped at or after this, so a reader can tell which of them the
+   * journal it reads already holds. */
   readonly message_at?: string;
   readonly text_offset: number;
   readonly text: string;
@@ -254,7 +255,7 @@ export class LiveEvents {
         this.thinkingOffset = 0;
         this.turn = turn;
         this.messageEnded = true;
-        this.messageAt = undefined;
+        this.messageAt = new Date().toISOString();
         this.written = { live_text: Buffer.alloc(0), live_thinking: Buffer.alloc(0) };
         this.error = undefined;
         this.toolCompletions.length = 0;
