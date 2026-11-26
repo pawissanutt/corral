@@ -430,21 +430,47 @@ pub fn created(feed: &Feed, key: &str) -> Option<String> {
     }
 }
 
+/// The status a confirmed move's task still shows on the board, while it does: the board's
+/// update follows the reply, so until then the task's step would offer the same move again.
+/// None once the row shows the target, has left that status, or the move was not confirmed.
+pub fn board_behind(feed: &Feed, act: &Act, status: &ActStatus) -> Option<Status> {
+    let Op::Move { id, status: target } = &act.op else {
+        return None;
+    };
+    let shown = feed.board.task(id)?.status();
+    (*status == ActStatus::Done && shown != *target).then_some(shown)
+}
+
+/// Whether the board has caught up with a confirmed move made while its task showed `from`:
+/// the row left that status, or is gone (another board, a cleared one).
+pub fn board_caught_up(feed: &Feed, op: &Op, from: Status) -> bool {
+    let Some(id) = target(op) else {
+        return true;
+    };
+    feed.board.task(id).is_none_or(|task| task.status() != from)
+}
+
+/// Why a sent operation's outcome is unknown, if it is: the request left this device but no
+/// answer says whether corrald applied it. Neither success nor failure is claimed and nothing
+/// is sent again. A request that never left (`offline`, "Not sent") is a known failure.
+pub fn unknown_outcome(feed: &Feed, key: &str) -> Option<&'static str> {
+    let operation = feed.operations.get(key)?;
+    let error = operation.error.as_ref()?;
+    let follow_up = operation.method == corral_protocol::op::OP_RESULT;
+    match error.code.as_str() {
+        "disconnected" => Some("the connection dropped before corrald answered"),
+        "deadline_expired" => Some("corrald did not answer in time"),
+        "not_found" if follow_up => Some("corrald no longer knows the operation it was running"),
+        _ => None,
+    }
+}
+
 /// The receipt a settled operation toasts. A new task has no id until the engine gives it one,
 /// so its receipt names the id from the reply: "New task T-21 · Done".
 pub fn receipt(feed: &Feed, act: &Act, status: &ActStatus) -> String {
-    // The link dropped after the request left, or a restarted corrald no longer knows the
-    // operation this device was following: it may have been applied. Neither success nor
-    // failure is claimed, and nothing is sent again.
-    let lost = feed.operations.get(&act.key).is_some_and(|operation| {
-        operation.error.as_ref().is_some_and(|error| {
-            error.code == "disconnected"
-                || (operation.method == corral_protocol::op::OP_RESULT && error.code == "not_found")
-        })
-    });
-    if lost {
+    if let Some(why) = unknown_outcome(feed, &act.key) {
         return format!(
-            "{} · outcome unknown: the connection dropped before corrald answered; the task's status shows whether it ran",
+            "{} · outcome unknown: {why}; the task's status shows whether it ran",
             act.title
         );
     }
@@ -568,5 +594,80 @@ mod tests {
         feed.operations.insert(Id::new("k"), done);
         assert_eq!(status(&feed, "k"), Some(ActStatus::Done));
         assert_eq!(created(&feed, "k").as_deref(), Some("T-9"));
+    }
+
+    /// A submit whose reply the client stopped waiting for read "Failed", though corrald may
+    /// have applied the move. Only a request that never left is a known failure.
+    #[test]
+    fn a_submit_reply_that_never_came_is_an_unknown_outcome_not_a_failure() {
+        use crate::model::daemon::{ClientError, Feed, Operation};
+        let act = Act::with_key(
+            Id::new("k"),
+            Op::Move {
+                id: "T-1".into(),
+                status: Status::Ready,
+            },
+            false,
+        );
+        let receipt_for = |code: &str| {
+            let mut feed = Feed::default();
+            feed.operations.insert(
+                Id::new("k"),
+                Operation {
+                    method: corral_protocol::op::OP_SUBMIT.into(),
+                    loading: false,
+                    value: None,
+                    error: Some(ClientError {
+                        code: code.into(),
+                        message: "m".into(),
+                    }),
+                    refusal: None,
+                },
+            );
+            let status = status(&feed, "k").expect("sent");
+            receipt(&feed, &act, &status)
+        };
+        for code in ["deadline_expired", "disconnected"] {
+            let line = receipt_for(code);
+            assert!(line.contains("outcome unknown"), "{code}: {line}");
+            assert!(!line.contains("Failed"), "{code}: {line}");
+        }
+        assert!(receipt_for("offline").contains("Failed"));
+    }
+
+    /// The reply came about a second before the board's update; between them the step button
+    /// offered the same move again and a press sent it twice.
+    #[test]
+    fn a_confirmed_move_stays_under_way_until_the_board_shows_it() {
+        use crate::model::daemon::{Feed, Task, bare_task, task_row};
+        let row = |status| {
+            Task::new(task_row(bare_task(
+                "T-1",
+                "t",
+                status,
+                jiff::Timestamp::UNIX_EPOCH,
+            )))
+        };
+        let act = Act::with_key(
+            Id::new("k"),
+            Op::Move {
+                id: "T-1".into(),
+                status: Status::Ready,
+            },
+            false,
+        );
+        let mut feed = Feed::default();
+        feed.board.apply_batch(1, vec![row(Status::Backlog)], &[]);
+        let from = board_behind(&feed, &act, &ActStatus::Done).expect("board still Backlog");
+        assert_eq!(from, Status::Backlog);
+        assert!(!board_caught_up(&feed, &act.op, from));
+        // A refusal or failure is never under way.
+        assert_eq!(
+            board_behind(&feed, &act, &ActStatus::Failed("x".into())),
+            None
+        );
+        feed.board.apply_batch(1, vec![row(Status::Ready)], &[]);
+        assert!(board_caught_up(&feed, &act.op, from));
+        assert_eq!(board_behind(&feed, &act, &ActStatus::Done), None);
     }
 }

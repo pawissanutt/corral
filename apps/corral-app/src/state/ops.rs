@@ -38,7 +38,10 @@ impl AppState {
     fn already_sent(&self, act: &Act) -> bool {
         let sent = self
             .watching
-            .with_untracked(|watching| watching.values().any(|sent| same(sent, act)));
+            .with_untracked(|watching| watching.values().any(|sent| same(sent, act)))
+            || self
+                .catching_up
+                .with_untracked(|confirmed| confirmed.values().any(|(sent, _)| same(sent, act)));
         if sent {
             self.toast(format!("{} · already sent, waiting for corrald", act.title));
         }
@@ -152,6 +155,34 @@ impl AppState {
     pub fn op_pending(&self, op: &corral_types::Op) -> bool {
         self.watching
             .with(|watching| watching.values().any(|sent| sent.op == *op))
+            || self
+                .catching_up
+                .with(|confirmed| confirmed.values().any(|(sent, _)| sent.op == *op))
+    }
+
+    /// A confirmed move stays under way until the board shows its task outside the status it
+    /// had; the row's next step then is another, or the row is gone.
+    fn settle_catching_up(self) {
+        effect(move || {
+            let caught: Vec<Id> = self.catching_up.with(|confirmed| {
+                self.feed.with(|feed| {
+                    confirmed
+                        .iter()
+                        .filter(|(_, (act, from))| act::board_caught_up(feed, &act.op, *from))
+                        .map(|(key, _)| key.clone())
+                        .collect()
+                })
+            });
+            if !caught.is_empty() {
+                untracked(|| {
+                    self.catching_up.update(|confirmed| {
+                        for key in &caught {
+                            confirmed.remove(key);
+                        }
+                    })
+                });
+            }
+        });
     }
 
     /// Tracked status of an operation this app submitted.
@@ -275,6 +306,7 @@ impl AppState {
     pub(super) fn watch_receipts(self) {
         self.follow_running();
         self.forget_other_namespace();
+        self.settle_catching_up();
         effect(move || {
             let mut watched = self.watching.get();
             // An operation still followed has not settled; its outcome is still to come.
@@ -297,10 +329,25 @@ impl AppState {
                 return;
             }
             untracked(move || {
-                self.watching.update(|watching| {
-                    for (act, _) in &settled {
-                        watching.remove(&act.key);
-                    }
+                let behind: Vec<(Act, corral_types::Status)> = self.feed.with(|feed| {
+                    settled
+                        .iter()
+                        .filter_map(|(act, status)| {
+                            act::board_behind(feed, act, status).map(|from| (act.clone(), from))
+                        })
+                        .collect()
+                });
+                batch(|| {
+                    self.catching_up.update(|confirmed| {
+                        for (act, from) in behind {
+                            confirmed.insert(act.key.clone(), (act, from));
+                        }
+                    });
+                    self.watching.update(|watching| {
+                        for (act, _) in &settled {
+                            watching.remove(&act.key);
+                        }
+                    });
                 });
                 for (act, status) in settled {
                     match status {

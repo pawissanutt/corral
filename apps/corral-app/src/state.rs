@@ -124,6 +124,9 @@ pub struct AppState {
     pub root: Owner,
     /// Operations submitted from here whose receipt has not been shown yet.
     watching: Signal<BTreeMap<Id, Act>>,
+    /// Moves corrald confirmed whose task the board still shows in the status it had, with
+    /// that status: still under way for the step button and the duplicate guard.
+    catching_up: Signal<BTreeMap<Id, (Act, corral_types::Status)>>,
     /// Operations corrald answered `running`, by their submission's key: the id `op.result`
     /// follows until the outcome is in, kept here so a lost reply is asked for again.
     following: Signal<BTreeMap<Id, String>>,
@@ -316,6 +319,7 @@ impl AppState {
             ask_field_error: signal(None),
             root: Owner::current(),
             watching: signal(BTreeMap::new()),
+            catching_up: signal(BTreeMap::new()),
             following: signal(BTreeMap::new()),
             device_ops: signal(BTreeMap::new()),
             sessions: signal(BTreeMap::new()),
@@ -601,6 +605,7 @@ impl AppState {
             // Another source has other operations.
             self.following.set(BTreeMap::new());
             self.watching.set(BTreeMap::new());
+            self.catching_up.set(BTreeMap::new());
             self.refusal.set(None);
             let uploads = self.ask_staged.with_untracked(|staged| {
                 staged
