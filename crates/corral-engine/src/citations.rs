@@ -68,6 +68,22 @@ pub(crate) fn encode_artifact_record(
 }
 
 impl Store {
+    /// The format the catalog recorded from the attached file's path (`markdown` or `other`),
+    /// never derived from the title; none for byte-sourced and older rows.
+    fn artifact_source_format(&self, artifact: &Artifact) -> Result<Option<&'static str>> {
+        let mut lookup = self.connection.prepare_cached(
+            "SELECT json_extract(document, '$.source_format') FROM artifact_catalog WHERE owner=?1 AND ordinal=?2",
+        ).context("prepare artifact source lookup")?;
+        let format: Option<String> = lookup
+            .query_row(params![artifact.task, artifact.id], |row| row.get(0))
+            .context("look up artifact source format")?;
+        Ok(match format.as_deref() {
+            Some("markdown") => Some(ArtifactSource::Markdown.as_str()),
+            Some("other") => Some(ArtifactSource::Other.as_str()),
+            _ => None,
+        })
+    }
+
     fn artifact_is_markdown(&self, artifact: &Artifact) -> Result<Option<bool>> {
         let mut lookup = self.connection.prepare_cached(
             "SELECT json_extract(document, '$.source_format') FROM artifact_catalog WHERE owner=?1 AND ordinal=?2",
@@ -85,6 +101,12 @@ impl Store {
 }
 
 impl Engine {
+    /// The title-independent format hint the catalog recorded for a file-sourced artifact
+    /// (`markdown` or `other`); none when the row carries none.
+    pub fn artifact_source_format(&self, artifact: &Artifact) -> Result<Option<&'static str>> {
+        self.store.artifact_source_format(artifact)
+    }
+
     pub fn artifact_references(&self, text: &str) -> Vec<ArtifactCitation> {
         self.artifact_references_in(&self.store, text)
     }

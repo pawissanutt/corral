@@ -110,16 +110,17 @@ pub(crate) fn html_signature(text: &str) -> bool {
 }
 
 /// What the text is. The display title, and the media type corrald derives from it alone, never
-/// decide Markdown or a page: the served bytes' own signatures do (an HTML start, then Markdown
-/// structure), after the artifact's recorded kind (a diff, a gate or run log). A cited section
-/// is Markdown, as the engine cut it from a Markdown document. A title's `.diff`, `.patch` or
-/// `.log` suffix only colours text that is not Markdown.
+/// decide Markdown or a page. An HTML start in the served bytes makes a page. The catalog's
+/// title-independent format hint (`source_format`, recorded from the attached file's path) makes
+/// Markdown, as does a cited section, which the engine cuts only from Markdown. Otherwise the
+/// artifact's recorded kind (a diff, a gate or run log) decides, then the bytes' own Markdown
+/// structure. A title's `.diff`, `.patch` or `.log` suffix only colours text that is not Markdown.
 fn shape(artifact: &Artifact, page: &ArtifactPage, section: bool) -> Shape {
     let text = original_text(page);
     if text.as_deref().is_some_and(html_signature) {
         return Shape::Html;
     }
-    if section {
+    if section || page.source_format.as_deref() == Some("markdown") {
         return Shape::Markdown;
     }
     match artifact.kind {

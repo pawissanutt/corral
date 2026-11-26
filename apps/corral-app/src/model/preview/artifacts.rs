@@ -194,6 +194,8 @@ pub(super) fn content(feed: &Feed, reference: &str) -> Result<ArtifactPage, Stri
             task: task.into(),
             key: key.unwrap_or_default().to_string(),
             media_type: Some("text/markdown".into()),
+            // Attached from a `.md` file: the catalog records its format from the path.
+            source_format: Some("markdown".into()),
             encoding: ArtifactEncoding::Text,
             content: LIBRARY_NOTES.into(),
             truncated: false,
@@ -241,6 +243,9 @@ pub(super) fn content(feed: &Feed, reference: &str) -> Result<ArtifactPage, Stri
         task: task.into(),
         key: key.unwrap_or_default().to_string(),
         media_type: (!media_type.is_empty()).then_some(media_type),
+        // The sample attaches each paper from a file named as its title; corrald records a
+        // `.md` file's format from that path, never from the title it shows.
+        source_format: row.title.ends_with(".md").then(|| "markdown".to_owned()),
         encoding,
         content,
         truncated: false,

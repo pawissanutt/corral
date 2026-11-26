@@ -68,6 +68,7 @@ fn serve((method, params, tag): Outgoing, content: &[u8], text: bool, page: usiz
                 task: "T-1".into(),
                 key: "2".into(),
                 media_type: None,
+                source_format: None,
                 encoding: if utf8 {
                     ArtifactEncoding::Text
                 } else {

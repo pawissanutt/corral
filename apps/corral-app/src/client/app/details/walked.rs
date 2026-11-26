@@ -407,6 +407,7 @@ mod tests {
                     task: "T-1".into(),
                     key: "report".into(),
                     media_type: None,
+                    source_format: None,
                     encoding: ArtifactEncoding::Base64,
                     content: content.into(),
                     truncated: false,

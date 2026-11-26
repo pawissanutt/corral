@@ -311,11 +311,24 @@ fn content_served(feed: &mut Feed, artifact: &Artifact, text: &str, truncated: b
 
 /// [`content_served`] under the media type corrald named, which it derives from the title.
 fn served_as(feed: &mut Feed, artifact: &Artifact, media: &str, text: &str, truncated: bool) {
+    served_with(feed, artifact, media, None, text, truncated);
+}
+
+/// [`served_as`] with the catalog's format hint, recorded from the attached file's path.
+fn served_with(
+    feed: &mut Feed,
+    artifact: &Artifact,
+    media: &str,
+    source_format: Option<&str>,
+    text: &str,
+    truncated: bool,
+) {
     let target = content_target(&artifact.reference());
     let body = DetailBody::Artifact(corral_protocol::detail::ArtifactPage {
         task: artifact.task.clone(),
         key: artifact.id.to_string(),
         media_type: Some(media.into()),
+        source_format: source_format.map(str::to_owned),
         encoding: corral_protocol::detail::ArtifactEncoding::Text,
         content: text.into(),
         truncated,
@@ -561,6 +574,35 @@ fn a_titled_markdown_artifact_renders_its_diagrams_from_every_route() {
             "{title:?}: a script's `#` comments are not Markdown: {body:?}"
         );
     }
+    // A Markdown file of a heading and plain prose, under a custom title: the catalog's format
+    // hint, recorded from its `.md` path, renders it; the same bytes with no hint are read by
+    // their structure alone, where a lone `#` line may be a script's comment, so they stay text.
+    let prose = "# Review\n\nThe build passed.\n";
+    for (id, (title, media)) in [("Review notes", ""), ("Review notes.txt", "text/plain")]
+        .into_iter()
+        .enumerate()
+    {
+        let id = 40 + 2 * id as u32;
+        let file = artifact("T-9", id, ArtifactKind::Report, title, 5);
+        served_with(&mut feed, &file, media, Some("markdown"), prose, false);
+        let Body::Markdown(words) = content(&feed, &file, Form::Desktop, true).body else {
+            panic!("{title:?}: a Markdown file renders its heading");
+        };
+        assert_eq!(words, prose);
+        let bytes = artifact("T-9", id + 1, ArtifactKind::Report, title, 5);
+        served_with(&mut feed, &bytes, media, None, prose, false);
+        assert!(matches!(
+            content(&feed, &bytes, Form::Desktop, true).body,
+            Body::Text(_)
+        ));
+    }
+    // A file recorded as another format is still Markdown by its structure (a closed fence).
+    let other = artifact("T-9", 50, ArtifactKind::Report, "Build pipeline", 5);
+    served_with(&mut feed, &other, "", Some("other"), pipeline, false);
+    assert!(matches!(
+        content(&feed, &other, Form::Desktop, true).body,
+        Body::Markdown(_)
+    ));
     // A recorded log stays a log even when a line looks like Markdown structure.
     let gate = artifact("T-9", 30, ArtifactKind::Gate, "Gate attempt", 4);
     served_as(&mut feed, &gate, "", "# gate\n- step: pass\n", false);

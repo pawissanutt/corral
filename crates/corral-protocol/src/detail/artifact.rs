@@ -9,7 +9,12 @@ pub struct ArtifactPage {
     pub task: String,
     /// Catalog key within that owner, not a filesystem path.
     pub key: String,
+    /// Derived from the artifact's title alone; not evidence of its format.
     pub media_type: Option<String>,
+    /// The format the catalog recorded from the attached file's path, independent of the title:
+    /// `markdown` or `other`. Absent for byte-sourced and older rows, and from older daemons.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_format: Option<String>,
     pub encoding: ArtifactEncoding,
     /// UTF-8 text or one independently base64-encoded byte chunk.
     /// The complete JSON-RPC reply remains within APP_CONTROL_MAX.

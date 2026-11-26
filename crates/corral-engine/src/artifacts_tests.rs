@@ -211,6 +211,15 @@ fn markdown_sections_use_the_attached_source_format_after_reopen() {
         .unwrap_err()
         .to_string();
     assert!(error.contains("not Markdown"), "{error}");
+    // The served hint is the attachment's, whatever its display title says.
+    assert_eq!(
+        engine.artifact_source_format(&design).unwrap(),
+        Some("markdown")
+    );
+    assert_eq!(
+        engine.artifact_source_format(&settings).unwrap(),
+        Some("other")
+    );
 
     let path = root.path().join("design.md");
     for _ in 0..2 {

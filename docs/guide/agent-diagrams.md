@@ -59,12 +59,15 @@ stays readable and points to its successor.
 ## What the app draws
 
 The app never decides the format from the title (or the media type corrald derives from it).
-After the artifact's recorded kind (a `diff`, `gate` or `log` artifact keeps that view), it reads
-the content: within its first 64 KiB, a closed code fence, a table's delimiter row, or a leading
-heading followed by a list item, link, quote or `**strong**` text makes it Markdown. The same
-bytes therefore render the same under `Build pipeline`, `Build pipeline v1.0rc1` or
-`pipeline.txt`. A lone leading `# line` is not enough, so a script's comments stay text. A
-`mermaid` fence is always a closed fence, so a diagram report always qualifies.
+When `artifact add` attaches a file, the catalog records its format from the file's path: a
+`.md`/`.markdown` file is Markdown under any `--title`, so an ordinary note of a heading and
+prose renders. Otherwise the artifact's recorded kind decides first (a `diff`, `gate` or `log`
+artifact keeps that view), then the content: within its first 64 KiB, a closed code fence, a
+table's delimiter row, or a leading heading followed by a list item, link, quote or
+`**strong**` text makes it Markdown. Those bytes render the same under `Build pipeline`,
+`Build pipeline v1.0rc1` or `pipeline.txt`. Without the file hint a lone leading `# line` is not
+enough, so a script's comments stay text. A `mermaid` fence is always a closed fence, so a
+diagram report always qualifies; attaching it from a `.md` file is still the surest path.
 
 On desktop and web each `mermaid` fence is drawn on the app's diagram canvas:
 

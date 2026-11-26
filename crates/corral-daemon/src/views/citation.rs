@@ -139,6 +139,7 @@ pub(super) fn artifact(
     let Some(section) = cited_ref.and_then(Reference::section) else {
         let content = ArtifactSource {
             media_type: media_type(&artifact.title),
+            source_format: engine.artifact_source_format(&artifact)?,
             text: None,
             fingerprint: fingerprint(&(&query.target, &artifact))?,
             bytes: artifact.bytes,
@@ -150,6 +151,8 @@ pub(super) fn artifact(
     let range = section_range(engine, &artifact, section)?;
     let content = ArtifactSource {
         media_type: Some("text/markdown"),
+        // The engine cuts sections only from Markdown.
+        source_format: Some("markdown"),
         // The engine read the source as UTF-8 without NULs to find the section.
         text: Some(true),
         fingerprint: fingerprint(&(&query.target, &artifact, range.start, range.end))?,

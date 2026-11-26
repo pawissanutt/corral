@@ -143,6 +143,14 @@
             "type": "string"
           },
           "media_type": {
+            "description": "Derived from the artifact's title alone; not evidence of its format.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source_format": {
+            "description": "The format the catalog recorded from the attached file's path, independent of the title:\n`markdown` or `other`. Absent for byte-sourced and older rows, and from older daemons.",
             "type": [
               "string",
               "null"

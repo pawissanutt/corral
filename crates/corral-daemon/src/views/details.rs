@@ -608,6 +608,8 @@ pub(super) fn paginate(body: &mut DetailBody, offset: usize) -> Result<Option<us
 
 pub(super) struct ArtifactSource<'a> {
     pub media_type: Option<&'a str>,
+    /// The catalog's title-independent format hint (`markdown`, `other`), when it has one.
+    pub source_format: Option<&'a str>,
     /// Whether the content is text, when the caller already knows (a cited section the
     /// engine read as UTF-8 without NULs); otherwise the first page inspects it.
     pub text: Option<bool>,
@@ -625,6 +627,7 @@ pub(super) fn artifact_page(
 ) -> Result<DetailReply> {
     let ArtifactSource {
         media_type,
+        source_format,
         text: known,
         fingerprint,
         bytes: total,
@@ -691,6 +694,7 @@ pub(super) fn artifact_page(
         task,
         key,
         media_type: media_type.map(str::to_owned),
+        source_format: source_format.map(str::to_owned),
         encoding,
         content,
         truncated,
@@ -792,6 +796,7 @@ mod tests {
             };
             let source = ArtifactSource {
                 media_type: None,
+                source_format: None,
                 text: None,
                 fingerprint: "f".into(),
                 bytes: blob.len() as u64,

@@ -100,6 +100,7 @@ pub(super) fn detail(
                 file,
                 ArtifactSource {
                     media_type: None,
+                    source_format: None,
                     text: None,
                     fingerprint: fingerprint(&query.target)?,
                     bytes,
