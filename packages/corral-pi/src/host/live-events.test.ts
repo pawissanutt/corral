@@ -68,6 +68,27 @@ test("a lagging live reader gets a gap marker instead of silent loss", () => {
   expect(next.more).toBeFalse();
 });
 
+// A reader that joined a long reply got only the ring's last chunks, at offsets it could not place.
+test("a reader behind the ring is told where the open turn is and what was written", () => {
+  const live = new LiveEvents(2);
+  start(live);
+  for (const text of ["one ", "two ", "three"]) delta(live, text);
+  expect(live.since(0, EVENT_PAGE_BYTES).open).toEqual({
+    turn: 7, message: 1, ended: false, text_offset: 0, text: "one two three", thinking_offset: 0, thinking: "",
+  });
+  expect(live.since(live.events.last, EVENT_PAGE_BYTES).open).toBeUndefined();
+  delta(live, "é".repeat(20_000));
+  const long = live.since(0, EVENT_PAGE_BYTES);
+  expect(long.open!.text_offset + Buffer.byteLength(long.open!.text)).toBe(13 + 40_000);
+  expect(long.open!.text).toMatch(/^é+$/);
+  expect(Buffer.byteLength(JSON.stringify(long))).toBeLessThanOrEqual(EVENT_PAGE_BYTES);
+  live.observe({ type: "message_end", message }, 7);
+  expect(live.since(0, EVENT_PAGE_BYTES).open).toMatchObject({ message: 1, ended: true, text: "" });
+  live.observe({ type: "turn_end", message, toolResults: [] }, 7);
+  live.observe({ type: "agent_settled", aborted: false }, 7);
+  expect(live.since(0, EVENT_PAGE_BYTES).open).toBeUndefined();
+});
+
 test("a completing live event never precedes its session-file entry", () => {
   const live = new LiveEvents();
   start(live);

@@ -46,12 +46,38 @@ export type { SessionFleet } from "./remote/fleet.ts";
 const STATE_INTERVAL_MS = 250;
 const NOTICE_MS = 8_000;
 const PAGE_BYTES = 56 * 1024;
+// What the host keeps of the message being written for a reader that joins it late.
+const OPEN_KEEP_BYTES = 32 * 1024;
+const OPEN_TAIL_BYTES = 8 * 1024;
+const OPEN_BYTES = 24 * 1024;
+
+/** Where the open turn is, for a reader whose cursor fell out of the ring. */
+export interface OpenTurn {
+  readonly turn: number;
+  /** Ordinal of the turn's latest assistant message; 0 before the first. */
+  readonly message: number;
+  readonly ended: boolean;
+  readonly text_offset: number;
+  readonly text: string;
+  readonly thinking_offset: number;
+  readonly thinking: string;
+}
+
+/** The last `limit` bytes of `bytes` from a character boundary, and the bytes before them. */
+function tail(bytes: Buffer, limit: number): { text: string; skipped: number } {
+  let start = Math.max(0, bytes.length - limit);
+  while (start < bytes.length && ((bytes[start] ?? 0) & 0xc0) === 0x80) start++;
+  return { text: bytes.subarray(start).toString("utf8"), skipped: start };
+}
 
 export class LiveEvents {
   readonly events: EventLog;
   private message = 0;
   private textOffset = 0;
   private thinkingOffset = 0;
+  private turn: number | undefined;
+  private messageEnded = true;
+  private written = { live_text: Buffer.alloc(0), live_thinking: Buffer.alloc(0) };
   private error: string | undefined;
   private readonly toolCompletions: Record<string, unknown>[] = [];
   private awaitingMessagePersistence = false;
@@ -175,12 +201,28 @@ export class LiveEvents {
     }
   }
 
-  since(seq: number, maxBytes: number): EventPage & { fleet?: SessionFleet; state?: SessionState } {
+  /** The open turn as of the latest event: a late reader cannot rebuild it from the ring. */
+  private open(): OpenTurn | undefined {
+    if (this.turn === undefined) return undefined;
+    for (let limit = OPEN_TAIL_BYTES; ; limit >>= 1) {
+      const text = tail(this.written.live_text, this.messageEnded ? 0 : limit);
+      const thinking = tail(this.written.live_thinking, this.messageEnded ? 0 : limit);
+      const open = { turn: this.turn, message: this.message, ended: this.messageEnded,
+        text_offset: this.textOffset - this.written.live_text.length + text.skipped, text: text.text,
+        thinking_offset: this.thinkingOffset - this.written.live_thinking.length + thinking.skipped,
+        thinking: thinking.text };
+      if (limit === 0 || Buffer.byteLength(JSON.stringify(open)) <= OPEN_BYTES) return open;
+    }
+  }
+
+  since(seq: number, maxBytes: number): EventPage & { fleet?: SessionFleet; state?: SessionState; open?: OpenTurn } {
     if (this.stateTimer && performance.now() >= this.sampledAt + STATE_INTERVAL_MS) this.refreshState();
     const initial = this.events.since(seq, 0, 1);
     const fleet = initial.gap || seq < this.fleetSeq ? this.fleet : undefined;
     const state = initial.gap || seq < this.stateSeq ? this.state : undefined;
-    const budget = Math.min(maxBytes, PAGE_BYTES) - (fleet ? this.fleetBytes : 0) - (state?.bytes ?? 0) - 256;
+    const open = initial.gap ? this.open() : undefined;
+    const budget = Math.min(maxBytes, PAGE_BYTES) - (fleet ? this.fleetBytes : 0) - (state?.bytes ?? 0) - 256
+      - (open ? Buffer.byteLength(JSON.stringify(open)) : 0);
     const page = this.events.since(seq, budget, 32);
     // Older owner prompts may carry a full question larger than a live event. Preserve its identity
     // and status so a reader can reread the canonical card; keep both replacements in the page.
@@ -189,7 +231,8 @@ export class LiveEvents {
       const { prompts: _prompts, ...brief } = event;
       return { ...brief, omitted: "event_too_large" };
     });
-    return { ...page, events, ...(fleet ? { fleet } : {}), ...(state ? { state: state.state } : {}) };
+    return { ...page, events, ...(fleet ? { fleet } : {}), ...(state ? { state: state.state } : {}),
+      ...(open ? { open } : {}) };
   }
 
   /** Called after HostSession updates its turn sequence for this same upstream event. */
@@ -199,6 +242,9 @@ export class LiveEvents {
         this.message = 0;
         this.textOffset = 0;
         this.thinkingOffset = 0;
+        this.turn = turn;
+        this.messageEnded = true;
+        this.written = { live_text: Buffer.alloc(0), live_thinking: Buffer.alloc(0) };
         this.error = undefined;
         this.toolCompletions.length = 0;
         this.awaitingMessagePersistence = false;
@@ -211,6 +257,7 @@ export class LiveEvents {
         this.stateChanged();
         // Settlement also runs after a failed message append; that is not a replay barrier.
         if (this.awaitingMessagePersistence) break;
+        this.turn = undefined;
         this.events.emit("live_turn", { turn, state: "ended", aborted: event.aborted,
           ...(this.error ? { error: this.error } : {}) });
         break;
@@ -219,6 +266,8 @@ export class LiveEvents {
         this.message++;
         this.textOffset = 0;
         this.thinkingOffset = 0;
+        this.messageEnded = false;
+        this.written = { live_text: Buffer.alloc(0), live_thinking: Buffer.alloc(0) };
         this.error = undefined;
         break;
       case "message_update": {
@@ -230,6 +279,10 @@ export class LiveEvents {
       case "message_end":
         if (["user", "assistant", "toolResult", "system"].includes(event.message.role)) {
           this.awaitingMessagePersistence = true;
+        }
+        if (event.message.role === "assistant") {
+          this.messageEnded = true;
+          this.written = { live_text: Buffer.alloc(0), live_thinking: Buffer.alloc(0) };
         }
         if (event.message.role === "assistant" && event.message.stopReason === "error") {
           this.error = utf8Prefix(event.message.errorMessage ?? "provider_error", 512);
@@ -288,5 +341,9 @@ export class LiveEvents {
       else this.thinkingOffset += end - start;
       start = end;
     }
+    // The bytes as emitted, so a tail's offset is the one its chunks carried.
+    const kept = Buffer.concat([this.written[kind], bytes]);
+    this.written[kind] = kept.length > 2 * OPEN_KEEP_BYTES
+      ? Buffer.from(kept.subarray(kept.length - OPEN_KEEP_BYTES)) : kept;
   }
 }
