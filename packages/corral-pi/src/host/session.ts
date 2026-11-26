@@ -375,6 +375,7 @@ export class HostSession {
   private readonly modelFavorites: WorkspaceModelFavorites;
   private readonly buildModelsPath: string | undefined;
   private remoteJobSample: ReturnType<typeof setTimeout> | undefined;
+  private finishOfferScheduled = false;
   readonly dialogs: RemoteDialogs;
   readonly panels: NativePanels | undefined;
   private readonly unsubscribePanels: (() => void) | undefined;
@@ -604,6 +605,8 @@ export class HostSession {
         if (result.disposition === "rejected") throw new Error(`Fleet parent delivery rejected: ${result.reason}`);
       },
       shellRefusal: options.modules.role.shellRefusal, changed: () => this.fleetChanged(), retained,
+      finishReady: source => this.remoteActionsReady && !this.open && this.session.isIdle && !this.admissions.size
+        && !this.session.agent.getQueuedMessages().length && (source === "owner" || !this.currentWaits().some(wait => wait.kind !== "owner")),
       ...(childPolicy ? { fallbackPolicy: childPolicy } : {}),
       onChildFallback: ({ child, from, model }) => {
         options.events.emit("model_fallback", { child, from, model, text: `Quota exhausted on ${from}; continuing on ${model}` });
@@ -725,7 +728,7 @@ export class HostSession {
         else this.monitorFacts.delete(fact.key);
         options.sessionManager.appendCustomEntry(MONITOR_ENTRY, fact);
       },
-      changed: () => { this.liveEvents.stateChanged(); this.panels?.refresh(); },
+      changed: () => { this.scheduleFinishOffer(); this.liveEvents.stateChanged(); this.panels?.refresh(); },
       settled: result => options.events.emit("command_settled", result),
       canNotify: () => !this.open,
       noticeSeen: key => this.commandNoticeSeen(key),
@@ -1696,6 +1699,8 @@ export class HostSession {
           const queued = this.queuedInputFacts.get(event.message);
           const tagged = queued ?? this.startedInputFacts;
           if (!queued) this.startedInputFacts = undefined;
+          // A steer can supersede Finish without starting another parent run.
+          if (tagged?.origin === "owner" || tagged?.origin === "pane") this.buildControls?.supersedeFinishOffer();
           // Even a queued owner or ordinary auto message ends the trusted scope.
           this.inAutomation = tagged !== undefined && this.automationInputs.delete(tagged);
           // The owner's own message answers a pending plan review as feedback. Like the kickoff, that is a fact
@@ -1714,6 +1719,7 @@ export class HostSession {
         }
       }
       if (event.type === "agent_start") {
+        this.buildControls?.supersedeFinishOffer();
         // A retry or a pre-settlement continuation can start another run before agent_settled.
         if (this.open) this.turnFacts.finish(this.turn);
         this.turnStarted();
@@ -1728,11 +1734,16 @@ export class HostSession {
         this.planMode?.turnEnded();
         for (const closed of this.closeWaiters.splice(0)) closed();
         this.remoteBuild.refreshExit();
+        if (event.aborted || this.turnError) this.buildControls?.supersedeFinishOffer();
+        else this.scheduleFinishOffer();
+      } else if (event.type === "compaction_end") {
+        this.scheduleFinishOffer();
       } else if (event.type === "session_info_changed") {
         // InteractiveMode /name emits this after appending session_info. It is not a prompt.
         this.syncBuildTitle(session);
       } else if (event.type === "queue_update") {
         this.options.events.emit("queue", { steering: event.steering.length, follow_up: event.followUp.length });
+        this.scheduleFinishOffer();
       } else if (event.type === "message_end" && event.message.role === "assistant" && event.message.stopReason === "error") {
         const message = event.message.errorMessage ?? "";
         const provider = isProviderId(event.message.provider) ? event.message.provider : this.provider;
@@ -2179,6 +2190,7 @@ export class HostSession {
     const settle = (result: SubmitResult) => {
       this.admissions.delete(queueTag);
       resolve(result);
+      this.scheduleFinishOffer();
     };
     const refuse = (message: string) => settle({ disposition: "rejected",
       reason: /already processing/i.test(message) ? "busy" : message.slice(0, 256) });
@@ -2379,8 +2391,20 @@ export class HostSession {
     return index < 0 ? undefined : index;
   }
 
+  private scheduleFinishOffer(): void {
+    const build = this.buildControls;
+    if (!build?.hasPendingFinishOffer() || this.finishOfferScheduled || this.closing) return;
+    this.finishOfferScheduled = true;
+    // Leave Pi's settlement callbacks and runnable delivery microtasks before testing readiness.
+    setImmediate(() => {
+      this.finishOfferScheduled = false;
+      void build.publishFinishOffer();
+    });
+  }
+
   private fleetChanged(): void {
     this.remoteFleetDirty = true;
+    this.scheduleFinishOffer();
     this.liveEvents.stateChanged();
     this.panels?.refresh();
   }

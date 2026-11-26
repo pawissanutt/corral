@@ -32,6 +32,8 @@ export interface BuildExitControl extends ExitControl {
   gateProgress(candidate: PreparedLanding, event: GateProgressEvent): void;
   /** Display a choice without preparing. With null, offer no candidate even if an old pin exists. */
   open(candidate?: PreparedLanding | null, detail?: string): void;
+  /** Withdraw an unanswered choice when the parent resumes working. */
+  withdraw(): void;
   close(): void;
   busy(): boolean;
   choiceBusy(): boolean;
@@ -74,6 +76,7 @@ export function createExit(options: {
   let offerDetail: string | undefined;
   let preparing: Promise<PreparedLanding | undefined> | undefined;
   let choiceRevision = 0;
+  let withdrawal = 0;
   let inFlight: { readonly choice: ExitChoice; readonly authorization?: string; readonly result: Promise<ExitState> } | undefined;
   let steps: LandTracker | undefined;
   let trackedPin: Pin | undefined;
@@ -204,6 +207,8 @@ export function createExit(options: {
   async function prepare(): Promise<PreparedLanding | undefined> {
     const previousPhase = state.phase;
     const previousRecord = state.record;
+    const startedAtWithdrawal = withdrawal;
+    const restorePhase = () => previousPhase === "pending" && withdrawal !== startedAtWithdrawal ? "none" : previousPhase;
     let status: LandCandidate = { state: "preparing" };
     let rebasing = false;
     let tracker: LandTracker | undefined;
@@ -288,7 +293,7 @@ export function createExit(options: {
         : `Rebased ${short(source)} to ${short(head)} on ${target.name} (${short(base)}).${carriedRound ? ` Carried approval from review round ${carriedRound}.` : ""}`;
       candidateStatus = { ...pinStatus(pin), detail };
       if (head !== source) journal.timeline("land", detail);
-      if (rebasing) update(previousPhase, detail, previousRecord);
+      if (rebasing) update(restorePhase(), detail, previousRecord);
       return pin.candidate;
     } catch (error) {
       prepared = undefined;
@@ -298,7 +303,7 @@ export function createExit(options: {
       tracker?.fail(preparationDetail);
       if (rebasing) {
         journal.timeline("land", `Preparation stopped: ${preparationDetail}`);
-        update(previousPhase === "pending" ? "pending" : "failed", preparationDetail, previousRecord);
+        update(restorePhase() === "pending" ? "pending" : "failed", preparationDetail, previousRecord);
       }
       return undefined;
     }
@@ -515,6 +520,17 @@ export function createExit(options: {
       if (!(pin && trackedPin === pin) && !previouslyTracked && !(candidateStatus?.state === "conflicts")) { steps = undefined; trackedPin = undefined; }
       update("pending", detail ?? "Choose Keep, Land or Iterate.");
       void getSummary().catch(() => { /* A summary failure cannot prevent Keep or Iterate. */ });
+    },
+    withdraw() {
+      if (closed || inFlight) return;
+      ++withdrawal;
+      offered = undefined;
+      offerDetail = undefined;
+      if (gateFlight?.phase === "pending") gateFlight = { ...gateFlight, phase: "none" };
+      if (state.phase === "pending") {
+        ++summaryEpoch;
+        update("none", "The parent resumed work; the previous exit choice is no longer offered.");
+      }
     },
     close() { closed = true; listeners.clear(); },
   };

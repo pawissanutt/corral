@@ -85,6 +85,7 @@ function harness(options: { readonly remote?: boolean } = {}) {
     },
     subscribe: listener => { exitListeners.add(listener); return () => { exitListeners.delete(listener); }; },
     open: () => { s.exit = { phase: "pending" }; emit(); },
+    withdraw: () => { if (s.exit.phase === "pending") { s.exit = { phase: "none" }; emit(); } },
     close: () => {},
     busy: () => false,
     summarySnapshot: () => s.summary,

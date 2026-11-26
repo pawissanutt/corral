@@ -153,6 +153,9 @@ when using Git, rerun checks and request a new review when the candidate changes
 
 Use build_finish with a real title of 1 to 120 characters describing what was built, not
 a slug or ID; optionally include a summary. Explain the candidate and evidence first.
+Call it when you are ready to finish or need the owner's exit decision to unblock review.
+The choice appears after the turn and pending work settle. If a new turn supersedes
+it, or you change the prepared candidate, call build_finish again when ready.
 <!-- corral-only -->
 Prepare before asking the owner to Land. build_verify and build_review prepare the candidate
 against the current integration tip before collecting evidence. Finish brings the exact

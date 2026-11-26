@@ -12,7 +12,8 @@ import { checkSource, commit, sourceBranch } from "./prepare.ts";
 import { reviewCoversCandidate } from "./review-evidence.ts";
 import type { FleetRuntime } from "../extensions/fleet/runtime.ts";
 import { TASK_DIFFICULTIES, TASK_SIZES, type BoardPlan, type BuildContext, type PreparedLanding as Candidate } from "./types.ts";
-type FinishReadiness = { candidate?: Candidate | null; nextAction?: string };
+type FinishReadiness = { candidate?: Candidate | null; nextAction?: string; deferred?: true };
+export type FinishSource = "agent" | "owner";
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 const failure = (error: unknown) => ({ content: [{ type: "text" as const, text: message(error) }], details: {}, isError: true });
 
@@ -36,9 +37,11 @@ export function buildFinishTool(exit: BuildExitControl, journal: BuildJournal,
         signal?.throwIfAborted();
         journal.finish(params.title, params.summary);
         const readiness = await finish(call, signal);
-        const text = readiness.nextAction
-          ? `Keep and Iterate are still available. ${readiness.nextAction} Do not choose an exit yourself.`
-          : "The owner now chooses from the available exits. Do not choose an exit yourself.";
+        const text = readiness.deferred
+          ? `The exit choice is staged, not shown. It opens after this turn and pending work settle if the offer is still current. A subsequent turn needs a fresh build_finish. ${readiness.nextAction ?? ""} Do not choose an exit yourself.`
+          : readiness.nextAction
+            ? `Keep and Iterate are still available. ${readiness.nextAction} Do not choose an exit yourself.`
+            : "The owner now chooses from the available exits. Do not choose an exit yourself.";
         return { content: [{ type: "text", text: text + await refresh(journal) }], details: readiness };
       } catch (error) { return failure(error); }
       finally { finishing = false; }
@@ -62,8 +65,8 @@ const openFindings = (review: RecordReview) => review.findings.some(finding =>
 
 /** One round pins the worktree until its gate, reviewer, and any concurrent finish call settle. */
 export function createBuildEvidence(options: { context: BuildContext; git: Run; fleet: Pick<FleetRuntime, "snapshot" | "profiles" | "start" | "wait" | "cancel">;
-  journal: BuildJournal; exit: BuildExitControl; changed: () => void }) {
-  const { context, git, fleet, journal, exit } = options;
+  journal: BuildJournal; exit: BuildExitControl; changed: () => void; finishReady?: (source: FinishSource) => boolean }) {
+  const { context, git, fleet, journal, exit, finishReady } = options;
   const { session } = context;
   const trustedCode = session.trustedCode === true;
   const landingProject = !trustedCode && !session.bare && !!session.workspaceRoot && !!session.project && context.settings.exitPolicy !== "none";
@@ -72,6 +75,9 @@ export function createBuildEvidence(options: { context: BuildContext; git: Run; 
   const pending = new Set<Promise<unknown>>();
   let round: EvidenceRound | undefined;
   let finishing: Promise<FinishReadiness> | undefined;
+  let deferred: { readiness: FinishReadiness; revision: number; signal?: AbortSignal } | undefined;
+  let offerEpoch = 0;
+  let publishing = false;
   let reviewNumber = Math.max(0, ...journal.record().reviews.map(review => Number(review.reviewer.replace(/^review-/, "")) || 0));
   function changed() {
     try { options.changed(); } catch { /* Observers do not own evidence execution. */ }
@@ -258,17 +264,54 @@ export function createBuildEvidence(options: { context: BuildContext; git: Run; 
     });
   }
 
-  function finish(call: string, signal?: AbortSignal): Promise<FinishReadiness> {
+  function discardFinishOffer(): void {
+    ++offerEpoch;
+    deferred = undefined;
+  }
+
+  function finish(call: string, signal?: AbortSignal, source: FinishSource = "owner"): Promise<FinishReadiness> {
     if (finishing) return finishing;
     if (exit.choiceBusy()) return Promise.reject(new Error("An owner exit is already running."));
-    const revision = exit.choiceRevision();
-    return finishing = prepareFinish(call, signal).then(readiness => {
+    if (source === "owner" && finishReady && !finishReady(source)) return Promise.reject(new Error("Wait for the parent and its queued input to finish."));
+    discardFinishOffer();
+    const epoch = offerEpoch, revision = exit.choiceRevision();
+    return finishing = prepareFinish(call, signal).then((readiness): FinishReadiness => {
       lifetime.signal.throwIfAborted();
       signal?.throwIfAborted();
-      if (exit.choiceRevision() !== revision) throw new Error("The owner chose an exit while Finish was running. No new exit choice was opened.");
+      if (offerEpoch !== epoch || exit.choiceRevision() !== revision) throw new Error("The session moved on while Finish was running. No new exit choice was opened.");
+      if (source === "agent" && finishReady) {
+        deferred = { readiness, revision, signal };
+        changed();
+        return { ...readiness, deferred: true };
+      }
+      if (source === "owner" && finishReady && !finishReady(source)) throw new Error("Work resumed while Finish was running. No new exit choice was opened.");
       exit.open(readiness.candidate, readiness.nextAction);
       return readiness;
     }).finally(() => { finishing = undefined; });
+  }
+
+  async function publishFinishOffer(): Promise<void> {
+    const offer = deferred;
+    if (!offer || publishing || !finishReady?.("agent") || exit.busy() || round?.working) return;
+    const current = () => !offer.signal?.aborted && !lifetime.signal.aborted && offer.revision === exit.choiceRevision();
+    try {
+      publishing = true;
+      if (!current()) { deferred = undefined; return; }
+      // The agent may have done more work after the tool returned. Never publish a stale pin.
+      if (offer.readiness.candidate) await exit.checkPrepared(offer.readiness.candidate);
+      if (deferred !== offer) return;
+      if (!current()) { deferred = undefined; return; }
+      if (!finishReady("agent") || exit.busy() || round?.working) return;
+      deferred = undefined;
+      exit.open(offer.readiness.candidate, offer.readiness.nextAction);
+    } catch {
+      // checkPrepared already exposes the staleness reason. Refreshing requires a new Finish.
+      if (deferred === offer) deferred = undefined;
+    } finally {
+      publishing = false;
+      // A newer Finish may have arrived while the older pin was being checked.
+      if (deferred && deferred !== offer) changed();
+    }
   }
 
   const tools: ToolDefinition[] = [{
@@ -332,8 +375,10 @@ export function createBuildEvidence(options: { context: BuildContext; git: Run; 
   return {
     tools: session.bare ? tools.filter(tool => tool.name !== "build_verify") : tools,
     finish,
+    publishFinishOffer, discardFinishOffer, hasPendingFinishOffer: () => deferred !== undefined,
     busy: () => !!round?.working,
     async close() {
+      discardFinishOffer();
       lifetime.abort(new Error("The build session closed while evidence was being collected."));
       await Promise.allSettled(pending);
     },

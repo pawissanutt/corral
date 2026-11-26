@@ -155,8 +155,10 @@ not a security boundary.
 
 ## Finish
 
-Choose **Finish** in the app, or use `/finish` in the terminal. The agent can
-offer the choices, but you decide:
+Choose **Finish** in the app, or use `/finish` in the terminal. An agent's Finish
+prepares the choice during its turn but only presents it after that turn and pending
+work settle. If a new turn starts first or the prepared candidate changes, the
+agent needs to offer Finish again. You decide:
 
 - **Keep** records the outcome and keeps the worktree and branch.
 - **Iterate** returns to the session to continue working.

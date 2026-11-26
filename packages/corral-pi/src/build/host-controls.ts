@@ -9,7 +9,7 @@ import { createBoard } from "./board.ts";
 import { engineRun, gitRun, type Run } from "./corral-cli.ts";
 import { createExit, type BuildExitControl } from "./exit.ts";
 import { loadSession, saveSession } from "./session-store.ts";
-import { boardPlanTool, createBuildEvidence, buildFinishTool } from "./tools.ts";
+import { boardPlanTool, createBuildEvidence, buildFinishTool, type FinishSource } from "./tools.ts";
 import { createJournal, type BuildJournal } from "./record.ts";
 import type { BuildRecord } from "./record-types.ts";
 import { LIVE_CHILD_STATES, type BoardControl, type BoardPlan, type BuildContext, type BuildPanelState, type BuildUi, type ChildSpec, type FleetControl } from "./types.ts";
@@ -25,6 +25,8 @@ export interface BuildControlsOptions extends Omit<FleetOptions, "models" | "app
   readonly git?: Run;
   /** Ends the parent's agent_wait when input is queued for its next turn boundary. */
   readonly wake?: InputWake;
+  /** The parent must be idle for either source; only automatic offers wait for detached work. */
+  readonly finishReady?: (source: FinishSource) => boolean;
 }
 
 export interface BuildControls {
@@ -37,6 +39,9 @@ export interface BuildControls {
   panelState(): BuildPanelState;
   setSessionTitle(name: string | undefined): void;
   noteOwnerInput(text: string): void;
+  hasPendingFinishOffer(): boolean;
+  publishFinishOffer(): Promise<void>;
+  supersedeFinishOffer(): void;
   close(): Promise<void>;
 }
 
@@ -100,9 +105,9 @@ export function createBuildControls(options: BuildControlsOptions): BuildControl
     if (pause) return { content: [{ type: "text", text: pause }], details: {}, isError: true };
     return start(...args);
   };
-  const evidence = createBuildEvidence({ context, git, fleet, journal: buildJournal, exit, changed: options.changed });
+  const evidence = createBuildEvidence({ context, git, fleet, journal: buildJournal, exit, changed: options.changed, finishReady: options.finishReady });
   const tools = [...fleetDefinitions, ...(!trustedCode || workspaceProject ? evidence.tools : []),
-    ...(!trustedCode ? [buildFinishTool(exit, buildJournal, evidence.finish)] : []),
+    ...(!trustedCode ? [buildFinishTool(exit, buildJournal, (call, signal) => evidence.finish(call, signal, "agent"))] : []),
     ...(board ? [boardPlanTool(plan => board.propose(plan), () => {
       if (!session.workspaceRoot) return "This session is outside a corral workspace.";
       if (!session.project) return "This session has no configured corral project.";
@@ -133,6 +138,12 @@ export function createBuildControls(options: BuildControlsOptions): BuildControl
     fleet, exit, board, tools, ui,
     liveRecord: buildJournal.liveRecord,
     setSessionTitle: buildJournal.setSessionTitle,
+    hasPendingFinishOffer: evidence.hasPendingFinishOffer,
+    publishFinishOffer: evidence.publishFinishOffer,
+    supersedeFinishOffer() {
+      evidence.discardFinishOffer();
+      exit.withdraw();
+    },
     panelState: () => ({ session, settings: context.settings, fleet: fleet.snapshot(), target, exit: exit.state(), record: buildJournal.record(), board: board?.tasks() ?? [] }),
     noteOwnerInput(text) {
       try { buildJournal.noteOwnerInput(text); }

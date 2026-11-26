@@ -13,10 +13,14 @@ test("turn reasons distinguish completion, waits, owner stop, failure, length an
   expect(turnReason({ ownerStopped: true, stopReason: "error", continuationStopped: "limit" })).toBe("stopped");
 });
 
-test("a running job and a pending owner question are separate waits", () => {
-  const waits = turnWaits({ jobs: [{ job: "j1-2", state: "running", command: "bun test" }],
-    questions: [{ id: "Q1", status: "pending" }, { id: "Q2", status: "answered" }] });
-  expect(waits.map(wait => [wait.kind, wait.id])).toEqual([["job", "j1-2"], ["owner", "Q1"]]);
+test("waits include owned work still draining, but exclude confirmed terminal work", () => {
+  const waits = turnWaits({ jobs: [
+    { job: "j1-2", state: "running", command: "bun test" },
+    { job: "j1-3", state: "exited", command: "check", groupClear: false },
+    { job: "j1-4", state: "exited", command: "check", groupClear: true },
+  ], questions: [{ id: "Q1", status: "pending" }, { id: "Q2", status: "answered" }],
+    children: [{ id: "slice", state: "stopping", label: "agent slice" }] });
+  expect(waits.map(wait => [wait.kind, wait.id])).toEqual([["job", "j1-2"], ["job", "j1-3"], ["owner", "Q1"], ["child", "slice"]]);
 });
 
 test("a missing sink is a no-op and replayed ends cannot create a mark", () => {

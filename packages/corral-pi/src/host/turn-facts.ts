@@ -22,7 +22,7 @@ export function turnReason(input: TurnOutcome): TurnEndMark["reason"] {
 
 /** Local observations only. Settled, failed and unknown resources are not invented waits. */
 export function turnWaits(input: {
-  readonly jobs?: readonly { readonly job: string; readonly state: string; readonly command: string;
+  readonly jobs?: readonly { readonly job: string; readonly state: string; readonly command: string; readonly groupClear?: boolean;
     readonly watches?: readonly { readonly wait: string; readonly armed: boolean; readonly matched: string | undefined }[] }[];
   readonly questions?: readonly { readonly id: string; readonly status: string }[];
   readonly ownerKeys?: readonly string[];
@@ -33,7 +33,7 @@ export function turnWaits(input: {
   const waits: TurnWait[] = [];
   const label = (text: string) => text.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 120);
   for (const job of input.jobs ?? []) {
-    if (job.state === "running") waits.push({ kind: "job", id: job.job, label: label(`job ${job.job}: ${job.command}`) });
+    if (job.state === "running" || job.groupClear === false) waits.push({ kind: "job", id: job.job, label: label(`job ${job.job}: ${job.command}`) });
     for (const watch of job.watches ?? []) {
       if (watch.armed && !watch.matched) waits.push({ kind: "event", id: watch.wait, label: label(`monitor ${watch.wait} on ${job.job}`) });
     }
@@ -43,7 +43,7 @@ export function turnWaits(input: {
   }
   for (const key of input.ownerKeys ?? []) waits.push({ kind: "owner", id: key, label: label(`answer to ${key}`) });
   for (const child of input.children ?? []) {
-    if (["preparing", "queued", "running", "needs"].includes(child.state)) {
+    if (["preparing", "queued", "running", "needs", "stopping"].includes(child.state)) {
       waits.push({ kind: "child", id: child.id, label: label(child.label) });
     }
   }

@@ -5,18 +5,25 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { validateToolArguments } from "@earendil-works/pi-ai";
 import type * as Sdk from "@earendil-works/pi-coding-agent";
-import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import type { ExtensionUIContext, ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { EventLog } from "../src/bridge/events.ts";
 import { createBuildControls, type BuildControls } from "../src/build/host-controls.ts";
 import { loadSession, saveSession, sessionDir } from "../src/build/session-store.ts";
 import { gitRun, type Run } from "../src/build/corral-cli.ts";
 import { prepareWorktree } from "../src/build/worktree.ts";
 import type { BuildContext, ChildSpec, ExitRecord } from "../src/build/types.ts";
 import type { ChildHandle, ChildHooks, ChildRunner } from "../src/extensions/fleet/child.ts";
+import { loadModules } from "../src/host/modules.ts";
+import { guardedFetch } from "../src/host/restrict.ts";
+import { HostSession, authContext } from "../src/host/session.ts";
 import { boardPart } from "../src/host/remote/board.ts";
 import { RemoteBuild } from "../src/host/remote/build.ts";
 import { cardDetail } from "../src/host/remote/cards.ts";
 import { RemoteDialogs } from "../src/host/remote/dialogs.ts";
+import { buildRole } from "../src/roles/build/index.ts";
+import { CorralClient } from "../src/tools/corral.ts";
 import type { BuildEntry } from "../src/ui/build/build-entries.ts";
+import { fixtureTransport } from "./fixtures/auth/index.ts";
 import { buildFixtureInstall, PACKAGE_ROOT } from "./support/fixture-install.ts";
 import { connect, type TestClient } from "./support/bridge-client.ts";
 import { launch } from "./support/pi-process.ts";
@@ -37,7 +44,7 @@ class FakeRunner implements ChildRunner {
   }
 }
 
-function fixture(root: string, exit?: ExitRecord, workspace = false, bare = false, engine?: Run, binding?: { repo: string; checkout: ReturnType<typeof prepareWorktree> }) {
+function fixture(root: string, exit?: ExitRecord, workspace = false, bare = false, engine?: Run, binding?: { repo: string; checkout: ReturnType<typeof prepareWorktree>; finishReady?: () => boolean }) {
   const now = new Date().toISOString();
   const context: BuildContext = { dir: sessionDir(root, "B-test"), corral: "/unused/corral",
     settings: { maxParallel: 2, exitPolicy: binding ? "review" : "none", profiles: [] },
@@ -61,7 +68,7 @@ function fixture(root: string, exit?: ExitRecord, workspace = false, bare = fals
   const controls = createBuildControls({ context, runner, run, git, sdk: {} as typeof Sdk,
     models: () => ({ getModels: () => [] }) as unknown as ModelRuntime, approved: () => ["approved"],
     parent: { provider: "approved", model: "parent", effort: "high" }, agentDir: join(root, "agent"), localTools: () => [],
-    deliverToParent() {}, changed: () => { changed++; } });
+    deliverToParent() {}, changed: () => { changed++; }, finishReady: binding?.finishReady });
   return { context, controls, runner, calls, changed: () => changed };
 }
 
@@ -138,7 +145,10 @@ test("Finish prepares against current main, gates and reviews once before offeri
   git("-C", checkout.worktree, "add", "result"); git("-C", checkout.worktree, "commit", "-qm", "work");
   git("commit", "-qm", "advanced", "--allow-empty");
   const target = git("rev-parse", "main");
-  const { controls, runner } = fixture(root, undefined, true, false, undefined, { repo, checkout });
+  let parentRunning = true, followUpQueued = true;
+  const { controls, runner } = fixture(root, undefined, true, false, undefined, {
+    repo, checkout, finishReady: () => !parentRunning && !followUpQueued,
+  });
   try {
     const finish = controls.tools.find(tool => tool.name === "build_finish")!;
     const completing = finish.execute("finish", { title: "Build result" }, undefined, undefined, {} as never);
@@ -150,6 +160,13 @@ test("Finish prepares against current main, gates and reviews once before offeri
     reviewer.hooks.reviewVerdict({ verdict: "approve", summary: "Ready", findings: [], head: candidate });
     reviewer.finish();
     expect((await completing).isError).not.toBe(true);
+    expect(controls.exit.state().phase).toBe("none");
+    parentRunning = false;
+    await controls.publishFinishOffer();
+    expect(controls.exit.state().phase).toBe("none");
+    followUpQueued = false;
+    await controls.publishFinishOffer();
+    expect(controls.exit.state().phase).toBe("pending");
     expect(git("rev-parse", "main")).toBe(target);
     const option = controls.exit.options().find(row => row.choice === "land")!;
     expect(option.authorization).toBeDefined();
@@ -415,6 +432,79 @@ test("the real build entry binds and advertises all build tools without creating
     assets.cleanup(); rmSync(work, { recursive: true, force: true });
   }
 }, 20_000);
+
+test("a Build exit stays hidden through the parent reply and its queued owner follow-up", async () => {
+  const work = mkdtempSync(join(tmpdir(), "build-finish-turn-"));
+  const assets = buildFixtureInstall({ parent: work });
+  const firstChunk = Promise.withResolvers<void>(), releaseReply = Promise.withResolvers<void>();
+  const originalFetch = globalThis.fetch;
+  let host: HostSession | undefined, turn: Promise<unknown> | undefined;
+  try {
+    const sdk = await import("@earendil-works/pi-coding-agent");
+    const modules = await loadModules(assets.dir, "worker");
+    const transport = modules.auth.transport?.(authContext());
+    if (!transport) throw new Error("fixture transport missing");
+    const network = guardedFetch(transport);
+    globalThis.fetch = network.fetch;
+    const now = new Date().toISOString();
+    const build: BuildContext = { dir: sessionDir(work, "B-test"), corral: "", settings: { maxParallel: 1, profiles: [], exitPolicy: "none" },
+      session: { id: "B-test", name: "test", version: 1, created: now, updated: now, repoRoot: work, worktree: work,
+        bare: true, repository: false, here: true, base: null, branch: null } };
+    saveSession(work, build.session);
+    const identity = { store: "st-demo", project: "", role: "build" } as const;
+    host = await HostSession.create({ sdk, identity, cwd: work, agentDir: join(work, "agent"), model: "gpt-6.1-sol",
+      ui: "plain", build, client: new CorralClient({ corral: "", root: work, cwd: work, identity }), events: new EventLog(), network,
+      capabilities: { catalog: 2, digest: "b".repeat(64), preset: "standard", enabled: ["background_shell"] },
+      guidance: { settings: { background_shell: { max_jobs: 1, max_output_bytes: 4096, max_runtime_secs: 60 } }, projectText: false },
+      runtimeDir: join(work, "runtime"),
+      modules: { ...modules, role: buildRole(PACKAGE_ROOT) }, sessionManager: sdk.SessionManager.create(work, join(work, "sessions")) });
+    await host.session.bindExtensions({ mode: "tui", uiContext: { setStatus() {} } as unknown as ExtensionUIContext });
+    await host.startLocal();
+    host.remoteBuild.register(host.remoteRegistry);
+    const exitCard = () => host!.dialogs.entries().find(entry => entry.card.kind === "exit");
+    const openExit = host.remoteRegistry.get("exit_open")!;
+    // Start with an unanswered owner offer. The next turn must withdraw it.
+    await openExit({});
+    await new Promise<void>(resolve => setImmediate(resolve));
+    const previous = exitCard()?.card.id;
+    expect(previous).toBeDefined();
+    const finish = (callId: string) => ({ toolCalls: [{ callId, name: "build_finish", arguments: { title: "Build result" } }] });
+    fixtureTransport().script([finish("first"), { chunks: ["Wrapping up", "."], afterFirstChunk: () => {
+      firstChunk.resolve(); return releaseReply.promise;
+    } }, { text: "Continuing with the new request." }]);
+    turn = host.session.prompt("Build and finish", { source: "extension" });
+    await within(firstChunk.promise, 5000, "parent replying after Finish");
+    expect(exitCard()).toBeUndefined();
+    expect(await host.submitLocal({ origin: "owner", busyPolicy: "follow_up", text: "Continue instead." })).toMatchObject({ disposition: "queued" });
+    releaseReply.resolve();
+    await turn;
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(exitCard()).toBeUndefined();
+
+    fixtureTransport().script([finish("second"), { text: "Done." }]);
+    await host.session.prompt("Now finish", { source: "extension" });
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(exitCard()).toBeDefined();
+    expect(exitCard()?.card.id).not.toBe(previous);
+
+    fixtureTransport().script([{ toolCalls: [{ callId: "server", name: "bash",
+      arguments: { command: "exec sleep 30", wait_ms: 0 } }] }, finish("third"), { text: "The background job is running." }]);
+    await host.session.prompt("Start an unrelated background job", { source: "extension" });
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(host.session.messages.find(message => message.role === "toolResult" && message.toolCallId.startsWith("server")))
+      .toMatchObject({ details: { state: "running", background: true } });
+    expect(exitCard()).toBeUndefined(); // The agent's offer is still deferred.
+    await openExit({});
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(exitCard()?.card.questions[0]?.options).toMatchObject([{ id: "keep" }, { id: "iterate" }]);
+  } finally {
+    releaseReply.resolve();
+    await turn?.catch(() => {});
+    await host?.close();
+    globalThis.fetch = originalFetch;
+    assets.cleanup(); rmSync(work, { recursive: true, force: true });
+  }
+});
 
 test("resumed task calls cannot overwrite a prior child's recorded history by reusing its id", async () => {
   const root = mkdtempSync(join(tmpdir(), "build-history-"));
