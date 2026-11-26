@@ -458,14 +458,15 @@ pub fn facts(feed: &Feed, id: &str) -> Option<TaskFacts> {
 }
 
 /// A task row's columns, every optional one included ([`columns::Chosen`] says which show).
-/// Profile, project, cost and the phrase give way before the planning estimates, and Priority
-/// last. With one project in scope the project column is left out. The title and phrase stop
+/// Profile, project, cost and the phrase give way before the planning estimates. A chosen
+/// Priority column never does: it is three Cells, and while it is chosen the title carries no
+/// priority tag, so its giving way would leave the row without one. With one project in scope the project column is left out. The title and phrase stop
 /// growing at a readable line.
 pub fn columns(scope: &Scope) -> Vec<Column> {
     let mut columns = vec![
         Column::fixed("status", "", 14.0, 1.0),
         Column::fixed("id", "ID", 58.0, 6.0),
-        Column::fixed("priority", "Pri", 30.0, 3.0).gives_way(7),
+        Column::fixed("priority", "Pri", 30.0, 3.0),
         Column::flex("title", "Title", 140.0, 16.0, 1.4).most(480.0, 56.0),
         Column::flex("now", "Now", 110.0, 14.0, 1.0)
             .most(360.0, 40.0)

@@ -330,3 +330,19 @@ fn the_columns_control_keeps_its_choice_on_this_device_until_restored() {
     })
     .unwrap();
 }
+
+/// A chosen Priority column that gave way on a narrow page took the title's tag with it, so a
+/// P1 task showed its priority nowhere on its row: the column stays while the others give way.
+#[test]
+fn a_chosen_priority_column_stays_on_a_narrow_page() {
+    let mut app = preview("tasks");
+    app.wait_for("id:col-title").unwrap();
+    app.set_viewport(Size::new(Points(560.0), Points(900.0)))
+        .unwrap();
+    app.wait_until("the others give way", Duration::from_secs(5), |screen| {
+        !column_shown(screen, "size")
+    })
+    .unwrap();
+    assert!(column_shown(app.screen(), "priority"));
+    assert!(app.screen().shows("P1"));
+}
