@@ -216,6 +216,23 @@ test("a gap check stuck in a tool that ignores abort settles on the first answer
   } finally { f.cleanup(); }
 });
 
+test("cancelling a Build explore child during a stuck gap check settles as cancelled, not as a fallback answer", async () => {
+  const f = fixture();
+  const controller = new AbortController();
+  f.body(async () => {
+    if (f.prompts.length === 1) { f.messages.push(answer("First answer")); return; }
+    controller.abort(new Error("owner cancelled"));
+    await new Promise(() => {});
+  });
+  try {
+    const done = await createSdkRunner(f.options).run({ id: "explore", title: "Explore", brief: "Trace", owns: [], kind: "explore" },
+      { profile: "fixture", provider: "openai-codex", model: "fixture" }, { ...f.hooks, execution: undefined }, controller.signal).done;
+    expect(f.prompts).toHaveLength(2);
+    expect(done.failed).toContain("owner cancelled");
+    expect(done.report).not.toContain("gap check produced no usable answer");
+  } finally { f.cleanup(); }
+});
+
 test("a thin research answer gets one gap check with project orientation, a quick one does not", async () => {
   for (const effort of ["standard", "quick"] as const) {
     const f = fixture();

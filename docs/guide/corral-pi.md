@@ -128,7 +128,8 @@ timeout_secs = 300   # 1..=600; default 300
 These are ceilings, not targets. A helper that answers after fewer than eight
 tool calls (unless `effort = "quick"`) gets one follow-up asking it to check
 unsupported claims and unexamined leads, provided at least three turns and 45
-seconds remain; the follow-up stops 15 seconds before the deadline. Standalone
+seconds remain; the follow-up stops 15 seconds before the deadline and runs
+for at most three minutes. Standalone
 Explore results report their depth (turns, tool calls and KB of tool output) and
 label a thin answer so the parent can retry with `deep`; `task` child reports
 show tool calls in their usage line.

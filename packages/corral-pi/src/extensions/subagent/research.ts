@@ -84,6 +84,8 @@ export const GAP_CHECK_PROMPT = "Before you finish: list each claim in your answ
 export const GAP_CHECK_MIN_CALLS = 8;
 /** The follow-up stops this long before the child deadline and falls back to the first answer. */
 export const GAP_CHECK_RESERVE_MS = 15_000;
+/** Longest the optional follow-up may run, including runs without a deadline. */
+export const GAP_CHECK_MAX_MS = 180_000;
 /** Whether a finished research run should get one gap-check follow-up. */
 export function wantsGapCheck(input: { effort?: ResearchEffort; toolCalls: number; turns: number; maxTurns?: number;
   deadlineAt?: number; now: number; stopped: boolean }): boolean {

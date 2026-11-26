@@ -17,7 +17,7 @@ import { childToolBindings, executionRefusal, exploreLoadout, type ChildHostedTo
 import { researchCode } from "../codemode/research.ts";
 import type { HelperEvent } from "../subagent/inspection.ts";
 import { observeHelperEvent, withChildBaseCalibration } from "../subagent/session.ts";
-import { ANSWER_FORMAT, CODE_METHOD, DEPTH_GUIDANCE, GAP_CHECK_PROMPT, GAP_CHECK_RESERVE_MS, researchBudget, researchPrompt, researchResult, strongerThinking, wantsGapCheck,
+import { ANSWER_FORMAT, CODE_METHOD, DEPTH_GUIDANCE, GAP_CHECK_MAX_MS, GAP_CHECK_PROMPT, GAP_CHECK_RESERVE_MS, researchBudget, researchPrompt, researchResult, strongerThinking, wantsGapCheck,
   type ResearchOptions, type ResearchReport } from "../subagent/research.ts";
 import { projectOrientation } from "../subagent/orientation.ts";
 import type { FleetContext } from "./runtime.ts";
@@ -509,17 +509,24 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
           // The optional phase ends well before the child deadline, so a slow follow-up falls back
           // to the first answer instead of timing the whole child out.
           // Settle on the cutoff itself: an in-flight tool (e.g. an LSP wait) may ignore the abort.
+          // Runs without a deadline still get a finite optional phase.
           const deadlineAt = execution?.deadlineAt;
           const reserve = Promise.withResolvers<void>();
-          const cutoff = deadlineAt === undefined ? undefined : setTimeout(() => {
+          const cutoff = setTimeout(() => {
             reason = "time reserve reached";
             void session!.abort().catch(() => {});
             reserve.resolve();
-          }, Math.max(0, deadlineAt - GAP_CHECK_RESERVE_MS - (options.now ?? Date.now)()));
+          }, Math.min(GAP_CHECK_MAX_MS, deadlineAt === undefined ? GAP_CHECK_MAX_MS
+            : Math.max(0, deadlineAt - GAP_CHECK_RESERVE_MS - (options.now ?? Date.now)())));
+          // Cancellation settles immediately as well, without waiting for a slow tool to unwind.
+          const cancelled = Promise.withResolvers<void>();
+          const onAbort = () => cancelled.resolve();
+          signal.addEventListener("abort", onAbort, { once: true });
+          if (signal.aborted) cancelled.resolve();
           const followUp = session.prompt(GAP_CHECK_PROMPT, { source: "rpc" })
             .catch((error: unknown) => { reason ??= error instanceof Error ? error.message : String(error); });
-          try { await Promise.race([followUp, reserve.promise]); }
-          finally { clearTimeout(cutoff); }
+          try { await Promise.race([followUp, reserve.promise, cancelled.promise]); }
+          finally { clearTimeout(cutoff); signal.removeEventListener("abort", onAbort); }
           // Explicit cancellation and the child's own deadline keep their usual meaning.
           signal.throwIfAborted();
           const replacement = session.messages.slice(before).findLast(message => message.role === "assistant");
