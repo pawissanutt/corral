@@ -101,24 +101,24 @@ fn resolve(
     subject: &DiagramSubject,
     target: &CompareTarget,
 ) -> Result<(CompareResolution, Option<Revision>)> {
-    let observed = || -> Result<String, CompareResolution> {
+    let observed = || -> Result<String, Box<CompareResolution>> {
         let Ok(snapshot) = shared.system.map(shared, &subject.project) else {
-            return Err(unavailable("the project's head is not observed"));
+            return Err(Box::new(unavailable("the project's head is not observed")));
         };
         match snapshot.head {
             Some(head) => Ok(head),
-            None if snapshot.building => Err(CompareResolution::Pending),
+            None if snapshot.building => Err(Box::new(CompareResolution::Pending)),
             None => {
-                Err(unavailable(snapshot.error.unwrap_or_else(|| {
+                Err(Box::new(unavailable(snapshot.error.unwrap_or_else(|| {
                     "the project's head is not observed".into()
-                })))
+                }))))
             }
         }
     };
     let (origin, commit) = match target {
         CompareTarget::ObservedHead => match observed() {
             Ok(head) => (CompareOrigin::ObservedHead, head),
-            Err(resolution) => return Ok((resolution, None)),
+            Err(resolution) => return Ok((*resolution, None)),
         },
         CompareTarget::Candidate => match latest_submission(engine, artifact, subject)? {
             Ok(candidate) => (CompareOrigin::Candidate, candidate.head),
@@ -155,7 +155,7 @@ fn resolve(
     {
         let head = match observed() {
             Ok(head) => head,
-            Err(resolution) => return Ok((resolution, None)),
+            Err(resolution) => return Ok((*resolution, None)),
         };
         let reached = resolve_local_commit(repo, &head)
             .and_then(|head| is_ancestor(repo, &rev, &head))
