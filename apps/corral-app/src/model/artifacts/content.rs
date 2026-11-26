@@ -22,7 +22,9 @@ pub const FULL_PARTIAL_LINES: usize = 1000;
 
 const BINARY: &str =
     "Binary content: the app shows its facts, not its bytes. Download saves the bytes.";
-const HTML: &str = "An HTML page: the app shows its facts here rather than its markup. Open it full size to read the source.";
+const HTML: &str = "An HTML page: the app shows its facts here rather than its markup. Open in browser shows it in a sandboxed copy; View source reads the markup.";
+/// Bytes of a page's start searched for an HTML signature.
+const SIGNATURE_BYTES: usize = 1024;
 const IMAGE: &str = "An image: open it full size to see it.";
 const TERMINAL_IMAGE: &str =
     "A terminal cannot draw images; open this artifact in the desktop or web app to see it.";
@@ -79,14 +81,43 @@ fn ends_with(title: &str, endings: &[&str]) -> bool {
     endings.iter().any(|ending| title.ends_with(ending))
 }
 
-/// What the text is, from corrald's media type, then the artifact's kind and title.
-fn shape(artifact: &Artifact, media: Option<&str>) -> Shape {
+/// Whether the text starts as a standalone HTML document does (`<!doctype html`, `<html`),
+/// after a byte-order mark, white space and comments, within its first [`SIGNATURE_BYTES`]:
+/// a descriptive title names no suffix, and corrald's media type follows the title.
+pub(crate) fn html_signature(text: &str) -> bool {
+    let mut start = text[..text.floor_char_boundary(SIGNATURE_BYTES)]
+        .trim_start_matches('\u{feff}')
+        .trim_start();
+    while let Some(comment) = start.strip_prefix("<!--") {
+        let Some(end) = comment.find("-->") else {
+            return false;
+        };
+        start = comment[end + 3..].trim_start();
+    }
+    let opens = |tag: &str| {
+        start
+            .get(..tag.len())
+            .is_some_and(|head| head.eq_ignore_ascii_case(tag))
+            && start[tag.len()..]
+                .chars()
+                .next()
+                .is_some_and(|c| c == '>' || c.is_whitespace())
+    };
+    opens("<!doctype html") || opens("<html")
+}
+
+/// What the text is, from corrald's media type, an HTML signature, then the artifact's kind
+/// and title.
+fn shape(artifact: &Artifact, media: Option<&str>, text: &str) -> Shape {
     let title = artifact.title.as_str();
     match media.unwrap_or_default() {
         "text/markdown" => return Shape::Markdown,
         "text/x-diff" | "text/x-patch" => return Shape::Diff,
         "text/html" => return Shape::Html,
         _ => {}
+    }
+    if html_signature(text) {
+        return Shape::Html;
     }
     let diff = matches!(artifact.kind, ArtifactKind::Diff);
     let log = matches!(artifact.kind, ArtifactKind::Gate | ArtifactKind::Log);
@@ -206,6 +237,21 @@ fn served(page: &ArtifactPage) -> Served {
     }
 }
 
+/// Whether the artifact corrald serves is a standalone HTML page, from its media type or its
+/// start; false until its content has loaded and for a cited section.
+pub fn is_html(feed: &Feed, artifact: &Artifact) -> bool {
+    let Some(DetailBody::Artifact(page)) = feed
+        .detail(&target(&artifact.reference()))
+        .and_then(|cache| cache.body())
+    else {
+        return false;
+    };
+    match served(page) {
+        Served::Text(text) => shape(artifact, page.media_type.as_deref(), &text) == Shape::Html,
+        Served::Image(_) | Served::Binary => false,
+    }
+}
+
 /// The first `limit` lines of `text`, and how many there are in all.
 fn first_lines(text: &str, limit: Option<usize>) -> (String, Option<usize>) {
     let total = text.lines().count();
@@ -284,7 +330,7 @@ pub fn content_of(
             };
         }
     };
-    let shape = shape(artifact, page.media_type.as_deref());
+    let shape = shape(artifact, page.media_type.as_deref(), &text);
     if shape == Shape::Html && !full {
         return Content {
             body: Body::Facts(HTML),

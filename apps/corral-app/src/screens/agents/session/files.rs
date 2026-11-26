@@ -8,6 +8,7 @@
 //! `btn-open-html-browser`; the session chrome carries the return to the conversation.
 #[path = "files_open.rs"]
 mod files_open;
+pub(crate) use files_open::{Stop as HtmlStop, target as html_target};
 #[path = "files_tree.rs"]
 mod tree;
 

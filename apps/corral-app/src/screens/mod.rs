@@ -15,6 +15,7 @@ pub mod home;
 pub mod host;
 pub mod landing;
 pub(crate) mod markdown;
+pub(crate) mod mermaid;
 pub mod sessions;
 pub mod settings;
 pub mod system;

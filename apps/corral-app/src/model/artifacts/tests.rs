@@ -365,3 +365,74 @@ fn previews_stay_bounded_and_say_when_they_are_partial() {
     assert_eq!(shown.body, Body::Text("one\ntwo\n".into()));
     assert_eq!(shown.cut, None);
 }
+
+/// The reported standalone report: titled in words, so corrald names no HTML media type, yet
+/// its own start says it is a page. It must offer Open in browser over the whole verified
+/// artifact rather than read as plain text; text that merely mentions a tag must not, and a
+/// page past the preview's bound is refused before anything is read.
+#[test]
+fn a_descriptively_titled_html_report_opens_in_the_browser() {
+    let mut feed = Feed::default();
+    let report = artifact(
+        "T-7",
+        1,
+        ArtifactKind::Report,
+        "Standalone coverage report for the review",
+        1,
+    );
+    content_served(
+        &mut feed,
+        &report,
+        "\u{feff}\n<!-- generated -->\n<!DOCTYPE html>\n<html><body><h1>Coverage</h1></body></html>\n",
+        false,
+    );
+    let shown = preview(&feed, &report, Form::Desktop, false);
+    assert!(shown.html, "its doctype makes it a page");
+    assert!(matches!(shown.content.body, Body::Facts(_)));
+    assert_eq!(
+        (shown.save.reference.as_str(), shown.save.bytes),
+        ("T-7:1", report.bytes),
+        "the open reads and verifies the whole artifact, not the head"
+    );
+    assert_eq!(browser::refusal(&shown.save), None);
+
+    let notes = artifact("T-7", 2, ArtifactKind::Report, "Notes on html", 2);
+    content_served(&mut feed, &notes, "We should emit <html> later.\n", false);
+    assert!(!preview(&feed, &notes, Form::Desktop, false).html);
+
+    let mut huge = report.clone();
+    huge.bytes = browser::MAX_BYTES + 1;
+    assert!(browser::refusal(&preview(&feed, &huge, Form::Desktop, false).save).is_some());
+}
+
+/// A Markdown artifact with a Mermaid fence and ordinary code stays rendered Markdown: its
+/// headings and table survive, the Mermaid fence reads as a diagram and the Rust fence stays
+/// code, not a diagram or an error.
+#[test]
+fn markdown_draws_its_mermaid_fence_and_keeps_ordinary_code() {
+    use nsh_base::text_view::{Block, Parser};
+
+    let mut feed = Feed::default();
+    let plan = artifact("T-8", 1, ArtifactKind::Report, "plan.md", 1);
+    let text = "# Plan\n\n| Step | Owner |\n|---|---|\n| gate | [T-8](https://example.invalid) |\n\n```mermaid\nflowchart TD\n  A[Brief] --> B{Gate}\n  B -->|pass| C[Land]\n```\n\n```rust\nfn main() { println!(\"A --> B\"); }\n```\n";
+    content_served(&mut feed, &plan, text, false);
+    let Body::Markdown(words) = content(&feed, &plan, Form::Desktop, true).body else {
+        panic!("a .md artifact draws as Markdown");
+    };
+    let blocks = Parser::new().markdown(&words).blocks;
+    assert!(matches!(blocks.first(), Some(Block::Heading { .. })));
+    assert!(blocks.iter().any(|block| matches!(block, Block::Table(_))));
+    let fences: Vec<_> = blocks
+        .iter()
+        .filter_map(|block| match block {
+            Block::CodeBlock(code) => Some(code),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(fences.len(), 2);
+    assert!(mermaid::is_mermaid(fences[0].language.as_deref()));
+    let diagram = mermaid::parse(&fences[0].code).expect("the flowchart is drawn");
+    assert_eq!((diagram.nodes.len(), diagram.edges.len()), (3, 2));
+    assert!(!mermaid::is_mermaid(fences[1].language.as_deref()));
+    assert!(fences[1].code.contains("println!"));
+}

@@ -6,14 +6,16 @@
 //! content shows beside the results (under them where the page is narrow) and opens full size;
 //! from either, its task opens.
 
+pub mod browser;
 mod content;
 pub mod download;
+pub mod mermaid;
 #[cfg(test)]
 mod tests;
 
 pub use content::{
     Body, Content, FULL_PARTIAL_LINES, Line, PREVIEW_BYTES, PREVIEW_LINES, content, content_of,
-    target as content_target,
+    is_html, target as content_target,
 };
 pub(crate) use content::{log_hue, plain_text, utf8_text};
 
@@ -522,6 +524,8 @@ pub struct Preview {
     pub open_task: Option<String>,
     /// What Download saves: the whole artifact's bytes, checked against its catalog row.
     pub save: Save,
+    /// A standalone HTML page, which Open in browser opens and View source reads.
+    pub html: bool,
 }
 
 /// The whole artifact a download saves, and what its bytes must match.
@@ -660,6 +664,7 @@ fn preview(feed: &Feed, artifact: &Artifact, form: Form, full: bool) -> Preview 
         facts,
         summary,
         content: content(feed, artifact, form, full),
+        html: is_html(feed, artifact),
         save: Save {
             reference: artifact.reference(),
             file_name: download::file_name(artifact),

@@ -1,0 +1,69 @@
+use super::*;
+
+fn labels(elements: &[Element]) -> Vec<&str> {
+    elements.iter().map(|e| e.label.as_str()).collect()
+}
+
+/// A flowchart's shapes, chains, `&` groups and the arrows' two ways of carrying words must all
+/// land on the boxes and arrows they name, or the drawing misleads.
+#[test]
+fn a_flowchart_reads_its_shapes_chains_and_arrow_words() {
+    let diagram = parse(
+        "flowchart LR\n  %% a comment\n  A[Brief] --> B{Gate passes?}\n  B -->|yes| C((Land)) & D[(Store)]\n  B -- no --> A; C -.-> E>Notify]\n  classDef hot fill:#f00\n",
+    )
+    .unwrap();
+    assert_eq!(diagram.kind, LensKind::State);
+    assert_eq!(
+        labels(&diagram.nodes),
+        ["Brief", "Gate passes?", "Land", "Store", "Notify"]
+    );
+    let edges: Vec<_> = diagram
+        .edges
+        .iter()
+        .map(|e| (e.ends.unwrap(), e.label.as_str()))
+        .collect();
+    assert_eq!(
+        edges,
+        [
+            ((0, 1), ""),
+            ((1, 2), "yes"),
+            ((1, 3), "yes"),
+            ((1, 0), "no"),
+            ((2, 4), ""),
+        ]
+    );
+}
+
+#[test]
+fn state_and_sequence_diagrams_read_their_ends_and_messages() {
+    let states = parse(
+        "stateDiagram-v2\n  [*] --> Queued\n  state \"Under review\" as Review\n  Queued --> Review : submit\n  note right of Review\n    waits\n  end note\n  Review --> [*]\n",
+    )
+    .unwrap();
+    assert_eq!(
+        labels(&states.nodes),
+        ["Start", "Queued", "Under review", "End"]
+    );
+    assert_eq!(states.edges[1].label, "submit");
+
+    let sequence = parse(
+        "sequenceDiagram\n  participant A as App\n  actor O\n  A->>+corrald: read page\n  Note over A: bounded\n  corrald-->>-A: bytes\n",
+    )
+    .unwrap();
+    assert_eq!(sequence.kind, LensKind::Sequence);
+    assert_eq!(labels(&sequence.nodes), ["App", "O", "corrald"]);
+    assert_eq!(sequence.edges[1].ends, Some((2, 0)));
+}
+
+/// What the app cannot read must come back as an error, so the view shows the source instead of
+/// a wrong or empty picture.
+#[test]
+fn unreadable_diagrams_are_errors_not_pictures() {
+    assert!(parse("pie title Pets\n  \"Dogs\" : 3\n").is_err());
+    assert!(parse("flowchart TD\n  A[open --> B\n").is_err());
+    assert!(parse("flowchart TD\n").is_err());
+    assert!(parse("sequenceDiagram\n  A says hi\n").is_err());
+    let many: String = (0..=MAX_NODES).map(|n| format!("N{n}\n")).collect();
+    assert!(parse(&format!("graph TD\n{many}")).is_err());
+    assert!(parse(&"x".repeat(MAX_SOURCE + 1)).is_err());
+}

@@ -31,7 +31,7 @@ mod native;
 /// A session's public id and a worktree path.
 type File = (String, String);
 /// Set once an open is abandoned; its sink then refuses to write or launch.
-type Stop = Arc<AtomicBool>;
+pub(crate) type Stop = Arc<AtomicBool>;
 
 /// The Files tab's browser open, bound to the file it was started from.
 #[derive(Clone, Copy)]
@@ -269,9 +269,9 @@ fn note(words: impl Into<String>) -> AnyElement {
 }
 
 const PREFIX: &[u8] = concat!(
-    "<!doctype html><meta charset=utf-8><title>Worktree HTML preview</title>",
+    "<!doctype html><meta charset=utf-8><title>Sandboxed HTML preview</title>",
     "<style>body{margin:0}iframe{display:block;border:0;width:100vw;height:100vh}</style>",
-    "<iframe title=\"Worktree HTML preview\" sandbox=\"allow-scripts\" referrerpolicy=\"no-referrer\" srcdoc=\"",
+    "<iframe title=\"Sandboxed HTML preview\" sandbox=\"allow-scripts\" referrerpolicy=\"no-referrer\" srcdoc=\"",
     "&lt;!doctype html&gt;&lt;meta charset=utf-8&gt;",
     "&lt;meta http-equiv='Content-Security-Policy' content=&quot;default-src 'none'; ",
     "script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; base-uri 'none'; form-action 'none'&quot;&gt;",
@@ -318,17 +318,17 @@ impl Drop for Slot {
 const ABANDONED: &str = "The HTML open was cancelled.";
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn target(stop: Stop) -> Result<Output, String> {
+pub(crate) fn target(stop: Stop) -> Result<Output, String> {
     native::NativePreview::new(stop).map(|preview| Box::new(preview) as Output)
 }
 
 #[cfg(not(any(target_arch = "wasm32", target_os = "linux", target_os = "macos")))]
-fn target(_: Stop) -> Result<Output, String> {
+pub(crate) fn target(_: Stop) -> Result<Output, String> {
     Err("This app cannot launch an HTML preview on this device.".into())
 }
 
 #[cfg(target_arch = "wasm32")]
-fn target(stop: Stop) -> Result<Output, String> {
+pub(crate) fn target(stop: Stop) -> Result<Output, String> {
     web::WebPreview::new(stop).map(|preview| Box::new(preview) as Output)
 }
 

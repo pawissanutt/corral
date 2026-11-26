@@ -7,12 +7,14 @@
 
 use nsh_core::prelude::*;
 
+use super::browser::{self, Opens};
 use super::save::{self, Downloads};
 use crate::model::Form;
+use crate::model::artifacts::browser::VIEW_SOURCE;
 use crate::model::artifacts::{
     Action, BACK, Body, Content, LOADING_CONTENT, Line, OPEN_FULL, PREVIEW_LABEL, Page, Preview,
 };
-use crate::screens::markdown::{markdown, provide_styles};
+use crate::screens::markdown::{artifact_markdown, provide_styles};
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button, button_with};
 use crate::ui::kit::marks::hue_ink;
@@ -37,7 +39,12 @@ const PREVIEW_MEASURE: f32 = IMAGE_MAX;
 
 /// The selected artifact beside or under the results: test ids "artifact-preview",
 /// "btn-open-full", "btn-open-task".
-pub(super) fn preview(app: AppState, page: Memo<Page>, downloads: Downloads) -> AnyElement {
+pub(super) fn preview(
+    app: AppState,
+    page: Memo<Page>,
+    downloads: Downloads,
+    opens: Opens,
+) -> AnyElement {
     let shown = computed(move || page.with(|page| page.preview.clone()));
     let terminal = app.form == Form::Terminal;
     view()
@@ -50,9 +57,10 @@ pub(super) fn preview(app: AppState, page: Memo<Page>, downloads: Downloads) -> 
             };
             untracked(|| {
                 let open = preview.reference.clone();
+                // An HTML page's full size is its source; Open in browser shows it.
                 let full = button(
                     app,
-                    OPEN_FULL,
+                    if preview.html { VIEW_SOURCE } else { OPEN_FULL },
                     ButtonKind::Primary,
                     "btn-open-full",
                     move || app.artifacts_act(Action::Open(open.clone())),
@@ -66,8 +74,9 @@ pub(super) fn preview(app: AppState, page: Memo<Page>, downloads: Downloads) -> 
                     )
                     .child(dim(app, preview.summary.clone()))
                     .when(terminal, |part| part.child(term::blank()))
-                    .child(actions(app, &preview, full, downloads))
+                    .child(actions(app, &preview, full, downloads, opens))
                     .child(save::note(app, downloads, &preview.save.reference))
+                    .children(html_note(app, &preview, opens))
                     .when(terminal, |part| part.child(term::blank()))
                     .child(content(app, &preview.content));
                 measure(app, PREVIEW_MEASURE, shown.into_element())
@@ -76,13 +85,26 @@ pub(super) fn preview(app: AppState, page: Memo<Page>, downloads: Downloads) -> 
         .into_element()
 }
 
-/// Open full size (or Back), Download and Open its task, in a row.
+/// What opening an HTML page in the browser does or where it stands; none for other content.
+fn html_note(app: AppState, preview: &Preview, opens: Opens) -> Option<AnyElement> {
+    preview
+        .html
+        .then(|| browser::note(app, opens, &preview.save.reference))
+}
+
+/// Open full size (or Back), Open in browser for an HTML page, Download and Open its task, in
+/// a row.
 fn actions(
     app: AppState,
     preview: &Preview,
     first: AnyElement,
     downloads: Downloads,
+    opens: Opens,
 ) -> AnyElement {
+    let browser = preview
+        .html
+        .then(|| browser::control(app, opens, &preview.save))
+        .flatten();
     let task = preview.task.clone();
     let open_task = preview.open_task.clone().map(|label| {
         button_with(
@@ -104,6 +126,7 @@ fn actions(
             8.0
         }))
         .child(first)
+        .children(browser)
         .child(save::control(app, downloads, &preview.save))
         .children(open_task)
         .into_element()
@@ -112,7 +135,12 @@ fn actions(
 /// The artifact full size in the results' place: its title and reference in the head with Back
 /// and Open its task, then its facts and all of its content, kept to the record's measure on a
 /// desktop, centred. test ids "artifact-full", "btn-artifact-back", "btn-open-task".
-pub(super) fn full(app: AppState, page: Memo<Page>, downloads: Downloads) -> AnyElement {
+pub(super) fn full(
+    app: AppState,
+    page: Memo<Page>,
+    downloads: Downloads,
+    opens: Opens,
+) -> AnyElement {
     let shown = computed(move || page.with(|page| page.full.clone()));
     dynamic(move || {
         let Some(preview) = shown.get() else {
@@ -143,8 +171,9 @@ pub(super) fn full(app: AppState, page: Memo<Page>, downloads: Downloads) -> Any
             );
             let scroll = view()
                 .gap(px(if terminal { 0.0 } else { 14.0 }))
-                .child(actions(app, &preview, back, downloads))
+                .child(actions(app, &preview, back, downloads, opens))
                 .child(save::note(app, downloads, &preview.save.reference))
+                .children(html_note(app, &preview, opens))
                 .when(terminal, |part| part.child(term::blank()))
                 .child(facts)
                 .when(terminal, |part| part.child(term::blank()))
@@ -185,7 +214,7 @@ fn content(app: AppState, content: &Content) -> AnyElement {
             provide_styles(app);
             view()
                 .when(form == Form::Desktop, |doc| doc.max_w(px(MEASURE)))
-                .child(markdown(app, words, false))
+                .child(artifact_markdown(app, words))
                 .into_element()
         }
         Body::Diff(lines) | Body::Log(lines) => code(app, lines),

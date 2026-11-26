@@ -36,6 +36,7 @@ mod tabs;
 mod task;
 mod usage;
 
+pub(crate) use files::{HtmlStop, html_target};
 pub(in crate::screens::agents) use header::popup;
 
 use corral_protocol::detail::DetailRef;

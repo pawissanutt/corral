@@ -9,6 +9,7 @@
 //! test ids: "field-artifacts", "artifacts" (the results' scroll), "artifact-<reference>" (a
 //! result), "artifacts-count", "btn-load-more", "btn-retry-artifacts", and those of `shown`.
 
+mod browser;
 mod save;
 mod shown;
 
@@ -61,11 +62,12 @@ pub fn screen(app: AppState) -> AnyElement {
     keep_loaded(app, page);
     let full = computed(move || page.with(|page| page.full.is_some()));
     let downloads = save::downloads();
+    let opens = browser::opens();
     dynamic(move || {
         if full.get() {
-            untracked(|| shown::full(app, page, downloads))
+            untracked(|| shown::full(app, page, downloads, opens))
         } else {
-            untracked(|| finder(app, page, downloads))
+            untracked(|| finder(app, page, downloads, opens))
         }
     })
     .into_element()
@@ -149,7 +151,12 @@ fn keep_loaded(app: AppState, page: Memo<Page>) {
 }
 
 /// The finder: the head, the filter, then the results and the preview.
-fn finder(app: AppState, page: Memo<Page>, downloads: save::Downloads) -> AnyElement {
+fn finder(
+    app: AppState,
+    page: Memo<Page>,
+    downloads: save::Downloads,
+    opens: browser::Opens,
+) -> AnyElement {
     let form = app.form;
     if form == Form::Phone {
         let content = view()
@@ -158,7 +165,7 @@ fn finder(app: AppState, page: Memo<Page>, downloads: save::Downloads) -> AnyEle
             .child(context(
                 app,
                 "artifact-side",
-                shown::preview(app, page, downloads),
+                shown::preview(app, page, downloads, opens),
             ))
             .into_element();
         return pane(app, "artifacts", content);
@@ -176,7 +183,11 @@ fn finder(app: AppState, page: Memo<Page>, downloads: save::Downloads) -> AnyEle
             ),
             (
                 Width::Fill,
-                context(app, "artifact-side", shown::preview(app, page, downloads)),
+                context(
+                    app,
+                    "artifact-side",
+                    shown::preview(app, page, downloads, opens),
+                ),
             ),
         ],
         1,

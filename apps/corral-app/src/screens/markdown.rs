@@ -12,6 +12,7 @@ use nsh_base::text_view::{
 use nsh_core::prelude::*;
 
 use crate::model::Form;
+use crate::model::artifacts::mermaid;
 use crate::model::cite;
 use crate::screens::cites::{keep_cited, link_blocks};
 use crate::state::AppState;
@@ -287,33 +288,46 @@ fn code_block(app: AppState, code: &CodeBlock) -> AnyElement {
 /// `markdown` laid out; while `streaming`, syntax its end leaves open reads as closed. Text
 /// and HTML-looking words stay literal, as the terminal shows them: no formulas, no markup.
 pub(crate) fn markdown(app: AppState, markdown: &str, streaming: bool) -> AnyElement {
-    cited(app, markdown, streaming, true, false)
+    cited(app, markdown, streaming, true, false, false)
 }
 
 /// Chat messages use records at every width: their available width is not the page width.
 pub(crate) fn chat_markdown(app: AppState, markdown: &str, streaming: bool) -> AnyElement {
-    cited(app, markdown, streaming, true, true)
+    cited(app, markdown, streaming, true, true, false)
 }
 
 /// `markdown` laid out, every image as its alt text: for stored words someone else wrote (a
 /// reviewer's note), which must not make the device fetch a URL just by being shown.
 pub(crate) fn markdown_without_images(app: AppState, markdown: &str) -> AnyElement {
-    cited(app, markdown, false, false, false)
+    cited(app, markdown, false, false, false, false)
+}
+
+/// A saved artifact's Markdown: laid out as `markdown` is, with each Mermaid fence drawn as
+/// its diagram where the form can draw one and read as its source otherwise.
+pub(crate) fn artifact_markdown(app: AppState, markdown: &str) -> AnyElement {
+    cited(app, markdown, false, true, false, true)
 }
 
 /// Laid out with every citation that resolves as a link to what it cites, drawn again when
 /// one starts or stops resolving.
-fn cited(app: AppState, markdown: &str, streaming: bool, images: bool, chat: bool) -> AnyElement {
+fn cited(
+    app: AppState,
+    markdown: &str,
+    streaming: bool,
+    images: bool,
+    chat: bool,
+    diagrams: bool,
+) -> AnyElement {
     let cites = cite::cites(markdown);
     if cites.is_empty() {
-        return laid_out(app, markdown, streaming, images, chat, &[]);
+        return laid_out(app, markdown, streaming, images, chat, diagrams, &[]);
     }
     keep_cited(app, &cites);
     let open = computed(move || app.feed.with(|feed| cite::opening(feed, &cites)));
     let markdown = markdown.to_owned();
     dynamic(move || {
         let open = open.get();
-        untracked(|| laid_out(app, &markdown, streaming, images, chat, &open))
+        untracked(|| laid_out(app, &markdown, streaming, images, chat, diagrams, &open))
     })
     .into_element()
 }
@@ -350,6 +364,7 @@ pub(crate) fn chat_markdown_streaming(
             let open = open.get();
             markdown.with(|markdown| document(app, markdown, streaming.get(), true, true, &open))
         }),
+        false,
     );
     view()
         .min_w(px(0.0))
@@ -364,10 +379,11 @@ fn laid_out(
     streaming: bool,
     images: bool,
     chat: bool,
+    diagrams: bool,
     open: &[String],
 ) -> AnyElement {
     let document = document(app, markdown, streaming, images, chat, open);
-    shown(app, text_view().document(document))
+    shown(app, text_view().document(document), diagrams)
 }
 
 /// `markdown` read as the app shows it: images as their alt text unless `images`, the
@@ -408,8 +424,9 @@ fn document(
 
 /// A text view of the app's: its words select and copy with the platform's own gestures and
 /// commands (a drag selects without following a link; a press on one still opens it), its
-/// links open what they cite, its code blocks are the app's.
-fn shown(app: AppState, words: TextViewElement) -> AnyElement {
+/// links open what they cite, its code blocks are the app's (with `diagrams`, a Mermaid fence
+/// is its diagram).
+fn shown(app: AppState, words: TextViewElement, diagrams: bool) -> AnyElement {
     let rendered = words
         .selectable(true)
         .on_link_press(move |press: &TextViewLinkPressEvent| {
@@ -417,7 +434,13 @@ fn shown(app: AppState, words: TextViewElement) -> AnyElement {
                 app.open_cite(spelled);
             }
         })
-        .render_code_block(move |code: &CodeBlock| code_block(app, code))
+        .render_code_block(move |code: &CodeBlock| {
+            if diagrams && mermaid::is_mermaid(code.language.as_deref()) {
+                super::mermaid::block(app, code, code_block(app, code))
+            } else {
+                code_block(app, code)
+            }
+        })
         .into_element();
     if app.form == Form::Terminal {
         crate::ui::composer::terminal_selectable(app, view().selectable(true))

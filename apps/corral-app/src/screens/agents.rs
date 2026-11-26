@@ -7,6 +7,7 @@
 mod remove;
 mod rewind;
 mod session;
+pub(crate) use session::{HtmlStop, html_target};
 mod start;
 pub(crate) mod transcript;
 pub(crate) use transcript::watch as watch_transcript;

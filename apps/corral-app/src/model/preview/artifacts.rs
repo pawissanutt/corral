@@ -305,6 +305,9 @@ fn evidence(record: &TaskDetail, row: &Artifact) -> String {
     )
 }
 
+/// How a report says its work went: a Mermaid flowchart beside an ordinary code fence.
+const FLOW: &str = "## Flow\n\n```mermaid\nflowchart LR\n  Brief[Brief] --> Work[Work] --> Gate{Gate}\n  Gate -->|pass| Review[Review]\n  Gate -->|fail| Work\n```\n\n```sh\njust check\n```\n\n";
+
 /// A summary, report or plan, written as the agents write them.
 fn markdown(feed: &Feed, record: &TaskDetail, row: &Artifact) -> String {
     let task = &record.task;
@@ -341,6 +344,9 @@ fn markdown(feed: &Feed, record: &TaskDetail, row: &Artifact) -> String {
             out.push_str(&format!("| `{path}` | {added} | {deleted} |\n"));
         }
         out.push('\n');
+    }
+    if row.kind == ArtifactKind::Report {
+        out.push_str(FLOW);
     }
     out.push_str("## Checks\n\n");
     if record.checks.is_empty() {
