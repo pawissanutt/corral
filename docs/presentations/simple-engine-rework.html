@@ -462,7 +462,7 @@ footer .wrap{display:flex;flex-wrap:wrap;justify-content:space-between;gap:var(-
     <h3 id="what-changed">What changed for the owner</h3>
     <ul>
       <li><strong>No state needs an agent.</strong> The owner clears any state with one command. The assistant is optional.</li>
-      <li><strong>Force is one flag.</strong> Dependencies, slot limits, the gate, status rules and a live session can each be passed with <code>--force</code> on the same command. Every refusal names the command that gets past it.</li>
+      <li><strong>Force is one flag.</strong> Dependencies, the gate and some status rules can be bypassed with <code>--force</code> on the same command. Slot limits still apply.</li>
       <li><strong>A gate runs once per commit</strong> that is landed or sent back. A green rerun clears a red one. No tiers, attempts ledger, credits or receipts.</li>
       <li><strong>A paired device is the owner.</strong> Per-device authority classes, previews and proofs are gone.</li>
       <li><strong>One chat assistant</strong> replaces the PM and the assistant. A plan is a parent task with children and a Markdown document.</li>
@@ -536,7 +536,7 @@ footer .wrap{display:flex;flex-wrap:wrap;justify-content:space-between;gap:var(-
       <li><strong>Green is green.</strong> A check passes or fails on a commit.</li>
       <li><strong>One trust boundary: the network.</strong> The local user is the owner. Only paired remote devices authenticate, and a paired device is the owner.</li>
       <li><strong>State stays readable.</strong> Tasks, runs, checks, artifacts, events. Nothing derived is stored.</li>
-      <li><strong>Every refusal names the command that gets past it</strong>, including its <code>--force</code> form.</li>
+      <li><strong>A refusal names ways to resolve it when available</strong>, including a <code>--force</code> form only when it can get past the check.</li>
     </ol>
   </section>
 
@@ -804,7 +804,7 @@ footer .wrap{display:flex;flex-wrap:wrap;justify-content:space-between;gap:var(-
         </g>
       </svg>
       <figcaption><b>Figure 4.</b> A task’s life: the eight states, with the command or cause on each arrow.</figcaption>
-      <p class="fig-note"><code>move --force</code> sets any status from any status.</p>
+      <p class="fig-note"><code>move --force</code> bypasses status rules, but a move into a slot-holding status still needs a free slot if the task does not already hold one.</p>
       <details class="fig-more">
         <summary>The transitions as text</summary>
         <ul>
@@ -972,7 +972,7 @@ Configuration is valid</code></pre></div>
       <table class="cmd-table">
         <thead><tr><th scope="col">Setting</th><th scope="col">Default</th><th scope="col">Meaning</th></tr></thead>
         <tbody>
-          <tr><th scope="row"><code>limits.running</code></th><td>4</td><td>Tasks in Running or Blocked at once. Review, reviewers and gates hold no slot.</td></tr>
+          <tr><th scope="row"><code>limits.running</code></th><td>4</td><td>One slot per Running, Blocked, or Review task, even while idle in Review. Gates, reviewers, and landing use the same slot.</td></tr>
           <tr><th scope="row"><code>defaults.auto_dispatch</code></th><td>false</td><td>Start Ready tasks by themselves when a slot is free.</td></tr>
           <tr><th scope="row"><code>defaults.auto_land</code></th><td>false</td><td>Land after the gate and review without asking you.</td></tr>
           <tr><th scope="row"><code>defaults.max_rounds</code></th><td>2</td><td>Automatic send-backs before a task becomes Blocked.</td></tr>
@@ -1068,7 +1068,7 @@ T-003: running — Second part</code></pre></div>
 SEQ  KIND        ACTOR  RUN  DETAIL
 12   dispatched  owner  R1   {"base":"main","profile":"script"}
 13   forced      owner  R1   {"operation":"dispatch","skipped":["dependencies"]}</code></pre></div>
-    <p>Force does not get past something physical. The refusal then names a command that can work:</p>
+    <p>Force cannot bypass slot limits or get past Git failures such as a missing branch. When another command can work, the refusal names it:</p>
     <div class="code term"><div class="code-h"><span>Terminal</span></div><pre tabindex="0"><code><span class="cl"><span class="pr">$ </span>corral-next approve T-003 --onto nosuchbranch</span>
 refused: landing target branch "nosuchbranch" does not exist
 next: corral-next approve T-003 --onto main</code></pre></div>
@@ -1298,24 +1298,24 @@ SEQ   TIME                  KIND     ACTOR      RUN  DETAIL
 
 pub struct Refusal { pub reason: String, pub next: Vec&lt;Next&gt;, <span class="cm">/* config problems */</span> }
 pub struct Next    { pub op: Op, pub force: bool }</code></pre></div>
-    <p>A refusal carries the typed operations that get past it, including the forced form. The app turns each <code>Next</code> into a button; the CLI prints it as a command.</p>
+    <p>A refusal carries any typed operations that get past it, including the forced form when applicable. The app turns each <code>Next</code> into a button; the CLI prints it as a command.</p>
   </section>
 
   <section class="sec" aria-labelledby="s4-2">
     <h3 id="s4-2"><span class="sec-no">4.2</span> Force</h3>
-    <p>Force is not a second mechanism. There is one short list of checks and the owner passes any of them.</p>
+    <p>Force skips specific checks on the same operation.</p>
     <div class="tw wide" tabindex="0" role="region" aria-label="Force table">
       <table class="cmd-table">
         <thead><tr><th scope="col">Operation</th><th scope="col">Normally requires</th><th scope="col"><code>--force</code> skips</th></tr></thead>
         <tbody>
-          <tr><th scope="row"><code>dispatch</code></th><td>Backlog or Ready, a project, dependencies Done, a free slot</td><td>Dependencies and slots</td></tr>
+          <tr><th scope="row"><code>dispatch</code></th><td>Backlog or Ready, a project, dependencies Done, a free slot</td><td>Dependencies</td></tr>
           <tr><th scope="row"><code>approve</code></th><td>Review, and a green gate on the commit being landed</td><td>The gate and the status rule: any task with a branch lands</td></tr>
-          <tr><th scope="row"><code>move</code></th><td>A move among Idea, Backlog, Ready; or Done or Dropped back to Backlog</td><td>Every status rule: any status to any status</td></tr>
+          <tr><th scope="row"><code>move</code></th><td>A move among Idea, Backlog, Ready; or Done or Dropped back to Backlog</td><td>Status rules, not admission limits</td></tr>
         </tbody>
       </table>
     </div>
     <ul>
-      <li><strong>Cannot be skipped:</strong> a rebase conflict, a missing branch, a refusal from git. These are physical.</li>
+      <li><strong>Cannot be skipped:</strong> slot limits, rebase conflicts, missing branches, or other Git refusals.</li>
       <li><strong>Recorded:</strong> each forced action appends one <code>forced</code> event listing what it skipped.</li>
       <li><strong>Automation never forces.</strong></li>
     </ul>
@@ -1361,7 +1361,7 @@ pub struct Next    { pub op: Op, pub force: bool }</code></pre></div>
     fn focus(&amp;self, session: &amp;SessionRef) -&gt; Result&lt;()&gt;;
 }</code></pre></div>
     <p>Four runners: a herdr pane, a detached process, the pi host, and a fake for tests. A sync pass reads each live session, turns “agent is asking” into a Blocked card that names <code>reply</code>, turns “session ended without done” into a Blocked card that names <code>retry</code>, dispatches Ready work when automatic dispatch is on, and advances stalled pipelines.</p>
-    <p>Two rules that came out of testing: slots count Running and Blocked tasks, not sessions; and <code>approve</code> does not wait for the worker to go idle.</p>
+    <p>A task holds its slot from dispatch through Review until Done, Dropped, Backlog or Ready. Send-backs, retries and replies reuse that slot while the task holds it. Four tasks waiting for approval can fill the default cap even with no active workers. <code>approve</code> does not wait for the worker to go idle.</p>
   </section>
 
   <section class="sec" aria-labelledby="s4-6">
@@ -1488,7 +1488,7 @@ pub struct Next    { pub op: Op, pub force: bool }</code></pre></div>
           <li>With no assistant running, <code>new</code>, <code>dispatch</code> and <code>approve</code> land a one-line change.</li>
           <li>A landed task runs its gate once per commit that is actually landed or sent back.</li>
           <li>Every Blocked card carries the command that clears it, and none names an agent.</li>
-          <li>Every refusal names its force command, and the app offers each one.</li>
+          <li>When a forced command can resolve a refusal, the refusal names it and the app offers it.</li>
         </ul>
       </li>
     </ol>

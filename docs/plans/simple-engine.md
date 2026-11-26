@@ -3,7 +3,7 @@
 Owner decisions, 2026-11-17:
 
 1. Replace the engine (`corral-ops` + `corral-core`); do not subtract in place.
-2. Retire the classic ratatui board. The app is the surface, and it can force anything.
+2. Retire the classic ratatui board. The app is the surface, including for forced operations.
 3. Rework the corral-pi host (see [corral-pi host](#corral-pi-host)).
 4. No line budget.
 
@@ -39,7 +39,8 @@ Measured on the workspace store on 2026-11-17 (976 tasks, 621 landed with full h
    socket and in agent panes. Only paired remote devices authenticate, and a paired device is
    the owner.
 4. **State stays readable.** Tasks, runs, checks, artifacts, events. Nothing derived is stored.
-5. **Every refusal names the command that gets past it**, including its `--force` form.
+5. **A refusal names the commands that resolve it, when available**, including a `--force`
+   form only when it can get past the check.
 
 ## Phases and worktrees
 
@@ -74,7 +75,7 @@ current directory that contains `.corral-next/`. At cutover the directory become
 
 ```toml
 [limits]
-running = 4                  # tasks in Running or Blocked at once; Review, reviewers and gates hold no slot
+running = 4                  # one slot per Running, Blocked, or Review task
 
 [defaults]
 profile = "omp-sol"          # worker profile when nothing else names one
@@ -127,6 +128,18 @@ title_regex = "(?i)tui|frontend"
 project = "corral"
 profile = "omp-opus"
 ```
+
+Both the global and optional per-project limits count tasks, not processes. A task holds
+one slot from dispatch through Running, Blocked, and Review, including gate, review and
+landing work. It still holds the slot if it spends a long time in Review without a live
+session. It frees the slot when it reaches Done or Dropped or is returned to Backlog or
+Ready. Send-backs, retries, and replies within the slot-holding statuses do not need a
+free slot. A retry from an unoccupied status checks admission again.
+
+This bounds how much work can pile up before landing, but can leave workers idle while
+reviews wait for the owner. With the default limit of four, four stalled reviews can stop
+new dispatches. The [configuration guide](../guide/configuration.md#running-slots-corral-next)
+covers the tradeoff.
 
 Worker profile resolution: dispatch flag, task `profile`, first matching `[[routing]]`
 rule, project `profile`, `defaults.profile`. Project keys fall back to `[defaults]`.
@@ -275,7 +288,8 @@ stateDiagram-v2
     Done --> Backlog: reopen
 ```
 
-`drop` moves any status to Dropped. `move --force` sets any status from any status.
+`drop` moves any status to Dropped. `move --force` bypasses status rules, but a move
+into Running, Blocked, or Review from a non-slot-holding status still needs a free slot.
 
 ### Operations
 
@@ -299,8 +313,8 @@ The CLI parses its arguments into an `Op`; the wire submits `{ op, force }` unch
 |---|---|---|---|
 | `new` | always | Task in Idea, Backlog or Ready | n/a |
 | `edit`, `comment` | always | Fields or body change; `edited` or `commented` event | n/a |
-| `move` | among Idea, Backlog, Ready; Done or Dropped to Backlog | Status change | Every rule: any status to any status |
-| `dispatch` | Backlog or Ready, project set, dependencies Done, a slot free | Worktree `<project>/.worktrees/<id>` on `<branch_prefix><id>`, prompt, worker session, Running | Dependencies and slots |
+| `move` | among Idea, Backlog, Ready; Done or Dropped to Backlog | Status change | Status rules, not admission limits |
+| `dispatch` | Backlog or Ready, project set, dependencies Done, a slot free | Worktree `<project>/.worktrees/<id>` on `<branch_prefix><id>`, prompt, worker session, Running | Dependencies |
 | `reply` | a live worker session | Text delivered; Blocked returns to Running | n/a |
 | `done` | Running or Blocked with a worker run; a repeat while in Review succeeds and changes nothing | Uncommitted work is committed; diff, summary and glob artifacts stored; Review; pipeline starts | n/a |
 | `gate` | the task has a worktree | Gate runs on HEAD; `Check` and log artifact recorded | n/a |
@@ -308,7 +322,7 @@ The CLI parses its arguments into an `Op`; the wire submits `{ op, force }` unch
 | `verdict` | Review | `Check` recorded; approve ends the reviewer session and continues the pipeline; changes sends work back and keeps the reviewer session for the next round | n/a |
 | `changes` | Review or Blocked with a run | Owner note sent back; Running; `round` reset to 0 | n/a |
 | `approve` | Review, gate green on the landed commit; the task's sessions are stopped as part of landing | Land (below) onto the run's base, or onto any existing branch with `onto`; Done | The gate, and the status rule: any task with a branch lands |
-| `retry` | the task has had a run | New worker run on the same branch, or from base with `fresh` | n/a |
+| `retry` | the task has had a run; a free slot if the task no longer holds one | New worker run on the same branch, or from base with `fresh` | n/a |
 | `stop` | a live session | Session killed; Blocked `stopped by owner` | n/a |
 | `drop`, `reopen` | always | Dropped, or back to Backlog | n/a |
 | `sync` | always | Reconcile sessions, dispatch Ready work, resume stalled pipelines | n/a |
@@ -465,20 +479,21 @@ repositories and a fake `Runner`; none starts herdr or touches a live workspace.
 2. Red gate sends back; at `max_rounds` the task is Blocked and `next` names the commands.
 3. Reviewer `changes` then `approve`; `auto_land` lands without the owner.
 4. Rebase conflict sends back; an unchanged commit does not rerun its gate.
-5. Force: `approve --force` over a red gate; `dispatch --force` past dependencies and
-   slots; `move --force` to Done stops the session.
+5. Force: `approve --force` over a red gate; `dispatch --force` past dependencies only;
+   `move --force` to Done stops the session.
+   Neither dispatch nor move into a slot-holding status can force past admission limits.
 6. Sync: blocked excerpt, session gone, auto-dispatch order.
 7. CLI end to end with `ProcessRunner` and a shell-script agent that commits and calls `done`.
 
 ## Force
 
-Force is not a second mechanism. There is one short list of checks, and the owner passes
-any of them: dependencies, slot limits, the gate, status rules, a live session. What force
-cannot skip is physical: a rebase conflict, a missing branch, a git refusal.
+Force skips specific checks on the same operation: dispatch dependencies, move status
+rules, or approve status and gate checks. Force does not bypass slot limits or Git
+failures such as rebase conflicts or missing branches.
 
-The app shows every operation in the table above on every card and session, with the
-forced form offered whenever the normal form is refused. A paired device is the owner:
-no per-device authority classes, previews or device proofs; destructive actions ask once.
+The app shows every operation in the table above on every card and session, and offers
+the forced form when it can resolve a refusal. A paired device is the owner: no per-device
+authority classes, previews or device proofs; destructive actions ask once.
 
 ## App and daemon
 
@@ -544,4 +559,4 @@ Direction:
 - With no assistant running, `new`, `dispatch` and `approve` land a one-line change.
 - A landed task runs its gate once per commit that is actually landed or sent back.
 - Every Blocked card carries the command that clears it, and none names an agent.
-- Every refusal names its force command, and the app offers each one.
+- When a forced command can resolve a refusal, the refusal names it and the app offers it.

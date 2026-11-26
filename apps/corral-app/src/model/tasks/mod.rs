@@ -219,9 +219,8 @@ pub fn sections(feed: &Feed, scope: &Scope, state: &State) -> Vec<Section> {
     sections
 }
 
-/// `22 open · slots 3 of 5 used` over the list: the open tasks in scope, and the running slots
-/// corrald counts (a project with its own limit counts its own). The open count is unknown
-/// until the board is complete.
+/// The open tasks in scope and the dispatch slots corrald counts (a project with its own
+/// limit counts its own). The open count is unknown until the board is complete.
 pub fn summary(feed: &Feed, scope: &Scope) -> String {
     let open = if feed.board.complete {
         in_scope(feed, scope)
@@ -242,7 +241,10 @@ pub fn summary(feed: &Feed, scope: &Scope) -> String {
             .unwrap_or(&slots.global)
     });
     match count {
-        Some(count) => format!("{open} open · slots {} of {} used", count.used, count.limit),
+        Some(count) => format!(
+            "{open} open · slots {}/{} incl. Review",
+            count.used, count.limit
+        ),
         None => format!("{open} open"),
     }
 }

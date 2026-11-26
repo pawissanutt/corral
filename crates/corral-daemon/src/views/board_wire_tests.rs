@@ -339,7 +339,7 @@ max_rounds = 5
 [projects.demo]
 path = "repo"
 auto_dispatch = false
-running = 2
+running = 3
 reviewer = "generic"
 gate = ["cargo", "check"]
 env = { CHECK_MODE = "fast" }
@@ -396,7 +396,7 @@ path = "missing-repo"
             reviewer: Some("generic".into()),
             profile: Some("generic".into()),
             gate: vec!["cargo".into(), "check".into()],
-            running: Some(2),
+            running: Some(3),
             env: BTreeMap::from([("CHECK_MODE".into(), "fast".into())]),
             auto_dispatch: false,
             auto_land: true,
@@ -419,8 +419,8 @@ path = "missing-repo"
     assert_eq!(
         health.slots.as_ref().unwrap(),
         &Slots {
-            global: SlotCount { used: 3, limit: 7 },
-            projects: BTreeMap::from([("demo".into(), SlotCount { used: 2, limit: 2 })]),
+            global: SlotCount { used: 4, limit: 7 },
+            projects: BTreeMap::from([("demo".into(), SlotCount { used: 3, limit: 3 })]),
         }
     );
     let SubDelta::Health { rows, .. } = subscribe(&shared, Topic::Health) else {

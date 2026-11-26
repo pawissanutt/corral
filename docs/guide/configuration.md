@@ -74,9 +74,28 @@ changes carry `pm_relevant = true`; UI-only changes remain readable through even
 
 These commands only read recorded events; they do not reload settings or create events.
 
-Sections: [limits](#limits) · [resources](#resources) · [dispatch](#dispatch) · [projects](#projects) · [defaults](#defaults) · [harnesses](#harnesses) ·
+Sections: [running slots (corral-next)](#running-slots-corral-next) · [limits](#limits) · [resources](#resources) · [dispatch](#dispatch) · [projects](#projects) · [defaults](#defaults) · [harnesses](#harnesses) ·
 [profiles](#profiles) · [routing](#routing) · [automation](#automation) · [review](#review) · [sync](#sync) · [ui](#ui) · [board.card](#boardcard) · [viewers](#viewers) ·
 [artifacts](#artifacts) · [storage](#storage) · [load_sandbox](#load_sandbox) · [search](#search) · [pm](#pm) · [build](#build) · [herdr](#herdr) · [agents (legacy)](#agents-legacy)
+
+## Running slots (`corral-next`)
+
+In `.corral-next/corral.toml`, `[limits].running` caps the number of tasks in flight across
+all projects (default `4`). An optional `[projects.<key>].running` also caps the tasks in
+that project. Both count one slot per task in **Running**, **Blocked**, or **Review**,
+not one per session or process.
+
+A task holds its slot from dispatch through the gate, review, and landing pipeline, even
+while waiting for owner approval with no session running. It frees the slot when it reaches
+Done or Dropped, or is moved back to Backlog or Ready. Send-backs, retries, and replies
+reuse the slot of a task that still holds one, even when the board is full. A retry from
+outside those three statuses checks admission again. New dispatches and moves into a
+slot-holding status from outside one need a free slot, even with `--force`.
+
+The limit bounds unfinished work, not just active workers. For example, with the default
+limit, four tasks waiting in Review can prevent new dispatches even when no worker is
+running. Clear stalled reviews or reconsider the cap if you need more coding work to start
+while reviews wait; raising it also allows more unfinished work to accumulate.
 
 ## Session wrappers (`corral-next`)
 

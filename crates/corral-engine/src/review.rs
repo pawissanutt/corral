@@ -145,7 +145,8 @@ impl Engine {
                         self.store.transaction(|store| {
                             let mut current = store.require_task(id)?;
                             if current.status == task.status
-                                && !matches!(current.status, Status::Done | Status::Dropped)
+                                && current.status.holds_slot()
+                                && !store.has_queued_repair(id)?
                             {
                                 self.record_operation_failure(
                                     store,
@@ -497,6 +498,11 @@ impl Engine {
     ) -> Result<Option<Run>> {
         let mut worker = self.last_worker(store, task)?;
         let project = self.project_for(task)?;
+        // Ordinary send-backs stay in the task's existing slot. A forced
+        // landing of an unadmitted task can also reach this path on conflict.
+        if !task.status.holds_slot() {
+            self.require_dispatch_slot(store, task.project.as_deref(), project.as_ref())?;
+        }
         let max_rounds = project
             .as_ref()
             .map_or(self.config.defaults.max_rounds, |p| p.max_rounds);
@@ -527,15 +533,6 @@ impl Engine {
                 actor,
             )?;
             return Ok(None);
-        }
-        if self.worker_slot_full(store, task, project.as_ref())? {
-            if task.status == Status::Review
-                && let SendBack::Automatic { onto } = reason
-            {
-                store.queue_repair(&task.id, notes, onto)?;
-                return Ok(None);
-            }
-            return Err(refuse("no free worker slot for changes", vec![]));
         }
         let origin = if reset && actor != Actor::Auto {
             Origin::Owner

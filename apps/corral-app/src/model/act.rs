@@ -277,7 +277,7 @@ pub fn label(op: &Op, force: bool) -> String {
 pub const fn skips(op: &Op) -> Option<&'static str> {
     match op {
         Op::Move { .. } => Some("every status rule: any status to any status"),
-        Op::Dispatch { .. } => Some("unfinished dependencies and the running-slot limit"),
+        Op::Dispatch { .. } => Some("unfinished dependencies"),
         Op::Approve { .. } => Some("the gate check and the Review status rule"),
         _ => None,
     }

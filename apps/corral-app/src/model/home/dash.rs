@@ -127,8 +127,8 @@ pub fn tiles(feed: &Feed, scope: &Scope, since: &Since, cost: &Cost) -> Vec<Tile
                     || "slots unknown".to_owned(),
                     |(used, limit)| format!("slots {used}/{limit}"),
                 ),
-                "Running tasks, reviews being checked and working sessions; a Running or \
-                 Blocked task holds a slot"
+                "Running, Blocked and Review tasks hold a slot, even while waiting to land. \
+                 Working counts running tasks, reviews being checked and working sessions."
                     .into(),
             )
         },

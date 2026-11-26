@@ -480,7 +480,8 @@ impl Store {
 
     /// Count task slots according to the same rule used by dispatch.
     pub fn occupied_slots(&self, project: Option<&str>) -> Result<usize> {
-        let count: i64 = self.connection.query_row("SELECT count(*) FROM tasks WHERE status IN ('running','blocked') AND (?1 IS NULL OR project=?1)", [project], |row| row.get(0)).context("count tasks holding a dispatch slot")?;
+        let [running, blocked, review] = Status::SLOT_HOLDERS.map(Status::as_str);
+        let count: i64 = self.connection.query_row("SELECT count(*) FROM tasks WHERE status IN (?2,?3,?4) AND (?1 IS NULL OR project=?1)", params![project, running, blocked, review], |row| row.get(0)).context("count tasks holding a dispatch slot")?;
         count.try_into().context("slot count exceeds platform size")
     }
 

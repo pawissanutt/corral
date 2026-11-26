@@ -40,7 +40,7 @@ build sessions and 2 chats. The home screen showed an idle task loop; the live w
 | 4 | **Every existing surface keeps a dedicated page**; what changes is how it is reached. Feed, Timeline, Usage and Artifacts are sub-pages of Activity: the sidebar shows four places at rest and reveals Activity's pages under it while Activity is open. |
 | 5 | **One project scope for the whole app.** A switcher at the top of the sidebar (All projects, or one) scopes Home, Tasks, Sessions and Activity together. The Project page is Home scoped to that project, plus its facts. No per-screen filter chips. |
 | 6 | **One page per thing.** Review and landing happen on the task's page; a plan is a task page that lists its children. No Review or Plans destination. |
-| 7 | **One next step, the rest under More.** A task shows one button picked from its status. Every other operation is in a More menu. A refusal still offers its forced form. |
+| 7 | **One next step, the rest under More.** A task shows one button picked from its status. Every other operation is in a More menu. A refusal offers its forced form when one can resolve it; slot limits cannot be bypassed. |
 | 8 | **Home is three sections and a composer:** Needs you, Working, Just finished, tasks and sessions mixed, with a composer docked at the bottom to ask, file an idea or instruct. |
 | 9 | **Small things in place, big things on their page.** A question shows its options or reply box in the Home list. A review, a blocked task with a log, or a build choosing its exit opens its page, with the decision at the top. |
 | 10 | **Tasks is one list grouped by status**, in the order Blocked, Review, Running, Ready, Backlog, Idea, with Done and Dropped folded at the bottom. Same layout on the phone. |

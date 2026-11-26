@@ -25,7 +25,7 @@ pub(super) fn sample(projects: bool) -> String {
 const WORKSPACE: &str = r#"# corral.toml of the sample workspace: every project, task and device here is sample data.
 
 [limits]
-running = 5                  # tasks in Running or Blocked at once; Review holds no slot
+running = 8                  # tasks in Running, Blocked or Review at once
 
 [defaults]
 profile = "omp-sol"          # worker profile when nothing else names one

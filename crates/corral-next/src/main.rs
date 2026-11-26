@@ -201,12 +201,27 @@ fn run(command: Command, out: &mut Output<'_>) -> Result<u8> {
                     Status::Review,
                 ],
             };
-            let tasks = engine.store.list_tasks(&TaskFilter {
-                statuses,
-                project,
-                parent: None,
+            let (tasks, occupied) = engine.store.read_snapshot(|| {
+                let tasks = engine.store.list_tasks(&TaskFilter {
+                    statuses,
+                    project,
+                    parent: None,
+                })?;
+                let occupied = if out.json {
+                    0
+                } else {
+                    engine.store.occupied_slots(None)?
+                };
+                Ok((tasks, occupied))
             })?;
-            out.value(tasks.as_slice(), output::tasks)?;
+            out.value(tasks.as_slice(), |out, tasks| {
+                writeln!(
+                    out,
+                    "Global task slots: {}/{} used (Running, Blocked and Review)",
+                    occupied, engine.config.limits.running,
+                )?;
+                output::tasks(out, tasks)
+            })?;
         }
         Command::Show(Id { id }) => {
             let task = engine.store.require_task(&id)?;

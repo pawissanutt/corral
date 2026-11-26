@@ -7,6 +7,7 @@ use serde_json::json;
 
 use crate::{
     Applied, ArtifactKind, Engine, Next, Op, Run, Runner,
+    config::EffectiveProject,
     error::refuse,
     events::{EventKind, NewEvent},
     model::{Actor, Blocked, Outcome, Status, Task},
@@ -186,7 +187,11 @@ impl Engine {
                 task.body = value;
             }
             if let Some(value) = edit.project {
-                task.project = value;
+                let from = std::mem::replace(&mut task.project, value);
+                if task.status.holds_slot() && task.project != from {
+                    let project = self.project_for(&task)?;
+                    self.require_project_slot(store, task.project.as_deref(), project.as_ref())?;
+                }
             }
             if let Some(value) = edit.priority {
                 task.priority = value;
@@ -316,8 +321,47 @@ impl Engine {
         })
     }
 
+    // Call inside the write transaction, only when acquiring a slot (not when
+    // resuming a task that already holds one, even if the limit was lowered).
+    pub(crate) fn require_dispatch_slot(
+        &self,
+        store: &Store,
+        project_name: Option<&str>,
+        project: Option<&EffectiveProject>,
+    ) -> Result<()> {
+        if store.occupied_slots(None)? >= self.config.limits.running {
+            return Err(refuse("no free task slot (limits.running)", vec![]));
+        }
+        self.require_project_slot(store, project_name, project)
+    }
+
+    pub(crate) fn require_project_slot(
+        &self,
+        store: &Store,
+        project_name: Option<&str>,
+        project: Option<&EffectiveProject>,
+    ) -> Result<()> {
+        if let Some(limit) = project.and_then(|p| p.running)
+            && store.occupied_slots(project_name)? >= limit
+        {
+            return Err(refuse("no free task slot (project.running)", vec![]));
+        }
+        Ok(())
+    }
+
     fn set_status(&self, store: &Store, task: &mut Task, status: Status) -> Result<()> {
-        if matches!(status, Status::Done | Status::Dropped) {
+        if status.holds_slot() && !task.status.holds_slot() {
+            let project = self.project_for(task)?;
+            self.require_dispatch_slot(store, task.project.as_deref(), project.as_ref())?;
+        }
+        if !status.holds_slot()
+            && (task.status.holds_slot() || matches!(status, Status::Done | Status::Dropped))
+        {
+            let reason = if matches!(status, Status::Done | Status::Dropped) {
+                "terminal task move"
+            } else {
+                "task returned to planning"
+            };
             for mut run in store.live_runs_for_task(&task.id)? {
                 self.end_run(store, &mut run, Outcome::Stopped, true)?;
                 store.append_event(&NewEvent {
@@ -325,7 +369,7 @@ impl Engine {
                     run: Some(run.id),
                     kind: EventKind::Stopped,
                     actor: self.actor,
-                    detail: json!({"reason":"terminal task move"}),
+                    detail: json!({"reason":reason}),
                 })?;
             }
         }

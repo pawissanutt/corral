@@ -4,7 +4,7 @@ Phase 2 of [simple-engine.md](simple-engine.md): the daemon, the wire protocol a
 
 ## Kept owner decisions
 
-- The app can force anything: every engine operation is on every card and session, and the forced form is offered when the normal form is refused.
+- Every engine operation is on every card and session. The app offers a forced form when it resolves the refusal, not for hard limits such as slot capacity.
 - Browser and native clients have the same authority. A paired device is the owner: authority classes, previews and proofs are removed, and destructive actions ask once (confirmed 2026-11-18).
 - A plan is a parent task with children and a Markdown document. There is no separate plan review (confirmed 2026-11-18).
 - Inbox merges into Now and Builds merges into Agents (confirmed 2026-11-18; section 4).
@@ -48,7 +48,7 @@ pub enum OpReply { Done { seq: u64, task: Option<String> }, Running { seq: u64 }
 | `session` | reshape | Send → `reply`; Stop → `stop`; Relaunch → `retry`. Keys stays as a pass-through to the herdr pane (`crates/corral-herdr/src/lib.rs:255`). Cancel, Pause, Resume, PmOpen drop: chat sessions get input and cancel in phase 3 |
 | `config` | reshape | Set, ProfileAdd, ProfileRemove → `config.put` |
 | `question` | drop | A question is a Blocked card with `detail`; Answer, AnswerGroup, Followup → `reply`. Escalate, Cancel, Deadline have no successor |
-| `queue` | drop | Add → `move` to Ready; Remove → `move` to Backlog; Admit → `dispatch` with force; Pause, Resume → the `auto_dispatch` switch |
+| `queue` | drop | Add → `move` to Ready; Remove → `move` to Backlog; Admit → `dispatch` when a slot is free (`--force` skips dependencies only); Pause, Resume → the `auto_dispatch` switch |
 | `attention` | drop | Park, Unpark → `move` to Backlog plus `comment`; Attend has no successor |
 | `plan` | drop | Accept → `move` each child to Ready; RequestChanges → `comment` on the parent; AddMember, MoveMember → `edit` parent; Cancel → `drop` the parent; Policy has no successor |
 | `annotation` | drop | Review comments become one `changes` note that quotes file and line |

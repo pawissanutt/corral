@@ -80,6 +80,9 @@ impl Engine {
             }
             let project_name = self.dispatch_project(&task)?;
             let project = self.config.effective_project(project_name)?;
+            // The immediate transaction holds admission until the worker start and
+            // Running transition commit. Sync's earlier count is only a hint.
+            self.require_dispatch_slot(store, Some(project_name), Some(&project))?;
             let mut skipped = Vec::new();
             let mut next = Vec::new();
             for dependency in &task.depends_on {
@@ -99,18 +102,6 @@ impl Engine {
                         status: Status::Done,
                     }));
                 }
-            }
-            let global_full = store.occupied_slots(None)? >= self.config.limits.running;
-            let project_full = if let Some(limit) = project.running {
-                store.occupied_slots(Some(project_name))? >= limit
-            } else {
-                false
-            };
-            if global_full {
-                skipped.push("limits.running");
-            }
-            if project_full {
-                skipped.push("project.running");
             }
             if !skipped.is_empty() && !force {
                 next.insert(0, Next::force(op(id)));
@@ -260,11 +251,6 @@ impl Engine {
             if matches!(task.status, Status::Done | Status::Dropped) {
                 return Err(refuse("reply requires a live worker", vec![next_retry(id)]));
             }
-            if task.status == Status::Blocked
-                && self.worker_slot_full(store, &task, self.project_for(&task)?.as_ref())?
-            {
-                return Err(refuse("no free worker slot for reply", vec![]));
-            }
             let Some(session) = self.live_session(&run)? else {
                 return Err(refuse("reply requires a live worker", vec![next_retry(id)]));
             };
@@ -355,17 +341,19 @@ impl Engine {
                 } else {
                     next_retry(id)
                 };
-                self.block_in(
-                    store,
-                    &mut task,
-                    Some(&run.id),
-                    Blocked {
-                        reason: reason.into(),
-                        detail: None,
-                        next: vec![next, next_force_approve(id)],
-                    },
-                    self.actor,
-                )?;
+                if task.status.holds_slot() {
+                    self.block_in(
+                        store,
+                        &mut task,
+                        Some(&run.id),
+                        Blocked {
+                            reason: reason.into(),
+                            detail: None,
+                            next: vec![next, next_force_approve(id)],
+                        },
+                        self.actor,
+                    )?;
+                }
                 return Ok(run);
             }
             let next = if store.latest_run(id, Role::Worker)?.is_some() {
@@ -417,8 +405,8 @@ impl Engine {
                     )
                 })?;
             let project = self.project_for(&task)?;
-            if self.worker_slot_full(store, &task, project.as_ref())? {
-                return Err(refuse("no free worker slot for retry", vec![]));
+            if !task.status.holds_slot() {
+                self.require_dispatch_slot(store, task.project.as_deref(), project.as_ref())?;
             }
             let mut checkout = Checkout::from_run(&last)?;
             self.supersede_runs(store, id, |run| run.role == Role::Worker)?;

@@ -115,7 +115,7 @@ const ARTIFACTS: [&str; 2] = ["globs", "max_bytes"];
 /// The owner's word for a key.
 fn label(key: &str) -> &'static str {
     match key {
-        "running" => "Running slots",
+        "running" => "Dispatch slots",
         "profile" => "Worker profile",
         "base" => "Base branch",
         "max_rounds" => "Review rounds",
@@ -251,7 +251,7 @@ fn workspace(profiles: &[String]) -> Vec<Group> {
                     "running",
                     Kind::Typed(Typed::Number),
                 )
-                .note("tasks in Running or Blocked at once; Review, reviewers and gates hold none"),
+                .note("tasks in Running, Blocked or Review at once, including every review stage"),
             ],
         },
         Group {
@@ -334,7 +334,7 @@ fn entry(doc: &DocumentMut, feed: &Feed, part: Part, name: &str, profiles: &[Str
                     "running" => Field {
                         label: "Slot cap",
                         ..field(path, key, Kind::Typed(Typed::Number))
-                            .note("this project's tasks in Running or Blocked at once")
+                            .note("this project's tasks in Running, Blocked or Review at once")
                     },
                     "max_rounds" => field(path, key, Kind::Typed(Typed::Number)),
                     "auto_dispatch" | "auto_land" => {

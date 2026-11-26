@@ -1,12 +1,9 @@
-//! A review releases its worker slot. Persist automatic send-backs until the
-//! same write transaction can both admit the repair and resume its worker.
+//! Compatibility for send-backs queued before Review held a slot. Resume
+//! these with their original notes; new send-backs never wait for capacity.
 use anyhow::{Context, Result};
 use rusqlite::OptionalExtension;
 
-use crate::{
-    Actor, Engine, Next, Op, Status, Store, Task, config::EffectiveProject,
-    pipeline::OperationFailure, review::SendBack,
-};
+use crate::{Actor, Engine, Next, Op, Status, Store, pipeline::OperationFailure, review::SendBack};
 
 pub(crate) const EXHAUSTED: &str = "automatic change rounds exhausted";
 const REPAIR_FAILED: &str = "queued repair failed";
@@ -21,14 +18,6 @@ CREATE TRIGGER IF NOT EXISTS clear_pending_repair AFTER UPDATE OF status ON task
     BEGIN DELETE FROM pending_repairs WHERE task=NEW.id; END;";
 
 impl Store {
-    pub(crate) fn queue_repair(&self, id: &str, notes: &str, onto: Option<&str>) -> Result<()> {
-        self.connection.execute(
-            "INSERT INTO pending_repairs(task,notes,onto) VALUES(?1,?2,?3) ON CONFLICT(task) DO UPDATE SET notes=excluded.notes,onto=excluded.onto WHERE notes IS NOT excluded.notes OR onto IS NOT excluded.onto",
-            rusqlite::params![id, notes, onto],
-        ).context("queue repair waiting for a worker slot")?;
-        Ok(())
-    }
-
     pub(crate) fn has_queued_repair(&self, id: &str) -> Result<bool> {
         self.connection
             .query_row(
@@ -73,45 +62,6 @@ impl Store {
 }
 
 impl Engine {
-    pub(crate) fn worker_slot_full(
-        &self,
-        store: &Store,
-        task: &Task,
-        project: Option<&EffectiveProject>,
-    ) -> Result<bool> {
-        let repair_block = task.status == Status::Blocked
-            && task
-                .blocked
-                .as_ref()
-                .is_some_and(|b| matches!(b.reason.as_str(), EXHAUSTED | REPAIR_FAILED));
-        if task.status == Status::Running || (task.status == Status::Blocked && !repair_block) {
-            return Ok(false); // Already admitted.
-        }
-        let occupied =
-            |project: Option<&str>| -> Result<usize> {
-                if !repair_block {
-                    return store.occupied_slots(project);
-                }
-                // Fresh dispatch still counts every block. When explicitly resuming
-                // a repair, don't count other repair decisions that never started a
-                // worker: two exhausted reviews must not deadlock a one-slot board.
-                let count: i64 = store.connection.query_row(
-                "SELECT count(*) FROM tasks WHERE (status='running' OR (status='blocked' AND
-                 COALESCE(json_extract(document,'$.blocked.reason'),'') NOT IN (?2,?3)))
-                 AND (?1 IS NULL OR project=?1)",
-                rusqlite::params![project, EXHAUSTED, REPAIR_FAILED], |row| row.get(0)
-            ).context("count slots for owner repair")?;
-                count.try_into().context("invalid repair slot count")
-            };
-        if occupied(None)? >= self.config.limits.running {
-            return Ok(true);
-        }
-        if let Some(limit) = project.and_then(|p| p.running) {
-            return Ok(occupied(task.project.as_deref())? >= limit);
-        }
-        Ok(false)
-    }
-
     pub(crate) fn advance_queued_repair(&self, id: &str) -> Result<bool> {
         if !self.store.has_queued_repair(id)? {
             return Ok(false);

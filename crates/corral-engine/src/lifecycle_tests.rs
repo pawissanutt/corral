@@ -572,55 +572,8 @@ fn done_auto_lands_in_the_same_pipeline_while_worker_is_working() {
     assert_eq!(cx.runner.stops(), [worker.session.unwrap()]);
 }
 
-#[test]
-fn review_releases_global_and_project_slots_with_worker_still_live() {
-    let mut cx = Fixture::new(&[]);
-    cx.engine.config.limits.running = 1;
-    cx.project().running = Some(1);
-    let first = cx.backlog("enter review");
-    let run = cx.dispatch(&first);
-    assert_eq!(cx.done(&first).task.unwrap().status, Status::Review);
-    assert!(cx.runner.stops().is_empty());
-
-    let second = cx.new_task("next ready task", Status::Ready, Priority::P2, vec![]);
-    cx.project().auto_dispatch = Some(true);
-    cx.apply(Op::Sync, false);
-    assert_eq!(cx.task(&second).status, Status::Running);
-    let live = cx.engine.store.live_runs_for_task(&first).unwrap();
-    assert_eq!(live.len(), 1);
-    assert_eq!(live[0].session, run.session);
-}
-
-#[test]
-fn rejected_review_waits_for_a_worker_slot_before_delivering_notes() {
-    let mut cx = Fixture::new(&[]);
-    cx.engine.config.limits.running = 1;
-    let first = cx.backlog("needs revision");
-    cx.dispatch(&first);
-    cx.done(&first);
-    let second = cx.backlog("occupies released slot");
-    cx.dispatch(&second);
-    let sends = cx.runner.sends().len();
-    cx.engine
-        .verdict(&first, false, Some("fix the draft"))
-        .unwrap();
-    cx.apply(Op::Sync, false);
-    assert_eq!(cx.task(&first).status, Status::Review);
-    assert_eq!(cx.runner.sends().len(), sends);
-    cx.engine.config.limits.running = 2;
-    cx.project().running = Some(1);
-    cx.project().auto_dispatch = Some(true);
-    let third = cx.new_task("another ready task", Status::Ready, Priority::P2, vec![]);
-    cx.apply(Op::Sync, false);
-    assert_eq!(cx.task(&first).status, Status::Review);
-    assert_eq!(cx.runner.sends().len(), sends);
-    cx.done(&second);
-    cx.apply(Op::Sync, false);
-    assert_eq!(cx.task(&first).status, Status::Running);
-    assert_eq!(cx.task(&first).round, 1);
-    assert_eq!(cx.task(&third).status, Status::Ready);
-    assert_eq!(cx.events(&first, EventKind::SentBack).len(), 1);
-}
+#[path = "slot_tests.rs"]
+mod slot_tests;
 
 #[path = "land_queue_tests.rs"]
 mod queue_tests;
@@ -705,74 +658,6 @@ fn unchanged_head_reuses_green_gate_and_rebase_conflict_sends_back() {
             .starts_with("rebase onto main and resolve conflicts")
     );
     assert_eq!(cx.events(&id, EventKind::Gate).len(), 1);
-}
-
-#[test]
-fn force_records_only_the_skipped_checks_and_stops_live_sessions() {
-    let mut cx = Fixture::new(&["false"]);
-    cx.engine.config.limits.running = 1;
-    cx.project().running = Some(1);
-    let running = cx.backlog("occupies slot");
-    let run = cx.dispatch(&running);
-    let dependency = cx.backlog("not done");
-    let id = cx.new_task(
-        "forced work",
-        Status::Backlog,
-        Priority::P2,
-        vec![dependency],
-    );
-    let refused = cx.engine.apply(dispatch(&id), false).unwrap_err();
-    assert!(
-        as_refusal(&refused)
-            .unwrap()
-            .next
-            .iter()
-            .any(|n| n.force && n.op == dispatch(&id))
-    );
-    let forced = cx.apply(dispatch(&id), true).run.unwrap();
-    assert_eq!(
-        cx.events(&id, EventKind::Forced)[0].detail["skipped"],
-        serde_json::json!(["dependencies", "limits.running", "project.running"])
-    );
-    fs::write(forced.worktree.join("file.txt"), "forced change\n").unwrap();
-    let submitted = cx.done(&id);
-    // Force applies only to the dispatch, not to the later automatic gate repair.
-    assert_eq!(submitted.task.unwrap().status, Status::Review);
-    let head = submitted.run.unwrap().head_sha.unwrap();
-    cx.runner
-        .set_status(forced.session.as_ref().unwrap(), SessionStatus::Working);
-    let refused = cx.engine.apply(approve(&id), false).unwrap_err();
-    assert!(
-        as_refusal(&refused)
-            .unwrap()
-            .next
-            .iter()
-            .any(|n| n.force && n.op == approve(&id))
-    );
-    cx.apply(approve(&id), true);
-    cx.assert_landed(&forced, &head);
-    assert_eq!(cx.events(&id, EventKind::Gate).len(), 1);
-    assert_eq!(
-        cx.events(&id, EventKind::Forced)[1].detail["skipped"],
-        serde_json::json!(["queued repair", "gate"])
-    );
-    cx.apply(
-        Op::Move {
-            id: running.clone(),
-            status: Status::Done,
-        },
-        true,
-    );
-    assert_eq!(
-        cx.runner.stops(),
-        [forced.session.unwrap(), run.session.unwrap()]
-    );
-    assert!(run.worktree.exists());
-    assert!(cx.branch_exists(&run.branch));
-    assert_eq!(
-        cx.events(&running, EventKind::Forced)[0].detail["skipped"],
-        serde_json::json!(["status rule"])
-    );
 }
 
 #[test]

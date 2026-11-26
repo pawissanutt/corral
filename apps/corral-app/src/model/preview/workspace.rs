@@ -129,12 +129,12 @@ pub(super) fn resolved_profile(feed: &Feed, task: &corral_types::Task) -> Option
     })
 }
 
-/// Slots in use: Running and Blocked tasks hold one; projects with their own limit count apart.
+/// Count tasks, not runs: every stage of Review still holds the task's dispatch slot.
 pub(super) fn slots(feed: &Feed, records: &[TaskDetail]) -> Slots {
     let holding = |project: Option<&str>| {
         records
             .iter()
-            .filter(|record| matches!(record.task.status, Status::Running | Status::Blocked))
+            .filter(|record| record.task.status.holds_slot())
             .filter(|record| project.is_none_or(|id| record.task.project.as_deref() == Some(id)))
             .count() as u64
     };

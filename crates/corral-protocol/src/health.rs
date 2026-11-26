@@ -38,7 +38,7 @@ pub struct Slots {
     Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
 )]
 pub struct SlotCount {
-    /// Running and Blocked tasks currently occupying slots.
+    /// Running, Blocked and Review tasks currently occupying slots.
     pub used: u64,
     pub limit: u64,
 }

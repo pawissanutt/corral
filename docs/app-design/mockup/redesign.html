@@ -503,7 +503,7 @@ td.m{font-family:var(--mono)}
    number and time below is composed for this reference and is not a daemon fact.
    Words follow the engine: 8 statuses, the CLI operation names, its event kinds.
 --------------------------------------------------------------------------------------------- */
-const LIMIT = 4;
+const LIMIT = 4; // The sample starts over capacity to show what happens after a cap is lowered.
 const PROJECTS = {
   "corral": {base:"main", gate:"bash scripts/gate.sh", reviewer:"pi-sol", profile:"pi-terra"},
   "mitigraph": {base:"main", gate:"cargo nextest run", reviewer:"pi-sol", profile:"pi-sol"},
@@ -611,7 +611,7 @@ const EVENTS = [
   ["10:31","sent_back","T-944","gate failed on 6a0c1ee, round 2","auto"],
   ["10:29","dispatched","T-704","worker R1, profile pi-opus-api","owner"],
   ["10:05","landed","B-j1c5","5e0c2d1 onto main","owner"],
-  ["09:58","forced","T-704","dispatch skipped the slot limit","owner"],
+  ["09:58","forced","T-704","dispatch skipped dependencies","owner"],
   ["09:40","dropped","T-720","","owner"],
   ["09:31","created","T-962","filed from chat A-4","assistant"],
 ];
@@ -621,7 +621,7 @@ const OPS = [ // the engine's order; the hint says what the word does
   ["verdict","record a review verdict"],["changes","send back with a note"],["approve","land onto the base"],["retry","restart the worker"],
   ["stop","stop the session"],["drop","mark as Dropped"],["reopen","back to Backlog"],
 ];
-const SKIPS = {dispatch:"dependencies and the slot limit", approve:"the gate and the status rule", move:"every status rule"};
+const SKIPS = {dispatch:"dependencies", approve:"the gate and the status rule", move:"status rules"};
 const ASKS = new Set(["drop","stop","approve"]);
 
 /* ------------------------------------------------------------------------------------------ */
@@ -644,7 +644,8 @@ const st = s => `<span class="st s-${s}">${mark(s)}<span>${cap(s)}</span></span>
 const inScope = x => S.scope==="all" || x.project===S.scope;
 const tasks = f => Object.values(T).filter(t => inScope(t) && (!f || f(t)));
 const sessions = f => Object.values(SS).filter(s => inScope(s) && (!f || f(s)));
-const slots = () => Object.values(T).filter(t => t.status==="running" || t.status==="blocked").length;
+const holdsSlot = status => ["running", "blocked", "review"].includes(status);
+const slots = () => Object.values(T).filter(t => holdsSlot(t.status)).length;
 const base = t => PROJECTS[t.project]?.base || "main";
 const isPhone = () => S.frame==="phone" || innerWidth < 760;
 
@@ -693,14 +694,14 @@ function apply(op, id, o={}){
     S.sheet = {kind:"confirm", id, op, o}; return;
   }
   S.sheet = null;
+  const noSlot = () => refuse(`No slot is free: ${slots()}/${LIMIT} slots held by Running, Blocked, or Review tasks.`, []);
   switch (op){
     case "dispatch": {
-      if (!o.force){
-        if (!["backlog","ready"].includes(t.status)) return refuse(`${id} is ${cap(t.status)}; dispatch needs Backlog or Ready.`, [{op:"move",arg:"ready",force:true}]);
-        const d = t.deps.find(d => T[d].status!=="done");
-        if (d) return refuse(`${id} depends on ${d}, which is in ${cap(T[d].status)}.`, [{op:"dispatch",force:true}]);
-        if (slots() >= LIMIT) return refuse(`No slot is free: ${slots()} of ${LIMIT} tasks are Running or Blocked.`, [{op:"dispatch",force:true}]);
-      } else log("forced", id, `dispatch skipped ${SKIPS.dispatch}`);
+      if (!is("backlog","ready")) return refuse(`${id} is ${cap(t.status)}; dispatch needs Backlog or Ready.`, [{op:"move",arg:"ready",force:true}]);
+      if (slots() >= LIMIT) return noSlot();
+      const d = t.deps.find(d => T[d].status!=="done");
+      if (d && !o.force) return refuse(`${id} depends on ${d}, which is in ${cap(T[d].status)}.`, [{op:"dispatch",force:true}]);
+      if (d && o.force) log("forced", id, `dispatch skipped ${SKIPS.dispatch}`);
       const p = o.profile || PROJECTS[t.project].profile;
       Object.assign(t, {status:"running", age:"now", run:{id:"R1", profile:p, doing:"reading the prompt", quiet:""}});
       ensureSession(t);
@@ -721,6 +722,7 @@ function apply(op, id, o={}){
       Object.assign(t, {status:"running", blocked:null, ready:false, round:0, review:null, age:"now"}); Object.assign(t.run, {doing:"reading your note", quiet:""}); ensureSession(t); log("sent_back", id, o.text||"owner note"); break;
     case "retry":
       if (!t.run) return refuse(`${id} has not had a run; retry restarts one.`, start);
+      if (!holdsSlot(t.status) && slots() >= LIMIT) return noSlot();
       Object.assign(t, {status:"running", blocked:null, ready:false, round:0, age:"now"}); t.run = {id:"R"+(+t.run.id.slice(1)+1), profile:o.profile||t.run.profile, doing:o.fresh?"starting over from base":"continuing on the branch", quiet:""}; ensureSession(t); log("dispatched", id, `worker ${t.run.id}${o.fresh?", fresh":""}`); break;
     case "stop":
       if (!t.run || !is("running","blocked","review")) return refuse(`${id} has no live session to stop.`, []);
@@ -740,6 +742,7 @@ function apply(op, id, o={}){
     case "move": { if (!STATUSES.includes(o.arg)){ openForm("move", id); return; }
       if (!o.force && !(["idea","backlog","ready"].includes(t.status) && ["idea","backlog","ready"].includes(o.arg)) && !(["done","dropped"].includes(t.status) && o.arg==="backlog"))
         return refuse(`${id} is ${cap(t.status)}; move goes among Idea, Backlog and Ready.`, [{op:"move",arg:o.arg,force:true}]);
+      if (!holdsSlot(t.status) && holdsSlot(o.arg) && slots() >= LIMIT) return noSlot();
       if (o.force) log("forced", id, `move skipped ${SKIPS.move}`);
       Object.assign(t, {status:o.arg, age:"now", blocked:o.arg==="blocked"?{reason:"moved by owner",next:[{op:"move",arg:"backlog",force:true}]}:null, ready:false});
       if (o.arg==="done" || o.arg==="dropped"){ Object.assign(t, {fresh:true, at:"now"}); endSessions(); }
@@ -1100,7 +1103,7 @@ function vSettings(){
   const sw = on => `<span class="seg" style="border-color:var(--rule-2)"><button aria-pressed="${!on}">off</button><button aria-pressed="${on}">on</button></span>`;
   return `<div class="phead"><h1>Settings</h1><span class="say">${secs.find(s => s[0]===S.asub)[1]}</span></div><div class="set"><nav>${secs.map(s => `<button class="${s[0]===S.asub?"on":""}" data-a="asub" data-id="${s[0]}">${s[1]}</button>`).join("")}</nav>
     <div class="form">${S.asub==="workspace" ? `<div class="h">Workspace · corral.toml</div>
-      <div class="fr"><label>limits.running<small>tasks Running or Blocked at once</small></label><span class="field"><input value="${LIMIT}" aria-label="limits.running"></span></div>
+      <div class="fr"><label>limits.running<small>tasks Running, Blocked, or in Review</small></label><span class="field"><input value="${LIMIT}" aria-label="limits.running"></span></div>
       <div class="fr"><label>defaults.profile</label><span class="field"><input value="pi-terra" aria-label="defaults.profile"></span></div>
       <div class="fr"><label>defaults.max_rounds</label><span class="field"><input value="2" aria-label="defaults.max_rounds"></span></div>
       <div class="fr"><label>defaults.auto_dispatch<small>start Ready tasks when a slot is free</small></label>${sw(false)}</div>
@@ -1271,7 +1274,7 @@ addEventListener("resize", () => render(true));
 
 document.getElementById("notes").innerHTML = `<h2>Design notes</h2><p>Brief: <code>docs/app-design/REDESIGN.md</code>, from the owner interviews of 2026-11-19. This file is a reference for the next step, not the app. Its data is a sample and its actions run on a small local engine.</p>
 <h3>Principles</h3><ol><li><b>Attention first.</b> The first thing on screen is what waits on you. On a wide screen Home is a dashboard that leads with it; it is not a second Tasks list.</li><li><b>Four places at rest.</b> Home, Tasks, Sessions, Activity; every other page has exactly one home under them.</li><li><b>One page per thing.</b> A task has one page, a session has one page; lists only open them.</li><li><b>One next step.</b> Each thing shows the one press that moves it; the rest is under More.</li><li><b>Decide where it is cheapest.</b> On a wide screen, in the open card on Home or in the inspector beside a list. On a phone, small answers in the list and large ones at the top of the page.</li><li><b>One scope.</b> The project in scope applies everywhere and is always visible.</li><li><b>The engine's words, the engine decides.</b> 8 statuses, CLI operation names, progress as a plain phrase; the app suggests but never predicts a refusal.</li><li><b>One list, one panel beside it.</b> No tabs inside pages (the task page excepted). A wide screen keeps the panel open: the inspector beside a list, Details beside a conversation. A phone shows one column and opens the rest.</li><li><b>Dense, and it uses the width.</b> The owner is technical: a row is a table row with a header (status, id, title, now, run, gate, review, land, project, profile, cost, age, next step), and columns give way only when there is no room. Colour only for state.</li><li><b>Same product on every device.</b> The phone has the same places, pages and actions, with less on screen at once.</li></ol>
-<h3>Things to try</h3><ol><li>Home is a dashboard: numbers on top, what waits on you as cards on the left, what Corral is doing on the right. Reply to T-887 in its open card; click B-k3x9, or press <code>j</code>, to open that card and answer it; press a project to scope every page. On the phone frame Home is one list and the same answers sit in it.</li><li>Tasks and Sessions: click a row, or walk with <code>j</code> <code>k</code>, and read it in the inspector; <code>Enter</code> or a second click opens its page; <code>i</code> hides the inspector and every column comes back; <code>Ctrl B</code> folds the sidebar.</li><li>Tasks: press Dispatch on T-707 (refused: no slot) and on T-706 (refused: dependency); each refusal offers its forced form.</li><li>Open T-703: Approve asks once, then the task moves to Just finished. Its Changes tab holds the diff.</li><li>Open T-944: a Blocked task with a log; the engine's next steps are its buttons.</li><li>Any row's ⋯: all 15 operations, the next step marked.</li><li>The scope switcher at the top of the sidebar scopes every page. A scoped Home is the Project page.</li><li>Open B-p8d1: Details are open, a message can be queued or steer the turn, and the status line is under the composer. Open B-m2q7 to choose a build's exit.</li><li>Activity › Timeline ends with the burn-up.</li><li>Keys: <code>h t s a ,</code> places, <code>j k Enter</code> cards and rows, <code>i</code> inspector, <code>/</code> composer, <code>Ctrl K</code> go to, <code>Ctrl B</code> sidebar, <code>Esc</code> back.</li></ol>
+<h3>Things to try</h3><ol><li>Home is a dashboard: numbers on top, what waits on you as cards on the left, what Corral is doing on the right. Reply to T-887 in its open card; click B-k3x9, or press <code>j</code>, to open that card and answer it; press a project to scope every page. On the phone frame Home is one list and the same answers sit in it.</li><li>Tasks and Sessions: click a row, or walk with <code>j</code> <code>k</code>, and read it in the inspector; <code>Enter</code> or a second click opens its page; <code>i</code> hides the inspector and every column comes back; <code>Ctrl B</code> folds the sidebar.</li><li>Tasks: press Dispatch on T-707 (refused: no slot). Even forcing dispatch cannot bypass the cap. Once a slot is free, Dispatch on T-706 is still refused until its dependency is Done or you force the dependency check.</li><li>Open T-703: Approve asks once, then the task moves to Just finished. Its Changes tab holds the diff.</li><li>Open T-944: a Blocked task with a log; the engine's next steps are its buttons.</li><li>Any row's ⋯: all 15 operations, the next step marked.</li><li>The scope switcher at the top of the sidebar scopes every page. A scoped Home is the Project page.</li><li>Open B-p8d1: Details are open, a message can be queued or steer the turn, and the status line is under the composer. Open B-m2q7 to choose a build's exit.</li><li>Activity › Timeline ends with the burn-up.</li><li>Keys: <code>h t s a ,</code> places, <code>j k Enter</code> cards and rows, <code>i</code> inspector, <code>/</code> composer, <code>Ctrl K</code> go to, <code>Ctrl B</code> sidebar, <code>Esc</code> back.</li></ol>
 <h3>Where the nine destinations went</h3><table><tr><th>Today</th><th>Here</th></tr><tr><td>Now › Needs you</td><td>Home › Needs you</td></tr><tr><td>Now › Corral, Workers</td><td>Home › Working</td></tr><tr><td>Now › Waiting, Closed</td><td>Tasks</td></tr><tr><td>Changes</td><td>Activity › Feed</td></tr><tr><td>Plans</td><td>A task page with Children; a row in Tasks that unfolds</td></tr><tr><td>Agents</td><td>Sessions</td></tr><tr><td>Review</td><td>The task page: decision band and Changes tab</td></tr><tr><td>Timeline, Usage, Artifacts</td><td>Activity › Timeline, Usage, Artifacts</td></tr><tr><td>Project list, Project page, filter chips</td><td>The scope switcher; scoped Home</td></tr><tr><td>Ask drawer</td><td>The composer on Home; <code>/</code> elsewhere</td></tr><tr><td>Actions menu, Session menu</td><td>One next step plus More</td></tr></table>
 <h3>Deep links</h3><p><code>#home #tasks #task/T-703/changes #sessions #session/B-k3x9 #activity/usage #settings</code>, with <code>?frame=phone&amp;theme=light&amp;scope=corral&amp;sel=T-703&amp;noinsp&amp;fold&amp;details&amp;notes&amp;demo=more|refusal|confirm|scope|form</code> before the hash.</p>`;
 

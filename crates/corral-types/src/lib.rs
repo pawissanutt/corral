@@ -36,6 +36,13 @@ pub enum Status {
 }
 
 impl Status {
+    /// Each admitted task holds one slot, including while its candidate is in the pipeline.
+    pub const SLOT_HOLDERS: [Self; 3] = [Self::Running, Self::Blocked, Self::Review];
+
+    pub fn holds_slot(self) -> bool {
+        Self::SLOT_HOLDERS.contains(&self)
+    }
+
     pub fn parse(value: &str) -> Result<Self, ParseStatusError> {
         [
             Self::Idea,

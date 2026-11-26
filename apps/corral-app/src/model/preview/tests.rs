@@ -9,7 +9,78 @@ use corral_protocol::detail::{SessionItem, SessionPage};
 use corral_protocol::rows::{AssistantKind, AssistantState};
 use corral_protocol::session_host::{SessionSend, SessionSent};
 use corral_protocol::session_state::SendPolicy;
-use corral_types::{Op, Status};
+use corral_types::{Op, Status, TaskEdit};
+
+#[test]
+fn review_keeps_the_slot_and_force_cannot_bypass_the_preview_cap() {
+    let mut feed = feed(1_800_000_000, "2027-01-15".into(), "08:00".into(), None);
+    let mut doc: toml_edit::DocumentMut = feed.sample_config.as_deref().unwrap().parse().unwrap();
+    doc["projects"]["site"]["running"] = toml_edit::value(1);
+    super::config::config(&mut feed, &Id::new("cap"), Some(&doc.to_string()));
+    assert!(feed.operations["cap"].refusal.is_none());
+
+    let submit = |feed: &mut Feed, key: &str, op, force| {
+        act(feed, &Act::with_key(Id::new(key), op, force)).unwrap();
+    };
+    submit(
+        &mut feed,
+        "edit",
+        Op::Edit {
+            id: "T-17".into(),
+            edit: TaskEdit {
+                project: Some(Some("site".into())),
+                ..TaskEdit::default()
+            },
+        },
+        false,
+    );
+    let used = |feed: &Feed| {
+        let slots = feed.health.as_ref().unwrap().slots.as_ref().unwrap();
+        (slots.global.used, slots.projects["site"].used)
+    };
+    let (global, site) = used(&feed);
+    submit(
+        &mut feed,
+        "review",
+        Op::Done {
+            id: "T-15".into(),
+            summary: String::new(),
+        },
+        false,
+    );
+    assert_eq!(feed.board.task("T-15").unwrap().status(), Status::Review);
+    assert_eq!(used(&feed), (global, site));
+
+    let dispatch = Op::Dispatch {
+        id: "T-17".into(),
+        profile: None,
+        base: None,
+    };
+    submit(&mut feed, "refused", dispatch.clone(), true);
+    let Some(ActStatus::Refused(refusal)) = acts::status(&feed, "refused") else {
+        panic!("forced dispatch bypassed a slot held by Review");
+    };
+    assert!(refusal.next.is_empty());
+    submit(
+        &mut feed,
+        "move refused",
+        Op::Move {
+            id: "T-17".into(),
+            status: Status::Review,
+        },
+        true,
+    );
+    assert!(matches!(
+        acts::status(&feed, "move refused"),
+        Some(ActStatus::Refused(_))
+    ));
+
+    submit(&mut feed, "drop", Op::Drop { id: "T-15".into() }, false);
+    assert_eq!(used(&feed), (global - 1, site - 1));
+    submit(&mut feed, "dispatched", dispatch, false);
+    assert_eq!(acts::status(&feed, "dispatched"), Some(ActStatus::Done));
+    assert_eq!(used(&feed), (global, site));
+}
 
 #[test]
 fn unfinished_dependency_refuses_dispatch_until_forced() {

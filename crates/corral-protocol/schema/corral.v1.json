@@ -9723,7 +9723,7 @@
             "type": "integer"
           },
           "used": {
-            "description": "Running and Blocked tasks currently occupying slots.",
+            "description": "Running, Blocked and Review tasks currently occupying slots.",
             "format": "uint64",
             "minimum": 0,
             "type": "integer"

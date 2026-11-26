@@ -226,7 +226,8 @@ impl Engine {
             }
             let recorded = self.store.transaction(|store| {
                 let mut current = store.require_task(id)?;
-                if current.status != task.status
+                if !current.status.holds_slot()
+                    || current.status != task.status
                     || self.last_worker(store, &current)?.id != worker.id
                 {
                     return Ok(false);
@@ -367,7 +368,7 @@ fn check_queued_repair(
 
 fn queued_repair_refusal(id: &str, onto: Option<&str>) -> anyhow::Error {
     refuse(
-        "repair is waiting for a worker slot",
+        "a legacy queued repair is awaiting processing",
         vec![Next::force(approve_op(id, onto))],
     )
 }

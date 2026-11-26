@@ -2,7 +2,7 @@
 # Add a [projects.NAME] table for each Git repository Corral should manage.
 
 # [limits]
-# running = 4               # Running and Blocked tasks hold slots; Review does not.
+# running = 4               # Running, Blocked and Review tasks hold slots (including gate and landing).
 
 # [defaults]
 # profile = "omp-sol"

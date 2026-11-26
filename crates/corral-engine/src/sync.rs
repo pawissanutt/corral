@@ -17,16 +17,16 @@ impl Engine {
                 self.sync_error(&run.task, Some(&run.id), "session reconciliation", &error)?;
             }
         }
-        // Give already-requested repairs first chance at newly released slots.
+        // Resume legacy queued repairs before admitting new work.
         for id in self.store.queued_repairs()? {
             let _ = self.advance(&id);
         }
-        let mut running = self.store.occupied_slots(None)?;
+        let mut occupied = self.store.occupied_slots(None)?;
         for task in self.store.list_tasks(&TaskFilter {
             statuses: vec![Status::Ready],
             ..TaskFilter::default()
         })? {
-            if running >= self.config.limits.running {
+            if occupied >= self.config.limits.running {
                 break;
             }
             let Some(project) = self.project_for(&task)? else {
@@ -36,7 +36,7 @@ impl Engine {
                 continue;
             }
             match self.dispatch_as(&task.id, None, None, false, Actor::Auto) {
-                Ok(_) => running += 1,
+                Ok(_) => occupied += 1,
                 Err(error) if as_refusal(&error).is_none() => {
                     self.sync_error(&task.id, None, "automatic dispatch", &error)?;
                 }

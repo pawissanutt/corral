@@ -15,6 +15,7 @@ use crate::screens::agents::ask_view;
 use crate::state::AppState;
 use crate::ui::composer::docked_composer;
 use crate::ui::kit::board_status::{board_status, dim_stale};
+use crate::ui::kit::hint::tip;
 use crate::ui::kit::page;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, MEASURE_PAGE, Token, color};
@@ -245,7 +246,10 @@ fn tile_frame(app: AppState, tile: Tile, fill: bool) -> AnyElement {
         .test_id(&format!("stat-{}", tile.key))
         .flex_grow(1.0)
         .min_w(px(0.0))
-        .label(spoken);
+        .label(spoken)
+        .when(tile.key == "working", |frame| {
+            tip(form, frame, tile.hint.into())
+        });
     match tile.go {
         Some(to) => frame
             .role(AccessibilityRole::Link)

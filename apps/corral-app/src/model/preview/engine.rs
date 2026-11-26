@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 use super::rollup::{closed, last_worker, rebuild};
 use super::sample::{finish, run};
 use super::system_lenses::{draft_task, repair_task};
-use super::{ago, event, number, record, records, save};
+use super::{ago, event, number, record, records, save, workspace};
 use crate::model::act::Act;
 use crate::model::daemon::{ClientError, Feed, Operation};
 use pipeline::{approve, done, run_gate, send_back, start_review, verdict};
@@ -232,6 +232,12 @@ fn new(feed: &mut Feed, task: &NewTask) -> Applied {
 /// Applies an edit as the engine does: a size is checked against the scale only when it
 /// changes, so an older task keeps its own.
 fn edit(feed: &mut Feed, mut rec: TaskDetail, edit: &TaskEdit) -> Result<(), Fail> {
+    if let Some(project) = &edit.project
+        && rec.task.status.holds_slot()
+        && *project != rec.task.project
+    {
+        require_slot(feed, &records(feed), project.as_deref(), false)?;
+    }
     if let Some(size) = &edit.size
         && *size != rec.task.size
     {
@@ -310,6 +316,9 @@ fn r#move(feed: &mut Feed, mut rec: TaskDetail, status: Status, force: bool) -> 
                 status,
             })],
         ));
+    }
+    if status.holds_slot() && !from.holds_slot() {
+        require_slot(feed, &records(feed), rec.task.project.as_deref(), true)?;
     }
     set_status(feed, &mut rec, status);
     if status == Status::Blocked {
@@ -396,6 +405,7 @@ fn dispatch(
         ));
     };
     let all = records(feed);
+    require_slot(feed, &all, Some(&project), true)?;
     let mut skipped = Vec::new();
     let mut next = Vec::new();
     for dependency in &rec.task.depends_on {
@@ -412,23 +422,6 @@ fn dispatch(
                 status: Status::Done,
             }));
         }
-    }
-    let occupied = |project: Option<&str>| {
-        all.iter()
-            .filter(|record| matches!(record.task.status, Status::Running | Status::Blocked))
-            .filter(|record| {
-                project.is_none_or(|project| record.task.project.as_deref() == Some(project))
-            })
-            .count() as u64
-    };
-    let limit = config(feed, &["limits", "running"]).as_u64().unwrap_or(4);
-    if occupied(None) >= limit {
-        skipped.push("limits.running");
-    }
-    if let Some(cap) = projects[&project]["running"].as_u64()
-        && occupied(Some(&project)) >= cap
-    {
-        skipped.push("project.running");
     }
     if !skipped.is_empty() && !force {
         next.insert(0, Next::force(op.clone()));
@@ -583,6 +576,9 @@ fn retry(
         ));
     };
     let profile = profile.map_or(last.profile, str::to_owned);
+    if !rec.task.status.holds_slot() {
+        require_slot(feed, &records(feed), rec.task.project.as_deref(), true)?;
+    }
     let run_id = start(feed, &mut rec, Role::Worker, &profile);
     super::pi_script::follow(feed, &mut rec, &run_id, fresh);
     supersede(feed, &mut rec, &run_id);
@@ -618,9 +614,28 @@ fn end_live(feed: &Feed, rec: &mut TaskDetail, outcome: Outcome) {
     }
 }
 
-/// Moving to Done or Dropped stops live sessions; only Blocked carries a block.
+fn require_slot(
+    feed: &Feed,
+    records: &[TaskDetail],
+    project: Option<&str>,
+    check_global: bool,
+) -> Result<(), Fail> {
+    let slots = workspace::slots(feed, records);
+    if check_global && slots.global.used >= slots.global.limit {
+        return Err(refuse("no free task slot (limits.running)", Vec::new()));
+    }
+    if project
+        .and_then(|project| slots.projects.get(project))
+        .is_some_and(|count| count.used >= count.limit)
+    {
+        return Err(refuse("no free task slot (project.running)", Vec::new()));
+    }
+    Ok(())
+}
+
+/// Releasing a slot stops live sessions; only Blocked carries a block.
 fn set_status(feed: &Feed, rec: &mut TaskDetail, status: Status) {
-    if closed(status) {
+    if !status.holds_slot() && (rec.task.status.holds_slot() || closed(status)) {
         end_live(feed, rec, Outcome::Stopped);
     }
     rec.task.status = status;
