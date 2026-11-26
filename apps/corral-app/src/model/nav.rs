@@ -602,14 +602,18 @@ impl NavState {
 }
 
 /// Whether the workspace has the page. An assistant-only workspace has no board: it keeps
-/// Home (its landing), Sessions, Activity › Usage and Settings, and the rest is left out
-/// rather than shown unavailable.
+/// Home (its landing), Sessions, Activity › Usage and Host performance (the corrald host does
+/// not depend on projects) and Settings, and the rest is left out rather than shown unavailable.
 pub fn offers(feed: &crate::model::daemon::Feed, destination: Destination) -> bool {
     use crate::model::projects::WorkspaceMode;
     WorkspaceMode::of(feed) != WorkspaceMode::AssistantOnly
         || matches!(
             destination,
-            Destination::Home | Destination::Sessions | Destination::Usage | Destination::Settings
+            Destination::Home
+                | Destination::Sessions
+                | Destination::Usage
+                | Destination::Host
+                | Destination::Settings
         )
 }
 

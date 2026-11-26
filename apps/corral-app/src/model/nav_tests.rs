@@ -122,7 +122,7 @@ fn every_record_opens_its_one_page_and_leaves_to_its_place() {
 /// A workspace without projects has no board: its board places must not be offered at all,
 /// on the sidebar, the phone's tabs or the palette.
 #[test]
-fn an_assistant_only_workspace_offers_home_sessions_usage_and_settings() {
+fn an_assistant_only_workspace_offers_home_sessions_usage_host_and_settings() {
     let mut feed = crate::model::daemon::Feed::default();
     assert_eq!(places(&feed), Area::PLACES);
     assert_eq!(phone_tabs(&feed), PhoneTab::ALL);
@@ -130,13 +130,17 @@ fn an_assistant_only_workspace_offers_home_sessions_usage_and_settings() {
         .insert(corral_protocol::PROJECTS_V1.into());
     feed.topics.insert("projects".into(), Default::default());
     assert_eq!(places(&feed), [Area::Home, Area::Sessions, Area::Activity]);
-    assert_eq!(activity_pages(&feed), [Destination::Usage]);
+    assert_eq!(
+        activity_pages(&feed),
+        [Destination::Usage, Destination::Host]
+    );
     assert_eq!(
         destinations(&feed),
         [
             Destination::Home,
             Destination::Sessions,
             Destination::Usage,
+            Destination::Host,
             Destination::Settings
         ]
     );

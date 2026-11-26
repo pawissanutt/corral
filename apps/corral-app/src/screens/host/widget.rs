@@ -2,7 +2,7 @@
 //! figures are host-wide in the head with the link to the page (`btn-open-host`), the status
 //! when the readings are not live, then a tile per figure (`host-tile-<slug>`, each opening
 //! the page) with its value and inline trend; narrower than four tiles' room it lists the
-//! figures as label and value rows instead. A terminal's Home has one numeric line
+//! figures as label and value rows instead. A terminal's Home has numeric lines
 //! (`home-host`), the phone's Home one row (`home-host`); both open the page.
 
 use nsh_core::prelude::*;
@@ -264,29 +264,32 @@ fn figure_row(app: AppState, data: Memo<HostView>, kind: Kind) -> AnyElement {
         .into_element()
 }
 
-/// A terminal Home's line: "corrald host" and every figure in numbers, opening the page.
+/// A terminal Home's lines: "corrald host (host-wide, not scoped)" and every figure in numbers,
+/// each figure whole, wrapped to the width it has; opening the page.
 pub fn line(app: AppState) -> AnyElement {
-    let shown = computed(move || {
-        app.feed.with(|feed| {
-            let view = host::view(feed);
-            (host::compact(&view), view.stale(), view.status)
-        })
-    });
+    let width = signal(0.0_f32);
+    let shown = computed(move || app.feed.with(host::view));
     let handle = element_ref();
     let focused = term::focus_of(handle);
-    let words = dynamic(move || {
-        let (figures, stale, _) = shown.get();
-        text(figures)
-            .flex_1()
+    let lines = dynamic(move || {
+        let columns = (width.get() / term::cells(1.0).0).floor() as usize;
+        let (lines, stale) = shown.with(|v| (host::compact_lines(v, columns.max(1)), v.stale()));
+        let ink = color(if stale { Token::Ink3 } else { Token::Ink });
+        view()
+            .flex_col()
             .min_w(px(0.0))
-            .number_of_lines(1u32)
-            .truncate()
-            .text_color(color(if stale { Token::Ink3 } else { Token::Ink }))
+            .children(lines.into_iter().map(|line| {
+                text(line)
+                    .number_of_lines(1u32)
+                    .truncate()
+                    .text_color(ink)
+                    .into_element()
+            }))
             .into_element()
     });
     let spoken = computed(move || {
         SharedString::from(
-            shown.with(|(figures, _, status)| format!("{LINE_LABEL}: {figures}. {status}")),
+            shown.with(|v| format!("{LINE_LABEL}: {}. {}", host::compact(v), v.status)),
         )
     });
     view()
@@ -301,12 +304,16 @@ pub fn line(app: AppState) -> AnyElement {
         .on_press(move || open(app))
         .child(term::focus_cell(focused))
         .child(
-            text(LINE_LABEL)
-                .flex_shrink_0()
-                .number_of_lines(1u32)
-                .text_color(color(Token::Ink3)),
+            view()
+                .flex_1()
+                .min_w(px(0.0))
+                .on_layout(move |frame: &Bounds<Points>| {
+                    if (width.get_untracked() - frame.size.width.0).abs() > 0.5 {
+                        width.set(frame.size.width.0);
+                    }
+                })
+                .child(lines),
         )
-        .child(words)
         .into_element()
 }
 

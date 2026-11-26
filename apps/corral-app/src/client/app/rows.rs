@@ -138,15 +138,7 @@ impl AppState {
             SubDelta::Host { delta } => {
                 feed.update(|feed| {
                     if let Some(row) = delta.rows.into_iter().last() {
-                        // Only a newer reading is fresh; a repeated snapshot keeps its age.
-                        let newest = |m: &corral_protocol::host::HostMetrics| {
-                            m.samples.last().map(|s| s.at_ms)
-                        };
-                        let advanced = feed.daemon_host.as_ref().map(newest) != Some(newest(&row));
-                        if advanced || feed.daemon_host_at.is_none() {
-                            feed.daemon_host_at = Some(feed.now);
-                        }
-                        feed.daemon_host = Some(row);
+                        crate::model::host::receive(feed, row);
                     }
                 });
                 Topic::Host

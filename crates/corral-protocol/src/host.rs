@@ -25,6 +25,11 @@ pub struct HostMetrics {
     pub cpus: Option<u32>,
     /// Milliseconds between samples.
     pub interval_ms: u64,
+    /// How old the newest sample was when corrald served this page, by corrald's own clock.
+    /// Zero while sampling keeps pace; a client counts a reading's age from it, never from
+    /// when the page arrived.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub age_ms: u64,
     /// Oldest first, at most `HOST_HISTORY_MAX`; empty before the first sample.
     pub samples: Vec<HostSample>,
     /// The filesystem holding the daemon's workspace root, absent when it cannot be read.
@@ -82,4 +87,8 @@ pub struct HostCoverage {
     /// Why the rates are absent when the host cannot report them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unavailable: Option<String>,
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }

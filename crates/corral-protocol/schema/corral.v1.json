@@ -4409,6 +4409,12 @@
       "HostMetrics": {
         "description": "The one row of `Topic::Host`: the newest samples and what they cover.",
         "properties": {
+          "age_ms": {
+            "description": "How old the newest sample was when corrald served this page, by corrald's own clock.\nZero while sampling keeps pace; a client counts a reading's age from it, never from\nwhen the page arrived.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "cpus": {
             "description": "Logical CPUs, absent when unknown.",
             "format": "uint32",

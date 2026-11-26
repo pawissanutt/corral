@@ -1,6 +1,7 @@
 //! The assistant workspace's landing: what a daemon with no configured projects offers. It says
 //! why the board is absent, opens Ask, and says how a project is added. Its board destinations
-//! are not shown at all, so this is where such a workspace lands. test ids: "landing",
+//! are not shown at all, so this is where such a workspace lands. Host performance shows here
+//! as on Home, since it does not depend on projects. test ids: "landing",
 //! "page-title", "btn-ask".
 
 use nsh_core::prelude::*;
@@ -42,6 +43,8 @@ pub fn screen(app: AppState) -> AnyElement {
             .child(term::blank())
             .child(h3(app, landing.instructions_heading, None))
             .child(text(landing.instructions).text_color(color(Token::Ink)))
+            .child(term::blank())
+            .child(crate::screens::host::line(app))
     } else {
         let size = text_size(form) + 1.0;
         view()
@@ -59,6 +62,12 @@ pub fn screen(app: AppState) -> AnyElement {
             // A phone's floating Ask is this page's one Ask; desktop has no such button.
             .when(form != Form::Phone, |v| {
                 v.child(view().flex_row().child(ask))
+            })
+            // The corrald host does not depend on projects: its figures belong here too.
+            .child(if form == Form::Phone {
+                crate::screens::host::phone_row(app)
+            } else {
+                crate::screens::host::widget(app)
             })
             .child(
                 view()

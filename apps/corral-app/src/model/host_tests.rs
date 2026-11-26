@@ -28,6 +28,7 @@ fn feed(samples: Vec<HostSample>) -> Feed {
         os: "linux".into(),
         cpus: Some(8),
         interval_ms: 2_000,
+        age_ms: 0,
         samples,
         filesystem: Some(HostFilesystem {
             path: "/srv/work".into(),
@@ -110,4 +111,56 @@ fn readings_that_stop_arriving_or_a_lost_link_are_stale() {
     let shown = view(&down);
     assert!(shown.stale());
     assert!(compact(&shown).starts_with("STALE"));
+}
+
+#[test]
+fn a_new_subscriber_counts_age_from_corrald_not_from_receipt() {
+    let samples = vec![
+        sample(990, Some(5.0), Some(1)),
+        sample(992, Some(6.0), Some(1)),
+    ];
+    // A client that has watched since the reading: 8 s later it is stale.
+    let mut watching = feed(samples.clone());
+    watching.daemon_host_at = Some(992);
+    watching.now = 1_000;
+    // A client that subscribed just now gets the same reading, which corrald says is 8 s old.
+    let mut joined = feed(Vec::new());
+    joined.daemon_host = None;
+    joined.daemon_host_at = None;
+    let mut row = feed(samples).daemon_host.unwrap();
+    row.age_ms = 8_000;
+    receive(&mut joined, row);
+    let expected = Standing::Stale { age_secs: Some(8) };
+    assert_eq!(view(&watching).standing, expected);
+    assert_eq!(view(&joined).standing, expected);
+    // The same reading served again on time does not make it fresh.
+    let mut again = joined.daemon_host.clone().unwrap();
+    again.age_ms = 0;
+    receive(&mut joined, again);
+    assert_eq!(view(&joined).standing, expected);
+}
+
+#[test]
+fn the_terminal_line_wraps_whole_figures_and_says_it_is_host_wide() {
+    let shown = view(&feed(vec![
+        sample(996, Some(13.0), Some(1_200_000)),
+        sample(998, Some(13.0), Some(1_200_000)),
+    ]));
+    let lines = compact_lines(&shown, 66);
+    assert!(
+        lines.iter().all(|line| line.chars().count() <= 66),
+        "{lines:?}"
+    );
+    assert!(lines[0].contains(HOST_WIDE));
+    let all = lines.join(" · ");
+    for kind in Kind::ALL {
+        assert!(
+            all.contains(kind.short()),
+            "{kind:?} missing from {lines:?}"
+        );
+    }
+    assert!(
+        all.contains("4.0G/16G") && all.contains("40G used 60G free"),
+        "{all}"
+    );
 }

@@ -21,6 +21,7 @@ pub(super) fn populate(feed: &mut Feed) {
         os: "linux".into(),
         cpus: Some(16),
         interval_ms: HOST_INTERVAL_MS,
+        age_ms: 0,
         samples,
         filesystem: Some(HostFilesystem {
             path: "/preview/corral".into(),

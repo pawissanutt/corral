@@ -93,13 +93,22 @@ pub(crate) fn disks(stats: &str, keep: impl Fn(&str) -> bool) -> BTreeMap<String
         .collect()
 }
 
-/// The mount point in `/proc/self/mountinfo` that holds `path`: the longest one containing it.
-pub(crate) fn mount_of(mountinfo: &str, path: &Path) -> Option<String> {
-    mountinfo
+/// The mount point in `/proc/self/mountinfo` that holds `path` on device `dev` (major, minor):
+/// the longest one containing it. None when the longest is another device's, so a label never
+/// names a filesystem other than the one measured.
+pub(crate) fn mount_of(mountinfo: &str, path: &Path, dev: (u32, u32)) -> Option<String> {
+    let device = format!("{}:{}", dev.0, dev.1);
+    let (mount, id) = mountinfo
         .lines()
-        .filter_map(|line| line.split(' ').nth(4).map(unescape))
-        .filter(|mount| path.starts_with(mount))
-        .max_by_key(|mount| mount.len())
+        .filter_map(|line| {
+            let mut fields = line.split(' ');
+            let id = fields.nth(2)?;
+            let mount = unescape(fields.nth(1)?);
+            Some((mount, id))
+        })
+        .filter(|(mount, _)| path.starts_with(mount))
+        .max_by_key(|(mount, _)| mount.len())?;
+    (id == device).then_some(mount)
 }
 
 /// Mountinfo escapes space, tab, newline and backslash as three octal digits.
@@ -127,7 +136,6 @@ fn unescape(field: &str) -> String {
 /// Reads one sampler's counters; holds what it last said about coverage.
 pub(super) struct Probe {
     root: PathBuf,
-    mount: Option<String>,
     pub network: HostCoverage,
     pub disk: HostCoverage,
 }
@@ -135,12 +143,8 @@ pub(super) struct Probe {
 impl Probe {
     pub(super) fn new(root: &Path) -> Self {
         let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
-        let mount = std::fs::read_to_string("/proc/self/mountinfo")
-            .ok()
-            .and_then(|info| mount_of(&info, &root));
         Self {
             root,
-            mount,
             network: unsupported(),
             disk: unsupported(),
         }
@@ -199,7 +203,19 @@ impl Probe {
     }
 
     pub(super) fn filesystem(&self) -> Option<HostFilesystem> {
+        let device = || rustix::fs::stat(&self.root).ok().map(|stat| stat.st_dev);
+        let before = device();
         let stat = rustix::fs::statvfs(&self.root).ok()?;
+        // Resolved with every measurement, and only when the same device was measured
+        // throughout: a mount made meanwhile must not lend its label to other figures.
+        let mount = before.filter(|dev| device() == Some(*dev)).and_then(|dev| {
+            let info = std::fs::read_to_string("/proc/self/mountinfo").ok()?;
+            mount_of(
+                &info,
+                &self.root,
+                (rustix::fs::major(dev), rustix::fs::minor(dev)),
+            )
+        });
         let block = stat.f_frsize;
         let total = stat.f_blocks.checked_mul(block)?;
         let used = stat
@@ -209,7 +225,7 @@ impl Probe {
         let free = stat.f_bavail.checked_mul(block)?;
         Some(HostFilesystem {
             path: self.root.display().to_string(),
-            mount: self.mount.clone(),
+            mount,
             total,
             used,
             free,

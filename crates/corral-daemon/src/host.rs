@@ -142,8 +142,10 @@ pub(crate) struct Sampler {
 
 struct Inner {
     latest: Arc<Rows>,
-    /// When `latest` was taken; `None` for an empty snapshot.
-    published: Option<Instant>,
+    /// The newest readings and when they were taken; `None` before the first and when idle.
+    newest: Option<(HostMetrics, Instant)>,
+    /// The whole seconds of age `latest` carries; 0 while sampling keeps pace.
+    served_age: u64,
     demand: Instant,
     running: bool,
     stopped: bool,
@@ -154,7 +156,8 @@ impl Default for Sampler {
         Self {
             inner: Mutex::new(Inner {
                 latest: Arc::new(Rows::Host(vec![empty(None)])),
-                published: None,
+                newest: None,
+                served_age: 0,
                 demand: Instant::now(),
                 running: false,
                 stopped: false,
@@ -178,13 +181,7 @@ impl Sampler {
             // A failed spawn leaves the empty snapshot; the next read tries again.
             inner.running = started.is_ok();
         }
-        // A sampler stuck in a slow read must not have its last readings served as current.
-        let limit = Duration::from_millis(HOST_INTERVAL_MS) * MAX_GAP_INTERVALS;
-        if inner.published.is_some_and(|at| at.elapsed() > limit) {
-            inner.latest = Arc::new(Rows::Host(vec![empty(None)]));
-            inner.published = None;
-        }
-        Arc::clone(&inner.latest)
+        inner.serve(Instant::now())
     }
 
     pub(crate) fn stop(&self) {
@@ -208,8 +205,7 @@ impl Sampler {
                 if inner.stopped || inner.demand.elapsed() >= IDLE {
                     inner.running = false;
                     // A later subscriber must not see this run's last values as current.
-                    inner.latest = Arc::new(Rows::Host(vec![empty(None)]));
-                    inner.published = None;
+                    inner.clear();
                     return;
                 }
                 let wait = next.saturating_duration_since(Instant::now());
@@ -238,11 +234,46 @@ impl Sampler {
                 inner.running = false;
                 return;
             }
-            inner.latest = Arc::new(Rows::Host(vec![metrics]));
-            inner.published = Some(started);
+            inner.publish(metrics, started);
             // Measured from this reading, so a late wakeup never brings the next one closer.
             next = started + interval;
         }
+    }
+}
+
+impl Inner {
+    fn clear(&mut self) {
+        self.latest = Arc::new(Rows::Host(vec![empty(None)]));
+        self.newest = None;
+        self.served_age = 0;
+    }
+
+    fn publish(&mut self, metrics: HostMetrics, taken: Instant) {
+        self.latest = Arc::new(Rows::Host(vec![metrics.clone()]));
+        self.newest = Some((metrics, taken));
+        self.served_age = 0;
+    }
+
+    /// The snapshot to serve at `now`. While sampling keeps pace it is the shared one as
+    /// published; once the newest reading is more than a second late (a stalled read) it
+    /// carries its age, refreshed once a second, so no client can take it for current.
+    fn serve(&mut self, now: Instant) -> Arc<Rows> {
+        if let Some((metrics, taken)) = &self.newest {
+            let elapsed = now.saturating_duration_since(*taken);
+            let late = elapsed.saturating_sub(Duration::from_millis(HOST_INTERVAL_MS));
+            let age = if late < Duration::from_secs(1) {
+                0
+            } else {
+                elapsed.as_secs()
+            };
+            if age != self.served_age {
+                let mut aged = metrics.clone();
+                aged.age_ms = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
+                self.latest = Arc::new(Rows::Host(vec![aged]));
+                self.served_age = age;
+            }
+        }
+        Arc::clone(&self.latest)
     }
 }
 
@@ -254,6 +285,7 @@ fn empty(filesystem: Option<HostFilesystem>) -> HostMetrics {
             .ok()
             .and_then(|count| u32::try_from(count.get()).ok()),
         interval_ms: HOST_INTERVAL_MS,
+        age_ms: 0,
         samples: Vec::new(),
         filesystem,
         network: HostCoverage::default(),

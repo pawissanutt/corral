@@ -1,8 +1,14 @@
-use std::{collections::BTreeMap, path::Path, time::Duration};
+use std::{
+    collections::BTreeMap,
+    path::Path,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use corral_protocol::host::{HOST_HISTORY_MAX, HOST_INTERVAL_MS};
 
-use super::{Counters, Tracker, read};
+use super::{Counters, Inner, Tracker, read};
+use crate::views::Rows;
 
 fn counters(secs: u64, cpu: (u64, u64), rx: u64, disk_read: u64) -> Counters {
     Counters {
@@ -92,13 +98,50 @@ fn parsers_read_kernel_text_and_reject_missing_fields() {
     let mountinfo = "22 1 8:1 / / rw - ext4 /dev/sda1 rw\n30 22 8:2 / /home/my\\040files rw - ext4 /dev/sda2 rw\n";
     let path = Path::new("/home/my files/work");
     assert_eq!(
-        read::mount_of(mountinfo, path).as_deref(),
+        read::mount_of(mountinfo, path, (8, 2)).as_deref(),
         Some("/home/my files")
     );
     assert_eq!(
-        read::mount_of(mountinfo, Path::new("/var")).as_deref(),
+        read::mount_of(mountinfo, Path::new("/var"), (8, 1)).as_deref(),
         Some("/")
     );
+    // Another filesystem now answers for the path: no label rather than the old one's.
+    assert_eq!(read::mount_of(mountinfo, path, (8, 9)), None);
+}
+
+#[test]
+fn a_stalled_reading_is_served_with_its_age_not_as_current() {
+    let taken = Instant::now();
+    let mut inner = Inner {
+        latest: Arc::new(Rows::Host(Vec::new())),
+        newest: None,
+        served_age: 0,
+        demand: taken,
+        running: true,
+        stopped: false,
+    };
+    let mut metrics = super::empty(None);
+    metrics
+        .samples
+        .push(super::Tracker::default().push(counters(1, (1, 2), 1, 1))[0].clone());
+    inner.publish(metrics, taken);
+    let interval = Duration::from_millis(HOST_INTERVAL_MS);
+    let on_time = inner.serve(taken + interval);
+    assert!(
+        Arc::ptr_eq(&on_time, &inner.serve(taken + interval)),
+        "shared while on time"
+    );
+    let age = |rows: &Rows| match rows {
+        Rows::Host(rows) => rows[0].age_ms,
+        _ => unreachable!(),
+    };
+    assert_eq!(age(&on_time), 0);
+    let stalled = inner.serve(taken + Duration::from_secs(8));
+    assert_eq!(age(&stalled), 8_000);
+    assert!(Arc::ptr_eq(
+        &stalled,
+        &inner.serve(taken + Duration::from_millis(8_400))
+    ));
 }
 
 /// Reads the real counters twice without generating load: the probe only reads files.

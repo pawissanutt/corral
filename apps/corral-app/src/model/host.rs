@@ -109,6 +109,8 @@ pub struct Metric {
     pub series: Vec<Series>,
     /// What the figure covers: the sampled path, the interfaces or disks summed.
     pub note: Option<String>,
+    /// The value in the fewest Cells, totals included, for a terminal's line.
+    pub brief: Option<String>,
 }
 
 /// Everything Host performance shows.
@@ -318,18 +320,61 @@ pub fn figure(kind: Kind, value: f64) -> String {
     }
 }
 
-/// The terminal's one-line fallback: every figure, numbers only.
-pub fn compact(view: &HostView) -> String {
+/// A corrald page arrived with its host row. The reading's age is the one corrald measured,
+/// so a page that arrives late, or a new subscriber's first, never makes it current.
+pub fn receive(feed: &mut Feed, row: HostMetrics) {
+    let newest = |m: &HostMetrics| m.samples.last().map(|s| s.at_ms);
+    let taken = feed.now.saturating_sub(row.age_ms.div_ceil(1000));
+    let advanced = feed.daemon_host.as_ref().map(newest) != Some(newest(&row));
+    feed.daemon_host_at = Some(match feed.daemon_host_at {
+        // The same reading again can only have grown older.
+        Some(at) if !advanced => at.min(taken),
+        _ => taken,
+    });
+    feed.daemon_host = Some(row);
+}
+
+/// The figures in numbers, in the fewest Cells: stale first, then each figure.
+fn segments(view: &HostView) -> Vec<String> {
     let mut parts: Vec<String> = view
         .metrics
         .iter()
-        .map(|m| format!("{} {}", m.kind.short(), m.value.as_deref().unwrap_or("—")))
+        .map(|m| {
+            format!(
+                "{} {}",
+                m.kind.short(),
+                m.brief.as_deref().unwrap_or(NO_VALUE)
+            )
+        })
         .collect();
     // First, so a narrow line that cuts the end never hides it.
     if view.stale() {
         parts.insert(0, STALE.to_uppercase());
     }
-    parts.join(" · ")
+    parts
+}
+
+/// The phone's one-line form: every figure, numbers only.
+pub fn compact(view: &HostView) -> String {
+    segments(view).join(" · ")
+}
+
+/// A terminal's lines in `cells` columns: whose figures these are and that the scope does not
+/// apply, then every figure, each kept whole and wrapped onto the next line when it does not
+/// fit, so no figure is cut off.
+pub fn compact_lines(view: &HostView, cells: usize) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    let label = format!("{LINE_LABEL} ({HOST_WIDE})");
+    for part in std::iter::once(label).chain(segments(view)) {
+        match lines.last_mut() {
+            Some(line) if line.chars().count() + 3 + part.chars().count() <= cells => {
+                line.push_str(" · ");
+                line.push_str(&part);
+            }
+            _ => lines.push(part),
+        }
+    }
+    lines
 }
 
 fn metric(m: &HostMetrics, kind: Kind) -> Metric {
@@ -344,6 +389,7 @@ fn metric(m: &HostMetrics, kind: Kind) -> Metric {
                     s.cpu_percent.map(f64::from)
                 })],
                 note: Some("Busy share of every CPU the kernel counts.".into()),
+                brief: cpu.map(|cpu| format!("{cpu:.0}%")),
                 ..absent(
                     kind,
                     why_rate(m, cpu.is_none(), |s| s.cpu_percent.is_some()),
@@ -365,6 +411,7 @@ fn metric(m: &HostMetrics, kind: Kind) -> Metric {
                     |s| s.memory_used.map(|v| v as f64),
                 )],
                 note: Some("Used is total less what the kernel reports as available.".into()),
+                brief: pair.map(|(used, total)| format!("{}/{}", terse(used), terse(total))),
                 ..absent(kind, pair.is_none().then(|| unreported(m)))
             }
         }
@@ -373,6 +420,7 @@ fn metric(m: &HostMetrics, kind: Kind) -> Metric {
                 value: Some(format!("{} used · {} free", bytes(fs.used), bytes(fs.free))),
                 detail: Some(format!("of {}", bytes(fs.total))),
                 share: share(fs.used, fs.total),
+                brief: Some(format!("{} used {} free", terse(fs.used), terse(fs.free))),
                 note: Some(match &fs.mount {
                     Some(mount) => format!("Capacity of {mount}, which holds {}.", fs.path),
                     None => format!("Capacity of the filesystem holding {}.", fs.path),
@@ -394,6 +442,7 @@ fn metric(m: &HostMetrics, kind: Kind) -> Metric {
             &m.network,
             ("Receive", |s: &HostSample| s.net_rx_bps),
             ("Send", |s: &HostSample| s.net_tx_bps),
+            ("↓ ", "↑ "),
             ("↓", "↑"),
         ),
         Kind::DiskIo => rates(
@@ -402,7 +451,8 @@ fn metric(m: &HostMetrics, kind: Kind) -> Metric {
             &m.disk,
             ("Read", |s: &HostSample| s.disk_read_bps),
             ("Write", |s: &HostSample| s.disk_write_bps),
-            ("read", "write"),
+            ("read ", "write "),
+            ("r", "w"),
         ),
     }
 }
@@ -416,6 +466,7 @@ fn rates(
     (a_label, a): (&'static str, Pick),
     (b_label, b): (&'static str, Pick),
     (a_word, b_word): (&str, &str),
+    (a_mark, b_mark): (&str, &str),
 ) -> Metric {
     let newest = m.samples.last();
     let pair = newest.and_then(|s| Some((a(s)?, b(s)?)));
@@ -437,7 +488,8 @@ fn rates(
     });
     Metric {
         kind,
-        value: pair.map(|(x, y)| format!("{a_word} {} {b_word} {}", rate(x), rate(y))),
+        value: pair.map(|(x, y)| format!("{a_word}{} {b_word}{}", rate(x), rate(y))),
+        brief: pair.map(|(x, y)| format!("{a_mark}{}/s {b_mark}{}/s", terse(x), terse(y))),
         detail: None,
         absent: if pair.is_some() { None } else { why },
         share: None,
@@ -466,6 +518,7 @@ fn absent(kind: Kind, why: Option<String>) -> Metric {
         share: None,
         series: Vec::new(),
         note: None,
+        brief: None,
     }
 }
 
@@ -523,6 +576,22 @@ pub fn bytes(value: u64) -> String {
         format!("{amount:.0} {}", UNITS[unit])
     } else {
         format!("{amount:.1} {}", UNITS[unit])
+    }
+}
+
+/// Binary units in one letter: `9.4G`, `812M`, `0B`.
+pub fn terse(value: u64) -> String {
+    const UNITS: [&str; 6] = ["B", "K", "M", "G", "T", "P"];
+    let mut amount = value as f64;
+    let mut unit = 0;
+    while amount >= 1024.0 && unit + 1 < UNITS.len() {
+        amount /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 || amount >= 10.0 {
+        format!("{amount:.0}{}", UNITS[unit])
+    } else {
+        format!("{amount:.1}{}", UNITS[unit])
     }
 }
 
