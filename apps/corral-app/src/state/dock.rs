@@ -89,6 +89,17 @@ impl AppState {
         }
     }
 
+    /// Opens a newly started session from the pane without closing Ask before the navigation
+    /// guard has decided whether Configuration can be left.
+    pub(super) fn open_started_from_pane(&self, id: Id) {
+        self.dock_ui.cite.set(PaneCite::Armed);
+        self.change(|nav| nav.open_live(crate::model::Live::Session(id)));
+        if self.dock_ui.cite.get_untracked() == PaneCite::Armed {
+            self.dock_ui.cite.set(PaneCite::Idle);
+            self.set_pane_aside();
+        }
+    }
+
     /// Leaving unsaved Configuration is about to ask first: a pane citation running now waits
     /// for the answer, and any earlier one that waited is forgotten, its question replaced.
     pub(super) fn defer_pane_cite(&self) {

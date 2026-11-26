@@ -360,6 +360,60 @@ fn the_switcher_opens_a_code_session_in_the_side_pane() {
     app.wait_for("id:list-tasks").unwrap();
 }
 
+/// A full pane still opens the just-started session through Configuration's leave guard.
+#[test]
+fn full_pane_start_from_dirty_configuration_opens_the_exact_session() {
+    let mut config = desktop();
+    config.viewport = Size::new(Points(800.0), Points(900.0));
+    let mut app = preview(
+        config,
+        &[
+            ("corral.destination", "settings"),
+            ("corral.settings", "config"),
+        ],
+    );
+    app.press("id:tab-config-2").unwrap();
+    app.press("id:seg-config-profiles-pi-luna").unwrap();
+    let model = "id:field-config-profiles.pi-luna.model";
+    app.type_text(model, "-custom").unwrap();
+    let drafted = app.screen().input_text(model).unwrap().unwrap().to_owned();
+    app.press("id:side-pane-toggle").unwrap();
+    for n in 0..7 {
+        if n == 6 {
+            app.press("id:dock-tab-ask").unwrap();
+        }
+        app.wait_for("id:pane-new").unwrap();
+        app.press("id:pane-new").unwrap();
+        app.press("id:pane-new-build").unwrap();
+        app.wait_for("id:field-build-name").unwrap();
+        app.press("id:seg-build-project-corral").unwrap();
+        app.type_text("id:field-build-name", &format!("full-test-{n}"))
+            .unwrap();
+        app.press("id:btn-start-build").unwrap();
+        if n < 6 {
+            app.wait_for("id:dock-transcript").unwrap();
+        }
+    }
+    app.wait_for("id:confirm").unwrap();
+    assert_eq!(
+        app.screen().input_text(model).unwrap(),
+        Some(drafted.as_str())
+    );
+    app.press("id:confirm-confirm").unwrap();
+    app.wait_for("text:full-test-6").unwrap();
+    app.wait_for("id:btn-session-actions").unwrap();
+    assert_eq!(app.screen().count("id:list-sessions").unwrap(), 0);
+    app.press("id:nav-sessions").unwrap();
+    app.wait_for("id:list-sessions >> text:full-test-6")
+        .unwrap();
+    assert_eq!(
+        app.screen()
+            .count("id:list-sessions >> text:full-test-6")
+            .unwrap(),
+        1
+    );
+}
+
 /// Both commands start a session on a tab, leaving the page where it was.
 #[test]
 fn the_panes_plus_starts_a_build_on_a_tab_of_its_own() {
