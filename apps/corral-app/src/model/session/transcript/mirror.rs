@@ -373,3 +373,12 @@ pub(crate) fn bound(cache: &mut DetailCache) {
         cache.pages.clear();
     }
 }
+
+/// The anchor a recorded message is drawn and placed under: the identity kept from the stream
+/// it replaced, else its own. Everything that finds a record's rows looks it up so.
+pub(super) fn shown_anchor(mirror: Option<&Mirror>, message: &SessionMessage) -> String {
+    mirror
+        .and_then(|mirror| mirror.identity.get(&message.id))
+        .cloned()
+        .unwrap_or_else(|| super::anchor(message))
+}

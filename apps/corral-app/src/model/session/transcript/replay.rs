@@ -416,7 +416,7 @@ fn message(
         .mirror
         .and_then(|mirror| mirror.identity.get(&message.id));
     let streaming = cx.mirror.and_then(|mirror| mirror.open.as_ref()) == Some(&message.id);
-    let anchor = identity.cloned().unwrap_or_else(|| anchor(message));
+    let anchor = super::mirror::shown_anchor(cx.mirror, message);
     let mut retained_text = false;
     let mut retained_thinking = false;
     let resolved: Vec<_> = placed

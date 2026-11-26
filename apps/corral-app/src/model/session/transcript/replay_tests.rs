@@ -364,7 +364,8 @@ fn a_reader_who_scrolled_up_finds_the_same_row_after_leaving_and_reopening_the_s
 /// T-2119: a page that starts partway through an assistant record holds only its tail, each
 /// block of it whole. Once `history_changed` hides the way to the page before, Copy reply on
 /// that tail must still say it is partial; a record the window paged the end out of too. A
-/// record wholly on the page copies whole.
+/// record wholly on the page copies whole, also when the cut record took over the anchor of the
+/// open reply it replaced.
 #[test]
 fn a_split_record_copies_as_partial_after_history_changed_hides_older_pages() {
     let text = |words: &str| SessionItem::Text { text: words.into() };
@@ -408,10 +409,13 @@ fn a_split_record_copies_as_partial_after_history_changed_hides_older_pages() {
         replies
     };
     assert_eq!(partial(&feed), [true, false]);
-    feed.details
+    let seams = &mut feed
+        .details
         .get_mut(&daemon::detail_key(&target))
         .expect("the fixture's cache")
-        .transcript_seams
-        .suffix = Some(("m3".into(), 1));
+        .transcript_seams;
+    // The cut record replaced an open streamed reply, whose anchor it keeps.
+    seams.mirror.identity.insert("m1".into(), "stream-1".into());
+    seams.suffix = Some(("m3".into(), 1));
     assert_eq!(partial(&feed), [true, true]);
 }

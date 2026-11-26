@@ -49,11 +49,13 @@ pub(super) fn cut_messages(
 ) -> Vec<String> {
     let older = cache.and_then(super::older_token).is_some();
     let suffix = cache.and_then(|cache| cache.transcript_seams.suffix.as_ref());
-    let first = recorded.first().filter(|_| older).map(super::anchor);
+    let mirror = cache.map(|cache| &cache.transcript_seams.mirror);
+    let anchor = |message: &SessionMessage| super::mirror::shown_anchor(mirror, message);
+    let first = recorded.first().filter(|_| older).map(anchor);
     let last = recorded
         .last()
         .filter(|m| suffix.is_some_and(|(id, n)| *n > 0 && !id.is_empty() && *id == m.id))
-        .map(super::anchor);
+        .map(anchor);
     first
         .into_iter()
         .chain(last)
