@@ -167,9 +167,9 @@ impl Engine {
         reviewer: &Run,
         request: &str,
     ) -> Result<VerdictIntent> {
-        if !store
+        if store
             .latest_run(&task.id, Role::Reviewer)?
-            .is_some_and(|run| run.id == reviewer.id)
+            .is_none_or(|run| run.id != reviewer.id)
         {
             return Err(stale_request());
         }
