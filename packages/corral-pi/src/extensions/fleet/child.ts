@@ -351,6 +351,8 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
     void ready.catch(() => {});
     const done = (async () => {
       let unsubscribe = () => {};
+      // prompt() resolves only after the SDK run settles, even if abort was requested earlier.
+      let pendingGap: Promise<void> | undefined;
       const abort = () => {
         if (signal.aborted) for (const job of ownedJobs) stopOwned(job);
         if (session && !complete) void session.abort().catch(() => {});
@@ -544,14 +546,16 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
             reserve.resolve();
           }, Math.min(GAP_CHECK_MAX_MS, deadlineAt === undefined ? GAP_CHECK_MAX_MS
             : Math.max(0, deadlineAt - GAP_CHECK_RESERVE_MS - (options.now ?? Date.now)())));
-          // Cancellation settles immediately as well, without waiting for a slow tool to unwind.
+          // Exit the optional phase on Cancel, but keep the prompt for the teardown wait.
           const cancelled = Promise.withResolvers<void>();
           const onAbort = () => cancelled.resolve();
           signal.addEventListener("abort", onAbort, { once: true });
           if (signal.aborted) cancelled.resolve();
-          const followUp = session.prompt(GAP_CHECK_PROMPT, { source: "rpc" })
-            .catch((error: unknown) => { reason ??= error instanceof Error ? error.message : String(error); });
-          try { await Promise.race([followUp, reserve.promise, cancelled.promise]); }
+          pendingGap = session.prompt(GAP_CHECK_PROMPT, {
+            source: "rpc", preflightResult: disposition => { if (disposition === "started") signal.throwIfAborted(); },
+          }).catch((error: unknown) => { reason ??= error instanceof Error ? error.message : String(error); })
+            .finally(() => { pendingGap = undefined; });
+          try { await Promise.race([pendingGap, reserve.promise, cancelled.promise]); }
           finally { clearTimeout(cutoff); signal.removeEventListener("abort", onAbort); }
           // Explicit cancellation and the child's own deadline keep their usual meaning.
           signal.throwIfAborted();
@@ -571,7 +575,11 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
         return result(error instanceof Error ? error.message : String(error));
       } finally {
         try {
-          try { unsubscribe(); usage(); }
+          try {
+            // Do not dispose a cancelled gap check until its prompt confirms it is idle.
+            if (signal.aborted && pendingGap) await pendingGap;
+            unsubscribe(); usage();
+          }
           finally {
             complete = true;
             try { if (session) closeResidentSession(session.sessionId); }
@@ -581,8 +589,12 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
           // Cancel is still accepted during disposal and async teardown. Keep the owned-job
           // listener alive until cleanup drains, then close admission before disconnecting it.
           try {
-            if (signal.aborted && (await Promise.all(stopping.values())).some(clear => !clear)) {
-              throw new Error("Could not confirm exit of the child's owned command groups");
+            if (signal.aborted) {
+              // A time-reserve fallback can enter disposal before Cancel is accepted.
+              if (pendingGap) await pendingGap;
+              if ((await Promise.all(stopping.values())).some(clear => !clear)) {
+                throw new Error("Could not confirm exit of the child's owned command groups");
+              }
             }
           } finally {
             teardownDone = true;

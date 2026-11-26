@@ -279,21 +279,37 @@ test("a gap check stuck in a tool that ignores abort settles on the first answer
   } finally { f.cleanup(); }
 });
 
-test("cancelling a Build explore child during a stuck gap check settles as cancelled, not as a fallback answer", async () => {
+test("owner Cancel waits for a held Build Explore gap check to drain", async () => {
   const f = fixture();
-  const controller = new AbortController();
+  const entered = Promise.withResolvers<void>(), drained = Promise.withResolvers<void>();
   f.body(async () => {
     if (f.prompts.length === 1) { f.messages.push(answer("First answer")); return; }
-    controller.abort(new Error("owner cancelled"));
-    await new Promise(() => {});
+    entered.resolve();
+    await drained.promise;
   });
+  const abort = f.session.abort;
+  f.session.abort = async () => { await abort(); await drained.promise; };
+  const fleet = new FleetRuntime({ ...f.options, approved: ["openai-codex"], parent: { provider: "openai-codex", model: "fixture" },
+    changed() {}, deliverToParent() {} });
+  const registry = new RemoteRegistry();
+  registerChildren(registry, { fleet: () => fleet, snapshot: () => fleet.snapshot(), ready: () => true, helpers: () => [] });
   try {
-    const done = await createSdkRunner(f.options).run({ id: "explore", title: "Explore", brief: "Trace", owns: [], kind: "explore" },
-      { profile: "fixture", provider: "openai-codex", model: "fixture" }, { ...f.hooks, execution: undefined }, controller.signal).done;
-    expect(f.prompts).toHaveLength(2);
-    expect(done.failed).toContain("owner cancelled");
-    expect(done.report).not.toContain("gap check produced no usable answer");
-  } finally { f.cleanup(); }
+    await fleet.start("task", [{ id: "child", kind: "explore", title: "Explore", brief: "Trace", owns: [] }]);
+    await within(entered.promise, 1000, "Explore gap check entered");
+    let replied = false;
+    const cancelled = Promise.resolve(registry.get("child_act")!({ child: "child", action: "cancel" }))
+      .then(result => { replied = true; return result; });
+    // Let promise continuations from Cancel run while the second prompt is still held.
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(f.aborted).toBeTrue();
+    expect(replied).toBeFalse();
+    expect(fleet.snapshot().children[0]?.state).toBe("stopping");
+    drained.resolve();
+    expect(await within(cancelled, 1000, "owner Cancel reply")).toEqual({ ok: true });
+    const [child] = fleet.snapshot().children;
+    expect(child?.state).toBe("cancelled");
+    expect(child?.report).not.toContain("gap check produced no usable answer");
+  } finally { drained.resolve(); await fleet.close(); f.cleanup(); }
 });
 
 test("a thin research answer gets one gap check with project orientation, a quick one does not", async () => {
