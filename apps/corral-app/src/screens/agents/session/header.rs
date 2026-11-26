@@ -430,16 +430,10 @@ fn facts(app: AppState, page: Memo<SessionPage>, header: Memo<Header>) -> AnyEle
         .into_element()
 }
 
-/// Compact Ask has no session header, but its device-local action results still need a place.
+/// Compact Ask has no session header, but action results and host failures still need a place.
 pub(super) fn local_notice(app: AppState, session: Id, page: Memo<SessionPage>) -> AnyElement {
     let header = computed(move || {
-        page.with(|page| {
-            page.header
-                .notice
-                .as_ref()
-                .filter(|notice| notice.id.starts_with("notice-"))
-                .map(|_| page.header.clone())
-        })
+        page.with(|page| page.header.notice.as_ref().map(|_| page.header.clone()))
     });
     dynamic(move || {
         let header = header.get()?;

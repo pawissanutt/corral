@@ -19,6 +19,17 @@ function delta(live: LiveEvents, text: string): void {
     assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: text, partial: message } }, 7);
 }
 
+test("host notice IDs are unique across host instances", () => {
+  const first = new LiveEvents(), second = new LiveEvents();
+  try {
+    const now = Date.now();
+    first.note("error", "failure", now);
+    second.note("error", "failure", now);
+    expect(first.notices[0]?.id).toBeDefined();
+    expect(first.notices[0]?.id).not.toBe(second.notices[0]?.id);
+  } finally { first.close(); second.close(); }
+});
+
 test("live deltas do not evict or renumber events of the existing ring", () => {
   const lifecycle = new EventLog(2);
   const live = new LiveEvents(2);

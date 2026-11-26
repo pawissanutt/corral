@@ -11,6 +11,8 @@ import type { CapabilityGuidance } from "../src/capabilities/guidance.ts";
 import { loadModules } from "../src/host/modules.ts";
 import { PLAN_ENTRY, PLAN_NOTE, type PlanMode } from "../src/host/plan-mode.ts";
 import { RemoteOwner } from "../src/host/remote-owner.ts";
+import { registerCards } from "../src/host/remote/cards.ts";
+import { RemoteRegistry } from "../src/host/remote/registry.ts";
 import { guardedFetch, restrictEnvironment } from "../src/host/restrict.ts";
 import { SessionRecord } from "../src/host/session-record.ts";
 import { HostSession, authContext } from "../src/host/session.ts";
@@ -130,7 +132,8 @@ for (const variant of VARIANTS) {
       expect(texts().some(text => text.includes("Plan mode: the working tree is read-only"))).toBeTrue();
       expect(entries().filter(entry => entry.type === "custom_message" && entry.customType === PLAN_NOTE).map(entry => entry.details?.kinds))
         .toEqual([["contract"]]);
-      expect(plan.brief()).toEqual({ phase: "review", title: "Add the flag", revision: 1 });
+      expect(plan.brief()).toMatchObject({ phase: "review", title: "Add the flag", revision: 1 });
+      expect(typeof plan.brief()?.approval_epoch).toBe("string");
 
       // Given the working file changes after the submission, as a shell command could change it:
       writeFileSync(plan.path, "tampered\n");
@@ -146,7 +149,8 @@ for (const variant of VARIANTS) {
       live.session.compact = instructions => compact(instructions).then(result => { compacted = true; return result; },
         error => { compacted = false; throw error; });
       fixtureTransport().script([write("late", outside, "x"), { text: "Done." }]);
-      expect(await card.answer([{ options: ["execute_clean"] }], false, async () => {})).toBe("started");
+      expect(card.answer([{ options: ["execute_clean"] }], false, async () => {})).toBe("preparing");
+      expect(plan.brief()?.preparing).toBe("clean");
       await until(() => plan.phase === "off" && texts().at(-1) === "Done.", "the approved plan to run");
       await live.drained();
       expect(compacted).toBe(variant.compacts);
@@ -252,7 +256,8 @@ test("a kickoff Pi refuses after deferring it leaves the review and the session 
   live.session.prompt = async (_text, options) => {
     queueMicrotask(() => observer.lifecycle({ tag: options?.queueTag, event: "rejected", reason: "compaction is in progress" }));
   };
-  expect(answerCard(live).answer([{ options: ["execute"] }], false, async () => {})).toBe("started");
+  await expect(Promise.resolve(answerCard(live).answer([{ options: ["execute"] }], false, async () => {})))
+    .rejects.toThrow("The plan was not started");
   // Then the admission order is released and the same review is open,
   expect(await within(owner.pause(), 5_000, "a pause after the refused kickoff")).toMatchObject({ paused: true });
   await owner.resume();
@@ -260,7 +265,8 @@ test("a kickoff Pi refuses after deferring it leaves the review and the session 
   // and it can be approved once Pi takes the kickoff.
   live.session.prompt = prompt;
   fixtureTransport().script([{ text: "Executing." }]);
-  expect(answerCard(live).answer([{ options: ["execute"] }], false, async () => {})).toBe("started");
+  expect(await answerCard(live).answer([{ options: ["execute"] }], false, async () => {})).toBe("started");
+  expect(plan.approved?.title).toBe("Add the flag");
   await until(() => plan.phase === "off" && !live.session.isStreaming, "the approved plan to run");
   await live.drained();
 }), 120_000);
@@ -293,14 +299,16 @@ test("an approval made while the previous turn settles starts after it has settl
   void live.submitLocal({ text: "an automated note", origin: "auto", busyPolicy: "steer" });
   await settling.promise;
   // When the owner approves in that window:
-  expect(answerCard(live).answer([{ options: ["execute"] }], false, async () => {})).toBe("started");
+  const answered = Promise.resolve(answerCard(live).answer([{ options: ["execute"] }], false, async () => {}))
+    .then(status => { order.push("answered"); return status; });
   await new Promise(resolve => setTimeout(resolve, 20));
   expect(order).toEqual([]);
   hooks.resolve();
-  // Then the kickoff is prompted only once that turn has settled, and the plan runs.
+  // Then the kickoff is prompted only once that turn has settled, and the answer does not report a start until its admission.
+  expect(await answered).toBe("started");
   await until(() => plan.phase === "off" && !live.session.isStreaming, "the approved plan to run");
   await live.drained();
-  expect(order.slice(0, 2)).toEqual(["settled", "kickoff"]);
+  expect(order.slice(0, 3)).toEqual(["settled", "kickoff", "answered"]);
 }), 120_000);
 
 test("a kickoff whose admission comes up while another turn settles is refused, not deferred", () => planning(undefined, async (live, plan, _cwd, owner) => {
@@ -318,7 +326,8 @@ test("a kickoff whose admission comes up while another turn settles is refused, 
     void result.then(admission.resolve);
     return result;
   };
-  expect(answerCard(live).answer([{ options: ["execute"] }], false, async () => {})).toBe("started");
+  const answered = Promise.resolve(answerCard(live).answer([{ options: ["execute"] }], false, async () => {}));
+  void answered.catch(() => {});
   // and meanwhile an independent turn starts and reaches its settle hooks:
   const hooks = Promise.withResolvers<void>(), settling = Promise.withResolvers<void>();
   const runner = (live.session as unknown as { _extensionRunner: { emit(event: { type: string }): Promise<unknown> } })._extensionRunner;
@@ -336,6 +345,7 @@ test("a kickoff whose admission comes up while another turn settles is refused, 
   // When the kickoff's turn in the order comes, it is refused there and then:
   ahead.resolve();
   expect(await admission.promise).toMatchObject({ disposition: "rejected", reason: "busy" });
+  await expect(answered).rejects.toThrow("The plan was not started");
   hooks.resolve();
   await until(() => !live.session.isStreaming, "the independent turn to settle");
   await live.drained();
@@ -356,7 +366,8 @@ test("a kickoff that loses the run to another prompt neither marks that prompt n
     const held = fixtureTransport().whenHeld();
     const winner = live.session.prompt("an independent input", { source: "extension" });
     await first.reached;
-    expect(answerCard(live).answer([{ options: ["execute"] }], false, async () => {})).toBe("started");
+    const answered = Promise.resolve(answerCard(live).answer([{ options: ["execute"] }], false, async () => {}));
+    void answered.catch(() => {});
     await second.reached;
     // When the other prompt takes the run, and the kickoff then finds it taken:
     first.pass();
@@ -364,6 +375,7 @@ test("a kickoff that loses the run to another prompt neither marks that prompt n
     second.pass();
     fixtureTransport().release();
     await winner;
+    await expect(answered).rejects.toThrow("The plan was not started");
     await live.drained();
     // Then that prompt's message is not taken for the kickoff: nothing was approved, and the review is still open.
     expect(plan.review).toBe(review);
@@ -406,11 +418,14 @@ test("a prompt whose preflight ends while another run settles does not start und
 }), 120_000);
 
 test("a prompt whose preflight ends while an approval compacts the context does not start under that compaction",
-  () => planning({ settings: { compaction: { keep_recent_tokens: 1 } }, projectText: false }, async (live, plan) => {
+  () => planning({ settings: { compaction: { keep_recent_tokens: 1 } }, projectText: false }, async (live, plan, _cwd, owner) => {
     writeFileSync(plan.path, PLAN);
     fixtureTransport().script([SUBMIT, { text: "Submitted." }]);
     await live.session.prompt("Plan a --version flag", { source: "extension" });
     await live.drained();
+    const review = answerCard(live).card.id;
+    const by = { source: "remote", expectedModel: live.remoteState(owner).state.model } as const;
+    live.liveEvents.bindState(() => live.remoteState(owner));
     await overlapping(live, async (first, second) => {
       // Given an independent prompt is in Pi's preflight, past its check for a running compaction,
       const other = live.session.prompt("an independent input", { source: "extension" });
@@ -421,17 +436,72 @@ test("a prompt whose preflight ends while an approval compacts the context does 
       fixtureTransport().script([{ text: "Summary." }, { text: "Executing." }]);
       fixtureTransport().holdNext();
       const held = fixtureTransport().whenHeld();
-      expect(answerCard(live).answer([{ options: ["execute_compact"] }], false, async () => {})).toBe("started");
-      await held;
-      // When that prompt's preflight ends:
-      first.pass();
-      // Then it is refused rather than run on a context about to be replaced, and the approval goes on.
-      await expect(other).rejects.toThrow("compacting");
-      fixtureTransport().release();
+      const answer = [{ options: ["execute_compact"] }];
+      const registry = new RemoteRegistry();
+      registerCards(registry, { dialogs: live.dialogs, ready: () => true, beforeQuestion: async () => {},
+        reviewAttempt: card => {
+          const brief = plan.review === card ? plan.brief() : undefined;
+          return brief?.approval_epoch && brief.approval_host
+            ? { approval_epoch: brief.approval_epoch, approval_host: brief.approval_host } : undefined;
+        } });
+      const approve = registry.get("card_answer")!;
+      const request = { card: review, answers: answer, expected_model: by.expectedModel };
+      try {
+        const ack = await approve(request) as { status: string; approval_epoch: string; approval_host: string };
+        expect(ack.status).toBe("preparing");
+        expect(ack.approval_epoch).toBe(plan.brief()?.approval_epoch);
+        expect(ack.approval_host).toBe(plan.brief()?.approval_host);
+        await held;
+        const published = () => live.liveEvents.since(0, 56 * 1024).state;
+        await until(() => published()?.plan_mode?.preparing === "compact", "published preparation progress");
+        expect(published()?.cards.some(card => card.id === review)).toBeTrue();
+        expect(plan.approved).toBeUndefined();
+        expect(await approve(request)).toEqual({ status: "waiting", approval_epoch: ack.approval_epoch, approval_host: ack.approval_host });
+        expect(answerCard(live).card.questions[0]?.options.every(option => option.unavailable)).toBeTrue();
+        // When that prompt's preflight ends, it is refused rather than run on a context about to be replaced.
+        first.pass();
+        await expect(other).rejects.toThrow("compacting");
+      } finally {
+        first.pass();
+        fixtureTransport().release();
+      }
       await until(() => plan.phase === "off" && !live.session.isStreaming, "the approved plan to run");
       await live.drained();
       expect(plan.approved?.title).toBe("Add the flag");
+      expect(live.remoteState(owner).state.plan_mode).toBeUndefined();
     });
+  }), 120_000);
+
+test("failed context preparation reports the error and leaves the same review available for retry", () =>
+  planning(undefined, async (live, plan, _cwd, owner) => {
+    writeFileSync(plan.path, PLAN);
+    fixtureTransport().script([SUBMIT, { text: "Submitted." }]);
+    await live.session.prompt("Plan a --version flag", { source: "extension" });
+    await live.drained();
+    live.markAttached("headless");
+    live.liveEvents.bindState(() => live.remoteState(owner));
+    const card = answerCard(live), failure = Promise.withResolvers<void>();
+    live.session.compact = async () => { await failure.promise; throw new Error("provider offline"); };
+
+    expect(card.answer([{ options: ["execute_compact"] }], false, async () => {})).toBe("preparing");
+    const epoch = plan.brief()?.approval_epoch;
+    if (!epoch) throw new Error("missing approval epoch");
+    failure.resolve();
+    const published = () => live.liveEvents.since(0, 56 * 1024).state;
+    await until(() => published()?.notices.some(notice => notice.tone === "error" && notice.text.includes("provider offline")) === true,
+      "the approval failure notice");
+    expect(published()?.notices.find(notice => notice.text.includes("provider offline"))?.id).toBe(plan.failureNoticeId(epoch));
+    expect(published()?.plan_mode).toMatchObject({ phase: "review" });
+    expect(published()?.plan_mode?.preparing).toBeUndefined();
+    expect(plan.review).toBe(card.card.id);
+    expect(plan.approved).toBeUndefined();
+    expect(answerCard(live).card.questions[0]?.options.every(option => !option.unavailable)).toBeTrue();
+
+    fixtureTransport().script([{ text: "Executing without compacting." }]);
+    expect(await card.answer([{ options: ["execute"] }], false, async () => {})).toBe("started");
+    expect(plan.approved?.title).toBe("Add the flag");
+    await until(() => !live.session.isStreaming, "the approved plan to run");
+    await live.drained();
   }), 120_000);
 
 test("review feedback whose preflight outlasts a resubmission is not delivered to the newer review", () => planning(undefined, async (live, plan) => {
@@ -483,7 +553,7 @@ for (const { turn, source, reason, phase } of [
   };
   await overlapping(live, async (kickoff, other) => {
     // Given the context was reset to the plan and the kickoff is in Pi's preflight,
-    expect(answerCard(live).answer([{ options: ["execute_clean"] }], false, async () => {})).toBe("started");
+    expect(answerCard(live).answer([{ options: ["execute_clean"] }], false, async () => {})).toBe("preparing");
     await kickoff.reached;
     // and another turn meanwhile runs and settles first:
     other.pass();
@@ -548,7 +618,7 @@ test("an overlapping prompt that loses the run to a kickoff costs it neither its
     fixtureTransport().script([{ text: "Executing." }]);
     fixtureTransport().holdNext();
     const held = fixtureTransport().whenHeld();
-    expect(answerCard(live).answer([{ options: ["execute"] }], false, async () => {})).toBe("started");
+    const answered = answerCard(live).answer([{ options: ["execute"] }], false, async () => {});
     await first.reached;
     const loser = live.session.prompt("an overlapping input", { source: "extension" });
     await second.reached;
@@ -557,6 +627,7 @@ test("an overlapping prompt that loses the run to a kickoff costs it neither its
     await held;
     second.pass();
     await expect(loser).rejects.toThrow("already processing");
+    expect(await answered).toBe("started");
     // Then the kickoff carries its approval, and its turn is still the open one a pause cancels.
     expect(plan.phase).toBe("off");
     expect(plan.approved?.title).toBe("Add the flag");

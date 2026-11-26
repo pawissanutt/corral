@@ -259,12 +259,44 @@ pub(crate) fn action(shared: &Shared, request: SessionActionRequest) -> Result<S
             Some(ActArgs::ModelFavorite { model, favorite }),
         ),
         SessionAction::PlanMode { enabled } => ("plan_mode", Some(ActArgs::PlanMode { enabled })),
+        SessionAction::PlanStatus { card } => return plan_status(shared, &id, &card),
         SessionAction::Other => anyhow::bail!("invalid: unknown session action"),
     };
     match args {
         Some(args) => host_call(shared, &id, command, args, HostCall::Act),
         None => host_call(shared, &id, command, Map::new(), HostCall::Act),
     }
+}
+
+fn plan_status(shared: &Shared, id: &str, card: &str) -> Result<SessionActionDone> {
+    ensure!(valid_plan_card(card), "invalid: invalid plan review card");
+    let reply = host_call(
+        shared,
+        id,
+        "plan_status",
+        serde_json::json!({ "card": card }),
+        HostCall::Read,
+    )?;
+    check_plan_status_reply(card, reply)
+}
+
+fn valid_plan_card(card: &str) -> bool {
+    (1..=160).contains(&card.len())
+        && card
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._:-".contains(&byte))
+}
+
+fn check_plan_status_reply(card: &str, reply: SessionActionDone) -> Result<SessionActionDone> {
+    let status = reply
+        .plan_status
+        .as_ref()
+        .context("the session host did not return plan status")?;
+    ensure!(
+        status.card == card,
+        "the session host returned status for a different plan review card"
+    );
+    Ok(reply)
 }
 
 fn host_error(command: &str, error: anyhow::Error) -> anyhow::Error {
@@ -383,12 +415,46 @@ mod tests {
 
     #[test]
     fn an_older_host_is_refused_with_a_restart_hint() {
-        let error = exchange_with_reply::<SessionActionDone>(
-            "compact",
-            json!({ "ok": false, "error": { "code": "unknown_command", "reason": "unsupported" } }),
+        for command in ["compact", "plan_status"] {
+            let error = exchange_with_reply::<SessionActionDone>(
+                command,
+                json!({ "ok": false, "error": { "code": "unknown_command", "reason": "unsupported" } }),
+            )
+            .unwrap_err();
+            assert_eq!(error.downcast::<Refusal>().unwrap().reason, OLDER_HOST_HINT);
+        }
+    }
+
+    #[test]
+    fn plan_status_card_is_bounded_and_reply_must_echo_it() {
+        assert!(valid_plan_card("plan-1-aB_0.x:y"));
+        assert!(valid_plan_card(&"x".repeat(160)));
+        for card in ["", "card\n", "card/1", "🦀", &"x".repeat(161)] {
+            assert!(!valid_plan_card(card));
+        }
+        let reply = exchange_with_reply::<SessionActionDone>(
+            "plan_status",
+            json!({ "ok": true, "result": {"plan_status": {
+                "card": "card-1", "host": "host-1", "epoch": "0", "pending": false,
+                "failures": [], "open": false
+            }} }),
         )
-        .unwrap_err();
-        assert_eq!(error.downcast::<Refusal>().unwrap().reason, OLDER_HOST_HINT);
+        .unwrap();
+        assert!(check_plan_status_reply("card-2", reply.clone()).is_err());
+        assert_eq!(
+            check_plan_status_reply("card-1", reply)
+                .unwrap()
+                .plan_status
+                .unwrap()
+                .host,
+            "host-1"
+        );
+        let missing = exchange_with_reply::<SessionActionDone>(
+            "plan_status",
+            json!({ "ok": true, "result": {} }),
+        )
+        .unwrap();
+        assert!(check_plan_status_reply("card-1", missing).is_err());
     }
 
     #[test]

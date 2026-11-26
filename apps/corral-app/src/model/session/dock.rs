@@ -17,8 +17,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use corral_protocol::detail::{CardKind, DetailBody, DetailRef, SessionCard};
-use corral_protocol::session_host::{CardAnswer, SessionCardAnswer};
-use corral_protocol::session_state::CardBrief;
+use corral_protocol::session_host::{
+    CardAnswer, SessionAction, SessionActionRequest, SessionCardAnswer,
+};
+use corral_protocol::session_state::{CardBrief, PlanModeBrief};
 
 use crate::model::daemon::{Feed, Operation};
 use crate::model::effect::Effect;
@@ -30,7 +32,7 @@ use super::dialog::{self, DecisionCard};
 use super::plan_review::{self, PlanReview};
 use super::questions::{self, AnswerCard, QuestionDock};
 use super::queue::{self, QueueDock};
-use super::{Action, Cx, Focus, State, Ui, exit};
+use super::{Action, Cx, Focus, Host, State, Ui, exit};
 
 mod fold;
 #[cfg(test)]
@@ -131,6 +133,11 @@ pub enum Pending {
     Card {
         card: String,
     },
+    /// A fresh host status read, correlated to the approval that requested it.
+    Probe {
+        card: String,
+        baseline: Option<PlanModeBrief>,
+    },
     Withdraw {
         key: String,
         /// Edit: the text goes back into the draft.
@@ -149,6 +156,70 @@ pub enum Pending {
     },
 }
 
+/// Bound unresolved answers even if their hosts never answer a status read.
+pub(super) const MAX_PLAN_ATTEMPTS: usize = 64;
+
+/// A plan answer remains guarded until its live preparation or outcome reaches this device.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanAttempt {
+    pub context: String,
+    pub acknowledged: bool,
+    pub observed: bool,
+    pub initial_epoch: Option<String>,
+    pub ack_epoch: Option<String>,
+    pub ack_host: Option<String>,
+    pub duplicate: bool,
+    pub probe_needed: bool,
+    pub probe_failed: bool,
+    /// The status host has not appeared in live state; allow a manual recheck.
+    pub probe_unconfirmed: bool,
+    pub last_probe_plan: Option<PlanModeBrief>,
+    pub probe_id: Option<Id>,
+    pub prior_failures: BTreeSet<String>,
+}
+
+/// A fresh probe supersedes older live snapshots until the live stream catches up.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProbeResolution {
+    pub baseline: Option<PlanModeBrief>,
+    pub host: String,
+    pub epoch: String,
+    pub open: bool,
+}
+
+#[derive(PartialEq, Eq)]
+pub(super) enum ResolutionView {
+    Proven,
+    Newer,
+    Ambiguous,
+}
+
+pub(super) fn resolution_view(
+    resolution: &ProbeResolution,
+    plan: Option<&PlanModeBrief>,
+) -> ResolutionView {
+    if resolution.baseline.as_ref() == plan {
+        return ResolutionView::Proven;
+    }
+    if let Some(plan) =
+        plan.filter(|plan| plan.approval_host.as_deref() == Some(resolution.host.as_str()))
+    {
+        if let Some((current, probed)) = plan
+            .approval_epoch
+            .as_deref()
+            .and_then(|epoch| epoch.parse::<u64>().ok())
+            .zip(resolution.epoch.parse::<u64>().ok())
+        {
+            return if current <= probed {
+                ResolutionView::Proven
+            } else {
+                ResolutionView::Newer
+            };
+        }
+    }
+    ResolutionView::Ambiguous
+}
+
 /// The dock's state on this device, per session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DockUi {
@@ -165,6 +236,9 @@ pub struct DockUi {
     pub confirming: Option<Confirming>,
     pub compose: Option<Compose>,
     pub pending: BTreeMap<Id, Pending>,
+    pub plan_attempts: BTreeMap<String, PlanAttempt>,
+    /// Live snapshot superseded by a fresh status read; it must not reassert old busy state.
+    pub resolved_probes: BTreeMap<String, ProbeResolution>,
     /// The host's status of this device's answer to a card that still waits (`answered`: the
     /// answer is recorded and its delivery pending).
     pub answered: BTreeMap<String, String>,
@@ -185,6 +259,8 @@ impl DockUi {
         confirming: None,
         compose: None,
         pending: BTreeMap::new(),
+        plan_attempts: BTreeMap::new(),
+        resolved_probes: BTreeMap::new(),
         answered: BTreeMap::new(),
         asked: None,
         wanted: None,
@@ -263,6 +339,8 @@ pub enum DockAction {
     ToggleQueue(Id),
     /// Read the cards behind the briefs `ids`.
     Read { session: Id, ids: Vec<String> },
+    /// Read the current host's review status after an acknowledgement or host change.
+    Probe { session: Id, card: String },
     /// Give the keys to the next dock item (queue, questions, docked choice, then the composer).
     Next(Id),
 }
@@ -303,6 +381,7 @@ impl Dock {
             && self.queue.is_none()
             && self.decision.is_none()
             && self.waiting.is_empty()
+            && self.read.is_none()
     }
 }
 
@@ -375,15 +454,74 @@ pub(super) const fn decision(kind: CardKind) -> bool {
     matches!(kind, CardKind::Select | CardKind::Confirm | CardKind::Input)
 }
 
+/// An ACK needs a fresh host read; live state and action replies may arrive out of order.
+pub(super) fn probe(cx: &Cx<'_>) -> Option<Action> {
+    if cx.feed.link != crate::model::daemon::Link::Up || cx.host != Host::Running {
+        return None;
+    }
+    let plan = cx.state.and_then(|state| state.plan_mode.as_ref());
+    let pending = |card: &str| {
+        cx.ui
+            .dock
+            .pending
+            .values()
+            .any(|pending| matches!(pending, Pending::Probe { card: sent, .. } if sent == card))
+    };
+    let card = cx
+        .ui
+        .dock
+        .plan_attempts
+        .iter()
+        .find(|(card, attempt)| attempt.probe_needed && !pending(card))
+        .map(|(card, _)| card)
+        .or_else(|| {
+            cx.ui
+                .dock
+                .resolved_probes
+                .iter()
+                .find(|(card, resolution)| {
+                    !cx.ui.dock.plan_attempts.contains_key(*card)
+                        && !pending(card)
+                        && resolution_view(resolution, plan) == ResolutionView::Ambiguous
+                        && cx
+                            .state
+                            .is_some_and(|state| state.cards.iter().any(|brief| &brief.id == *card))
+                })
+                .map(|(card, _)| card)
+        })?;
+    Some(Action::Dock(DockAction::Probe {
+        session: cx.id.clone(),
+        card: card.clone(),
+    }))
+}
+
+/// A completed fresh probe supersedes the live snapshot that preceded its request.
+pub(super) fn live_busy(
+    dock: &DockUi,
+    state: Option<&corral_protocol::session_state::SessionState>,
+    card: &str,
+) -> bool {
+    let plan = state.and_then(|state| state.plan_mode.as_ref());
+    if let Some(resolution) = dock.resolved_probes.get(card) {
+        match resolution_view(resolution, plan) {
+            ResolutionView::Proven => return !resolution.open,
+            ResolutionView::Ambiguous => return true,
+            ResolutionView::Newer => {}
+        }
+    }
+    plan.is_some_and(|plan| plan.preparing.is_some() || plan.approval_pending == Some(true))
+}
+
 /// Whether this device's answer to `card` is on its way.
 pub(super) fn sending(ui: &Ui, feed: &Feed, card: &str) -> bool {
-    ui.dock.pending.iter().any(|(key, pending)| {
-        matches!(pending, Pending::Card { card: sent } if sent == card)
-            && feed
-                .operations
-                .get(key)
-                .is_none_or(|operation| operation.loading)
-    })
+    ui.dock.plan_attempts.contains_key(card)
+        || ui.dock.pending.iter().any(|(key, pending)| {
+            matches!(pending, Pending::Card { card: sent } if sent == card)
+                && feed
+                    .operations
+                    .get(key)
+                    .is_none_or(|operation| operation.loading)
+        })
 }
 
 /// What a request's reply refused, as corrald or the host said it.
@@ -585,6 +723,83 @@ pub(super) fn act(state: &mut State, action: DockAction, feed: &Feed) -> Vec<Eff
             Vec::new()
         }
         DockAction::Read { session, ids } => reads::read(state, session, ids, feed),
+        DockAction::Probe { session, card } => {
+            if state.ui(session.as_str()).dock.pending.values().any(
+                |pending| matches!(pending, Pending::Probe { card: sent, .. } if sent == &card),
+            ) {
+                return Vec::new();
+            }
+            if !state
+                .ui(session.as_str())
+                .dock
+                .plan_attempts
+                .contains_key(&card)
+            {
+                let Some(resolution) = state
+                    .ui(session.as_str())
+                    .dock
+                    .resolved_probes
+                    .get(&card)
+                    .cloned()
+                else {
+                    return Vec::new();
+                };
+                let plan = feed
+                    .live
+                    .get(session.as_str())
+                    .and_then(|live| live.state.as_ref())
+                    .and_then(|state| state.plan_mode.as_ref());
+                if resolution_view(&resolution, plan) != ResolutionView::Ambiguous {
+                    return Vec::new();
+                }
+                state.ui_mut(&session).dock.plan_attempts.insert(
+                    card.clone(),
+                    PlanAttempt {
+                        context: "probe".into(),
+                        acknowledged: true,
+                        observed: false,
+                        initial_epoch: Some(resolution.epoch.clone()),
+                        ack_epoch: Some(resolution.epoch),
+                        ack_host: Some(resolution.host),
+                        duplicate: false,
+                        probe_needed: false,
+                        probe_failed: false,
+                        probe_unconfirmed: false,
+                        last_probe_plan: None,
+                        probe_id: None,
+                        prior_failures: BTreeSet::new(),
+                    },
+                );
+            }
+            let baseline = feed
+                .live
+                .get(session.as_str())
+                .and_then(|live| live.state.as_ref())
+                .and_then(|state| state.plan_mode.clone());
+            let key = state.ids.next_id();
+            let ui = state.ui_mut(&session);
+            if let Some(attempt) = ui.dock.plan_attempts.get_mut(&card) {
+                attempt.probe_needed = false;
+                attempt.probe_failed = false;
+                attempt.probe_unconfirmed = false;
+                attempt.probe_id = Some(key.clone());
+                attempt.last_probe_plan = baseline.clone();
+            }
+            ui.dock.pending.insert(
+                key.clone(),
+                Pending::Probe {
+                    card: card.clone(),
+                    baseline,
+                },
+            );
+            vec![Effect::SessionAction {
+                key,
+                request: SessionActionRequest {
+                    id: session.to_string(),
+                    action: SessionAction::PlanStatus { card },
+                },
+            }]
+        }
         DockAction::Next(session) => {
             fold::next(state, &session, feed);
             Vec::new()
@@ -611,14 +826,33 @@ fn confirm(cx: &Cx<'_>) -> Option<CardConfirm> {
     })
 }
 
+fn probe_recovery(cx: &Cx<'_>) -> Option<CardsRead> {
+    let (card, _) = cx.ui.dock.plan_attempts.iter().find(|(card, attempt)| {
+        (attempt.probe_failed || attempt.probe_unconfirmed)
+            && !cx
+                .state
+                .is_some_and(|state| state.cards.iter().any(|brief| &brief.id == *card))
+    })?;
+    Some(CardsRead {
+        words: "Review status could not be confirmed; retry without sending an answer.".into(),
+        hue: Hue::Held,
+        retry: Some(Action::Dock(DockAction::Probe {
+            session: cx.id.clone(),
+            card: card.clone(),
+        })),
+    })
+}
+
 /// The dock of the session `cx` reads.
 pub fn dock(cx: &Cx<'_>) -> Dock {
     let queue = queue::queue_dock(cx);
     let wanted = fold::wanted_card(cx);
+    let probe_read = probe_recovery(cx);
     let Some(state) = cx.state else {
         return Dock {
             queue,
             answer: wanted,
+            read: probe_read,
             ..Dock::default()
         };
     };
@@ -665,7 +899,7 @@ pub fn dock(cx: &Cx<'_>) -> Dock {
                 card: brief.id.clone(),
             })
         }),
-        read: reads::cards_read(cx, &state.cards).filter(|_| !shown_read),
+        read: probe_read.or_else(|| reads::cards_read(cx, &state.cards).filter(|_| !shown_read)),
         inert,
     }
 }

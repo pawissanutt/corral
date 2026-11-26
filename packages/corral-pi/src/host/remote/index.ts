@@ -9,6 +9,12 @@ export function installRemote(host: HostSession, owner: RemoteOwner, sessionDir:
   if (host.servesChildren) registerFleet(host.remoteRegistry, sessionDir, child => host.childTranscript(child));
   registerCards(host.remoteRegistry, {
     dialogs: host.dialogs, ready: () => host.remoteActionsReady, beforeQuestion: () => owner.resume(),
+    reviewAttempt: card => {
+      const plan = host.planMode;
+      const brief = plan?.review === card ? plan.brief() : undefined;
+      return brief?.approval_epoch && brief.approval_host
+        ? { approval_epoch: brief.approval_epoch, approval_host: brief.approval_host } : undefined;
+    },
   });
   host.remoteBuild.register(host.remoteRegistry);
   host.installRemoteParts();

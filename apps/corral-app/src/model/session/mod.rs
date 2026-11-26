@@ -136,7 +136,7 @@ pub use plan::{
     HistoryLine, Ledger, LedgerStep, PlanAction, PlanTab, PlanUi, StepRow,
     StepState as PlanStepState, ledger, plan_tab,
 };
-pub use plan_review::{PlanDoc, PlanReview, compact};
+pub use plan_review::{PlanDoc, PlanReview, compact, compact_in_place};
 pub use proof::{ProofAction, ProofTab, ProofUi, proof_tab};
 pub use questions::{
     AnswerCard, AnswerTab, QuestionDock, QuestionLine, QuestionView, Review, ReviewRow,
@@ -825,6 +825,7 @@ pub fn page(feed: &Feed, state: &State, id: &Id, env: Env) -> SessionPage {
         })
         .collect();
     fetches.extend(dock::fetch(&cx));
+    fetches.extend(dock::probe(&cx));
     fetches.extend(actions::fetches(&cx));
     fetches.extend(board::record_fetches(&cx));
     fetches.extend(match &body {

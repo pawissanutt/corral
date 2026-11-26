@@ -546,7 +546,7 @@ export class HostSession {
       },
       model: () => this.session.model ? `${this.session.model.provider}/${this.session.model.id}` : undefined,
       changed: () => { this.liveEvents.stateChanged(); this.panels?.refresh(); },
-      note: (text, tone = "text") => { this.addMark({ kind: "note", tone, at: Date.now(), text }); },
+      note: (text, tone = "text", noticeId) => { this.addMark({ kind: "note", tone, at: Date.now(), text }, noticeId); },
       approved: summary => { this.buildControls?.noteOwnerInput(summary); },
     }) : undefined;
     const sessionRoot = options.build?.dir ?? options.sessionDir;
@@ -1539,8 +1539,8 @@ export class HostSession {
   /**
    * Presentation cannot affect prompts, session state, or tool results.
    */
-  private addMark(mark: TranscriptMark): boolean {
-    if (mark.kind === "note" && this.attached) this.liveEvents.note(mark.tone, mark.text, mark.at);
+  private addMark(mark: TranscriptMark, noticeId?: string): boolean {
+    if (mark.kind === "note" && this.attached) this.liveEvents.note(mark.tone, mark.text, mark.at, noticeId);
     return recordTranscriptMark(this.options.marks ?? this.markRows, mark, {
       attached: this.attached, plain: this.options.ui === "plain", bound: this.bound,
       build: this.options.build !== undefined || this.options.identity.role === "build",

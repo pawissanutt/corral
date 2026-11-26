@@ -385,6 +385,6 @@ pub(super) fn settled(ui: &mut Ui, pending: Pending, operation: &Operation, now:
                 ui.notices.push(Hue::Held, "That input could not move", now);
             }
         }
-        Pending::Card { .. } | Pending::Action { .. } => {}
+        Pending::Card { .. } | Pending::Probe { .. } | Pending::Action { .. } => {}
     }
 }

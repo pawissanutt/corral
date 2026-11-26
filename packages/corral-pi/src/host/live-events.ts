@@ -1,4 +1,5 @@
 // Ephemeral chat projection only: never writes the Pi journal or the lifecycle event ring.
+import { randomUUID } from "node:crypto";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { EventLog, EVENT_MAX_BYTES, type EventPage } from "../bridge/events.ts";
 import type { FleetSnapshot } from "../build/types.ts";
@@ -100,6 +101,7 @@ export class LiveEvents {
   private sampledAt = -Infinity;
   private stateTimer: ReturnType<typeof setTimeout> | undefined;
   private noticeTimer: ReturnType<typeof setTimeout> | undefined;
+  private readonly noticeInstance = randomUUID();
   private noticeId = 0;
   private hostNotices: HostNotice[] = [];
   private readonly parts = new Map<SessionPart, string>();
@@ -157,8 +159,8 @@ export class LiveEvents {
     this.stateChanged();
   }
 
-  note(tone: HostNotice["tone"], text: string, at: number): void {
-    this.hostNotices = [...this.hostNotices.slice(-3), { id: `note-${++this.noticeId}`, tone, text: utf8Prefix(text, 240),
+  note(tone: HostNotice["tone"], text: string, at: number, id?: string): void {
+    this.hostNotices = [...this.hostNotices.slice(-3), { id: id ?? `note-${this.noticeInstance}-${++this.noticeId}`, tone, text: utf8Prefix(text, 240),
       until: new Date(at + NOTICE_MS).toISOString() }];
     this.expireNotices();
     this.stateChanged();

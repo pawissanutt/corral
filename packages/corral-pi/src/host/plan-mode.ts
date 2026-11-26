@@ -1,7 +1,7 @@
 // Plan mode (docs/plans/pi-plan-mode.md). The agent plans read-only with the owner, submits one plan
 // document, and the owner's review choice starts execution. The phase is read from the transcript, so a
 // restart restores it and a rewind undoes it. Nothing here changes the system prompt or the tool list.
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
@@ -12,7 +12,7 @@ import { real, resolveToolPath } from "../roles/assistant/paths.ts";
 import type { PlanContext, PlanPrompts } from "../roles/types.ts";
 import { cardQuestion, invalidAnswer, singleAnswer, type AnswerStatus, type CardAnswer, type CardEntry } from "./remote/cards.ts";
 import type { AnswerSource } from "./remote/dialogs.ts";
-import { clipText, cursorOffset, fingerprintPart, jsonBytes, partCursor } from "./remote/state.ts";
+import { clipText, cursorOffset, fingerprintPart, jsonBytes, partCursor, type PlanModeBrief } from "./remote/state.ts";
 
 export const PLAN_ENTRY = "corral_plan_mode";
 export const PLAN_NOTE = "corral_plan_note";
@@ -70,7 +70,7 @@ export interface PlanHost {
   submit(text: string, origin: "owner" | "auto", answers?: PlanAnswer): Promise<boolean>;
   model(): string | undefined;
   changed(): void;
-  note(text: string, tone?: "text" | "warning" | "error"): void;
+  note(text: string, tone?: "text" | "warning" | "error", id?: string): void;
   /** A build session's record of what the owner approved. */
   approved?(summary: string): void;
   now?: () => number;
@@ -202,15 +202,39 @@ function scan(entries: readonly PlanEntry[]): Scan {
   return { record, ...(approved ? { approved } : {}), due: due ? [due] : [] };
 }
 
+export interface PlanStatus {
+  card: string;
+  host: string;
+  epoch: string;
+  pending: boolean;
+  error?: string;
+  failures: { epoch: string; error: string }[];
+  open: boolean;
+}
+
 export class PlanMode {
   /** The one plan document of the session. */
   get path(): string { return join(this.host.dir, PLAN_FILE); }
   private cache: { leaf: string | null; scan: Scan } | undefined;
   private submitted: { card: string; body: string } | undefined;
+  /** Lets a client distinguish stale review state from state after an approval attempt, even if it missed preparation. */
+  private readonly approvalHost = randomUUID();
+  private approvalEpoch = 0;
+  private approvalError: { card: string; text: string } | undefined;
+  private approvalFailures: { card: string; epoch: string; error: string }[] = [];
+
+  private rememberFailure(card: string, error: string, epoch = String(this.approvalEpoch)): void {
+    const text = clipText(error, 1024);
+    this.approvalError = { card, text };
+    this.approvalFailures.push({ card, epoch, error: text });
+    if (this.approvalFailures.length > 4) this.approvalFailures.shift();
+  }
+
+  failureNoticeId(epoch: string): string { return `plan-failure-${this.approvalHost}-${epoch}`; }
   /** An approval is being carried out, up to the admission of its kickoff. */
-  private starting = false;
+  private starting: { readonly card: string; readonly context: PlanContext } | undefined;
   /** The approval's own compaction or reset is running. */
-  private preparing = false;
+  private changingContext = false;
   /** The kickoff on its way into the transcript: its card, its text, its plan, and what the Build record will say of it. */
   private kickoff: { readonly card: string; readonly text: string; readonly path: string; readonly journal: string; admitted: boolean } | undefined;
   /** The review whose feedback the session took but the transcript does not hold yet. */
@@ -244,7 +268,12 @@ export class PlanMode {
     return record.phase === "review" ? cardId(record) : undefined;
   }
   /** An approval is on its way into the transcript. */
-  get approving(): boolean { return this.starting || (this.kickoff !== undefined && this.kickoff.card === this.review); }
+  get approving(): boolean { return this.starting !== undefined || (this.kickoff !== undefined && this.kickoff.card === this.review); }
+  /** Live context preparation belongs to one review, never another submission on a rewound branch. */
+  private get preparing(): PlanContext | undefined {
+    const attempt = this.starting;
+    return attempt && attempt.card === this.review ? attempt.context : undefined;
+  }
   /** One answer to the review is being carried out: nothing else may answer it or change the mode meanwhile. */
   private get pending(): boolean { return this.approving || (this.feedback !== undefined && this.feedback.card === this.review); }
 
@@ -262,7 +291,8 @@ export class PlanMode {
   /** A rewind can replace a pending review or approved copy without changing the phase. */
   private get shown(): string {
     const { record, approved } = this.read();
-    return `${record.phase} ${record.phase === "review" ? cardId(record) : approved?.path ?? ""}`;
+    return record.phase === "review" ? `${record.phase} ${cardId(record)} ${this.approvalEpoch} ${this.preparing ?? ""} ${this.pending} ${this.approvalError?.text ?? ""}`
+      : `${record.phase} ${approved?.path ?? ""}`;
   }
 
   private announce(): void {
@@ -292,11 +322,30 @@ export class PlanMode {
   turnEnded(): void {
     if (this.kickoff?.admitted) this.kickoff = undefined;
     if (this.feedback?.admitted) this.feedback = undefined;
+    if (this.shown !== this.seen) this.announce();
   }
 
-  brief(): { phase: "planning" | "review"; title?: string; revision?: number } | undefined {
-    const { phase, title, revision } = this.record;
-    return phase === "off" ? undefined : { phase, ...(title ? { title } : {}), ...(revision ? { revision } : {}) };
+  private failuresFor(card: string | undefined): PlanStatus["failures"] {
+    return this.approvalFailures.filter(failure => failure.card === card).map(({ epoch, error }) => ({ epoch, error }));
+  }
+
+  /** Read the exact requested review without publishing a change or reading the plan copy. */
+  status(card: string): PlanStatus {
+    const open = this.review === card;
+    const pending = open && (this.starting?.card === card || this.kickoff?.card === card || this.feedback?.card === card);
+    const error = this.approvalError;
+    return { card, host: this.approvalHost, epoch: String(this.approvalEpoch), open, pending,
+      ...(open && error?.card === card ? { error: error.text } : {}), failures: this.failuresFor(card) };
+  }
+
+  brief(): PlanModeBrief | undefined {
+    const { phase, title, revision } = this.record, preparing = this.preparing, error = this.approvalError;
+    const failures = this.failuresFor(this.review);
+    return phase === "off" ? undefined : { phase, ...(title ? { title } : {}), ...(revision ? { revision } : {}),
+      ...(phase === "review" ? { approval_epoch: String(this.approvalEpoch), approval_host: this.approvalHost, ...(this.pending ? { approval_pending: true } : {}),
+        ...(error && error.card === this.review ? { approval_error: error.text } : {}),
+        ...(failures.length ? { approval_failures: failures } : {}) } : {}),
+      ...(preparing ? { preparing } : {}) };
   }
 
   private targetsPlan(path: unknown): boolean {
@@ -340,7 +389,7 @@ export class PlanMode {
     const { approved, due } = this.read();
     // Only the approval's own compaction and its own kickoff go without the planning contract: any other turn
     // that gets in before the kickoff is still a turn under review.
-    if (!due.length || this.preparing || (prompt !== undefined && prompt === this.kickoff?.text)) return undefined;
+    if (!due.length || this.changingContext || (prompt !== undefined && prompt === this.kickoff?.text)) return undefined;
     const content = due.map(kind => kind === "contract"
       ? this.host.prompts.contract({ path: this.path, existing: this.exists(), askUser: this.host.askUser })
       : kind === "left" ? "[corral plan mode]\nPlan mode is off: the owner left it without approving a plan. Normal tool access is "
@@ -448,13 +497,14 @@ export class PlanMode {
   card(): CardEntry | undefined {
     const record = this.record;
     if (record.phase !== "review") return undefined;
-    const body = this.reviewText();
+    const body = this.reviewText(), id = cardId(record);
+    const unavailable = this.approving ? ANSWERING : undefined;
     return {
-      card: { id: cardId(record), kind: "plan_review", title: record.title ?? "Plan", tool: PLAN_SUBMIT_TOOL,
+      card: { id, kind: "plan_review", title: record.title ?? "Plan", tool: PLAN_SUBMIT_TOOL,
         meta: [`revision ${record.revision}`, this.host.model()].filter(Boolean).join(" · "),
         ...(body === undefined ? {} : { body }), opened_at: new Date(record.at).toISOString(),
-        questions: [cardQuestion("How should this plan proceed?", PLAN_OPTIONS.map(option => ({ ...option, destructive: false })), true)] },
-      answer: (answers, dismiss, _before, by) => dismiss ? "dismissed" : this.answer(singleAnswer(answers), by),
+        questions: [cardQuestion("How should this plan proceed?", PLAN_OPTIONS.map(option => ({ ...option, unavailable, destructive: false })), true)] },
+      answer: (answers, dismiss, _before, by) => this.review !== id ? "missing" : dismiss ? "dismissed" : this.answer(singleAnswer(answers), by),
     };
   }
 
@@ -466,11 +516,16 @@ export class PlanMode {
     if (choice !== "revise" && by?.source === "remote" && (!by.expectedModel || by.expectedModel !== this.host.model())) {
       throw new BridgeRefusal("plan_mode_unavailable", "Review the current model before executing; the approval did not match it");
     }
-    return this.choose(choice as PlanChoice, text);
+    const result = this.choose(choice as PlanChoice, text, by?.source === "remote");
+    if (result === "preparing" && by?.source === "remote") {
+      by.approvalEpoch = String(this.approvalEpoch);
+      by.approvalHost = this.approvalHost;
+    }
+    return result;
   }
 
   /** The owner's review choice, from the terminal or a card answer. Refused while it could not be carried out. */
-  choose(choice: PlanChoice, text?: string): AnswerStatus | Promise<AnswerStatus> {
+  choose(choice: PlanChoice, text?: string, remote = false): AnswerStatus | Promise<AnswerStatus> {
     if (this.phase !== "review") return "missing";
     // One answer at a time, said out loud: a second one must not be taken for carried out, nor override the first.
     if (this.pending) throw new BridgeRefusal("plan_mode_unavailable", ANSWERING);
@@ -478,8 +533,14 @@ export class PlanMode {
     const blocked = this.host.blocked();
     if (blocked) throw new BridgeRefusal("plan_mode_unavailable", blocked);
     if (choice === "revise") return this.revise(text);
-    void this.execute(EXECUTE[choice]!, text);
-    return "started";
+    const context = EXECUTE[choice]!;
+    const epoch = String(++this.approvalEpoch);
+    const execution = this.execute(context, epoch, text);
+    if (context === "keep" && !remote) return execution;
+    // Stopping the prior turn or preparing context can outlast the bridge's reply deadline. Acknowledge
+    // preparation, not a turn that has yet to start, and publish any later refusal through live notices.
+    void execution.catch(error => this.host.note(error instanceof BridgeRefusal ? error.reason : String(error), "error", this.failureNoticeId(epoch)));
+    return "preparing";
   }
 
   /**
@@ -497,8 +558,11 @@ export class PlanMode {
       this.host.note("Back to planning. Tell the agent what to change.");
       return "delivered";
     }
+    this.approvalEpoch++;
+    this.approvalError = undefined;
     this.feedback = { card, admitted: false };
     const feedbackSent = this.feedback;
+    this.announce();
     return this.host.submit("[corral plan review]\nThe owner reviewed the plan and wants changes before approving:\n"
       + `${text}\n\nRevise \`${this.path}\`, then call plan_submit again.`, "owner", { card, kickoff: false }).then(taken => {
       if (!taken) throw new Error("refused");
@@ -506,9 +570,12 @@ export class PlanMode {
       return "delivered" as const;
     }).catch(() => {
       if (this.feedback === feedbackSent) this.feedback = undefined;
-      throw new BridgeRefusal("plan_mode_unavailable", this.review === card
+      const reason = this.review === card
         ? "The session did not take the feedback, so the review is still open. Wait for the agent's turn to end, then send it again"
-        : "The session did not take the feedback: the review it answered is no longer open");
+        : "The session did not take the feedback: the review it answered is no longer open";
+      if (this.review === card) this.rememberFailure(card, reason);
+      this.announce();
+      throw new BridgeRefusal("plan_mode_unavailable", reason);
     });
   }
 
@@ -516,12 +583,14 @@ export class PlanMode {
    * Carry out an approval. Nothing is recorded for it: the review ends when the kickoff itself is in the
    * transcript, so a refusal, a failure or a restart at any point before that leaves the same review open.
    */
-  private async execute(context: PlanContext, note?: string): Promise<void> {
+  private async execute(context: PlanContext, epoch: string, note?: string): Promise<"started" | "missing"> {
     const record = this.record;
-    if (record.phase !== "review") return;
+    if (record.phase !== "review") return "missing";
     const card = cardId(record), model = this.host.model();
-    this.starting = true;
+    this.approvalError = undefined;
+    this.starting = { card, context };
     try {
+      this.announce();
       await this.host.stopTurn();
       // A fallback already authenticating for the stopped turn can finish its switch during settlement.
       if (this.host.model() !== model) throw new Error("the model changed; review the current model and approve again");
@@ -534,13 +603,15 @@ export class PlanMode {
         throw new Error(CHANGED);
       }
       const title = record.title ?? "Plan", { revision, path } = record;
-      this.preparing = true;
-      try {
-        if (context === "compact") await this.host.compact(COMPACT_INSTRUCTIONS);
-        // The reset summary carries the plan itself, so the cleared context holds it whatever happens next.
-        else if (context === "clean") await this.host.reset(this.host.prompts.reset({ path, title, revision, plan }));
-      } finally {
-        this.preparing = false;
+      if (context !== "keep") {
+        this.changingContext = true;
+        try {
+          if (context === "compact") await this.host.compact(COMPACT_INSTRUCTIONS);
+          // The reset summary carries the plan itself, so the cleared context holds it whatever happens next.
+          else await this.host.reset(this.host.prompts.reset({ path, title, revision, plan }));
+        } finally {
+          this.changingContext = false;
+        }
       }
       // The owner may have paused or rewound while the context was prepared; the admission order then decides
       // for good.
@@ -553,13 +624,16 @@ export class PlanMode {
       const kickoff = this.kickoff;
       if (!await this.host.submit(text, "auto", { card, kickoff: true, model })) throw new Error("the session did not take it");
       kickoff.admitted = true;
+      return "started";
     } catch (error) {
       this.kickoff = undefined;
-      this.host.note(`The plan was not started: ${error instanceof Error ? error.message : String(error)}.`
-        + (this.review === card ? " The review is still open." : ""), "error");
-      this.announce();
+      const reason = `The plan was not started: ${error instanceof Error ? error.message : String(error)}.`
+        + (this.review === card ? " The review is still open." : "");
+      if (this.review === card) this.rememberFailure(card, reason, epoch);
+      throw new BridgeRefusal("plan_mode_unavailable", reason);
     } finally {
-      this.starting = false;
+      this.starting = undefined;
+      if (this.shown !== this.seen) this.announce();
     }
   }
 

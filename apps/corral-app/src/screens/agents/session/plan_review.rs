@@ -3,7 +3,9 @@
 //! drawn as Markdown at the prose measure under its title and facts, with where the read of the
 //! whole document stands; the dock holds its card: the model an execute option runs on with
 //! Change (the session's model list), the host's options, the one field for feedback or a note,
-//! and Not now. Its keys work while the dock has them, as a docked choice's do.
+//! and Not now. Its keys work while the dock has them, as a docked choice's do. The side pane's
+//! session tab and Ask's drawer review in place the same way (`in_place`, the page's view bar
+//! leading back); the phone sheet, a Home card and the Sessions inspector keep the review's line.
 //! test ids `plan-review`, `btn-plan-retry`, `dock-<card>`, `opt-<card>-<n>`, `btn-plan-model`,
 //! `field-answer-<card>-0`, `btn-plan-send`, `btn-card-not-now`.
 
@@ -13,6 +15,7 @@ use std::rc::Rc;
 use nsh_core::prelude::*;
 
 use crate::model::Form;
+use crate::model::hue::Hue;
 use crate::model::session::{Body, PlanDoc, PlanReview, SessionPage};
 use crate::screens::markdown::{markdown, provide_styles};
 use crate::state::AppState;
@@ -24,6 +27,32 @@ use crate::ui::tokens::{FONT_TEXT, MEASURE_PROSE, Token, color};
 use super::super::run;
 use super::cards::{foot_row, frame, hint, options_list, press, quiet, standing, tint, words};
 use super::decision::text_row;
+
+/// Ask's transcript place: `chat` (the transcript) until a plan review opens on the session,
+/// then the document, as the page's main view does; each is drawn again only when that changes.
+pub(super) fn in_place(
+    app: AppState,
+    page: Memo<SessionPage>,
+    chat: fn(AppState, Memo<SessionPage>) -> AnyElement,
+) -> AnyElement {
+    let reviewing = computed(move || page.with(|p| matches!(p.body, Body::PlanReview(_))));
+    view()
+        .flex_1()
+        .min_w(px(0.0))
+        .min_h(px(0.0))
+        .flex_col()
+        .child(dynamic(move || {
+            let reviewing = reviewing.get();
+            untracked(|| {
+                if reviewing {
+                    document(app, page)
+                } else {
+                    chat(app, page)
+                }
+            })
+        }))
+        .into_element()
+}
 
 /// The plan document in the conversation's place, in its own scroll.
 pub(super) fn document(app: AppState, page: Memo<SessionPage>) -> AnyElement {
@@ -149,13 +178,38 @@ fn review_card(
     });
     let state = computed(move || {
         card.with(|c| {
-            c.as_ref()
-                .map(|c| (c.read.clone(), c.sending, c.inert.clone()))
+            c.as_ref().map(|c| {
+                (
+                    c.read.clone(),
+                    c.sending,
+                    c.inert.clone(),
+                    c.preparing.clone(),
+                )
+            })
         })
     });
+    // The host took the choice and prepares the execution's context: its words, not `sending…`.
     let state = dynamic(move || {
-        let (read, sending, inert) = state.get()?;
-        untracked(|| standing(app, read, sending, inert.as_deref()))
+        let (read, sending, inert, preparing) = state.get()?;
+        untracked(|| match preparing.filter(|_| inert.is_none()) {
+            Some(said) => Some(preparing_line(app, said)),
+            None => standing(app, read, sending, inert.as_deref()),
+        })
+    });
+    let retry = computed(move || card.with(|c| c.as_ref().and_then(|c| c.probe_retry.clone())));
+    let retry = dynamic(move || {
+        retry.get().map(|action| {
+            untracked(|| {
+                button(
+                    app,
+                    "Retry status",
+                    ButtonKind::Quiet,
+                    "btn-plan-status-retry",
+                    move || run(app, action.clone()),
+                )
+                .into_element()
+            })
+        })
     });
     let foot = computed(move || {
         card.with(|c| {
@@ -205,7 +259,21 @@ fn review_card(
         &test_id,
         move || card.with(|c| c.as_ref().map(|c| c.title.clone()).unwrap_or_default()),
         None,
-        vec![model, rows, field, state, foot],
+        vec![model, rows, field, state, retry, foot],
         false,
     )
+}
+
+/// `Choice received; preparing a clean context…` with the running mark, while the host prepares
+/// the context the plan executes in; the options stay muted until it starts or says why not.
+fn preparing_line(app: AppState, said: String) -> AnyElement {
+    let form = app.form;
+    view()
+        .test_id("plan-preparing")
+        .flex_row()
+        .items_center()
+        .gap(px(if form == Form::Terminal { 8.0 } else { 6.0 }))
+        .children(super::state_mark(app, true, None, Hue::Worker))
+        .child(words(form, said, tint(Hue::Worker)).flex_1().min_w(px(0.0)))
+        .into_element()
 }

@@ -1,5 +1,5 @@
 //! App operations forwarded to the owner controls of a Pi session.
-use crate::assistant::SendAttachment;
+use crate::{assistant::SendAttachment, session_state::PlanApprovalFailure};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -133,6 +133,10 @@ pub struct CardAnswer {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SessionCardAnswered {
     pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_epoch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_host: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -214,6 +218,10 @@ pub enum SessionAction {
     PlanMode {
         enabled: bool,
     },
+    /// Read the current host's status of one review card without changing it.
+    PlanStatus {
+        card: String,
+    },
     #[serde(other)]
     Other,
 }
@@ -222,6 +230,24 @@ pub enum SessionAction {
 pub struct SessionActionDone {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_status: Option<PlanStatus>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PlanStatus {
+    /// The requested review card, whether or not it is open.
+    pub card: String,
+    /// Identity of this host instance, including when the card is absent.
+    pub host: String,
+    /// Current approval counter on this host; only comparable within this host.
+    pub epoch: String,
+    pub pending: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// Recent failures for this exact card on this host.
+    pub failures: Vec<PlanApprovalFailure>,
+    pub open: bool,
 }
 
 #[cfg(test)]
@@ -295,11 +321,52 @@ mod tests {
                 phase: PlanModePhase::Review,
                 title: Some("T".into()),
                 revision: Some(2),
+                preparing: None,
+                approval_epoch: None,
+                approval_host: None,
+                approval_pending: None,
+                approval_error: None,
+                approval_failures: Vec::new(),
             })
         );
         let action: SessionActionRequest = round_trip(json!({
             "id": "B-one", "action": "plan_mode", "enabled": true
         }));
         assert_eq!(action.action, SessionAction::PlanMode { enabled: true });
+    }
+
+    #[test]
+    fn plan_status_is_typed_and_other_action_replies_remain_compatible() {
+        let action: SessionActionRequest = round_trip(json!({
+            "id": "B-one", "action": "plan_status", "card": "card-1"
+        }));
+        assert_eq!(
+            action.action,
+            SessionAction::PlanStatus {
+                card: "card-1".into()
+            }
+        );
+        let response: SessionActionDone = round_trip(json!({"plan_status": {
+            "card": "card-1", "host": "current-host", "epoch": "2", "open": false,
+            "pending": false, "failures": []
+        }}));
+        assert_eq!(
+            response.plan_status.unwrap(),
+            PlanStatus {
+                card: "card-1".into(),
+                host: "current-host".into(),
+                epoch: "2".into(),
+                pending: false,
+                error: None,
+                failures: Vec::new(),
+                open: false,
+            }
+        );
+        let legacy: SessionActionDone = round_trip(json!({"text": "Done"}));
+        assert_eq!(legacy.plan_status, None);
+        assert_eq!(
+            serde_json::to_value(legacy).unwrap(),
+            json!({"text": "Done"})
+        );
     }
 }

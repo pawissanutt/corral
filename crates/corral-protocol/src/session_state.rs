@@ -336,6 +336,30 @@ pub struct PlanModeBrief {
     pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revision: Option<u32>,
+    /// Context preparation is underway; execution has not yet been admitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preparing: Option<String>,
+    /// A monotonically increasing answer-attempt counter within the host instance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_epoch: Option<String>,
+    /// Identifies the host instance that issued the epoch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_host: Option<String>,
+    /// An approval is still being prepared or admitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_pending: Option<bool>,
+    /// The current review's most recent approval failure, when reported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_error: Option<String>,
+    /// Recent failed answers to this review, keyed by the host-local epoch.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub approval_failures: Vec<PlanApprovalFailure>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PlanApprovalFailure {
+    pub epoch: String,
+    pub error: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

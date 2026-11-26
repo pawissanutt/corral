@@ -331,6 +331,7 @@ pub(super) fn compact(
         text: Some(format!(
             "Compacted session context ({before} tokens before compaction)"
         )),
+        plan_status: None,
     })
 }
 
@@ -365,6 +366,7 @@ pub(super) fn favorite(
         } else {
             format!("{model} is no longer a favorite")
         }),
+        plan_status: None,
     })
 }
 
@@ -388,6 +390,7 @@ pub(super) fn board_refresh(feed: &mut Feed, id: &Id) -> Result<Value, String> {
     settle(feed, id.as_str());
     reply(SessionActionDone {
         text: Some(format!("Board refreshed: {tasks} tasks, {blocked} blocked")),
+        plan_status: None,
     })
 }
 

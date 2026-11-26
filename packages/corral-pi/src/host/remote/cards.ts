@@ -20,7 +20,7 @@ export interface SessionCard extends Omit<CardBrief, "kind"> {
   kind: CardKind; meta?: string; body?: string; body_more: boolean; questions: CardQuestion[]; tool?: string; opened_at: string;
 }
 export interface CardAnswer { options: string[]; text?: string }
-export type AnswerStatus = "delivered" | "answered" | "started" | "dismissed" | "expired" | "missing";
+export type AnswerStatus = "delivered" | "answered" | "preparing" | "started" | "dismissed" | "expired" | "missing";
 export interface CardEntry {
   card: Omit<SessionCard, "body_more">;
   answer(answers: readonly CardAnswer[], dismiss: boolean, beforeQuestion: () => Promise<unknown>, by?: AnswerSource): AnswerStatus | Promise<AnswerStatus>;
@@ -160,6 +160,7 @@ function parseAnswer(args: Record<string, unknown>) {
 
 export function registerCards(registry: RemoteRegistry, source: {
   dialogs: RemoteDialogs; ready(): boolean; beforeQuestion(): Promise<unknown>;
+  reviewAttempt?(card: string): { approval_epoch: string; approval_host: string } | undefined;
 }): void {
   registry.register({ name: "cards", parse: ({ after }) => {
     if (after !== undefined && (typeof after !== "string" || Buffer.byteLength(after) > 128)) {
@@ -181,8 +182,18 @@ export function registerCards(registry: RemoteRegistry, source: {
   } });
   registry.register({ name: "card_answer", parse: parseAnswer, run: async ({ card, answers, dismiss, device, expectedModel }) => {
     if (!source.ready()) throw new BridgeRefusal("host_not_ready", "session is not accepting card answers");
-    const status = await source.dialogs.resolve(card, answers, dismiss,
-      { source: "remote", ...(device === undefined ? {} : { device }), ...(expectedModel === undefined ? {} : { expectedModel }) }, source.beforeQuestion);
-    return { status };
+    const by: Extract<AnswerSource, { source: "remote" }> = {
+      source: "remote", ...(device === undefined ? {} : { device }), ...(expectedModel === undefined ? {} : { expectedModel }),
+    };
+    try {
+      const status = await source.dialogs.resolve(card, answers, dismiss, by, source.beforeQuestion);
+      return { status, ...(by.approvalEpoch ? { approval_epoch: by.approvalEpoch, approval_host: by.approvalHost } : {}) };
+    } catch (error) {
+      const reason = error instanceof BridgeRefusal ? error.reason : "";
+      const attempt = (reason === "This review is already being answered; wait for it" || reason === "the card is already being answered")
+        ? source.reviewAttempt?.(card) : undefined;
+      if (attempt) return { status: "waiting", ...attempt };
+      throw error;
+    }
   } });
 }

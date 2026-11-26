@@ -133,6 +133,12 @@ pub(super) fn seed(host: &mut Host, model: Option<&str>, at: String) {
         phase: PlanModePhase::Review,
         title: Some(TITLE.into()),
         revision: Some(REVISION),
+        preparing: None,
+        approval_epoch: None,
+        approval_host: None,
+        approval_pending: None,
+        approval_error: None,
+        approval_failures: Vec::new(),
     });
     host.pending.push(card(DOC, model, at));
 }
@@ -266,6 +272,12 @@ pub(super) fn toggle(feed: &mut Feed, id: &Id, enabled: bool) -> Result<Value, S
             phase: PlanModePhase::Planning,
             title: None,
             revision: None,
+            preparing: None,
+            approval_epoch: None,
+            approval_host: None,
+            approval_pending: None,
+            approval_error: None,
+            approval_failures: Vec::new(),
         });
         "Plan mode is on: the working tree is read-only until a plan is approved"
     } else {
@@ -277,6 +289,7 @@ pub(super) fn toggle(feed: &mut Feed, id: &Id, enabled: bool) -> Result<Value, S
     settle(feed, id.as_str());
     serde_json::to_value(SessionActionDone {
         text: Some(text.into()),
+        plan_status: None,
     })
     .map_err(|error| error.to_string())
 }

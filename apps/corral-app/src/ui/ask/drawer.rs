@@ -15,7 +15,7 @@ use crate::model::board::Mark;
 use crate::model::hue::Hue;
 use crate::model::session::{SessionPage, StateWord};
 use crate::model::{Effect, Form, Id, Live};
-use crate::screens::agents::{Compact, ask_session, ask_view};
+use crate::screens::agents::{Compact, ask_session, ask_view, ask_view_in};
 use crate::state::AppState;
 use crate::ui::ask::{act, unconnected};
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button, button_with};
@@ -117,7 +117,7 @@ fn keyed_session(
     dynamic(move || {
         let (id, _) = keyed.get();
         untracked(|| {
-            let page = ask_view(app, id.clone());
+            let page = ask_view_in(app, id.clone(), form);
             let warmed = id.clone();
             app.reduce(app.assistant, move |state, feed, _, _| {
                 state.warm(warmed.as_str(), feed)

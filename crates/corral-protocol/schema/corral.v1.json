@@ -5725,6 +5725,21 @@
         ],
         "type": "object"
       },
+      "PlanApprovalFailure": {
+        "properties": {
+          "epoch": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "epoch",
+          "error"
+        ],
+        "type": "object"
+      },
       "PlanBrief": {
         "properties": {
           "current": {
@@ -5807,8 +5822,50 @@
       },
       "PlanModeBrief": {
         "properties": {
+          "approval_epoch": {
+            "description": "A monotonically increasing answer-attempt counter within the host instance.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "approval_error": {
+            "description": "The current review's most recent approval failure, when reported.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "approval_failures": {
+            "description": "Recent failed answers to this review, keyed by the host-local epoch.",
+            "items": {
+              "$ref": "#/components/schemas/PlanApprovalFailure"
+            },
+            "type": "array"
+          },
+          "approval_host": {
+            "description": "Identifies the host instance that issued the epoch.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "approval_pending": {
+            "description": "An approval is still being prepared or admitted.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "phase": {
             "$ref": "#/components/schemas/PlanModePhase"
+          },
+          "preparing": {
+            "description": "Context preparation is underway; execution has not yet been admitted.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "revision": {
             "format": "uint32",
@@ -5890,6 +5947,50 @@
         "required": [
           "parent",
           "child_counts"
+        ],
+        "type": "object"
+      },
+      "PlanStatus": {
+        "properties": {
+          "card": {
+            "description": "The requested review card, whether or not it is open.",
+            "type": "string"
+          },
+          "epoch": {
+            "description": "Current approval counter on this host; only comparable within this host.",
+            "type": "string"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "failures": {
+            "description": "Recent failures for this exact card on this host.",
+            "items": {
+              "$ref": "#/components/schemas/PlanApprovalFailure"
+            },
+            "type": "array"
+          },
+          "host": {
+            "description": "Identity of this host instance, including when the card is absent.",
+            "type": "string"
+          },
+          "open": {
+            "type": "boolean"
+          },
+          "pending": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "card",
+          "host",
+          "epoch",
+          "pending",
+          "failures",
+          "open"
         ],
         "type": "object"
       },
@@ -6764,6 +6865,16 @@
       },
       "SessionActionDone": {
         "properties": {
+          "plan_status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PlanStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "text": {
             "type": [
               "string",
@@ -6884,6 +6995,23 @@
             "required": [
               "action",
               "enabled"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Read the current host's status of one review card without changing it.",
+            "properties": {
+              "action": {
+                "const": "plan_status",
+                "type": "string"
+              },
+              "card": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "action",
+              "card"
             ],
             "type": "object"
           },
@@ -7092,6 +7220,18 @@
       },
       "SessionCardAnswered": {
         "properties": {
+          "approval_epoch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "approval_host": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "status": {
             "type": "string"
           }
@@ -14819,11 +14959,25 @@
                 "type": "string"
               },
               {
+                "const": "plan_status",
+                "type": "string"
+              },
+              {
                 "const": "other",
                 "type": "string"
               }
             ]
           }
+        },
+        {
+          "name": "card",
+          "required": false,
+          "schema": {
+            "type": "string"
+          },
+          "x-required-in": [
+            7
+          ]
         },
         {
           "name": "command",

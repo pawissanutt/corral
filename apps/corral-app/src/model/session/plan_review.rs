@@ -38,6 +38,7 @@ const CAPABILITY: &str = "plan_mode_doc";
 /// The option that returns to planning: its text is the owner's feedback.
 const REVISE: &str = "revise";
 const UNKNOWN_MODEL: &str = "the execution model has not been reported";
+const ANSWERING: &str = "This review is already being answered; wait for it";
 
 impl SessionPage {
     /// A card in the composer's place owns the option keys even after the plan opens above it.
@@ -146,9 +147,45 @@ pub fn compact(feed: &Feed, state: &State, id: &Id, env: Env) -> SessionPage {
     page
 }
 
+/// Compact conversation surfaces that actually draw the plan can review it in place.
+pub fn compact_in_place(feed: &Feed, state: &State, id: &Id, env: Env) -> SessionPage {
+    let ui = state.ui(id.as_str());
+    if ui.tab == Tab::Chat && ui.sub.is_none() {
+        super::page(feed, state, id, env)
+    } else {
+        // Do not show an already-open review whose real page is elsewhere: Bring resets the
+        // real state to Chat, preserving the same approval guard as the full page.
+        let mut page = compact(feed, state, id, env);
+        for line in &mut page.dock.waiting {
+            if let Action::Dock(DockAction::Answer {
+                session,
+                asked: Asked::Card(card),
+            }) = &line.action
+            {
+                line.action = Action::Dock(DockAction::Bring {
+                    session: session.clone(),
+                    card: card.clone(),
+                });
+                line.text = "▲ Plan to review · open here to review".into();
+            }
+        }
+        if let Some(Action::Dock(DockAction::Answer {
+            session,
+            asked: Asked::Card(card),
+        })) = &page.dock.oldest
+        {
+            page.dock.oldest = Some(Action::Dock(DockAction::Bring {
+                session: session.clone(),
+                card: card.clone(),
+            }));
+        }
+        page
+    }
+}
+
 impl SessionPage {
     pub fn docked(feed: &Feed, state: &State, id: &Id, env: Env, panel: &super::Panel) -> Self {
-        let mut page = compact(feed, state, id, env);
+        let mut page = compact_in_place(feed, state, id, env);
         let facts = super::Facts::of(feed, id);
         let cx = Cx::new(feed, state.ui(id), id, env, &facts);
         page.details = crate::model::dock::details(&cx, panel);
@@ -264,6 +301,23 @@ pub(super) fn fetches(cx: &Cx<'_>) -> Option<Action> {
     load(cx, Ok(target(cx.id.as_str(), &brief.id)), Some(CAPABILITY))
 }
 
+/// Only a fresh idle probe may supersede the host's old answering-only card availability.
+fn stale_answering(
+    ui: &Ui,
+    state: Option<&corral_protocol::session_state::SessionState>,
+    card: &str,
+    why: &str,
+) -> bool {
+    why == ANSWERING
+        && ui.dock.resolved_probes.get(card).is_some_and(|resolution| {
+            resolution.open
+                && dock::resolution_view(
+                    resolution,
+                    state.and_then(|state| state.plan_mode.as_ref()),
+                ) == dock::ResolutionView::Proven
+        })
+}
+
 /// The opened review's choices in the dock.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlanReview {
@@ -286,6 +340,10 @@ pub struct PlanReview {
     pub not_now: Action,
     pub hint: Vec<(&'static str, &'static str)>,
     pub sending: bool,
+    /// The host has accepted the choice but has not admitted execution yet.
+    pub preparing: Option<String>,
+    /// Retry a failed authoritative status read without resubmitting the approval.
+    pub probe_retry: Option<Action>,
     pub inert: Option<String>,
     pub read: Option<CardsRead>,
 }
@@ -294,11 +352,51 @@ pub struct PlanReview {
 pub(super) fn review(cx: &Cx<'_>, inert: Option<String>) -> Option<PlanReview> {
     let brief = opened(cx)?;
     let card = dock::card(cx.feed, cx.id.as_str(), &brief.id);
-    let sending = dock::sending(cx.ui, cx.feed, &brief.id);
+    let preparing = cx
+        .state
+        .and_then(|state| state.plan_mode.as_ref())
+        .filter(|_| dock::live_busy(&cx.ui.dock, cx.state, &brief.id))
+        .and_then(|plan| plan.preparing.as_deref())
+        .or_else(|| {
+            cx.ui
+                .dock
+                .plan_attempts
+                .get(&brief.id)
+                .filter(|attempt| {
+                    attempt.acknowledged
+                        || cx.ui.dock.pending.iter().any(|(key, pending)| {
+                            matches!(pending, dock::Pending::Card { card } if card == &brief.id)
+                            && cx
+                                .feed
+                                .operations
+                                .get(key)
+                                .and_then(|op| {
+                                    op.decode::<corral_protocol::session_host::SessionCardAnswered>(
+                                    )
+                                })
+                                .is_some_and(|reply| reply.status == "preparing")
+                        })
+                })
+                .map(|attempt| attempt.context.as_str())
+        });
+    let host_pending = dock::live_busy(&cx.ui.dock, cx.state, &brief.id);
+    let sending = dock::sending(cx.ui, cx.feed, &brief.id) || preparing.is_some() || host_pending;
     let enabled = !sending && inert.is_none();
     let draft = cx.ui.dock.drafts.get(&brief.id);
     let picks = draft.map(|draft| draft.picks(0)).unwrap_or_default();
-    let question = card.and_then(|card| card.questions.first());
+    let mut question = card.and_then(|card| card.questions.first()).cloned();
+    if let Some(question) = question.as_mut() {
+        for option in &mut question.options {
+            if option
+                .unavailable
+                .as_deref()
+                .is_some_and(|why| stale_answering(cx.ui, cx.state, &brief.id, why))
+            {
+                option.unavailable = None;
+            }
+        }
+    }
+    let question = question.as_ref();
     let model = cx.model().filter(|model| !model.trim().is_empty());
     let mut options = question.map_or_else(Vec::new, |question| {
         choice::options(&brief.id, question, picks, enabled, |option| {
@@ -376,6 +474,85 @@ pub(super) fn review(cx: &Cx<'_>, inert: Option<String>) -> Option<PlanReview> {
         not_now: not_now(cx, brief),
         hint,
         sending,
+        preparing: if cx
+            .ui
+            .dock
+            .plan_attempts
+            .get(&brief.id)
+            .is_some_and(|attempt| attempt.probe_failed)
+        {
+            Some("Could not confirm review status; retry the status check.".into())
+        } else if cx
+            .ui
+            .dock
+            .plan_attempts
+            .get(&brief.id)
+            .is_some_and(|attempt| attempt.probe_unconfirmed)
+        {
+            Some("The host reports an answer pending; retry status if it does not update.".into())
+        } else if cx
+            .ui
+            .dock
+            .plan_attempts
+            .get(&brief.id)
+            .is_some_and(|attempt| attempt.context == "probe")
+            || cx
+                .ui
+                .dock
+                .resolved_probes
+                .get(&brief.id)
+                .is_some_and(|resolution| {
+                    dock::resolution_view(
+                        resolution,
+                        cx.state.and_then(|state| state.plan_mode.as_ref()),
+                    ) == dock::ResolutionView::Ambiguous
+                })
+        {
+            Some("Checking the current review status…".into())
+        } else if cx
+            .ui
+            .dock
+            .resolved_probes
+            .get(&brief.id)
+            .is_some_and(|resolution| {
+                !resolution.open
+                    && dock::resolution_view(
+                        resolution,
+                        cx.state.and_then(|state| state.plan_mode.as_ref()),
+                    ) == dock::ResolutionView::Proven
+            })
+        {
+            Some("This review no longer waits; updating the session…".into())
+        } else if cx
+            .ui
+            .dock
+            .plan_attempts
+            .get(&brief.id)
+            .is_some_and(|attempt| attempt.duplicate)
+        {
+            Some("Another answer is being processed; waiting for it…".into())
+        } else {
+            preparing.map(|kind| match kind {
+                "compact" => {
+                    "Choice received; preparing compacted context before execution…".into()
+                }
+                "clean" => "Choice received; preparing clean context before execution…".into(),
+                "keep" => "Choice received; preparing execution…".into(),
+                _ => "Choice received; preparing context before execution…".into(),
+            })
+        },
+        probe_retry: cx
+            .ui
+            .dock
+            .plan_attempts
+            .get(&brief.id)
+            .filter(|attempt| attempt.probe_failed || attempt.probe_unconfirmed)
+            .map(|_| {
+                Action::Dock(DockAction::Probe {
+                    session: cx.id.clone(),
+                    card: brief.id.clone(),
+                })
+            }),
         inert,
         read: card.is_none().then(|| dock::card_read(cx)),
     })
@@ -428,7 +605,17 @@ pub(super) fn choose(
                 .or_else(|| expected_model.is_none().then_some(UNKNOWN_MODEL))
         })
         .flatten();
-    if let Some(why) = found.unavailable.as_deref().or(unread) {
+    let unavailable = found.unavailable.as_deref().filter(|why| {
+        !stale_answering(
+            state.ui(session.as_str()),
+            feed.live
+                .get(session.as_str())
+                .and_then(|live| live.state.as_ref()),
+            card_id,
+            why,
+        )
+    });
+    if let Some(why) = unavailable.or(unread) {
         state.ui_mut(session).notices.push(
             Hue::Held,
             format!("{}: unavailable: {why}", found.label),
@@ -436,7 +623,15 @@ pub(super) fn choose(
         );
         return Vec::new();
     }
-    if dock::sending(state.ui(session.as_str()), feed, card_id) {
+    if dock::sending(state.ui(session.as_str()), feed, card_id)
+        || dock::live_busy(
+            &state.ui(session.as_str()).dock,
+            feed.live
+                .get(session.as_str())
+                .and_then(|live| live.state.as_ref()),
+            card_id,
+        )
+    {
         return Vec::new();
     }
     let (asking, text) = typed(state, session, card_id);
@@ -450,6 +645,9 @@ pub(super) fn choose(
         ui.focus = Focus::Dock;
         return Vec::new();
     }
+    if !track_attempt(state, session, card_id, option, feed) {
+        return Vec::new();
+    }
     dock::send_with_model(
         state,
         session,
@@ -458,6 +656,60 @@ pub(super) fn choose(
         false,
         expected_model.filter(|_| option != REVISE),
     )
+}
+
+fn track_attempt(state: &mut State, session: &Id, card: &str, option: &str, feed: &Feed) -> bool {
+    if !state
+        .ui(session.as_str())
+        .dock
+        .plan_attempts
+        .contains_key(card)
+        && state.ui(session.as_str()).dock.plan_attempts.len() >= dock::MAX_PLAN_ATTEMPTS
+    {
+        state.ui_mut(session).notices.push(
+            Hue::Held,
+            "Resolve an older review status before answering another plan.",
+            feed.now,
+        );
+        return false;
+    }
+    let live = feed
+        .live
+        .get(session.as_str())
+        .and_then(|live| live.state.as_ref());
+    let plan = live.and_then(|live| live.plan_mode.as_ref());
+    let context = match option {
+        "execute_compact" => "compact",
+        "execute_clean" => "clean",
+        REVISE => "feedback",
+        _ => "keep",
+    };
+    state.ui_mut(session).dock.plan_attempts.insert(
+        card.to_owned(),
+        dock::PlanAttempt {
+            context: context.into(),
+            acknowledged: false,
+            observed: false,
+            initial_epoch: plan.and_then(|plan| plan.approval_epoch.clone()),
+            ack_epoch: None,
+            ack_host: None,
+            duplicate: false,
+            probe_needed: false,
+            probe_failed: false,
+            probe_unconfirmed: false,
+            last_probe_plan: None,
+            probe_id: None,
+            prior_failures: live
+                .map(|live| {
+                    live.notices
+                        .iter()
+                        .map(|notice| notice.id.clone())
+                        .collect()
+                })
+                .unwrap_or_default(),
+        },
+    );
+    true
 }
 
 /// The owner's feedback or note; an option waiting for it stays chosen.
@@ -475,8 +727,19 @@ pub(super) fn text(state: &mut State, session: &Id, card: &str, text: String) {
 /// that names no option. Nothing typed and nothing asked for sends nothing.
 pub(super) fn submit(state: &mut State, session: &Id, card: &str, feed: &Feed) -> Vec<Effect> {
     let (asking, text) = typed(state, session, card);
-    if (!asking && text.trim().is_empty()) || dock::sending(state.ui(session.as_str()), feed, card)
+    if (!asking && text.trim().is_empty())
+        || dock::sending(state.ui(session.as_str()), feed, card)
+        || dock::live_busy(
+            &state.ui(session.as_str()).dock,
+            feed.live
+                .get(session.as_str())
+                .and_then(|live| live.state.as_ref()),
+            card,
+        )
     {
+        return Vec::new();
+    }
+    if !track_attempt(state, session, card, REVISE, feed) {
         return Vec::new();
     }
     dock::send(state, session, card, answer(REVISE, &text), false)

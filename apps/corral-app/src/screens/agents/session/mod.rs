@@ -117,10 +117,13 @@ pub fn page(app: AppState, id: Id) -> AnyElement {
     });
     // Details widens with the page; BESIDE reads the whole page, before Details takes its share.
     let panel_width = computed(move || sidebar::panel_width(room.get()));
+    // The pane holds the conversation, and with it a plan review opened there: the page draws
+    // neither a second time.
     let conversation_beside = computed(move || {
         let shown = app.pane_conversation();
         page.with(|p| {
-            shown.as_ref() == Some(&p.id) && matches!(p.body, Body::Chat(_) | Body::Log(_))
+            shown.as_ref() == Some(&p.id)
+                && matches!(p.body, Body::Chat(_) | Body::Log(_) | Body::PlanReview(_))
         })
     });
     let plan_id = id.clone();
@@ -130,7 +133,10 @@ pub fn page(app: AppState, id: Id) -> AnyElement {
         .min_w(px(0.0))
         .min_h(px(0.0))
         .flex_col()
-        .child(view_bar(app, page))
+        .child(when(
+            move || !conversation_beside.get(),
+            move || untracked(|| view_bar(app, page)),
+        ))
         .child(
             when(
                 move || !conversation_beside.get(),
@@ -311,6 +317,9 @@ pub fn compact(app: AppState, id: Id, page: Memo<SessionPage>, form: Compact) ->
             .when(form == Compact::Dock, |pane| {
                 pane.child(sidebar::dock_details(app, page))
             })
+            // A plan review opened here: its way back over the document in the transcript's
+            // place, the card in the dock under it, as on the page.
+            .child(view_bar(app, page))
             .child(
                 view()
                     .test_id(if ask {
@@ -322,7 +331,7 @@ pub fn compact(app: AppState, id: Id, page: Memo<SessionPage>, form: Compact) ->
                     .min_h(px(0.0))
                     .flex_col()
                     .child(if ask {
-                        chat(app, page)
+                        plan_review::in_place(app, page, chat)
                     } else {
                         main(app, page)
                     }),
@@ -405,16 +414,30 @@ fn latest(app: AppState, id: Id, page: Memo<SessionPage>) -> AnyElement {
 }
 
 /// The session's page as Ask shows it (tracked): always the chat, whatever tab or view its own
-/// page was left on; that page keeps its tab.
+/// page was left on; that page keeps its tab. A plan review stays its line here, except in the
+/// side pane, which reviews it in place; see `ask_view_in`.
 pub fn ask_view(app: AppState, id: Id) -> Memo<SessionPage> {
+    ask_view_in(app, id, Compact::Card)
+}
+
+/// The session's page as `form` shows it (tracked). The side pane's session tab and Ask's drawer
+/// (Ask's tab on desktop, its pane in a terminal) draw a transcript, so a plan review opened
+/// there takes its place, its card in the dock, as on the page; the phone sheet, the hotkey
+/// composer, a Home card and the Sessions inspector draw none, so it stays its line.
+pub fn ask_view_in(app: AppState, id: Id, form: Compact) -> Memo<SessionPage> {
     computed(move || {
         let env = app.env();
         app.feed.with(|feed| {
-            app.session.with(|state| match app.dock_panel() {
-                Some(panel) => {
+            app.session.with(|state| match (app.dock_panel(), form) {
+                (Some(panel), _) => {
                     panel.with(|panel| SessionPage::docked(feed, state, &id, env, panel))
                 }
-                None => session::compact(feed, state, &id, env),
+                (None, Compact::Drawer | Compact::Dock) => {
+                    session::compact_in_place(feed, state, &id, env)
+                }
+                (None, Compact::Sheet | Compact::Composer | Compact::Card) => {
+                    session::compact(feed, state, &id, env)
+                }
             })
         })
     })

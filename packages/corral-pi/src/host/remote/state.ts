@@ -36,7 +36,11 @@ const CONFLICT_PATHS = 20, CONFLICT_BYTES = 240;
 interface BoardBrief { open: number; blocked: number; failed: number; proposed: boolean }
 interface PlanBrief { done: number; total: number; current?: string; stale: boolean }
 /** Plan mode while it is on; `plan` above is the todo ledger. */
-interface PlanModeBrief { phase: "planning" | "review"; title?: string; revision?: number }
+export interface PlanModeBrief {
+  phase: "planning" | "review"; title?: string; revision?: number; preparing?: "keep" | "clean" | "compact";
+  approval_epoch?: string; approval_host?: string; approval_pending?: boolean; approval_error?: string;
+  approval_failures?: { epoch: string; error: string }[];
+}
 interface Capability { id: string; unavailable?: string }
 export interface SessionState {
   mode: "interactive" | "headless"; turn: number; open: boolean; paused: boolean;

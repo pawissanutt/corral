@@ -14,7 +14,7 @@ use corral_protocol::build::{BuildRemove, BuildRemoved};
 use corral_protocol::detail::{CardKind, CardOption, CardQuestion, SessionCard};
 use corral_protocol::rows::AssistantKind;
 use corral_protocol::session_host::{
-    QueueMoved, QueueWithdrawn, SessionAction, SessionActionDone, SessionActionRequest,
+    PlanStatus, QueueMoved, QueueWithdrawn, SessionAction, SessionActionDone, SessionActionRequest,
     SessionCardAnswer, SessionCardAnswered, SessionQueueKey, SessionQueueMove, WithdrawOutcome,
 };
 use corral_protocol::session_state::{
@@ -40,6 +40,8 @@ fn reply(value: impl Serialize) -> Result<Value, String> {
 pub(super) fn answered(status: &str) -> Result<Value, String> {
     reply(SessionCardAnswered {
         status: status.into(),
+        approval_epoch: None,
+        approval_host: None,
     })
 }
 
@@ -485,6 +487,28 @@ pub(super) fn action(feed: &mut Feed, request: &SessionActionRequest) -> Result<
         SessionAction::PlanMode { enabled } => {
             return super::plan_mode::toggle(feed, &id, *enabled);
         }
+        SessionAction::PlanStatus { card } => {
+            let host = feed
+                .hosts
+                .get(id.as_str())
+                .ok_or("this session has no host")?;
+            let open = host
+                .pending
+                .iter()
+                .any(|pending| pending.id == *card && pending.kind == CardKind::PlanReview);
+            return reply(SessionActionDone {
+                text: None,
+                plan_status: Some(PlanStatus {
+                    card: card.clone(),
+                    host: "preview".into(),
+                    epoch: "0".into(),
+                    pending: false,
+                    error: None,
+                    failures: Vec::new(),
+                    open,
+                }),
+            });
+        }
         SessionAction::Export => return Err("this session's host does not export sessions".into()),
         SessionAction::Shell { .. } => {
             return Err("this session's host runs no owner shell commands".into());
@@ -525,7 +549,10 @@ pub(super) fn action(feed: &mut Feed, request: &SessionActionRequest) -> Result<
         ..brief(ExitPhase::Pending, None, base)
     });
     settle(feed, id.as_str());
-    reply(SessionActionDone { text: None })
+    reply(SessionActionDone {
+        text: None,
+        plan_status: None,
+    })
 }
 
 /// One clock tick: every other tick a landing build's exit takes its next phase.
