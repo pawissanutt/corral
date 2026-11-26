@@ -243,6 +243,156 @@ fn a_new_quick_thread_loads_its_metadata_without_replacing_the_stream() {
 }
 
 #[test]
+fn a_quick_host_start_refreshes_metadata_after_an_inflight_older_page() {
+    use wire::detail::{HostPresence, SessionMessage, SessionPage};
+    use wire::rows::{AssistantLocation, AssistantState};
+    use wire::subscription::TranscriptOp;
+
+    let runtime = nsh_core::element::Runtime::default();
+    let _entered = runtime.enter();
+    let sample = crate::model::preview::feed(0, String::new(), String::new(), None);
+    let row = crate::model::assistant::row(&sample, QUICK_THREAD).unwrap();
+    let target = DetailRef::Session {
+        id: QUICK_THREAD.into(),
+    };
+    let key = detail_key(&target);
+    let message = |suffix: &str| -> SessionMessage {
+        serde_json::from_value(json!({
+            "id": format!("{}/{suffix}", row.id), "author": "assistant",
+            "items": [{"kind": "text", "text": suffix}]
+        }))
+        .unwrap()
+    };
+    let (older, head, open) = (
+        message("entry/older"),
+        message("entry/head"),
+        message("open/1.1.1"),
+    );
+    let mut cold = empty_quick_page();
+    cold.id.clone_from(&row.id);
+    cold.messages = vec![head.clone()];
+    cold.older = Some("before-head".into());
+    let mut cache = DetailCache {
+        target: target.clone(),
+        pages: vec![],
+        merged: Some(DetailBody::Session(cold.clone())),
+        loading: false,
+        stale: false,
+        error: None,
+        transcript_seams: Default::default(),
+    };
+    crate::model::session::transcript::mirror::apply(
+        &mut cache,
+        vec![TranscriptOp::Put {
+            message: open.clone(),
+            before: None,
+            replaces: None,
+            open: true,
+            cut: false,
+            again: false,
+        }],
+        false,
+    );
+    let feed = signal(Feed::default());
+    feed.update(|f| {
+        f.capabilities.insert(SESSION_TRANSCRIPT_V1.into());
+        f.details.insert(key, cache);
+    });
+    let mut client = AppState::new();
+    client.ready = true;
+    client.session_scopes.insert(QUICK_THREAD.into(), 1);
+    let older_read = client.detail_request(
+        feed,
+        "older".into(),
+        DetailGet {
+            target: target.clone(),
+            etag: None,
+            page: cold.older.clone(),
+        },
+    );
+    assert!(
+        client
+            .rows(
+                feed,
+                SubDelta::Assistant {
+                    delta: RowsDelta {
+                        epoch: 1,
+                        rows: vec![wire::rows::AssistantRow {
+                            state: AssistantState::Ready,
+                            live_in: AssistantLocation::Daemon,
+                            ..row.clone()
+                        }],
+                        left: vec![],
+                        cursor: BoardCursor::default(),
+                        more: false,
+                    }
+                },
+                true
+            )
+            .unwrap()
+            .is_empty(),
+        "the metadata read must not interrupt Older"
+    );
+    let respond = |client: &mut AppState, reads: Vec<Outgoing>, page: SessionPage| {
+        let [(DETAIL_GET, params, tag)] = reads.as_slice() else {
+            panic!("expected a single detail read, got {reads:?}");
+        };
+        client
+            .event(
+                feed,
+                Event::Reply {
+                    method: DETAIL_GET,
+                    tag: tag.clone(),
+                    params: params.clone(),
+                    outcome: Ok(value(DetailReply {
+                        etag: "quick".into(),
+                        as_of: String::new(),
+                        seq: 1,
+                        next: None,
+                        body: Some(DetailBody::Session(page)),
+                    })),
+                    error_data: None,
+                },
+            )
+            .unwrap()
+    };
+    let metadata = respond(
+        &mut client,
+        older_read,
+        SessionPage {
+            messages: vec![older.clone()],
+            older: Some("before-older".into()),
+            ..cold.clone()
+        },
+    );
+    let [(DETAIL_GET, params, _)] = metadata.as_slice() else {
+        panic!("the running row must trigger a metadata read when Older settles");
+    };
+    let request: DetailGet = decode(params.clone()).unwrap();
+    assert_eq!(request.target, target);
+    assert!(request.page.is_none());
+    assert!(
+        respond(
+            &mut client,
+            metadata,
+            SessionPage {
+                host: HostPresence::Running,
+                ..cold
+            }
+        )
+        .is_empty()
+    );
+    feed.with_untracked(|f| {
+        let Some(DetailBody::Session(page)) = f.detail(&target).and_then(DetailCache::body) else {
+            panic!("expected Quick transcript");
+        };
+        assert_eq!(page.host, HostPresence::Running);
+        assert_eq!(page.older.as_deref(), Some("before-older"));
+        assert_eq!(page.messages, [older, head, open]);
+    });
+}
+
+#[test]
 fn ask_holds_its_draft_until_end_is_acknowledged_even_with_a_delayed_row() {
     use crate::model::{Effect, assistant, session};
     use wire::rows::{AssistantRow, AssistantState};

@@ -310,11 +310,22 @@ impl AppState {
         if self.detail_inflight.get(&key) != Some(&id) {
             return Ok(vec![]);
         }
-        if matches!(request.target, DetailRef::Session { .. }) {
+        if let DetailRef::Session { id: scope } = &request.target {
+            let quick_history = scope == QUICK_THREAD && request.page.is_some();
             let target = request.target.clone();
             let mut outgoing = self.transcript_reply(feed, &key, id, request, outcome);
-            if !self.detail_inflight.contains_key(&key) && self.transcript_deferred.remove(&key) {
-                outgoing.extend(self.refresh_transcript_part(feed, target));
+            if !self.detail_inflight.contains_key(&key) {
+                let deferred = self.transcript_deferred.remove(&key);
+                // A running Assistant row can arrive while Older owns the request slot.
+                // Recheck after publishing the history page so the refresh does not race it.
+                let quick_metadata = quick_history
+                    && feed.with_untracked(|f| {
+                        f.detail(&target)
+                            .is_some_and(|cache| rows::quick_metadata_due(f, cache))
+                    });
+                if deferred || quick_metadata {
+                    outgoing.extend(self.refresh_transcript_part(feed, target));
+                }
             }
             return Ok(outgoing);
         }

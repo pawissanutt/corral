@@ -316,20 +316,10 @@ impl AppState {
         changed: &BTreeSet<String>,
     ) -> Vec<Outgoing> {
         let targets = feed.with_untracked(|feed| {
-            let quick = (topic == Topic::Assistant)
-                .then(|| crate::model::assistant::row(feed, QUICK_THREAD))
-                .flatten();
             feed.details
                 .values()
                 .filter(|cache| {
-                    // A new quick chat needs its own detail metadata. Its stream may
-                    // already contain words, but a Put does not name the resolved scope.
-                    if matches!(&cache.target, DetailRef::Session { id } if id == QUICK_THREAD)
-                        && quick.as_ref().is_some_and(|quick| {
-                            !matches!(cache.body(), Some(DetailBody::Session(page))
-                                if page.id == quick.id && !quick_host_started(quick, page))
-                        })
-                    {
+                    if topic == Topic::Assistant && quick_metadata_due(feed, cache) {
                         return true;
                     }
                     !matches!(&cache.target, DetailRef::Session { id }
@@ -358,6 +348,16 @@ impl AppState {
         }
         outgoing
     }
+}
+
+/// A new Quick chat needs its own metadata. Stream operations can already carry
+/// its messages, but do not carry the resolved scope or detail host status.
+pub(super) fn quick_metadata_due(feed: &Feed, cache: &DetailCache) -> bool {
+    matches!(&cache.target, DetailRef::Session { id } if id == QUICK_THREAD)
+        && crate::model::assistant::row(feed, QUICK_THREAD).is_some_and(|quick| {
+            !matches!(cache.body(), Some(DetailBody::Session(page))
+                if page.id == quick.id && !quick_host_started(quick, page))
+        })
 }
 
 /// Quick can allocate an id before its host is started. A served cold page is not
