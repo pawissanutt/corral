@@ -71,6 +71,14 @@ export class ToolApprovals {
     }
   }
 
+  /** Whether a pinned image directory still backs live approval state. */
+  retainsImageIdentity(identity: string): boolean {
+    const suffix = `\0${identity}`;
+    return [...this.requests.values()].some(request => request.scope.startsWith("image-directory:") && request.scope.endsWith(suffix))
+      || [...this.grants.keys()].some(scope => scope.startsWith("image-directory:") && scope.endsWith(suffix) && this.hasGrant(scope))
+      || [...this.denials].some(denial => denial.includes("\0image-directory:") && denial.endsWith(suffix));
+  }
+
   private hasGrant(scope: string): boolean {
     const grants = this.grants.get(scope);
     if (grants === undefined) return false;

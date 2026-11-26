@@ -4,7 +4,7 @@ import type { ToolApprovals } from "./tool-approvals.ts";
 
 /** Classify the exact path pinned by the publisher, never a separately resolved destination. */
 export function authorizeImageDestination(
-  path: string, prompt: string, preparedPath: string, identity: string,
+  path: string, prompt: string, preparedPath: string, identity: () => string,
   scope: Parameters<typeof classifyWriteScope>[1], approvals?: ToolApprovals,
   classify: typeof classifyWriteScope = classifyWriteScope,
 ): () => void {
@@ -19,7 +19,7 @@ export function authorizeImageDestination(
     return decision;
   };
   const decision = decisionForPreparedPath();
-  const reason = approvals ? approvals.write("image_gen", { path, prompt }, decision, identity)
+  const reason = approvals ? approvals.write("image_gen", { path, prompt }, decision, decision.action === "ask" ? identity() : undefined)
     : decision.action === "deny" ? decision.reason
     : decision.action === "ask" ? "An owner approval interface is unavailable; nothing was written." : undefined;
   if (reason) throw new Error(reason);

@@ -98,7 +98,48 @@ function walk(start: number, parts: readonly string[]): number {
   }
 }
 
-export function preparePng(root: string, path: string): { path: string; identity: string; revalidate(): void; publish(bytes: Buffer): void; close(): void } {
+// Pin directory objects for the life of the image tool. Open handles prevent inode reuse,
+// even on filesystems without birth times; ctime is not an object identity.
+export class ImageDirectoryBindings {
+  private readonly bindings: { root: number; parent: number; identity: string }[] = [];
+  private closed = false;
+
+  identity(root: number, parent: number): string {
+    if (this.closed) throw new Error("Image directory bindings are closed.");
+    const rootStat = stat(root), parentStat = stat(parent);
+    const existing = this.bindings.find(binding => same(rootStat, stat(binding.root)) && same(parentStat, stat(binding.parent)));
+    if (existing) return existing.identity;
+    // Never evict a live binding: a pending approval or session grant may still refer to it.
+    if (this.bindings.length >= 256) throw new Error("Too many image destination directories in this session.");
+    const pinnedRoot = openSync(at(root, "."), DIRECTORY);
+    try {
+      const pinnedParent = openSync(at(parent, "."), DIRECTORY);
+      const identity = randomUUID();
+      this.bindings.push({ root: pinnedRoot, parent: pinnedParent, identity });
+      return identity;
+    } catch (error) { closeSync(pinnedRoot); throw error; }
+  }
+
+  prune(retain: (identity: string) => boolean): void {
+    for (let i = this.bindings.length - 1; i >= 0; i--) {
+      const binding = this.bindings[i]!;
+      if (!retain(binding.identity)) {
+        closeSync(binding.root); closeSync(binding.parent);
+        this.bindings.splice(i, 1);
+      }
+    }
+  }
+
+  clear(): void { this.prune(() => false); }
+
+  close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.clear();
+  }
+}
+
+export function preparePng(root: string, path: string, bindings?: ImageDirectoryBindings): { path: string; identity: string; revalidate(): void; publish(bytes: Buffer): void; close(): void } {
   if (/[\\:\x00-\x1f\x7f\u00a0\u2000-\u200a\u202f\u205f\u3000]/.test(path) || !path.endsWith(".png")) {
     throw new Error("Choose a new .png path.");
   }
@@ -158,11 +199,10 @@ export function preparePng(root: string, path: string): { path: string; identity
     rejectExisting();
     try { accessSync(at(boundParent, "."), constants.W_OK | constants.X_OK); }
     catch { throw new Error("Image destination directory must be writable."); }
+    let identity: string | undefined;
     return {
       path: target,
-      // Without birth time, conservatively invalidate on ctime changes to avoid inode reuse.
-      identity: [rootIdentity.dev, rootIdentity.ino, rootIdentity.birthtimeNs || rootIdentity.ctimeNs,
-        parentIdentity.dev, parentIdentity.ino, parentIdentity.birthtimeNs || parentIdentity.ctimeNs].join(":"),
+      get identity() { return identity ??= bindings?.identity(boundRoot, boundParent) ?? randomUUID(); },
       close,
       revalidate() { revalidate(); rejectExisting(); },
       publish(bytes) {

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import * as sdk from "@earendil-works/pi-coding-agent";
@@ -141,7 +141,7 @@ linuxTest("image_gen requests approval before dispatch and allow-once covers onl
   });
 }, 30_000);
 
-test.skipIf(process.platform !== "linux" || statSync(tmpdir(), { bigint: true }).birthtimeNs === 0n)("image_gen session grants survive sibling publication and cover new images", async () => {
+linuxTest("image_gen session grants survive sibling publication and cover new images", async () => {
   await imageHost(async ({ host, outside, path, requests, draw }) => {
     const second = join(outside, "second.png"), third = join(outside, "third.png");
     expect((await draw()).isError).toBeTrue();

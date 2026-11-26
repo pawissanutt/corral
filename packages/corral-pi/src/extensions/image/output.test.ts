@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
-import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { crc32 } from "node:zlib";
-import { preparePng, validatePng } from "./output.ts";
+import { ImageDirectoryBindings, preparePng, validatePng } from "./output.ts";
 
 const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
 const bytes = Buffer.from(png, "base64");
@@ -34,6 +34,34 @@ test("accepts canonical PNG and rejects invalid encodings, truncation, corruptio
   oversized.writeUInt32BE(crc32(oversized.subarray(12, 29)), 29);
   expect(() => validatePng(oversized.toString("base64"))).toThrow("dimensions");
 });
+
+fsTest("directory bindings survive entry changes but not replacement, and close with the session", () => fixture((root, outside) => {
+  const bindings = new ImageDirectoryBindings();
+  const pins = (path: string) => readdirSync("/proc/self/fd").filter(fd => {
+    try { return readlinkSync(`/proc/self/fd/${fd}`) === path; } catch { return false; }
+  }).length;
+  const identity = (name: string) => {
+    const output = preparePng(root, join(outside, name), bindings);
+    try { return output.identity; } finally { output.close(); }
+  };
+  try {
+    const first = identity("first.png");
+    expect(pins(root)).toBe(1);
+    expect(pins(outside)).toBe(1);
+    writeFileSync(join(outside, "neighbor"), "entry");
+    expect(identity("second.png")).toBe(first);
+    renameSync(outside, `${outside}-old`);
+    mkdirSync(outside);
+    expect(identity("third.png")).not.toBe(first);
+    bindings.prune(id => id !== first);
+    expect(pins(`${outside}-old`)).toBe(0);
+    expect(pins(outside)).toBe(1);
+  } finally { bindings.close(); bindings.close(); }
+  expect(pins(root)).toBe(0);
+  expect(pins(outside)).toBe(0);
+  expect(pins(`${outside}-old`)).toBe(0);
+  expect(() => identity("fourth.png")).toThrow("closed");
+}));
 
 fsTest("publishes exact bytes exclusively with private mode and leaves no stage", () => fixture(root => {
   const out = preparePng(root, "image.png");

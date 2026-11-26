@@ -1058,7 +1058,8 @@ export class HostSession {
     }, authorize: (path, prompt, preparedPath, destinationIdentity) => {
       if (!scope) throw new Error("image_generation_unavailable: no write scope");
       return authorizeImageDestination(path, prompt, preparedPath, destinationIdentity, scope, this.toolApprovals);
-    }, reserveOutput: path => this.taskDestinationLock(path) });
+    }, retainsIdentity: destinationIdentity => this.toolApprovals?.retainsImageIdentity(destinationIdentity) ?? false,
+    reserveOutput: path => this.taskDestinationLock(path) });
   }
 
   /** Build the tool's catalog on first invocation. Never widen a chat or fallback catalog. */
@@ -1313,6 +1314,7 @@ export class HostSession {
     });
     pi.on("session_start", () => {
       this.toolApprovals?.clear();
+      this.imageGeneration?.clearApprovals();
       this.revokeWorktreeAccess("session changed");
     });
     if (this.worktreeAccess) pi.registerCommand(WORKTREE_ACCESS_COMMAND, {
@@ -2449,6 +2451,7 @@ export class HostSession {
       // The branch may hold another plan review now, or none: an open review must not go on showing the old one.
       this.planMode?.refresh();
       this.toolApprovals?.clear();
+      this.imageGeneration?.clearApprovals();
       for (const question of this.ownerQuestions?.list() ?? []) {
         if (question.status === "pending") this.options.herdr?.questionChanged(question.id, false);
       }

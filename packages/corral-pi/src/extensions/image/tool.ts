@@ -4,14 +4,15 @@ import { Type } from "typebox";
 import type { HostedRoute, ImageProvider } from "../../host/hosted-settings.ts";
 import type { ModelUsage } from "../../tools/corral.ts";
 import { generateImage, type ImageProviderOptions } from "./providers.ts";
-import { preparePng, validatePng } from "./output.ts";
+import { ImageDirectoryBindings, preparePng, validatePng } from "./output.ts";
 
 export interface ImageScope {
   /** No root means preview only. A child never inherits a parent's writable root implicitly. */
   readonly root?: string;
   refusal(path?: string): string | undefined;
   /** Authorize the prepared destination; return a check to repeat before publication. */
-  authorize?(path: string, prompt: string, preparedPath: string, identity: string): () => void;
+  authorize?(path: string, prompt: string, preparedPath: string, identity: () => string): () => void;
+  retainsIdentity?(identity: string): boolean;
   /** Participate in task checkout writer exclusion; never grants image authorization. */
   reserveOutput?(path: string): Promise<{ check(): void; close(): void } | undefined>;
 }
@@ -20,10 +21,12 @@ export interface ImageScope {
 export class ImageGeneration {
   private busy = false;
   private readonly stopped = new AbortController();
+  private readonly bindings = new ImageDirectoryBindings();
   constructor(private readonly route: HostedRoute<ImageProvider>, private readonly providers: ImageProviderOptions,
     private readonly report: (usage: ModelUsage) => void) {}
 
-  close(): void { this.stopped.abort(); }
+  clearApprovals(): void { this.bindings.clear(); }
+  close(): void { this.stopped.abort(); this.bindings.close(); }
 
   tool(scope: ImageScope, platform = process.platform): ToolDefinition {
     const root = platform === "linux" ? scope.root : undefined;
@@ -51,9 +54,11 @@ export class ImageGeneration {
         try {
           let recheck: (() => void) | undefined;
           if (root && path) {
-            output = preparePng(root, path);
+            output = preparePng(root, path, this.bindings);
             if (!scope.authorize) throw new Error("image_generation_unavailable: write authorization is unavailable");
-            recheck = scope.authorize(path, prompt, output.path, output.identity);
+            if (scope.retainsIdentity) this.bindings.prune(scope.retainsIdentity);
+            try { recheck = scope.authorize(path, prompt, output.path, () => output!.identity); }
+            finally { if (scope.retainsIdentity) this.bindings.prune(scope.retainsIdentity); }
             if (scope.reserveOutput) writer = await scope.reserveOutput(output.path);
             check();
             output.revalidate();
