@@ -99,11 +99,14 @@ impl Read for Bounded {
         if !self.replay.get_ref().is_empty() {
             self.replay = Cursor::default();
         }
-        if let Some(waker) = &self.waker
-            && !wake::readable(self.stream.as_fd(), Some(waker), timeout)?
-        {
-            // As a read slice that ran out: the caller flushes its topics and reads again.
-            return Err(io::ErrorKind::WouldBlock.into());
+        if let Some(waker) = &self.waker {
+            let ready = wake::wait(self.stream.as_fd(), Some(waker), timeout)?;
+            // As a read slice that ran out: the caller flushes its topics and reads again. A
+            // wake goes first even with the peer's bytes ready, which stay in the socket:
+            // they may be only part of a frame, and the page would wait for the rest.
+            if ready.woken || !ready.input {
+                return Err(io::ErrorKind::WouldBlock.into());
+            }
         }
         self.stream.set_read_timeout(Some(timeout))?;
         let len = match self.remaining {
@@ -444,6 +447,29 @@ pub(super) fn peer_gone(error: &anyhow::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Woken for a page while part of a frame was ready, the read took those bytes and went
+    /// on waiting for the rest of the frame, the page unsent until the read slice ran out.
+    #[test]
+    fn a_pending_wake_ends_the_read_before_part_of_a_frame() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut peer = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let mut bounded = Bounded::incoming(listener.accept().unwrap().0);
+        let waker = Arc::new(Waker::new().unwrap());
+        bounded.waker = Some(Arc::clone(&waker));
+        peer.write_all(b"part").unwrap();
+        let arrived = wake::wait(bounded.stream.as_fd(), None, HANDSHAKE_TIMEOUT).unwrap();
+        assert!(arrived.input);
+        waker.wake();
+        let mut bytes = [0; 8];
+        assert_eq!(
+            bounded.read(&mut bytes).unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+        // The loop takes the wake as it flushes; the bytes were left for the read after.
+        waker.clear();
+        assert_eq!(bounded.read(&mut bytes).unwrap(), 4);
+    }
 
     #[test]
     fn remote_origins_need_one_exact_allowlisted_header_before_upgrade() {

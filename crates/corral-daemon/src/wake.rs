@@ -29,28 +29,39 @@ impl Waker {
         let _ = (&self.sender).write(&[0]);
     }
 
-    /// Whether a wake was pending, consuming it.
-    #[cfg(test)]
-    pub(crate) fn take(&self) -> bool {
-        let pending = readable(self.receiver.as_fd(), None, Duration::ZERO).unwrap_or(false);
-        self.drain();
-        pending
-    }
-
-    fn drain(&self) {
+    /// Takes the pending wake. The connection's loop does this just before it reads what was
+    /// published, so a publication after it wakes the next wait and none is lost. No wait
+    /// takes it: a wait that also found input would otherwise hide the wake from the loop.
+    pub(crate) fn clear(&self) {
         let mut bytes = [0; 64];
         while matches!((&self.receiver).read(&mut bytes), Ok(read) if read == bytes.len()) {}
     }
+
+    /// Whether a wake was pending, taking it.
+    #[cfg(test)]
+    pub(crate) fn take(&self) -> bool {
+        let woken =
+            wait(self.receiver.as_fd(), Some(self), Duration::ZERO).is_ok_and(|ready| ready.woken);
+        self.clear();
+        woken
+    }
 }
 
-/// Whether `stream` has input, waiting at most `timeout`. A wake ends the wait early
-/// without input; it is consumed here, before the caller reads what was published, so a
-/// publication after this returns wakes the next wait.
-pub(crate) fn readable(
+/// What ended a wait.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Ready {
+    /// The stream has input, or closed.
+    pub(crate) input: bool,
+    /// A wake is pending: it stays so until the loop clears it.
+    pub(crate) woken: bool,
+}
+
+/// Waits at most `timeout` for input on `stream` or a wake of `waker`.
+pub(crate) fn wait(
     stream: BorrowedFd<'_>,
     waker: Option<&Waker>,
     timeout: Duration,
-) -> io::Result<bool> {
+) -> io::Result<Ready> {
     let wake = waker.map_or(stream, |waker| waker.receiver.as_fd());
     let mut fds = [
         PollFd::new(&stream, PollFlags::IN),
@@ -62,10 +73,8 @@ pub(crate) fn readable(
         tv_nsec: timeout.subsec_nanos().into(),
     };
     poll(&mut fds[..watched], Some(&timeout))?;
-    if let Some(waker) = waker
-        && !fds[1].revents().is_empty()
-    {
-        waker.drain();
-    }
-    Ok(!fds[0].revents().is_empty())
+    Ok(Ready {
+        input: !fds[0].revents().is_empty(),
+        woken: waker.is_some() && !fds[1].revents().is_empty(),
+    })
 }

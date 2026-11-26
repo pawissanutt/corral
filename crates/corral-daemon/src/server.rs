@@ -140,9 +140,11 @@ pub(super) fn serve(mut stream: UnixStream, shared: Arc<Shared>) -> Result<()> {
         // Poll before reading so idle clients survive between requests, while a partial
         // frame still has a bounded read deadline. Shutdown never waits for the peer.
         // A watched session's page ends the wait too: the next pass flushes it.
-        let waker = topics.waker();
-        if !crate::wake::readable(stream.as_fd(), waker.as_deref(), IDLE_SLICE)
+        // Only where the pass above flushed: the flush is what takes the wake.
+        let waker = welcomed.then(|| topics.waker()).flatten();
+        if !crate::wake::wait(stream.as_fd(), waker.as_deref(), IDLE_SLICE)
             .context("waiting for client frame")?
+            .input
         {
             continue;
         }

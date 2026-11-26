@@ -105,7 +105,12 @@ pub(super) fn serve(
             }
             topics.flush(&mut conn)?;
         }
-        conn.wake_with(topics.waker());
+        // Only where the pass above flushed: the flush is what takes the wake.
+        conn.wake_with(
+            (welcomed && pair.is_none())
+                .then(|| topics.waker())
+                .flatten(),
+        );
         let frame = match conn.recv() {
             Ok(Some(frame)) => frame,
             Ok(None) => continue,

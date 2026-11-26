@@ -7,7 +7,7 @@ use std::{
 use super::{page, service};
 use crate::{
     topics::app::session::{
-        SESSION_POLL, SESSION_STREAM_LINGER, SESSION_STREAM_POLL,
+        SESSION_POLL, SESSION_STREAM_BURST, SESSION_STREAM_LINGER, SESSION_STREAM_POLL,
         reader::{LivePage, Sources, pass, poll},
         subscriber::subscribe,
     },
@@ -67,7 +67,7 @@ fn a_streaming_scope_is_read_sooner_than_a_quiet_one() {
     let _watch = subscribe(Arc::clone(&service), "pm".into(), 7, None).unwrap();
     let start = Instant::now();
     let now = Cell::new(start);
-    let reads = Cell::new(0);
+    let reads = Cell::new(0u64);
     let mut at = |after: Duration, next: LivePage| {
         now.set(start + after);
         let mut next = Some(next);
@@ -82,20 +82,25 @@ fn a_streaming_scope_is_read_sooner_than_a_quiet_one() {
             || false,
         )
     };
-    let full = LivePage {
+    let full = |n: u64| LivePage {
         more: true,
-        ..page(1, 1, 32, true)
+        ..page(1, n * 32 + 1, (n + 1) * 32, true)
     };
-    assert_eq!(at(Duration::ZERO, full), Duration::ZERO);
+    let burst = u64::from(SESSION_STREAM_BURST);
+    for n in 0..burst {
+        assert_eq!(at(Duration::ZERO, full(n)), Duration::ZERO);
+    }
     assert_eq!(
-        at(Duration::ZERO, page(1, 33, 33, true)),
-        SESSION_STREAM_POLL
+        at(Duration::ZERO, full(burst)),
+        SESSION_STREAM_POLL,
+        "a backlog held the worker without end"
     );
+    let last = (burst + 1) * 32;
     assert_eq!(
-        at(SESSION_STREAM_POLL / 2, quiet(33)),
+        at(SESSION_STREAM_POLL / 2, quiet(last)),
         SESSION_STREAM_POLL / 2
     );
-    assert_eq!(reads.get(), 2, "a scope was read before it was due");
-    assert_eq!(at(SESSION_STREAM_POLL, quiet(33)), SESSION_STREAM_POLL);
-    assert_eq!(at(SESSION_STREAM_LINGER, quiet(33)), SESSION_POLL);
+    assert_eq!(reads.get(), burst + 1, "a scope was read before it was due");
+    assert_eq!(at(SESSION_STREAM_POLL, quiet(last)), SESSION_STREAM_POLL);
+    assert_eq!(at(SESSION_STREAM_LINGER, quiet(last)), SESSION_POLL);
 }

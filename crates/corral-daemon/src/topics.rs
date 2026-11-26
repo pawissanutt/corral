@@ -140,6 +140,10 @@ impl<'a> Subscriptions<'a> {
     }
 
     pub fn flush(&mut self, conn: &mut dyn Conn) -> Result<()> {
+        // Before the buffers are read: what is published from here on wakes the next wait.
+        if let Some(waker) = self.sessions.waker() {
+            waker.clear();
+        }
         self.model_discovery.flush(conn)?;
         let mut i = 0;
         while i < self.rows.len() {

@@ -23,6 +23,8 @@ pub(crate) const SESSION_POLL: Duration = Duration::from_millis(100);
 /// How often it is read while it returns events, and for how long after the last of them.
 pub(crate) const SESSION_STREAM_POLL: Duration = Duration::from_millis(30);
 pub(crate) const SESSION_STREAM_LINGER: Duration = Duration::from_secs(1);
+/// How many full pages of one scope are followed at once before it waits its pace again.
+pub(crate) const SESSION_STREAM_BURST: u8 = 8;
 pub(crate) const SESSION_SCOPES: usize = 128;
 pub(crate) const SESSION_SUBSCRIPTIONS: usize = 32;
 pub(crate) const SESSION_SCOPE_BYTES: usize = 512;

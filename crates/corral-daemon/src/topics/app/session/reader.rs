@@ -18,7 +18,7 @@ use corral_types::SessionRef;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use super::{
-    SESSION_POLL, SESSION_STREAM_LINGER, SESSION_STREAM_POLL,
+    SESSION_POLL, SESSION_STREAM_BURST, SESSION_STREAM_LINGER, SESSION_STREAM_POLL,
     buffer::{Buffer, Entry, Watches},
     lock,
 };
@@ -432,6 +432,8 @@ pub(super) struct Source {
     streamed: Option<Instant>,
     /// It is not read again before this.
     due: Option<Instant>,
+    /// Full pages followed at once since it last waited its pace.
+    burst: u8,
 }
 
 #[derive(Default)]
@@ -455,8 +457,8 @@ pub(super) fn poll(
 /// Reads every watched scope that is due by `clock` (all of them without one) and returns how
 /// long until the next is. A scope whose host returned events within `SESSION_STREAM_LINGER`
 /// is due again after `SESSION_STREAM_POLL`, so a reply being written reaches its watchers
-/// in steps too short to see; a full page is followed at once; a quiet scope waits
-/// `SESSION_POLL`.
+/// in steps too short to see; a full page is followed at once, `SESSION_STREAM_BURST` times
+/// running at most; a quiet scope waits `SESSION_POLL`.
 pub(super) fn pass(
     service: &Watches,
     sources: &mut Sources,
@@ -492,6 +494,7 @@ pub(super) fn pass(
                 reader: LiveReader::default(),
                 streamed: None,
                 due: None,
+                burst: 0,
             });
         if let Some(early) = clock()
             .zip(source.due)
@@ -525,7 +528,11 @@ pub(super) fn pass(
         if events {
             source.streamed = Some(now);
         }
-        let pace = if events && more {
+        // A host that keeps a full page ready must not hold the worker every other scope
+        // shares: after a burst it waits its pace like any streaming scope.
+        let follow = events && more && source.burst < SESSION_STREAM_BURST;
+        source.burst = if follow { source.burst + 1 } else { 0 };
+        let pace = if follow {
             Duration::ZERO
         } else if source
             .streamed

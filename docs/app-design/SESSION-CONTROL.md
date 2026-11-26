@@ -391,13 +391,15 @@ runtime directory. Reading neither writes the store nor sends input.
   cached on the connection. A quiet scope is read every `SESSION_POLL = 100 ms`, never
   faster than 10 Hz. A scope whose host returned events within the last
   `SESSION_STREAM_LINGER = 1 s` is read every `SESSION_STREAM_POLL = 30 ms`, and a full
-  page is followed at once, so a reply being written reaches its watchers in steps too
-  short to see. The worker sleeps until the next scope is due. A failed bridge is
+  page is followed at once (at most `SESSION_STREAM_BURST = 8` times running, so one
+  backlog cannot hold the shared worker), so a reply being written reaches its watchers
+  in steps too short to see. The worker sleeps until the next scope is due. A failed bridge is
   re-resolved on a later tick; subscriptions survive termination, loss and relaunch.
 - A page buffered for a scope wakes each connection that watches it (`wake::Waker`), on
   both carriers, so it is sent when it is published and not when that connection's idle
   read slice (500 ms on the socket, 250 ms on the WebSocket) runs out. An idle read
-  wakes nobody.
+  wakes nobody. The wake stays pending until the connection's loop takes it as it
+  flushes, and goes before client input that is ready at the same time.
 - Limits in `topics/app/session.rs`: `SESSION_SCOPES = 128` watched scopes globally,
   `SESSION_SUBSCRIPTIONS = 32` total app-topic subscriptions per connection,
   `SESSION_SCOPE_BYTES = 512`, `SESSION_BUFFER_EVENTS = 512`,
