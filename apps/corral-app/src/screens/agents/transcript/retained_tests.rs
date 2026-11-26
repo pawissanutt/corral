@@ -1,5 +1,6 @@
 use super::*;
-use crate::model::session::transcript::{More, Prose};
+use crate::model::session::Action;
+use crate::model::session::transcript::{More, Prose, Thinking};
 use crate::model::{Id, daemon::Feed, session::Ui};
 use nsh_engine::{EngineConfig, Root};
 use nsh_testing::Headless;
@@ -16,11 +17,25 @@ fn message_at(anchor: &str, live: bool, words: &str) -> Message {
         detail: String::new(),
         tag: None,
         tag_facts: None,
-        items: vec![MessageItem::Prose(Prose {
-            markdown: words.into(),
-            more: More::Whole,
-            streaming: live,
-        })],
+        items: live
+            .then(|| {
+                MessageItem::Thinking(Thinking {
+                    text: "reasoning so far".into(),
+                    open: true,
+                    hidden: String::new(),
+                    hidden_all: false,
+                    more: More::Whole,
+                    streaming: true,
+                    action: Action::Thinking(Id::from("fixture")),
+                })
+            })
+            .into_iter()
+            .chain([MessageItem::Prose(Prose {
+                markdown: words.into(),
+                more: More::Whole,
+                streaming: live,
+            })])
+            .collect(),
         keys: if live {
             vec![]
         } else {
@@ -117,18 +132,17 @@ fn streaming_delta_retains_mounted_messages_and_item_wrappers() {
             item(first + 1).parent,
         ]
     };
-    // The paragraph of the reply being written that the delta leaves as it was.
+    // What is being written that neither a delta nor a renumbering changes: the reply's
+    // earlier paragraph and the reasoning before it.
     let earlier = |app: &mut Headless| {
         let nodes = app.screen().layout_nodes();
-        nodes
-            .iter()
-            .find(|node| {
-                node.text
-                    .as_ref()
-                    .is_some_and(|t| t.text.text == "stream settled")
-            })
-            .unwrap()
-            .id
+        ["stream settled", "reasoning so far"].map(|words| {
+            nodes
+                .iter()
+                .find(|node| node.text.as_ref().is_some_and(|t| t.text.text == words))
+                .unwrap()
+                .id
+        })
     };
     let original = nodes(&mut app, 0);
     let words = earlier(&mut app);
@@ -145,7 +159,7 @@ fn streaming_delta_retains_mounted_messages_and_item_wrappers() {
         "stream delta remounted the reply's earlier words"
     );
     app.press("id:advance").unwrap();
-    app.wait_for("id:item-3").unwrap();
+    app.wait_for("id:item-4").unwrap();
     let prepended = nodes(&mut app, 1);
     assert_eq!(
         words,

@@ -328,13 +328,13 @@ fn message_row(
 fn body(
     app: AppState,
     item: Memo<MessageItem>,
-    words: Memo<String>,
     number: usize,
     place: Option<(String, String, String)>,
+    live: Option<Written>,
 ) -> AnyElement {
     dynamic(move || {
         let body = item.get();
-        let live = written(&body).is_some().then_some(words);
+        let live = live.filter(|_| written(&body).is_some());
         let spot = place
             .as_ref()
             .map(|(scope, anchor, key)| Spot { scope, anchor, key });
@@ -462,9 +462,7 @@ fn item_list(
             let item = computed(move || row.with(|row| settled(&row.body)));
             let words =
                 computed(move || row.with(|row| written(&row.body).unwrap_or_default().to_owned()));
-            let stays = computed(move || {
-                row.with(|row| matches!(&row.body, MessageItem::Prose(words) if words.streaming))
-            });
+            let stays = computed(move || row.with(|row| written(&row.body).is_some()));
             let place = key.clone().map(|key| (scope.clone(), anchor.clone(), key));
             let content = dynamic(move || {
                 let place = place.clone();
@@ -475,13 +473,19 @@ fn item_list(
                     return view()
                         .relative()
                         .min_w(px(0.0))
-                        .child(body(app, item, words, number.get_untracked(), place))
+                        .child(body(
+                            app,
+                            item,
+                            number.get_untracked(),
+                            place,
+                            Some(Written { words, number }),
+                        ))
                         .child(dynamic(move || tag(number.get())))
                         .into_element();
                 }
                 // Numbered test IDs are static in NSH; renumber only this inner region on prepend.
                 let number = number.get();
-                numbered(number, body(app, item, words, number, place))
+                numbered(number, body(app, item, number, place, None))
             });
             match key {
                 Some(key) => placed(&scope, &anchor, &key, column.as_deref(), content),

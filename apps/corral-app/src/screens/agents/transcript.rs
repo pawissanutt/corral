@@ -261,18 +261,26 @@ fn item(app: AppState, entry: &MessageItem, n: usize, spot: Option<Spot<'_>>) ->
     numbered(n, item_body(app, entry, n, spot, None))
 }
 
-/// `live` is the words of an item still being written, which change without `entry` doing so.
+/// An item still being written, which keeps its view meanwhile: its words as they grow, and
+/// its number, which the rows above it can change.
+#[derive(Clone, Copy)]
+struct Written {
+    words: Memo<String>,
+    number: Memo<usize>,
+}
+
+/// `live` is what changes of an item still being written without `entry` doing so.
 fn item_body(
     app: AppState,
     entry: &MessageItem,
     n: usize,
     spot: Option<Spot<'_>>,
-    live: Option<Memo<String>>,
+    live: Option<Written>,
 ) -> AnyElement {
     let id = n.to_string();
     match entry {
         MessageItem::Paragraph(words) => paragraph(app, words),
-        MessageItem::Prose(words) => prose::prose(app, words, &id, live),
+        MessageItem::Prose(words) => prose::prose(app, words, &id, live.map(|live| live.words)),
         MessageItem::Thinking(thought) => prose::thinking(app, thought, &id, live),
         MessageItem::Tool(call) => tool::tool(app, call, &id),
         MessageItem::Group(folded) => group::group(app, folded, &id, spot),

@@ -11,8 +11,8 @@ use crate::screens::markdown::{chat_markdown, chat_markdown_streaming};
 use crate::state::AppState;
 use crate::ui::tokens::{FONT_TEXT, Token, color};
 
-use super::PARAGRAPH;
 use super::parts::{disclosure, pressable, small, state};
+use super::{PARAGRAPH, Written};
 
 #[cfg(test)]
 #[path = "prose_tests.rs"]
@@ -74,13 +74,57 @@ pub(super) fn prose(
 /// Thinking: a bold `thinking` lead, then the reasoning muted so it never reads as the answer;
 /// folded, one row says what it hides. Pressing the lead folds or shows it; while the session
 /// hides all thinking, the row is `thinking hidden · Alt+H shows it` and pressing it shows all.
-/// `live` is the reasoning while it is still being written, as for `prose`.
+/// `live` is the reasoning while it is still being written: its words are drawn in a view that
+/// stays as they grow, and its lead alone is made again when its number changes, which names
+/// the fold control.
 pub(super) fn thinking(
     app: AppState,
     thought: &Thinking,
     id: &str,
-    live: Option<Memo<String>>,
+    live: Option<Written>,
 ) -> AnyElement {
+    let form = app.form;
+    let lead = match live {
+        Some(live) => {
+            let thought = thought.clone();
+            dynamic(move || {
+                let id = live.number.get().to_string();
+                untracked(|| lead(app, &thought, &id).into_element())
+            })
+        }
+        None => lead(app, thought, id).into_element(),
+    };
+    let reasoning = thought.open.then(|| {
+        let words = match live {
+            Some(live) => text(move || live.words.get()),
+            None => text(thought.text.clone()),
+        }
+        .text_color(color(Token::Ink3));
+        let words = if form == Form::Terminal {
+            words
+        } else {
+            words
+                .font_family(FONT_TEXT)
+                .text_size(px(if form == Form::Phone { 14.0 } else { 12.5 }))
+                .line_height(px(if form == Form::Phone { 20.0 } else { 18.0 }))
+        };
+        view()
+            .min_w(px(0.0))
+            .when(form == Form::Desktop, |block| block.max_w(px(PARAGRAPH)))
+            .child(words)
+            .when(thought.streaming, |block| block.child(caret(app)))
+    });
+    view()
+        .min_w(px(0.0))
+        .when(form != Form::Terminal, |block| block.mb(px(6.0)))
+        .child(lead)
+        .children(reasoning)
+        .children(state(app, &thought.more, id, true))
+        .into_element()
+}
+
+/// The lead of a thinking block, which folds or shows it; `id` names it for tests.
+fn lead(app: AppState, thought: &Thinking, id: &str) -> View {
     let form = app.form;
     let bold = if form == Form::Terminal {
         FontWeight::BOLD
@@ -113,7 +157,7 @@ pub(super) fn thinking(
                 row.child(caret(app))
             })
     };
-    let lead = pressable(
+    pressable(
         app,
         lead,
         Some(&thought.action),
@@ -124,32 +168,5 @@ pub(super) fn thinking(
         },
         thought.open,
         id,
-    );
-    let reasoning = thought.open.then(|| {
-        let words = match live {
-            Some(live) => text(move || live.get()),
-            None => text(thought.text.clone()),
-        }
-        .text_color(color(Token::Ink3));
-        let words = if form == Form::Terminal {
-            words
-        } else {
-            words
-                .font_family(FONT_TEXT)
-                .text_size(px(if form == Form::Phone { 14.0 } else { 12.5 }))
-                .line_height(px(if form == Form::Phone { 20.0 } else { 18.0 }))
-        };
-        view()
-            .min_w(px(0.0))
-            .when(form == Form::Desktop, |block| block.max_w(px(PARAGRAPH)))
-            .child(words)
-            .when(thought.streaming, |block| block.child(caret(app)))
-    });
-    view()
-        .min_w(px(0.0))
-        .when(form != Form::Terminal, |block| block.mb(px(6.0)))
-        .child(lead)
-        .children(reasoning)
-        .children(state(app, &thought.more, id, true))
-        .into_element()
+    )
 }
