@@ -263,6 +263,9 @@ pub struct Transcript {
     pub older: Option<Action>,
     /// Identifies the next older page even when the preceding page displayed no new rows.
     pub older_cursor: Option<String>,
+    /// Anchors of the messages whose record another page may hold more of: their copy is
+    /// only ever partial.
+    pub cut: Vec<String>,
     /// Back to the latest messages, when a source shows a separate earlier page.
     pub newer: Option<Action>,
     /// A page is on its way while the shown one stays.

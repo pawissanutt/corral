@@ -1,7 +1,11 @@
 //! A finished agent message's words as one paste-ready text, for its Copy reply action: the
 //! Markdown it wrote, quotes and code included, without its time, tools or thinking.
 
-use super::{Message, MessageItem, MessageKind, Transcript};
+use corral_protocol::detail::SessionMessage;
+
+use crate::model::daemon::DetailCache;
+
+use super::{Message, MessageItem, MessageKind, Transcript, message_rows};
 
 /// What Copy reply puts on the clipboard.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,19 +37,47 @@ impl Reply {
     }
 }
 
+/// The displayed messages holding a recorded record another page may hold more of: the oldest
+/// loaded record while the served page names an older one (whether or not it may still be
+/// read), the newest while the window paged out items of it (`suffix`). Found by the rows
+/// each record ends on, so steers or mail placed around it and merged replies land right.
+pub(super) fn cut_messages(
+    recorded: &[SessionMessage],
+    cache: Option<&DetailCache>,
+    messages: &[Message],
+    ends: &[(String, usize)],
+) -> Vec<String> {
+    let older = cache.and_then(super::older_token).is_some();
+    let suffix = cache.and_then(|cache| cache.transcript_seams.suffix.as_ref());
+    let first = recorded.first().filter(|_| older).map(super::anchor);
+    let last = recorded
+        .last()
+        .filter(|m| suffix.is_some_and(|(id, n)| *n > 0 && !id.is_empty() && *id == m.id))
+        .map(super::anchor);
+    first
+        .into_iter()
+        .chain(last)
+        .filter_map(|record| {
+            let (_, end) = ends.iter().find(|(anchor, _)| *anchor == record)?;
+            let row = end.checked_sub(1)?;
+            let mut rows = 0;
+            messages
+                .iter()
+                .find(|m| {
+                    rows += message_rows(m);
+                    row < rows
+                })
+                .map(|m| m.anchor.clone())
+        })
+        .collect()
+}
+
 impl Transcript {
-    /// The anchors of the messages a page edge may cut: the first while earlier pages exist,
-    /// the last while newer ones do (`newer`). A record split across pages stays one message,
-    /// so such a message may lack items another page holds and copies only as partial.
-    pub fn cut(&self, newer: bool) -> [Option<String>; 2] {
-        let older = self.older.is_some() || self.older_cursor.is_some();
-        let anchor = |message: Option<&Message>| message.map(|m| m.anchor.clone());
-        [
-            older.then(|| anchor(self.messages.first())).flatten(),
-            (newer || self.newer.is_some())
-                .then(|| anchor(self.messages.last()))
-                .flatten(),
-        ]
+    /// The reply `message` copies: partial also when another page may hold part of its record.
+    pub fn reply_of(&self, message: &Message) -> Option<Reply> {
+        let mut reply = message.reply()?;
+        reply.partial |= self.cut.contains(&message.anchor);
+        Some(reply)
     }
 }
 
@@ -154,24 +186,5 @@ mod tests {
             None,
             "a reply still being written is not offered"
         );
-    }
-
-    /// A record split across pages stays one message whose other items are on a page not
-    /// loaded: the oldest message while earlier pages exist and the newest while newer ones
-    /// do are named as cut, so their copy is never passed off as whole.
-    #[test]
-    fn messages_at_a_page_edge_are_cut() {
-        let mut page = super::super::transcript(
-            &crate::model::Id::from("fixture"),
-            &crate::model::session::Ui::default(),
-            None,
-            &crate::model::daemon::Feed::default(),
-        );
-        let mut second = message(Vec::new());
-        second.anchor = "b".into();
-        page.messages = vec![message(Vec::new()), second];
-        assert_eq!(page.cut(false), [None, None]);
-        page.older_cursor = Some("older".into());
-        assert_eq!(page.cut(true), [Some("a".into()), Some("b".into())]);
     }
 }

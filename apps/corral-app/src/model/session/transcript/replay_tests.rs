@@ -360,3 +360,58 @@ fn a_reader_who_scrolled_up_finds_the_same_row_after_leaving_and_reopening_the_s
         "what arrived while they were away is counted from where they left"
     );
 }
+
+/// T-2119: a page that starts partway through an assistant record holds only its tail, each
+/// block of it whole. Once `history_changed` hides the way to the page before, Copy reply on
+/// that tail must still say it is partial; a record the window paged the end out of too. A
+/// record wholly on the page copies whole.
+#[test]
+fn a_split_record_copies_as_partial_after_history_changed_hides_older_pages() {
+    let text = |words: &str| SessionItem::Text { text: words.into() };
+    let mut feed = feed(vec![
+        text("The tail's first block."),
+        text("Its last block."),
+    ]);
+    let target = DetailRef::Session { id: ID.into() };
+    let cache = feed
+        .details
+        .get_mut(&daemon::detail_key(&target))
+        .expect("the fixture's cache");
+    let Some(DetailBody::Session(page)) = cache.merged.as_mut() else {
+        panic!("a served session page");
+    };
+    page.older = Some("before".into());
+    page.messages[0].id = "m1".into();
+    let mut whole = page.messages[0].clone();
+    whole.id = "m3".into();
+    whole.at = Some("2026-11-15T10:00:09Z".into());
+    whole.items = vec![text("A reply wholly on this page.")];
+    let mut asked = whole.clone();
+    asked.id = "m2".into();
+    asked.author = "user".into();
+    asked.at = Some("2026-11-15T10:00:05Z".into());
+    asked.items = vec![text("Go on.")];
+    page.messages.extend([asked, whole]);
+    cache.error = Some(daemon::ClientError {
+        code: "history_changed".into(),
+        message: "history changed".into(),
+    });
+    let partial = |feed: &daemon::Feed| {
+        let shown = shown(feed);
+        assert!(shown.older.is_none() && shown.older_cursor.is_none());
+        let replies: Vec<_> = shown
+            .messages
+            .iter()
+            .filter_map(|m| shown.reply_of(m))
+            .map(|reply| reply.partial)
+            .collect();
+        replies
+    };
+    assert_eq!(partial(&feed), [true, false]);
+    feed.details
+        .get_mut(&daemon::detail_key(&target))
+        .expect("the fixture's cache")
+        .transcript_seams
+        .suffix = Some(("m3".into(), 1));
+    assert_eq!(partial(&feed), [true, true]);
+}

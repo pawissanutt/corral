@@ -25,7 +25,7 @@ use super::marks::Turn;
 use super::{
     Action, EXPAND_ALL, Fill, Marker, Message, MessageItem, MessageKind, More, Prose, QuestionCard,
     Section, TagFacts, Thinking, Transcript, bubbles, failure, marks, older_token, overlay, page,
-    tool, tool_jobs,
+    reply, tool, tool_jobs,
 };
 
 mod recorded;
@@ -851,6 +851,7 @@ fn replay(
     let capped = cache
         .and_then(|cache| cache.error.as_ref())
         .is_some_and(|error| error.code == "history_changed");
+    let cut = reply::cut_messages(recorded, cache, &messages, &message_ends);
     let older_cursor = cache.and_then(older_token).filter(|_| !capped);
     Transcript {
         echoes: if detached {
@@ -863,6 +864,7 @@ fn replay(
         first,
         older: older_cursor.as_ref().map(|_| Action::Older(id.clone())),
         older_cursor,
+        cut,
         newer: None,
         paging: body.is_some() && loading,
         fill,

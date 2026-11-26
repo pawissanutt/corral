@@ -184,15 +184,7 @@ pub(super) fn render(
             edge(button).into_element()
         })
     });
-    let edges = reader.clone();
-    let cut = computed(move || {
-        shown.with(|p| {
-            p.as_ref().map_or_else(Default::default, |p| {
-                let (_, newer, _) = edges.status(&p.scope);
-                p.cut(newer)
-            })
-        })
-    });
+    let cut = computed(move || shown.with(|p| p.as_ref().map_or_else(Vec::new, |p| p.cut.clone())));
     let geometry = reader.clone();
     let listing = computed(move || shown.with(|p| p.as_ref().map_or_else(Vec::new, rows)));
     let messages = each(
@@ -258,7 +250,7 @@ fn message_row(
     scope: String,
     message: Message,
     shown: Memo<Option<(Message, usize)>>,
-    cut: Memo<[Option<String>; 2]>,
+    cut: Memo<Vec<String>>,
 ) -> AnyElement {
     let anchor = message.anchor.clone();
     let column = (message.keys.len() == message.items.len() && message.kind == MessageKind::Agent)
@@ -320,9 +312,8 @@ fn message_row(
         shown.with_untracked(|row| {
             let (m, _) = row.as_ref()?;
             let mut reply = m.reply()?;
-            // A page edge may hold the rest of this message's record.
-            reply.partial |=
-                cut.with_untracked(|cut| cut.iter().flatten().any(|at| *at == m.anchor));
+            // Another page may hold the rest of this message's record.
+            reply.partial |= cut.with_untracked(|cut| cut.contains(&m.anchor));
             Some(reply)
         })
     };

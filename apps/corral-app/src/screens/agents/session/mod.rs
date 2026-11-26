@@ -415,7 +415,7 @@ fn latest(app: AppState, id: Id, page: Memo<SessionPage>) -> AnyElement {
 }
 
 /// Copy reply under the phone sheet's preview: the newest finished reply whole, read from its
-/// message rather than the three lines shown, partial when a page edge may cut it.
+/// message rather than the three lines shown, partial when another page may hold part of its record.
 fn latest_copy(app: AppState, page: Memo<SessionPage>) -> AnyElement {
     use crate::model::session::transcript::{MessageKind, Reply};
     let reply = move || -> Option<Reply> {
@@ -429,13 +429,7 @@ fn latest_copy(app: AppState, page: Memo<SessionPage>) -> AnyElement {
                 .iter()
                 .rev()
                 .find(|message| message.kind == MessageKind::Agent)?;
-            let mut reply = message.reply()?;
-            reply.partial |= transcript
-                .cut(false)
-                .iter()
-                .flatten()
-                .any(|at| *at == message.anchor);
-            Some(reply)
+            transcript.reply_of(message)
         })
     };
     let offered = computed(move || {
