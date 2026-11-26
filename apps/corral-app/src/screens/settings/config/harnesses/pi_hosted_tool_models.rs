@@ -9,10 +9,9 @@ use crate::client::requests;
 use crate::model::{
     Id,
     daemon::Operation,
-    settings::pi_hosted_tool_models::Choice,
     settings::pi_hosted_tools::{Editor, Route, Tool},
 };
-use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with, menu_trigger};
+use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with, menu_trigger_reactive};
 use crate::ui::kit::overlay::counted;
 use crate::ui::tokens::color;
 
@@ -82,19 +81,11 @@ pub(super) fn settle(app: AppState, editor: Signal<Editor>) {
 /// list's state with Refresh.
 pub(super) fn model(app: AppState, editor: Signal<Editor>, tool: Tool, route: Route) -> AnyElement {
     let index = tool as usize;
-    // The chosen ID with the choices, so a pick between listed IDs relabels the trigger.
-    let choices = computed(move || {
-        editor.with(|editor| {
-            let current = &editor.draft[index].model;
-            let choices = editor.models[index].choices(current)?;
-            Some((choices, current.clone()))
-        })
-    });
+    let choices =
+        computed(move || editor.with(|editor| editor.models[index].listed().map(<[_]>::to_vec)));
     let typing = computed(move || editor.with(|editor| editor.models[index].typing()));
     let picker = dynamic(move || match choices.get() {
-        Some((choices, current)) => {
-            untracked(|| picker(app, editor, tool, route, choices, current))
-        }
+        Some(choices) => untracked(|| picker(app, editor, tool, route, choices)),
         None => view().into_element(),
     });
     let field = dynamic(move || {
@@ -102,13 +93,20 @@ pub(super) fn model(app: AppState, editor: Signal<Editor>, tool: Tool, route: Ro
             return view().into_element();
         }
         untracked(|| {
-            entry(
-                app,
-                format!("field-pi-hosted-tools-{}-model", tool.id()),
-                tool.model_label(route),
-                move || editor.with(|state| state.draft[index].model.clone()),
-                move |model| editor.update(|state| state.type_model(tool, model)),
-            )
+            let focus = element_ref();
+            // A reply must not remove the input between focusing it and the first keystroke.
+            focus.on_focus_in(move || editor.update(|state| state.models[index].manual = true));
+            view()
+                .element_ref(&focus)
+                .min_w(px(0.0))
+                .child(entry(
+                    app,
+                    format!("field-pi-hosted-tools-{}-model", tool.id()),
+                    tool.model_label(route),
+                    move || editor.with(|state| state.draft[index].model.clone()),
+                    move |model| editor.update(|state| state.type_model(tool, model)),
+                ))
+                .into_element()
         })
     });
     let note = dynamic(move || {
@@ -151,15 +149,11 @@ fn picker(
     editor: Signal<Editor>,
     tool: Tool,
     route: Route,
-    choices: Vec<Choice>,
-    current: String,
+    choices: Vec<String>,
 ) -> AnyElement {
     let index = tool as usize;
-    let shown = if current.is_empty() {
-        "Choose a model".to_owned()
-    } else {
-        current
-    };
+    let shown =
+        move || editor.with(|state| state.models[index].selection(&state.draft[index].model));
     let mut picker = menu()
         .popup_style(|s| {
             s.bg(color(Token::Surface))
@@ -167,10 +161,10 @@ fn picker(
                 .border_color(color(Token::Rule2))
         })
         .on_open_change(counted(app))
-        .trigger(menu_trigger(
+        .trigger(menu_trigger_reactive(
             app,
-            shown.clone(),
-            format!("{}: {shown}", tool.model_label(route)),
+            move || shown().into(),
+            move || format!("{}: {}", tool.model_label(route), shown()).into(),
             &format!("btn-pi-hosted-tools-{}-model", tool.id()),
         ))
         // First, so a long list never hides the way to type an ID.
@@ -180,20 +174,18 @@ fn picker(
             format!("seg-pi-hosted-tools-{}-model-manual", tool.id()),
             move || editor.update(|state| state.models[index].manual = true),
         ));
-    for choice in choices {
-        let words = if choice.listed {
-            choice.id.clone()
-        } else {
-            format!("{} (saved; not listed)", choice.id)
-        };
-        let test_id = format!("seg-pi-hosted-tools-{}-model-{}", tool.id(), choice.id);
-        let id = choice.id;
-        picker = picker.child(item(app, words, test_id, move || {
+    for id in choices {
+        let test_id = format!("seg-pi-hosted-tools-{}-model-{}", tool.id(), id);
+        picker = picker.child(item(app, id.clone(), test_id, move || {
             editor.update(|state| state.pick(tool, id.clone()))
         }));
     }
     picker.into_element()
 }
+
+#[cfg(test)]
+#[path = "pi_hosted_tool_models_tests.rs"]
+mod tests;
 
 fn item(app: AppState, words: String, test_id: String, chosen: impl Fn() + 'static) -> AnyElement {
     menu_item()

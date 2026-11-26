@@ -712,9 +712,11 @@ pub(super) fn preflight_request(method: &str, params: &Value) -> Result<(), Stri
 
 fn request_deadline(method: &str, params: &Value) -> u64 {
     match method {
-        wire::app::DETAIL_GET | wire::app::CHANGES_PAGE | wire::app::SEEN_ADVANCE => {
-            APP_READ_DEADLINE_MS
-        }
+        // Hosted model discovery waits for a provider, then corrald's connection flush.
+        wire::app::DETAIL_GET
+        | wire::app::CHANGES_PAGE
+        | wire::app::SEEN_ADVANCE
+        | wire::config::PI_HOSTED_TOOL_MODELS => APP_READ_DEADLINE_MS,
         wire::device::PAIR_STATUS => params["wait_ms"]
             .as_u64()
             .unwrap_or(0)
@@ -752,6 +754,41 @@ fn request_deadline(method: &str, params: &Value) -> u64 {
 
 fn decode(error: serde_json::Error) -> String {
     format!("invalid daemon JSON: {error}")
+}
+
+#[cfg(test)]
+#[test]
+fn pi_hosted_model_reply_survives_the_generic_request_deadline() {
+    use serde_json::json;
+
+    let mut core = Core::new();
+    let method = wire::config::PI_HOSTED_TOOL_MODELS;
+    core.request_tagged(
+        method,
+        json!({"tool":"image_gen","provider":"openai"}),
+        Some("models".into()),
+        0,
+    )
+    .unwrap();
+    let request: Request = serde_json::from_slice(&core.take_outbox().unwrap().payload).unwrap();
+    let now = 15_500; // Daemon attempt budget plus one Unix connection poll.
+    assert_eq!(core.expired(now), None);
+    assert!(core.next_event().is_none());
+    let result = json!({"status":"live","models":["gpt-image-fixture"]});
+    core.receive(
+        Frame {
+            kind: FrameKind::Control,
+            stream: 0,
+            payload: serde_json::to_vec(&json!({"jsonrpc":"2.0","id":request.id,"result":result}))
+                .unwrap(),
+        },
+        now,
+    )
+    .unwrap();
+    assert!(
+        matches!(core.next_event(), Some(Event::Reply { tag: Some(tag), method: received, outcome: Ok(value), .. })
+        if tag == "models" && received == method && value == result)
+    );
 }
 
 #[cfg(test)]

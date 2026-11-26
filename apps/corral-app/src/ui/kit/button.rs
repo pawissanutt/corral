@@ -609,9 +609,20 @@ pub fn menu_trigger(
     spoken: impl Into<SharedString>,
     test_id: &str,
 ) -> AnyElement {
+    let words = words.into();
+    let spoken = spoken.into();
+    menu_trigger_reactive(app, move || words.clone(), move || spoken.clone(), test_id)
+}
+
+/// The same trigger with live labels, without replacing the focused element.
+pub fn menu_trigger_reactive(
+    app: AppState,
+    words: impl Fn() -> SharedString + 'static,
+    spoken: impl Fn() -> SharedString + 'static,
+    test_id: &str,
+) -> AnyElement {
     let form = app.form;
-    let spoken: SharedString = spoken.into();
-    let words = text(words.into())
+    let words = text(words)
         .number_of_lines(1u32)
         .truncate()
         .min_w(px(0.0))

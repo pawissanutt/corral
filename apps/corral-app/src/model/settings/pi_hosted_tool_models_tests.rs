@@ -57,17 +57,11 @@ fn late_list_for_an_earlier_route_is_dropped_even_after_returning_to_it() {
     // A's first reply and B's reply land after A was asked again.
     for key in ["a1", "b"] {
         editor.models[search].settle(&Id::from(key), &models("live", &["stale"]));
-        assert_eq!(editor.models[search].choices(""), None);
+        assert_eq!(editor.models[search].listed(), None);
         assert!(editor.models[search].pending().is_some());
     }
     editor.models[search].settle(&Id::from("a2"), &models("live", &["fresh"]));
-    let ids: Vec<String> = editor.models[search]
-        .choices("")
-        .unwrap()
-        .into_iter()
-        .map(|choice| choice.id)
-        .collect();
-    assert_eq!(ids, ["fresh"]);
+    assert_eq!(editor.models[search].listed().unwrap(), ["fresh"]);
 }
 
 #[test]
@@ -79,21 +73,11 @@ fn listed_pick_saves_and_a_saved_id_the_provider_omits_stays_chosen() {
     assert!(editor.models[image].typing());
     editor.models[image].settle(&Id::from("i1"), &models("live", &["gpt-image-1"]));
     assert!(!editor.models[image].typing());
-    let choices = editor.models[image]
-        .choices(&editor.draft[image].model)
-        .unwrap();
-    assert_eq!(
-        choices,
-        [
-            Choice {
-                id: "gpt-image-1".into(),
-                listed: true
-            },
-            Choice {
-                id: "kept-id".into(),
-                listed: false
-            },
-        ]
+    assert_eq!(editor.models[image].listed().unwrap(), ["gpt-image-1"]);
+    assert!(
+        editor.models[image]
+            .selection(&editor.draft[image].model)
+            .starts_with("kept-id")
     );
     assert!(editor.change().is_none());
     editor.pick(Tool::Image, "gpt-image-1".into());
@@ -132,5 +116,5 @@ fn typed_id_survives_a_missing_login_save_and_reload() {
     fresh.wanted(Tool::Search).unwrap();
     fresh.models[search].sent(None);
     assert!(fresh.models[search].typing());
-    assert_eq!(fresh.models[search].choices("typed-id"), None);
+    assert_eq!(fresh.models[search].listed(), None);
 }

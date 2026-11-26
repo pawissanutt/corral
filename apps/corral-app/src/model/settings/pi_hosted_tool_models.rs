@@ -52,13 +52,6 @@ pub struct Discovery {
     pub manual: bool,
 }
 
-/// What the model picker offers: an ID and whether the provider listed it.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Choice {
-    pub id: String,
-    pub listed: bool,
-}
-
 impl Discovery {
     /// Follows the route shown; whether `wanted` needs a new list. A changed route drops the
     /// list and the request in flight, so its reply cannot land on another route.
@@ -109,7 +102,7 @@ impl Discovery {
         };
     }
 
-    fn listed(&self) -> Option<&[String]> {
+    pub fn listed(&self) -> Option<&[String]> {
         match &self.listing {
             Listing::Answered(PiHostedToolModels {
                 status: PiHostedToolModelsStatus::Live,
@@ -119,24 +112,18 @@ impl Discovery {
         }
     }
 
-    /// The picker's choices, or `None` while there is no list to pick from: the listed IDs,
-    /// then `current` when the provider did not list it, so a saved or typed ID stays chosen.
-    pub fn choices(&self, current: &str) -> Option<Vec<Choice>> {
-        let listed = self.listed()?;
-        let mut choices: Vec<Choice> = listed
-            .iter()
-            .map(|id| Choice {
-                id: id.clone(),
-                listed: true,
-            })
-            .collect();
-        if !current.is_empty() && !listed.iter().any(|id| id == current) {
-            choices.push(Choice {
-                id: current.into(),
-                listed: false,
-            });
+    /// The picker keeps the current selection visible even if no result contains it.
+    pub fn selection(&self, current: &str) -> String {
+        if current.is_empty() {
+            "Choose a model".into()
+        } else if self
+            .listed()
+            .is_some_and(|ids| ids.iter().any(|id| id == current))
+        {
+            current.into()
+        } else {
+            format!("{current} (not listed)")
         }
-        Some(choices)
     }
 
     /// Whether the typed ID field shows: chosen, or no usable list.
