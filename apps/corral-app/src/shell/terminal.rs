@@ -162,6 +162,7 @@ fn content(app: AppState, focus: Focus) -> AnyElement {
             .child(screens::agents::remove_sheet(app))
             .child(screens::agents::start_sheet(app))
             .child(confirmation(app))
+            .child(super::gate(app))
             .child(refusal(app))
             .child(crate::shell::switcher(app))
             .child(crate::ui::kit::more::overlays(app)),

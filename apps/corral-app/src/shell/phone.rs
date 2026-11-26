@@ -104,6 +104,7 @@ pub fn shell(app: AppState) -> AnyElement {
         .child(crate::screens::agents::remove_sheet(app))
         .child(crate::screens::agents::start_sheet(app))
         .child(confirmation(app))
+        .child(super::gate(app))
         .child(refusal(app))
         .child(super::switcher(app))
         .child(crate::ui::kit::more::overlays(app))

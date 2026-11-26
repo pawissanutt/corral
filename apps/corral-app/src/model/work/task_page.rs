@@ -30,6 +30,7 @@ pub fn detail_task(detail: &TaskDetail) -> daemon::Task {
             latest(detail, CheckKind::Gate)
         },
         review: latest(detail, CheckKind::Review),
+        gate_attempt: detail.gate_attempt.clone(),
         ready: false,
         ..TaskRow::default()
     })

@@ -50,6 +50,7 @@ pub(super) const CAPS: &[&str] = &[
     PROJECTS_V1,
     AGENTS_V1,
     REVIEW_V1,
+    GATE_ATTEMPT_V1,
     TIMELINE_V1,
     SYSTEM_V1,
     SYSTEM_RUNTIME_V1,

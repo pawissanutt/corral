@@ -347,6 +347,15 @@ fn row(app: AppState, key: &Id, columns: &[list::Column]) -> Row {
                             .gap(px(2.0))
                             .child(lines)
                             .child(view().flex_row().child(cell_text(app, facts, true)))
+                            .children(line.pipeline[1].open.clone().map(|open| {
+                                button(
+                                    app,
+                                    "Gate log",
+                                    ButtonKind::Quiet,
+                                    &format!("gate-mark-{}", open.task),
+                                    move || app.gate_open.set(Some(open.clone())),
+                                )
+                            }))
                             .into_element()
                     })
                 })

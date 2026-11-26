@@ -400,7 +400,7 @@ pub(super) fn cell_lines(lines: &[Line]) -> AnyElement {
 
 /// Lines of a log as the form sets them: mono rows on the page (wrapping on the phone), each
 /// in its class's role; one row each in a terminal.
-pub(super) fn log_lines(app: AppState, lines: &[Line]) -> AnyElement {
+pub(crate) fn log_lines(app: AppState, lines: &[Line]) -> AnyElement {
     let form = app.form;
     if form == Form::Terminal {
         return cell_lines(lines);

@@ -1,5 +1,5 @@
 //! Rows for the acknowledged application topics.
-use corral_types::{Check, Run, SessionStatus, Status, Task};
+use corral_types::{Check, GateAttempt, Run, SessionStatus, Status, Task};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -16,6 +16,10 @@ pub struct TaskRow {
     pub run: Option<Run>,
     #[schemars(with = "Option<crate::schema_types::Check>")]
     pub gate: Option<Check>,
+    /// Latest observed attempt, independent of the task status and of the retained check.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<crate::schema_types::GateAttempt>")]
+    pub gate_attempt: Option<GateAttempt>,
     #[schemars(with = "Option<crate::schema_types::Check>")]
     pub review: Option<Check>,
     /// Whether the pipeline appended `ready` for the current review.

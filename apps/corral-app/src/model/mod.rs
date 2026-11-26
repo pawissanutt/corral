@@ -27,6 +27,8 @@ pub mod disconnected;
 pub mod dock;
 /// Reducer effects and environment switches.
 pub mod effect;
+/// A task's observed gate attempt and its bounded, followed log.
+pub mod gate;
 /// Snapshot and health types.
 pub mod health;
 /// Home: what waits on the owner, then what is working.

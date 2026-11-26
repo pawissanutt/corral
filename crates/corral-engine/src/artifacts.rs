@@ -9,6 +9,8 @@ use std::{
 
 use anyhow::{Context, Result};
 pub use corral_types::Artifact;
+
+mod gate_log;
 use jiff::Timestamp;
 use rusqlite::{OptionalExtension, params};
 use serde_json::json;
@@ -597,6 +599,25 @@ impl Engine {
         if !path.try_exists().context("inspect artifact blob")? {
             publish_blob(&path, bytes)?;
         }
+        self.record_artifact_in(
+            store,
+            target,
+            (hash, bytes.len() as u64),
+            source,
+            kind,
+            title,
+        )
+    }
+
+    fn record_artifact_in(
+        &self,
+        store: &Store,
+        target: ArtifactTarget<'_>,
+        blob: (String, u64),
+        source: Option<ArtifactSource>,
+        kind: ArtifactKind,
+        title: &str,
+    ) -> Result<Artifact> {
         let (task, project) = match target.owner {
             ArtifactOwner::Task(task) => (Some(task.to_owned()), None),
             ArtifactOwner::Project(project) => (None, Some(project.to_owned())),
@@ -605,8 +626,8 @@ impl Engine {
         let artifact = Artifact {
             task: owner.to_owned(),
             id: store.next_artifact_id(owner)?,
-            sha256: hash,
-            bytes: bytes.len() as u64,
+            sha256: blob.0,
+            bytes: blob.1,
             kind,
             title: title.to_owned(),
             at: Timestamp::now(),

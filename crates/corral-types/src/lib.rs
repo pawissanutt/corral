@@ -8,6 +8,7 @@ use serde_json::Value;
 
 pub mod board_plan;
 pub mod facts;
+mod gate_attempt;
 pub mod lenses;
 mod op;
 pub mod pricing;
@@ -16,6 +17,7 @@ mod system;
 mod task_metadata;
 
 pub use facts::*;
+pub use gate_attempt::{GateAttempt, GateAttemptPage, GateAttemptState};
 pub use op::{ConfigProblem, Next, Op, Refusal};
 pub use references::{Reference, references_in, section_slug};
 pub use system::*;

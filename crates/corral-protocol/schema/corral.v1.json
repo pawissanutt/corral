@@ -2270,6 +2270,22 @@
           {
             "properties": {
               "body": {
+                "$ref": "#/components/schemas/GateAttemptPage"
+              },
+              "kind": {
+                "const": "gate_attempt",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "body": {
                 "$ref": "#/components/schemas/PatchPage"
               },
               "kind": {
@@ -2904,6 +2920,35 @@
             "required": [
               "kind",
               "task"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "`gate-attempt.v1`: latest log bytes, or a page ending at the given byte offset.\nUse the returned `start` as `before` to read older output, not `DetailGet.page`.",
+            "properties": {
+              "attempt": {
+                "type": "string"
+              },
+              "before": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "kind": {
+                "const": "gate_attempt",
+                "type": "string"
+              },
+              "task": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "task",
+              "attempt"
             ],
             "type": "object"
           },
@@ -4188,6 +4233,14 @@
           "Credit"
         ],
         "type": "string"
+      },
+      "GateAttempt": {
+        "type": "object",
+        "x-rust-type": "corral_types::GateAttempt"
+      },
+      "GateAttemptPage": {
+        "type": "object",
+        "x-rust-type": "corral_types::GateAttemptPage"
       },
       "HarnessFact": {
         "properties": {
@@ -10655,6 +10708,16 @@
             },
             "type": "array"
           },
+          "gate_attempt": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GateAttempt"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "pending_review_verdict": {
             "anyOf": [
               {
@@ -10715,6 +10778,17 @@
                 "type": "null"
               }
             ]
+          },
+          "gate_attempt": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GateAttempt"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Latest observed attempt, independent of the task status and of the retained check."
           },
           "max_rounds": {
             "description": "Effective limit for this task, including project overrides.",
@@ -13059,12 +13133,34 @@
           }
         },
         {
+          "name": "attempt",
+          "required": false,
+          "schema": {
+            "type": "string"
+          },
+          "x-required-in": [
+            3
+          ]
+        },
+        {
           "name": "before",
           "required": false,
           "schema": {
-            "type": [
-              "string",
-              "null"
+            "anyOf": [
+              {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
             ]
           }
         },
@@ -13089,7 +13185,7 @@
             ]
           },
           "x-required-in": [
-            32
+            33
           ]
         },
         {
@@ -13099,7 +13195,7 @@
             "type": "string"
           },
           "x-required-in": [
-            25
+            26
           ]
         },
         {
@@ -13109,7 +13205,7 @@
             "type": "string"
           },
           "x-required-in": [
-            14
+            15
           ]
         },
         {
@@ -13119,8 +13215,8 @@
             "$ref": "#/components/schemas/ChangesComparison"
           },
           "x-required-in": [
-            17,
-            18
+            18,
+            19
           ]
         },
         {
@@ -13130,7 +13226,7 @@
             "type": "string"
           },
           "x-required-in": [
-            38
+            39
           ]
         },
         {
@@ -13170,8 +13266,8 @@
             ]
           },
           "x-required-in": [
-            32,
-            34
+            33,
+            35
           ]
         },
         {
@@ -13191,8 +13287,7 @@
           "x-required-in": [
             0,
             1,
-            8,
-            10,
+            9,
             11,
             12,
             13,
@@ -13214,7 +13309,8 @@
             29,
             30,
             31,
-            38
+            32,
+            39
           ]
         },
         {
@@ -13224,7 +13320,7 @@
             "type": "string"
           },
           "x-required-in": [
-            16
+            17
           ]
         },
         {
@@ -13234,7 +13330,7 @@
             "type": "string"
           },
           "x-required-in": [
-            29
+            30
           ]
         },
         {
@@ -13252,6 +13348,10 @@
               },
               {
                 "const": "review",
+                "type": "string"
+              },
+              {
+                "const": "gate_attempt",
                 "type": "string"
               },
               {
@@ -13433,7 +13533,7 @@
             "type": "integer"
           },
           "x-required-in": [
-            21
+            22
           ]
         },
         {
@@ -13443,11 +13543,11 @@
             "type": "string"
           },
           "x-required-in": [
-            3,
-            18,
+            4,
             19,
             20,
-            21
+            21,
+            22
           ]
         },
         {
@@ -13457,11 +13557,11 @@
             "type": "string"
           },
           "x-required-in": [
-            4,
             5,
             6,
             7,
-            8
+            8,
+            9
           ]
         },
         {
@@ -13471,8 +13571,8 @@
             "type": "string"
           },
           "x-required-in": [
-            35,
-            36
+            36,
+            37
           ]
         },
         {
@@ -13503,7 +13603,7 @@
             ]
           },
           "x-required-in": [
-            33
+            34
           ]
         },
         {
@@ -13515,7 +13615,8 @@
           "x-required-in": [
             2,
             3,
-            9
+            4,
+            10
           ]
         },
         {
@@ -13544,8 +13645,8 @@
             ]
           },
           "x-required-in": [
-            32,
-            34
+            33,
+            35
           ]
         },
         {
@@ -13555,7 +13656,7 @@
             "type": "string"
           },
           "x-required-in": [
-            11
+            12
           ]
         },
         {
@@ -13569,7 +13670,7 @@
             "type": "integer"
           },
           "x-required-in": [
-            34
+            35
           ]
         }
       ],

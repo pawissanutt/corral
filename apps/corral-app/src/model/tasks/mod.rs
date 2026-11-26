@@ -17,7 +17,7 @@ use corral_types::{Priority, Status, TaskDifficulty};
 use crate::model::daemon::{Feed, Link, Task};
 use crate::model::list::{Column, Section};
 use crate::model::next::{NextStep, next_step};
-use crate::model::pipeline::{PipelineStep, pipeline, row_phrase};
+use crate::model::pipeline::{PipelineStep, observed_pipeline, row_phrase};
 use crate::model::projects::Scope;
 use crate::model::status::{OPEN, folds, status_look, status_word};
 use crate::model::{Id, TaskTab, work};
@@ -353,7 +353,7 @@ fn line_of(task: &Task, feed: &Feed) -> TaskLine {
         rank: priority_word(task.task().priority),
         parent: task.parent().map(str::to_owned),
         now: row_phrase(task, feed),
-        pipeline: pipeline(task),
+        pipeline: observed_pipeline(task, feed),
         project: task.project().map(str::to_owned),
         profile: profile_of(task),
         size: task.task().size.clone(),

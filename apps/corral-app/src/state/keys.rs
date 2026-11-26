@@ -265,7 +265,7 @@ impl AppState {
         on_key_with("mod+k", anywhere, move |_| self.toggle_palette());
         on_key_with(AGENTS_CHORD, anywhere, move |_| self.toggle_agents());
         on_key_with("escape", anywhere, move |_| {
-            if self.on_impact_view() {
+            if self.on_impact_view() || self.gate_open.with_untracked(Option::is_some) {
                 self.close_newest();
             }
         });
@@ -525,6 +525,7 @@ impl AppState {
     /// New build sheet, the Remove sheet or the action composer is up.
     pub(super) fn sheet_open(&self) -> bool {
         self.confirm.with(Option::is_some)
+            || self.gate_open.with(Option::is_some)
             || self.switcher.get()
             || self.refusal.with(Option::is_some)
             || self.agents.with(|state| {

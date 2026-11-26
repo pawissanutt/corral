@@ -12,6 +12,9 @@ use crate::{
     testing::FakeRunner,
 };
 
+#[cfg(unix)]
+#[path = "gate_attempts_tests.rs"]
+mod gate_attempts_tests;
 #[path = "review_verdict_tests.rs"]
 mod review_verdict_tests;
 

@@ -44,30 +44,91 @@ pub(super) fn read(engine: &Engine, query: DetailGet) -> Result<DetailReply> {
             None,
         );
     }
+    // The runner's state can change outside SQLite. Don't pin a snapshot across
+    // liveness probes: the engine may need to re-read a newly committed result.
+    if let DetailRef::GateAttempt {
+        task,
+        attempt,
+        before,
+    } = &query.target
+    {
+        ensure!(
+            query.page.is_none(),
+            "invalid: gate output uses the before offset"
+        );
+        let seq = engine.store.latest_seq()?;
+        let page = engine
+            .gate_attempt_page(task, attempt, *before)?
+            .ok_or(NotFound("gate attempt not found"))?;
+        let etag = fingerprint(&(&query.target, &page))?;
+        return reply(&query, seq, etag, DetailBody::GateAttempt(page), None);
+    }
+    if matches!(
+        &query.target,
+        DetailRef::Task { .. } | DetailRef::Plan { .. }
+    ) {
+        let (seq, mut model) = engine
+            .store
+            .read_snapshot(|| Ok((engine.store.latest_seq()?, body(engine, &query.target)?)))?;
+        let stable = fingerprint(&(&query.target, &model))?;
+        let attempts = match &mut model {
+            DetailBody::Task(model) => {
+                model.gate_attempt = engine.latest_gate_attempt(&model.task.id)?;
+                model.gate_attempt.iter().collect::<Vec<_>>()
+            }
+            DetailBody::Plan(model) => {
+                if let Some(rows) = &mut model.child_rows {
+                    rows::observe_gate_attempts(engine, rows)?;
+                }
+                model
+                    .child_rows
+                    .iter()
+                    .flatten()
+                    .filter_map(|row| row.gate_attempt.as_ref())
+                    .collect()
+            }
+            _ => Vec::new(),
+        };
+        // A heartbeat or log write must not invalidate an in-progress task/plan page walk.
+        // Conditional live readers use the dedicated GateAttempt detail's full observation.
+        let lifecycle: Vec<_> = attempts
+            .iter()
+            .map(|a| (&a.id, a.state, a.finished))
+            .collect();
+        let etag = fingerprint(&(stable, lifecycle))?;
+        return paginate_reply(&query, seq, etag, model);
+    }
     engine.store.read_snapshot(|| {
         let seq = engine.store.latest_seq()?;
         match &query.target {
-            DetailRef::Artifact { reference } => {
-                return citation::artifact(engine, &query, seq, reference);
-            }
+            DetailRef::Artifact { reference } => citation::artifact(engine, &query, seq, reference),
             DetailRef::Artifacts { filter, narrowing } => {
-                return artifacts(engine, &query, seq, filter.as_deref(), narrowing.as_ref());
+                artifacts(engine, &query, seq, filter.as_deref(), narrowing.as_ref())
             }
-            DetailRef::ReviewFile { task, path } => {
-                return review::file(engine, &query, seq, task, path);
-            }
-            DetailRef::Closed { before } => return closed(engine, &query, seq, before.as_deref()),
-            _ => {}
+            DetailRef::ReviewFile { task, path } => review::file(engine, &query, seq, task, path),
+            DetailRef::Closed { before } => closed(engine, &query, seq, before.as_deref()),
+            _ => paged_reply(&query, seq, body(engine, &query.target)?),
         }
-        let mut body = body(engine, &query.target)?;
-        let etag = fingerprint(&(&query.target, &body))?;
-        if query.page.is_none() && query.etag.as_ref() == Some(&etag) {
-            return reply(&query, seq, etag, body, None);
-        }
-        let offset = offset(query.page.as_deref(), &etag)?;
-        let next = paginate(&mut body, offset)?.map(|next| format!("{etag}:{next}"));
-        reply(&query, seq, etag, body, next)
     })
+}
+
+fn paged_reply(query: &DetailGet, seq: u64, body: DetailBody) -> Result<DetailReply> {
+    let etag = fingerprint(&(&query.target, &body))?;
+    paginate_reply(query, seq, etag, body)
+}
+
+fn paginate_reply(
+    query: &DetailGet,
+    seq: u64,
+    etag: String,
+    mut body: DetailBody,
+) -> Result<DetailReply> {
+    if query.page.is_none() && query.etag.as_ref() == Some(&etag) {
+        return reply(query, seq, etag, body, None);
+    }
+    let offset = offset(query.page.as_deref(), &etag)?;
+    let next = paginate(&mut body, offset)?.map(|next| format!("{etag}:{next}"));
+    reply(query, seq, etag, body, next)
 }
 
 fn body(engine: &Engine, target: &DetailRef) -> Result<DetailBody> {
@@ -84,6 +145,7 @@ fn body(engine: &Engine, target: &DetailRef) -> Result<DetailBody> {
             events.reverse();
             DetailBody::Task(TaskDetail {
                 pending_review_verdict: engine.pending_review_verdict(&task)?,
+                gate_attempt: None,
                 task,
                 runs: store.list_runs(id)?,
                 checks: store.list_checks(id)?,

@@ -10,6 +10,7 @@ pub mod agents;
 pub mod artifacts;
 pub mod assistant;
 pub(crate) mod cites;
+pub(crate) mod gate;
 pub mod home;
 pub mod host;
 pub mod landing;

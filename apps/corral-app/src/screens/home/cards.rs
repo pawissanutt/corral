@@ -8,7 +8,7 @@ use nsh_core::prelude::*;
 
 use crate::model::home::{self, Card, Decision};
 use crate::model::list;
-use crate::model::pipeline::pipeline;
+use crate::model::pipeline::observed_pipeline;
 use crate::model::projects::Scope;
 use crate::model::work::{self, Press, ReplyBox};
 use crate::model::{Form, Id};
@@ -375,7 +375,13 @@ fn task_decision(app: AppState, id: Id, facts: Memo<Option<Card>>) -> AnyElement
     };
     let pipeline_row = {
         let key = id.clone();
-        let steps = computed(move || app.feed.with(|feed| feed.board.task(&key).map(pipeline)));
+        let steps = computed(move || {
+            app.feed.with(|feed| {
+                feed.board
+                    .task(&key)
+                    .map(|task| observed_pipeline(task, feed))
+            })
+        });
         dynamic(move || {
             let shown = steps.get();
             let said = facts.with(|card| card.as_ref().map(|card| card.facts.clone()));

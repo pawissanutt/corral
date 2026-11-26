@@ -1,6 +1,7 @@
 //! Etag-aware, bounded app details. Page tokens are opaque and selector-bound.
 use corral_types::{
-    SystemAt, SystemData, SystemLens, SystemLenses, SystemMap, SystemReview, SystemRuntime, UsageBy,
+    GateAttemptPage, SystemAt, SystemData, SystemLens, SystemLenses, SystemMap, SystemReview,
+    SystemRuntime, UsageBy,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -38,6 +39,14 @@ pub enum DetailRef {
     },
     Review {
         task: String,
+    },
+    /// `gate-attempt.v1`: latest log bytes, or a page ending at the given byte offset.
+    /// Use the returned `start` as `before` to read older output, not `DetailGet.page`.
+    GateAttempt {
+        task: String,
+        attempt: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        before: Option<u64>,
     },
     ReviewFile {
         task: String,
@@ -258,6 +267,7 @@ pub enum DetailBody {
     Task(TaskDetail),
     Plan(PlanDetail),
     Review(ReviewDetail),
+    GateAttempt(#[schemars(with = "crate::schema_types::GateAttemptPage")] GateAttemptPage),
     ReviewFile(PatchPage),
     SystemMap(#[schemars(with = "crate::schema_types::SystemMap")] SystemMap),
     SystemRuntime(#[schemars(with = "crate::schema_types::SystemRuntime")] SystemRuntime),
@@ -317,6 +327,29 @@ pub struct PatchPage {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn gate_attempt_can_request_tail_without_before() {
+        let selector = json!({"kind": "gate_attempt", "task": "T-4", "attempt": "gate-id"});
+        let tail = DetailRef::GateAttempt {
+            task: "T-4".into(),
+            attempt: "gate-id".into(),
+            before: None,
+        };
+        assert_eq!(
+            serde_json::from_value::<DetailRef>(selector.clone()).unwrap(),
+            tail
+        );
+        assert_eq!(serde_json::to_value(&tail).unwrap(), selector);
+
+        // A byte cursor above the u32 range is still a valid selector.
+        let mut older = selector;
+        older["before"] = json!(u64::from(u32::MAX) + 1);
+        assert!(
+            matches!(serde_json::from_value::<DetailRef>(older).unwrap(),
+            DetailRef::GateAttempt { before: Some(offset), .. } if offset == u64::from(u32::MAX) + 1)
+        );
+    }
 
     #[test]
     fn unknown_detail_body_is_skipped() {

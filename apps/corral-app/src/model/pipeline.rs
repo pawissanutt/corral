@@ -2,10 +2,11 @@
 //! says it, and the plain phrase a row shows ("gate passed · review round 1 of 2"). Both read
 //! the served row and the rail `daemon_board` derives from it; nothing here is guessed.
 
-use corral_types::{CheckResult, Status};
+use corral_types::{CheckResult, GateAttemptState, Status};
 
 use crate::model::board::Mark;
-use crate::model::daemon::{Feed, Task};
+use crate::model::daemon::{Feed, Link, Task};
+use crate::model::gate::{self, GateOpen};
 use crate::model::status::{Stage, status_word};
 
 /// The stages' names, in order.
@@ -20,6 +21,8 @@ pub struct PipelineStep {
     /// What the mark stands for, as its hint and as the inspector spells it; empty where the
     /// stage is not part of where the task is.
     pub sentence: String,
+    /// The Gate view this stage opens: only the gate, and only once corrald reports an attempt.
+    pub open: Option<GateOpen>,
 }
 
 impl PipelineStep {
@@ -74,12 +77,18 @@ pub fn pipeline(task: &Task) -> [PipelineStep; 4] {
         ),
         (Some(run), Mark::Fail | Mark::Done) => (Stage::Ok, format!("worker {} finished", run.id)),
     };
-    let gate = match task.rail[1].mark {
-        Mark::Done => (Stage::Ok, on("passed", sha(1))),
-        Mark::Fail => (Stage::Fail, on("failed", sha(1))),
-        Mark::Active => (Stage::Now, "running".to_owned()),
-        Mark::Next | Mark::Na | Mark::Stale => (Stage::None, String::new()),
-    };
+    // Only an observed attempt says the gate runs; a check of the candidate speaks for the
+    // finished gate, and an attempt without one for how it ended.
+    let attempt = gate::current(row);
+    let gate = attempt.map_or_else(
+        || match task.rail[1].mark {
+            Mark::Done => (Stage::Ok, on("passed", sha(1))),
+            Mark::Fail => (Stage::Fail, on("failed", sha(1))),
+            Mark::Next if in_review => (Stage::Wait, "no gate result yet".to_owned()),
+            Mark::Active | Mark::Next | Mark::Na | Mark::Stale => (Stage::None, String::new()),
+        },
+        gate::stage,
+    );
     let review = match task.rail[2].mark {
         Mark::Done => (Stage::Ok, format!("approved in {}", round(task))),
         Mark::Fail => (Stage::Fail, format!("changes requested in {}", round(task))),
@@ -100,8 +109,19 @@ pub fn pipeline(task: &Task) -> [PipelineStep; 4] {
         name: STAGES[at],
         stage,
         sentence,
+        open: (at == 1).then(|| gate::open_of(row)).flatten(),
     };
     [step(0, run), step(1, gate), step(2, review), step(3, land)]
+}
+
+/// On a disconnected board the last live observation cannot claim a runner is still alive.
+pub fn observed_pipeline(task: &Task, feed: &Feed) -> [PipelineStep; 4] {
+    let mut steps = pipeline(task);
+    if feed.link != Link::Up && task.gate_attempt().is_some_and(gate::live) {
+        steps[1].stage = Stage::Stale;
+        steps[1].sentence = "runner liveness unknown offline".to_owned();
+    }
+    steps
 }
 
 /// What is happening to the task, as one plain phrase from its own facts; empty where the
@@ -122,21 +142,45 @@ pub fn phrase(task: &Task, feed: &Feed) -> String {
                     None => "ready to land".to_owned(),
                 });
             }
-            match gate.stage {
-                Stage::Ok => parts.push("gate passed".to_owned()),
-                Stage::Fail => parts.push("gate failed".to_owned()),
-                Stage::Now => parts.push("gate running".to_owned()),
-                _ => {}
+            if let Some(live) = task
+                .gate_attempt()
+                .and_then(|attempt| gate::phrase(attempt, feed))
+            {
+                parts.push(live);
+            } else {
+                match gate.stage {
+                    Stage::Ok => parts.push("gate passed".to_owned()),
+                    Stage::Fail => parts.push(
+                        match task.gate_attempt().map(|attempt| attempt.state) {
+                            Some(GateAttemptState::Interrupted) => "gate interrupted",
+                            Some(GateAttemptState::Error) => "gate could not run",
+                            _ => "gate failed",
+                        }
+                        .to_owned(),
+                    ),
+                    Stage::Wait => parts.push("no gate result yet".to_owned()),
+                    _ => {}
+                }
             }
             if matches!(review.stage, Stage::Ok | Stage::Fail | Stage::Now) {
                 parts.push(format!("review {}", review.sentence));
             }
             parts.join(" · ")
         }
-        Status::Running => match &row.run {
-            Some(run) => format!("worker {} · {}", run.id, run.profile),
-            None => "no worker session".to_owned(),
-        },
+        Status::Running => {
+            let worker = match &row.run {
+                Some(run) => format!("worker {} · {}", run.id, run.profile),
+                None => "no worker session".to_owned(),
+            };
+            // An explicit gate on a running task is reported as its runner reports it.
+            match task
+                .gate_attempt()
+                .and_then(|attempt| gate::phrase(attempt, feed))
+            {
+                Some(live) => format!("{worker} · {live}"),
+                None => worker,
+            }
+        }
         Status::Ready => row
             .dependencies
             .iter()
@@ -222,7 +266,7 @@ mod tests {
     fn a_review_phrase_names_the_gate_and_the_round_it_is_in() {
         let feed = Feed::default();
         let waiting = review_task(false, None, None);
-        assert_eq!(phrase(&waiting, &feed), "gate running");
+        assert_eq!(phrase(&waiting, &feed), "no gate result yet");
         assert_eq!(pipeline(&waiting)[2].stage, Stage::Wait);
         let reviewing = review_task(false, Some(CheckResult::Pass), None);
         assert_eq!(
@@ -237,6 +281,40 @@ mod tests {
         let stages: Vec<Stage> = pipeline(&ready).iter().map(|step| step.stage).collect();
         assert_eq!(stages, [Stage::None, Stage::Ok, Stage::Ok, Stage::You]);
         assert_eq!(pipeline(&ready)[1].sentence, "passed on c0ffee1");
+    }
+
+    /// The Review rail showed the gate running from the task's status alone, with no runner
+    /// behind it; and a runner that vanished stayed "running" or read as a pass.
+    #[test]
+    fn only_an_observed_attempt_runs_the_gate_and_an_interrupted_one_does_not_pass() {
+        let mut feed = Feed {
+            link: crate::model::daemon::Link::Up,
+            ..Feed::default()
+        };
+        let waiting = review_task(false, None, None);
+        assert_eq!(pipeline(&waiting)[1].stage, Stage::Wait);
+        assert!(pipeline(&waiting)[1].open.is_none());
+        let observed = |state| {
+            let mut row = review_task(false, None, None).row;
+            row.gate_attempt = Some(crate::model::gate::tests::attempt(state));
+            Task::new(row)
+        };
+        let running = observed(GateAttemptState::Running);
+        let [_, gate, _, _] = pipeline(&running);
+        assert_eq!(gate.stage, Stage::Now);
+        assert_eq!(
+            gate.open.as_ref().map(|open| open.attempt.as_str()),
+            running.gate_attempt().map(|attempt| attempt.id.as_str())
+        );
+        assert_eq!(phrase(&running, &feed), "gate running · step 2 of 5");
+        let stale = observed(GateAttemptState::Stale);
+        assert_eq!(pipeline(&stale)[1].stage, Stage::Stale);
+        let interrupted = observed(GateAttemptState::Interrupted);
+        assert_eq!(pipeline(&interrupted)[1].stage, Stage::Fail);
+        assert_eq!(interrupted.rail[1].mark, Mark::Fail);
+        assert_eq!(phrase(&interrupted, &feed), "gate interrupted");
+        feed.link = crate::model::daemon::Link::Down;
+        assert_eq!(phrase(&running, &feed), "gate liveness unknown offline");
     }
 
     /// A stage that is not part of where the task is must not read as pending work.

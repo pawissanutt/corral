@@ -8,7 +8,7 @@ mod remove;
 mod rewind;
 mod session;
 mod start;
-mod transcript;
+pub(crate) mod transcript;
 pub(crate) use transcript::watch as watch_transcript;
 
 pub(crate) use remove::sheet as remove_sheet;

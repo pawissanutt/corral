@@ -290,6 +290,15 @@ Send/Cancel use Act authority; raw Keys use Admin plus fresh device-bound proof.
 Input never queues offline. Daemon-hosted assistants have no raw terminal; a gate's
 terminal remains its recorded log.
 
+`gate-attempt.v1` adds the latest attempt to task rows and details. Manual gates,
+review-pipeline gates and landing rechecks all register a separate attempt tied to the
+worker run, commit and round. The Gate view reads a bounded tail using `detail.get`
+with a task and its attempt ID; older windows use byte offsets, not filesystem paths.
+The runner updates a heartbeat even when the log is quiet. A stale heartbeat is not
+proof of exit: if the daemon observes the runner's lease released with no result, the
+attempt is interrupted. Heartbeats and output do not enter the board event history.
+After a check commits, its retained artifact serves subsequent reads of that attempt.
+
 See [the app guide](../../apps/corral-app/README.md#live-data) for enrolment and recovery.
 
 

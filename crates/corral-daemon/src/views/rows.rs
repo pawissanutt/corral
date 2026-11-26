@@ -17,7 +17,7 @@ use corral_protocol::{
     rows::*,
     subscription::{BoardCursor, Topic},
 };
-use corral_types::SystemRow;
+use corral_types::{GateAttemptState, SystemRow};
 use serde::Serialize;
 
 use crate::state::Shared;
@@ -127,6 +127,7 @@ pub(crate) struct RowCache {
 struct Observation {
     revision: u64,
     at: Instant,
+    poll_task_attempts: bool,
     result: std::result::Result<Arc<Rows>, String>,
 }
 
@@ -162,31 +163,39 @@ impl RowCache {
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         let revision = shared.revision();
-        let refresh = slot.as_ref().is_none_or(|old| {
+        let previous = slot.as_ref();
+        let old = previous.and_then(|old| old.result.as_ref().ok());
+        let due = previous.is_some_and(|old| old.at.elapsed() >= EXTERNAL_POLL);
+        let refresh = previous.is_none_or(|old| {
             let poll = matches!(
                 topic,
                 Topic::Agents | Topic::Projects | Topic::Settings | Topic::Assistant
             ) || old.result.is_err();
-            old.revision != revision || (poll && old.at.elapsed() >= EXTERNAL_POLL)
+            old.revision != revision || (due && poll)
         });
-        if refresh {
+        let update = if refresh {
+            Some(read(shared, topic, builds).map(|new| match old {
+                Some(old) if **old == new => Arc::clone(old),
+                _ => Arc::new(new),
+            }))
+        } else if due
+            && previous.is_some_and(|old| old.poll_task_attempts)
+            && let Some(old) = old
+            && let Rows::Tasks(rows) = old.as_ref()
+        {
+            Some(poll_task_attempts(shared, old, rows))
+        } else {
+            None
+        };
+        if let Some(result) = update {
             // Stamp the generation from before reading. A publish during the
             // read stays visible on the next access; never mark its data as read.
-            let result = read(shared, topic, builds)
-                .map(|new| {
-                    if let Some(Ok(old)) = slot.as_ref().map(|old| &old.result)
-                        && **old == new
-                    {
-                        Arc::clone(old)
-                    } else {
-                        Arc::new(new)
-                    }
-                })
-                .map_err(|error| format!("{error:#}"));
             *slot = Some(Observation {
                 revision,
                 at: Instant::now(),
-                result,
+                // No per-task scan on routine client flushes when no gate is active.
+                poll_task_attempts: matches!(result.as_deref(), Ok(Rows::Tasks(rows)) if rows.iter().any(poll_attempt)),
+                result: result.map_err(|error| format!("{error:#}")),
             });
         }
         match &slot.as_ref().context("row observation unavailable")?.result {
@@ -220,9 +229,11 @@ fn read(shared: &Shared, topic: Topic, builds: bool) -> Result<Rows> {
     }
     let engine = shared.engine()?;
     match topic {
-        Topic::Tasks => engine
-            .store
-            .read_snapshot(|| Ok(Rows::Tasks(tasks(&engine)?))),
+        Topic::Tasks => {
+            let mut rows = engine.store.read_snapshot(|| tasks(&engine))?;
+            observe_gate_attempts(&engine, &mut rows)?;
+            Ok(Rows::Tasks(rows))
+        }
         Topic::Plans => engine
             .store
             .read_snapshot(|| Ok(Rows::Plans(plans(&engine)?))),
@@ -341,6 +352,36 @@ fn object(value: &impl Serialize) -> Result<serde_json::Map<String, serde_json::
     }
 }
 
+// Judge runner liveness outside the board's SQLite snapshot so the engine can
+// see a final result committed while it probes the active runner's lock.
+pub(super) fn observe_gate_attempts(engine: &Engine, rows: &mut [TaskRow]) -> Result<()> {
+    for row in rows {
+        row.gate_attempt = engine.latest_gate_attempt(&row.task.id)?;
+    }
+    Ok(())
+}
+
+fn poll_attempt(row: &TaskRow) -> bool {
+    row.gate_attempt.as_ref().is_some_and(|attempt| {
+        matches!(
+            attempt.state,
+            GateAttemptState::Running | GateAttemptState::Stale
+        )
+    })
+}
+
+fn poll_task_attempts(shared: &Shared, old: &Arc<Rows>, rows: &[TaskRow]) -> Result<Arc<Rows>> {
+    let engine = shared.engine()?;
+    let mut updated = None;
+    for (index, row) in rows.iter().enumerate().filter(|(_, row)| poll_attempt(row)) {
+        let attempt = engine.latest_gate_attempt(&row.task.id)?;
+        if attempt != row.gate_attempt {
+            updated.get_or_insert_with(|| rows.to_vec())[index].gate_attempt = attempt;
+        }
+    }
+    Ok(updated.map_or_else(|| Arc::clone(old), |rows| Arc::new(Rows::Tasks(rows))))
+}
+
 fn tasks(engine: &Engine) -> Result<Vec<TaskRow>> {
     task_rows(
         engine,
@@ -406,6 +447,7 @@ pub(super) fn task_rows(engine: &Engine, tasks: Vec<Task>) -> Result<Vec<TaskRow
                 task,
                 run,
                 gate,
+                gate_attempt: None,
                 review,
                 ready,
                 max_rounds: Some(max_rounds),

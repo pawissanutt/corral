@@ -53,6 +53,9 @@ impl Store {
         connection
             .execute_batch("CREATE INDEX IF NOT EXISTS events_task_kind ON events(task,kind,seq)")
             .context("index task events by kind")?;
+        connection
+            .execute_batch(crate::gate_attempts::SCHEMA)
+            .context("initialize gate attempt table")?;
         let store = Self { connection };
         crate::artifacts::prepare_catalog(&store)?;
         Ok(store)
@@ -555,7 +558,7 @@ impl Store {
         documents(&mut statement, [task])
     }
 
-    fn optional_document<T: DeserializeOwned>(
+    pub(crate) fn optional_document<T: DeserializeOwned>(
         &self,
         sql: &str,
         params: impl rusqlite::Params,

@@ -127,6 +127,8 @@ pub enum Stage {
     You,
     /// Its turn has not come.
     Wait,
+    /// Said to run, but its runner has not been heard from: neither running nor ended.
+    Stale,
     /// Not part of where the task is.
     None,
 }
@@ -137,6 +139,7 @@ impl Stage {
         match self {
             Self::Ok => "passed",
             Self::Now | Self::Working => "running",
+            Self::Stale => "stale",
             Self::Fail => "failed",
             Self::You => "waits on you",
             Self::Wait => "not yet",
@@ -215,6 +218,7 @@ pub const fn stage_look(stage: Stage) -> Look {
         Stage::Fail => look(Shape::Cross, '✗', Hue::Fail, false),
         Stage::You => look(Shape::Solid, '▲', Hue::You, false),
         Stage::Wait => look(Shape::Ring, '○', Hue::Neutral, true),
+        Stage::Stale => look(Shape::Dashed, '◌', Hue::Held, false),
         Stage::None => look(Shape::Dot, '·', Hue::Neutral, true),
     }
 }

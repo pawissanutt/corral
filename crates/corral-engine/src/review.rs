@@ -1,11 +1,6 @@
-use std::{
-    fmt::Write as _,
-    fs::{self, File},
-    io::Write,
-    process::{Command, Stdio},
-};
+use std::fmt::Write as _;
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result};
 use jiff::Timestamp;
 use serde_json::json;
 
@@ -15,7 +10,6 @@ use crate::{
     artifacts::{ArtifactOwner, ArtifactTarget},
     as_refusal,
     checkout::Checkout,
-    config::EffectiveProject,
     dispatch::{LaunchRequest, PendingLaunch},
     events::EventKind,
     pipeline::{GATE_FAILED, OperationFailure, PIPELINE_FAILED},
@@ -172,92 +166,6 @@ impl Engine {
         })?;
         self.kick_pipeline(id)?;
         Ok(check)
-    }
-
-    pub(crate) fn run_gate(
-        &self,
-        run: &Run,
-        round: u32,
-        project: Option<&EffectiveProject>,
-        actor: Actor,
-        effects_started: &mut bool,
-    ) -> Result<Check> {
-        self.require_worktree(run)?;
-        let head = corral_git::rev_sha(&run.worktree, "HEAD").context("read gate HEAD")?;
-        let prefix = head.get(..8).context("gate HEAD is not a commit SHA")?;
-        *effects_started = true;
-        let directory = self.state_dir.join("runs").join(&run.task);
-        fs::create_dir_all(&directory).context("create gate log directory")?;
-        let log_path = directory.join(format!("gate-{prefix}.log"));
-        let mut log = File::create(&log_path)
-            .with_context(|| format!("create gate log {}", log_path.display()))?;
-        let mut notes = None;
-        if let Some(project) = project {
-            for line in &project.gate {
-                writeln!(log, "$ {line}").context("write gate command to log")?;
-                let status = Command::new("sh")
-                    .args(["-c", line])
-                    .current_dir(&run.worktree)
-                    .envs(&project.env)
-                    .stdin(Stdio::null())
-                    .stdout(log.try_clone().context("clone gate stdout log")?)
-                    .stderr(log.try_clone().context("clone gate stderr log")?)
-                    .status()
-                    .with_context(|| format!("run gate line {line:?}"))?;
-                if !status.success() {
-                    writeln!(log, "\n{status}").context("write gate failure to log")?;
-                    notes = Some(line.clone());
-                    break;
-                }
-            }
-        }
-        drop(log);
-        ensure!(
-            corral_git::rev_sha(&run.worktree, "HEAD").context("read HEAD after gate")? == head,
-            "HEAD changed while gate was running; run corral gate {} again",
-            run.task
-        );
-        self.store.transaction(|store| {
-            let artifact = self.add_artifact_file_in(
-                store,
-                ArtifactTarget {
-                    owner: ArtifactOwner::Task(&run.task),
-                    run: Some(&run.id),
-                    actor,
-                    replaces: None,
-                },
-                &log_path,
-                ArtifactKind::Gate,
-                None,
-                None,
-            )?;
-            let check = Check {
-                task: run.task.clone(),
-                kind: CheckKind::Gate,
-                key: head,
-                result: if notes.is_none() {
-                    CheckResult::Pass
-                } else {
-                    CheckResult::Fail
-                },
-                notes,
-                log: Some(artifact.reference()),
-                by: actor,
-                at: Timestamp::now(),
-                round: Some(round),
-                run: Some(run.id.clone()),
-            };
-            store.insert_check(&check)?;
-            self.event(
-                store,
-                Some(&run.task),
-                Some(&run.id),
-                EventKind::Gate,
-                actor,
-                serde_json::to_value(&check).context("encode gate event")?,
-            )?;
-            Ok(check)
-        })
     }
 
     pub fn review(&self, id: &str, profile: Option<&str>) -> Result<Run> {

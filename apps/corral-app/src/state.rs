@@ -95,6 +95,8 @@ pub struct AppState {
     pub confirm: Signal<Option<crate::model::act::Confirming>>,
     /// The engine's last refusal and its next steps, until one is pressed or it is closed.
     pub refusal: Signal<Option<RefusalSheet>>,
+    /// The read-only Gate overlay, pinned to the selected attempt even if a retry starts.
+    pub gate_open: Signal<Option<crate::model::gate::GateOpen>>,
     /// The real context "Ask about this" attached to the composer; cleared when Ask closes.
     pub ask_context: Signal<Option<ContextRef>>,
     dock_ui: dock::DockUi,
@@ -300,6 +302,7 @@ impl AppState {
             task_columns: signal(task_columns::load()),
             confirm: signal(None),
             refusal: signal(None),
+            gate_open: signal(None),
             ask_context: signal(None),
             dock_ui: dock::DockUi::new(),
             scopes: signal(projects::load_scopes()),
@@ -515,6 +518,10 @@ impl AppState {
             self.close_agents();
             return;
         }
+        if self.gate_open.with_untracked(Option::is_some) {
+            self.gate_open.set(None);
+            return;
+        }
         if self.work.with_untracked(|state| state.menu.is_some()) {
             self.work.update(|state| state.menu = None);
             return;
@@ -580,6 +587,7 @@ impl AppState {
                 .update(|revision| *revision = revision.wrapping_add(1));
             self.close(Overlay::Ask);
             self.switcher.set(false);
+            self.gate_open.set(None);
             self.hotkey.set(false);
             self.share.set(false);
             self.lock.set(false);

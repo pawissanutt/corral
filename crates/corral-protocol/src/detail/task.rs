@@ -1,5 +1,5 @@
 //! Task detail over the engine's stored facts.
-use corral_types::{Artifact, Check, Event, PendingReviewVerdict, Run, Task};
+use corral_types::{Artifact, Check, Event, GateAttempt, PendingReviewVerdict, Run, Task};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -18,4 +18,7 @@ pub struct TaskDetail {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "Option<crate::schema_types::PendingReviewVerdict>")]
     pub pending_review_verdict: Option<PendingReviewVerdict>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<crate::schema_types::GateAttempt>")]
+    pub gate_attempt: Option<GateAttempt>,
 }

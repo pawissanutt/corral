@@ -159,6 +159,18 @@ pub fn pipeline_marks(app: AppState, steps: &[PipelineStep; 4]) -> AnyElement {
     let form = app.form;
     let marks = steps.iter().map(|step| {
         let mark = look_mark(app, stage_look(step.stage), step.spoken());
+        let mark = if let Some(open) = step.open.clone() {
+            view()
+                .test_id(&format!("gate-mark-{}", open.task))
+                .role(AccessibilityRole::Button)
+                .label(step.spoken())
+                .cursor_pointer()
+                .on_press(move || app.gate_open.set(Some(open.clone())))
+                .child(mark)
+                .into_element()
+        } else {
+            mark
+        };
         hinted(app, mark, step.spoken())
     });
     let row = view().flex_row().items_center().flex_shrink_0();
@@ -207,11 +219,18 @@ pub fn pipeline_rows(app: AppState, steps: &[PipelineStep; 4]) -> AnyElement {
             } else {
                 Token::Ink
             }));
-            let row = view()
+            let mut row = view()
                 .flex_row()
                 .items_start()
                 .accessible(true)
                 .label(step.spoken());
+            if let Some(open) = step.open.clone() {
+                row = row
+                    .test_id(&format!("gate-stage-{}", open.task))
+                    .role(AccessibilityRole::Button)
+                    .cursor_pointer()
+                    .on_press(move || app.gate_open.set(Some(open.clone())));
+            }
             let mark = look_mark(app, stage_look(step.stage), step.stage.word());
             match form {
                 Form::Terminal => row

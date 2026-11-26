@@ -28,6 +28,8 @@ shared! {
     Check: "object",
     ConfigProblem: "object",
     Event: "object",
+    GateAttempt: "object",
+    GateAttemptPage: "object",
     Op: ["string", "object"],
     PendingReviewVerdict: "object",
     #[cfg(test)]

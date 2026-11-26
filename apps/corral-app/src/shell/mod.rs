@@ -193,6 +193,14 @@ pub fn refusal(app: AppState) -> AnyElement {
     )
 }
 
+/// The same read-only attempt view regardless of which task control opened it.
+pub fn gate(app: AppState) -> AnyElement {
+    dynamic(move || {
+        let open = app.gate_open.get()?;
+        Some(untracked(|| crate::screens::gate::overlay(app, open)))
+    })
+}
+
 fn refusal_modal(app: AppState) -> Modal {
     let (title, reason, buttons) = app
         .refusal

@@ -28,6 +28,7 @@ fn task(feed: &mut Feed, id: &str, project: &str) {
     let target = DetailRef::Task { id: id.into() };
     let detail = TaskDetail {
         pending_review_verdict: None,
+        gate_attempt: None,
         task: Task {
             id: id.into(),
             title: format!("Task {id}"),

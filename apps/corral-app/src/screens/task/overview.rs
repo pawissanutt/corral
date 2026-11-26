@@ -79,7 +79,7 @@ pub(crate) fn overview(app: AppState, id: Id) -> AnyElement {
                 .child(description)
                 .child(children)
                 .child(depends)
-                .children((form != Form::Phone).then(|| pipeline(app, id)))
+                .child(pipeline(app, id))
                 .child(checks)
                 .child(runs)
                 .child(artifacts)

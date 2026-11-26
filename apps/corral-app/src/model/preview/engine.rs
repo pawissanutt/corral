@@ -200,6 +200,7 @@ fn new(feed: &mut Feed, task: &NewTask) -> Applied {
     let now = ago(feed, 0);
     let rec = TaskDetail {
         pending_review_verdict: None,
+        gate_attempt: None,
         task: Task {
             id: id.clone(),
             title: task.title.clone(),

@@ -37,6 +37,8 @@ pub const SYSTEM_DATA_V1: &str = "system.data.v1";
 /// Resolve task-text citations without their content (`DetailRef::Citation`).
 pub const CITATIONS_V1: &str = "citations.v1";
 pub const REVIEW_V1: &str = "review.v1";
+/// Live gate-attempt projections and bounded log reads through `detail.get`.
+pub const GATE_ATTEMPT_V1: &str = "gate-attempt.v1";
 pub const TIMELINE_V1: &str = "timeline.v1";
 pub const USAGE_V1: &str = "usage.v1";
 pub const AUTOMATION_V1: &str = "automation.v1";

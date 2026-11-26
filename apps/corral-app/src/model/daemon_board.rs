@@ -109,8 +109,14 @@ impl Task {
         match self.status() {
             Status::Review if self.row.ready => "ready to land".into(),
             Status::Review => match (&self.row.gate, &self.row.review) {
+                _ if self.gate_attempt().is_some_and(|attempt| {
+                    attempt.state == corral_types::GateAttemptState::Running
+                }) =>
+                {
+                    "gate running".into()
+                }
                 (Some(gate), _) if gate.result == CheckResult::Fail => "gate failed".into(),
-                (None, _) => "gate running".into(),
+                (None, _) => "no gate result yet".into(),
                 (Some(_), None) => "in review".into(),
                 (Some(_), Some(_)) => "reviewed".into(),
             },
@@ -120,6 +126,11 @@ impl Task {
             },
             status => status.as_str().into(),
         }
+    }
+
+    /// The gate attempt the row stands for (`gate::current`).
+    pub fn gate_attempt(&self) -> Option<&corral_types::GateAttempt> {
+        crate::model::gate::current(&self.row)
     }
 
     /// Unix seconds of the task's last change.
@@ -169,6 +180,12 @@ fn rail(row: &TaskRow) -> [Step; 4] {
         .gate
         .as_ref()
         .is_some_and(|gate| gate.result == CheckResult::Pass);
+    // A retry can have no result (even after an interruption) while its SHA still has a
+    // result from a prior attempt. Show the observed attempt rather than that older result.
+    let gate = crate::model::gate::current(row).map_or_else(
+        || checked(row.gate.as_ref(), false),
+        crate::model::gate::mark,
+    );
     let land = match status {
         Status::Done => Mark::Done,
         Status::Dropped => Mark::Na,
@@ -184,7 +201,7 @@ fn rail(row: &TaskRow) -> [Step; 4] {
                 .map(|sha| sha.chars().take(7).collect()),
             at: row.run.as_ref().and_then(|run| seconds(run.started)),
         },
-        step(checked(row.gate.as_ref(), in_review), row.gate.as_ref()),
+        step(gate, row.gate.as_ref()),
         step(
             checked(row.review.as_ref(), in_review && gate_passed),
             row.review.as_ref(),
