@@ -489,6 +489,25 @@ itself. No client stitches the two.
   item of a message the stream has put, and decorates that item until its result arrives
   in a `put`.
 
+A `put` is bounded like a history page: items are previews with continuation tokens. A
+record too large for one operation is put with only its last items, and `before` then
+resumes inside that record, exactly as a history page that splits a record does; the
+earlier items page in as older history under the same message id.
+
+corrald pairs the host's live words with journal records by order. Within a turn the
+`n`th assistant message the host streams is the `n`th assistant record the journal gains
+after the turn started; words for a message the journal already holds are not shown
+again. When corrald joins a turn it did not see start (its first read, or a gap in the
+host's ring), the host says where the turn is: the `live_since` reply to a reader with a
+gap carries `open: { turn, message, ended, text_offset, text, thinking_offset, thinking }`
+while a turn is open. `message` is the ordinal of the latest assistant message (0 before
+the first) and `ended` whether it has finished, so corrald knows which ordinals the
+journal already has or will have without their words. While it is being written, `text`
+and `thinking` are the tails of what was written, at those byte offsets, cut on character
+boundaries so the serialized `open` stays within 24 KiB. A host that sends no `open` on a
+gap (an older one) has its words left out until its next turn starts; its records still
+arrive.
+
 Operations share the page's byte budget with its events. A subscriber's operations are a
 bounded backlog beside the buffered events; one that falls behind it is sent `reset` and
 the current tail again, never a hole. Acknowledging a page acknowledges its operations.
