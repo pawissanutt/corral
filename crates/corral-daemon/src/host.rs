@@ -142,6 +142,9 @@ pub(crate) struct Sampler {
 
 struct Inner {
     latest: Arc<Rows>,
+    /// The snapshot without readings, built once: idle cleanup must not read the host
+    /// (hostname, cgroup CPU limits) under the lock.
+    blank: Arc<Rows>,
     /// The newest readings and when they were taken; `None` before the first and when idle.
     newest: Option<(HostMetrics, Instant)>,
     /// The whole seconds of age `latest` carries; 0 while sampling keeps pace.
@@ -153,9 +156,11 @@ struct Inner {
 
 impl Default for Sampler {
     fn default() -> Self {
+        let blank = Arc::new(Rows::Host(vec![empty(None)]));
         Self {
             inner: Mutex::new(Inner {
-                latest: Arc::new(Rows::Host(vec![empty(None)])),
+                latest: Arc::clone(&blank),
+                blank,
                 newest: None,
                 served_age: 0,
                 demand: Instant::now(),
@@ -243,7 +248,7 @@ impl Sampler {
 
 impl Inner {
     fn clear(&mut self) {
-        self.latest = Arc::new(Rows::Host(vec![empty(None)]));
+        self.latest = Arc::clone(&self.blank);
         self.newest = None;
         self.served_age = 0;
     }

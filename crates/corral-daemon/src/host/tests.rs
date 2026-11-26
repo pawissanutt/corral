@@ -114,6 +114,7 @@ fn a_stalled_reading_is_served_with_its_age_not_as_current() {
     let taken = Instant::now();
     let mut inner = Inner {
         latest: Arc::new(Rows::Host(Vec::new())),
+        blank: Arc::new(Rows::Host(Vec::new())),
         newest: None,
         served_age: 0,
         demand: taken,

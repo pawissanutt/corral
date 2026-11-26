@@ -130,14 +130,23 @@ fn a_new_subscriber_counts_age_from_corrald_not_from_receipt() {
     let mut row = feed(samples).daemon_host.unwrap();
     row.age_ms = 8_000;
     receive(&mut joined, row);
-    let expected = Standing::Stale { age_secs: Some(8) };
-    assert_eq!(view(&watching).standing, expected);
-    assert_eq!(view(&joined).standing, expected);
+    assert_eq!(
+        view(&watching).standing,
+        Standing::Stale { age_secs: Some(8) }
+    );
+    let joined_age = |feed: &Feed| match view(feed).standing {
+        Standing::Stale {
+            age_secs: Some(age),
+        } => age,
+        other => panic!("{other:?}"),
+    };
+    assert!(joined_age(&joined) >= 8);
     // The same reading served again on time does not make it fresh.
+    let before = joined_age(&joined);
     let mut again = joined.daemon_host.clone().unwrap();
     again.age_ms = 0;
     receive(&mut joined, again);
-    assert_eq!(view(&joined).standing, expected);
+    assert_eq!(joined_age(&joined), before);
 }
 
 #[test]
@@ -163,4 +172,26 @@ fn the_terminal_line_wraps_whole_figures_and_says_it_is_host_wide() {
         all.contains("4.0G/16G") && all.contains("40G used 60G free"),
         "{all}"
     );
+}
+
+#[test]
+fn a_late_reading_never_looks_fresher_to_a_client_that_just_joined() {
+    // A watcher took the reading at 999.9 by corrald's clock; at 1006 it is stale.
+    let samples = vec![
+        sample(998, Some(5.0), Some(1)),
+        sample(1000, Some(6.0), Some(1)),
+    ];
+    let mut watching = feed(samples.clone());
+    watching.daemon_host_at = Some(999);
+    watching.now = 1_006;
+    // A client joining at 1006 receives the shared page aged 5.1 s a moment earlier.
+    let mut joined = feed(Vec::new());
+    joined.daemon_host = None;
+    joined.daemon_host_at = None;
+    joined.now = 1_006;
+    let mut row = feed(samples).daemon_host.unwrap();
+    row.age_ms = 5_100;
+    receive(&mut joined, row);
+    assert!(view(&watching).stale());
+    assert!(view(&joined).stale(), "{:?}", view(&joined).standing);
 }

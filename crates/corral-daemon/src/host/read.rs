@@ -203,19 +203,28 @@ impl Probe {
     }
 
     pub(super) fn filesystem(&self) -> Option<HostFilesystem> {
-        let device = || rustix::fs::stat(&self.root).ok().map(|stat| stat.st_dev);
-        let before = device();
-        let stat = rustix::fs::statvfs(&self.root).ok()?;
-        // Resolved with every measurement, and only when the same device was measured
-        // throughout: a mount made meanwhile must not lend its label to other figures.
-        let mount = before.filter(|dev| device() == Some(*dev)).and_then(|dev| {
-            let info = std::fs::read_to_string("/proc/self/mountinfo").ok()?;
-            mount_of(
-                &info,
-                &self.root,
-                (rustix::fs::major(dev), rustix::fs::minor(dev)),
-            )
-        });
+        use rustix::fs::{Mode, OFlags};
+        // One open directory for the device and the capacity, so both describe the same
+        // filesystem even if a mount changes what the path names meanwhile.
+        let dir = rustix::fs::open(
+            &self.root,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .ok()?;
+        let dev = rustix::fs::fstat(&dir).ok()?.st_dev;
+        let stat = rustix::fs::fstatvfs(&dir).ok()?;
+        // Resolved with every measurement; the mount now over the path labels the figures only
+        // when it is the measured device.
+        let mount = std::fs::read_to_string("/proc/self/mountinfo")
+            .ok()
+            .and_then(|info| {
+                mount_of(
+                    &info,
+                    &self.root,
+                    (rustix::fs::major(dev), rustix::fs::minor(dev)),
+                )
+            });
         let block = stat.f_frsize;
         let total = stat.f_blocks.checked_mul(block)?;
         let used = stat

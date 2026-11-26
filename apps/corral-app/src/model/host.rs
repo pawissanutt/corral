@@ -324,7 +324,16 @@ pub fn figure(kind: Kind, value: f64) -> String {
 /// so a page that arrives late, or a new subscriber's first, never makes it current.
 pub fn receive(feed: &mut Feed, row: HostMetrics) {
     let newest = |m: &HostMetrics| m.samples.last().map(|s| s.at_ms);
-    let taken = feed.now.saturating_sub(row.age_ms.div_ceil(1000));
+    // A late reading's age is rounded toward stale: corrald re-ages its shared page once a
+    // second and this clock counts whole seconds, so either may lag by up to a second.
+    // Rounding the other way could let a client that just joined call Live what a client
+    // watching all along already calls Stale.
+    let lag = if row.age_ms == 0 {
+        0
+    } else {
+        row.age_ms.div_ceil(1000) + 1
+    };
+    let taken = feed.now.saturating_sub(lag);
     let advanced = feed.daemon_host.as_ref().map(newest) != Some(newest(&row));
     feed.daemon_host_at = Some(match feed.daemon_host_at {
         // The same reading again can only have grown older.
@@ -364,8 +373,9 @@ pub fn compact(view: &HostView) -> String {
 /// fit, so no figure is cut off.
 pub fn compact_lines(view: &HostView, cells: usize) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
-    let label = format!("{LINE_LABEL} ({HOST_WIDE})");
-    for part in std::iter::once(label).chain(segments(view)) {
+    // The label in two whole parts, so a narrow pane wraps it rather than cutting it.
+    let label = [LINE_LABEL.to_owned(), format!("({HOST_WIDE})")];
+    for part in label.into_iter().chain(segments(view)) {
         match lines.last_mut() {
             Some(line) if line.chars().count() + 3 + part.chars().count() <= cells => {
                 line.push_str(" · ");

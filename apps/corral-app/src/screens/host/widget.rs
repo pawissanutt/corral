@@ -288,9 +288,14 @@ pub fn line(app: AppState) -> AnyElement {
             .into_element()
     });
     let spoken = computed(move || {
-        SharedString::from(
-            shown.with(|v| format!("{LINE_LABEL}: {}. {}", host::compact(v), v.status)),
-        )
+        SharedString::from(shown.with(|v| {
+            format!(
+                "{LINE_LABEL}, {}: {}. {}",
+                host::HOST_WIDE,
+                host::compact(v),
+                v.status
+            )
+        }))
     });
     view()
         .test_id("home-host")
