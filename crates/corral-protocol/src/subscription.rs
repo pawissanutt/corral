@@ -380,6 +380,8 @@ pub enum SessionLiveToolState {
 /// client. Applied in order to the messages the client holds, the operations give the
 /// transcript's current branch up to the present, the message being written included, so
 /// such a client never reads `detail.get { session }` again to follow a turn.
+// A page holds a few operations for a moment; a box per message would buy nothing.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum TranscriptOp {

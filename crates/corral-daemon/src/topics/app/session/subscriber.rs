@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     sync::{Arc, Mutex},
 };
 
@@ -16,6 +16,7 @@ use super::{
     SESSION_SUBSCRIPTIONS,
     buffer::{Buffer, Entry, Watches},
     lock,
+    transcript_buffer::SizedOp,
 };
 use crate::{state::Shared, topics::notification, wake::Waker};
 
@@ -114,9 +115,10 @@ impl SessionTopics {
         conn: &mut dyn crate::conn::Conn,
         fleet: bool,
         state: bool,
+        transcript: bool,
     ) -> Result<()> {
         for subscriber in self.subscribers.values_mut() {
-            if let Some(frame) = subscriber.next(shared.epoch(), fleet, state)? {
+            if let Some(frame) = subscriber.next(shared.epoch(), fleet, state, transcript)? {
                 conn.send_frame(&frame)
                     .context("pushing session live page")?;
             }
@@ -177,6 +179,10 @@ pub(super) fn subscribe(
         serial: 0,
         in_flight: None,
         state_version: None,
+        transcript_revision: None,
+        operation: 0,
+        snapshot: VecDeque::new(),
+        prefer_transcript: false,
     })
 }
 
@@ -189,6 +195,10 @@ pub(super) struct Subscriber {
     serial: u64,
     in_flight: Option<BoardCursor>,
     state_version: Option<u64>,
+    transcript_revision: Option<u64>,
+    operation: u64,
+    snapshot: VecDeque<SizedOp>,
+    prefer_transcript: bool,
 }
 
 impl Subscriber {
@@ -206,6 +216,7 @@ impl Subscriber {
         epoch: u64,
         include_fleet: bool,
         include_state: bool,
+        include_transcript: bool,
     ) -> Result<Option<Frame>> {
         if !include_state {
             self.state_version = None;
@@ -251,7 +262,23 @@ impl Subscriber {
             });
         }
         let initial_fleet = include_fleet && self.version.is_none() && buffer.fleet.is_some();
-        let state = if include_state
+        let stream = &buffer.transcript;
+        let floor = stream.next - stream.operations.len() as u64;
+        let mut transcript = Vec::new();
+        let mut transcript_more = false;
+        if include_transcript
+            && stream.revision != 0
+            && (changed
+                || self.transcript_revision != Some(stream.revision)
+                || self.operation < floor)
+        {
+            self.transcript_revision = Some(stream.revision);
+            self.operation = stream.next;
+            self.snapshot = stream.snapshot();
+        }
+        let pending =
+            include_transcript && (!self.snapshot.is_empty() || self.operation < stream.next);
+        let mut state = if include_state
             && (gap.is_some() || self.state_version != Some(buffer.state_version))
         {
             buffer.state.as_ref()
@@ -261,6 +288,7 @@ impl Subscriber {
         if !initial_fleet
             && !send_empty_quick
             && state.is_none()
+            && !pending
             && gap.is_none()
             && buffer
                 .events
@@ -269,13 +297,54 @@ impl Subscriber {
         {
             return Ok(None);
         }
-        let fleet = include_fleet.then_some(buffer.fleet.as_ref()).flatten();
+        let mut fleet = include_fleet.then_some(buffer.fleet.as_ref()).flatten();
         let mut used = fleet.map_or(0, |(_, bytes)| *bytes) + state.map_or(0, |(_, bytes)| *bytes);
+        let mut transcript_only = false;
+        if pending {
+            let mut backlog = stream
+                .operations
+                .iter()
+                .skip(self.operation.saturating_sub(floor) as usize)
+                .peekable();
+            while let Some((op, bytes)) = self.snapshot.front().or_else(|| backlog.peek().copied())
+            {
+                if used + *bytes > SESSION_PAGE_BYTES {
+                    if !transcript.is_empty() {
+                        break;
+                    }
+                    let has_live_page = initial_fleet
+                        || state.is_some()
+                        || gap.is_some()
+                        || buffer
+                            .events
+                            .back()
+                            .is_some_and(|(event, _)| event.seq > start);
+                    if has_live_page && !self.prefer_transcript {
+                        self.prefer_transcript = true;
+                        break;
+                    }
+                    // Send a transcript-only page so large fleet/state replacements and
+                    // operations cannot starve one another. Leave host events unconsumed.
+                    transcript_only = true;
+                    fleet = None;
+                    state = None;
+                    used = 0;
+                }
+                used += *bytes;
+                transcript.push(op.clone());
+                self.prefer_transcript = false;
+                if self.snapshot.pop_front().is_none() {
+                    backlog.next();
+                    self.operation += 1;
+                }
+            }
+            transcript_more = !self.snapshot.is_empty() || self.operation < stream.next;
+        }
         let mut seq = start;
         let events: Vec<_> = buffer
             .events
             .iter()
-            .filter(|(event, _)| event.seq > start)
+            .filter(|(event, _)| !transcript_only && event.seq > start)
             .take(SESSION_PAGE_EVENTS)
             .take_while(|(_, bytes)| {
                 used += *bytes + 1;
@@ -284,6 +353,9 @@ impl Subscriber {
             .filter_map(|(event, _)| {
                 seq = event.seq;
                 let visible = match event.kind {
+                    SessionLiveKind::LiveText { .. } | SessionLiveKind::LiveThinking { .. } => {
+                        !include_transcript
+                    }
                     SessionLiveKind::LiveFleet {} => include_fleet,
                     SessionLiveKind::LiveState {}
                     | SessionLiveKind::LivePart { .. }
@@ -294,7 +366,13 @@ impl Subscriber {
                 visible.then(|| event.clone())
             })
             .collect();
-        if seq == start && !send_empty_quick && gap.is_none() && !initial_fleet && state.is_none() {
+        if seq == start
+            && !send_empty_quick
+            && gap.is_none()
+            && !initial_fleet
+            && state.is_none()
+            && transcript.is_empty()
+        {
             return Ok(None);
         }
         let version = buffer.version;
@@ -302,11 +380,23 @@ impl Subscriber {
         let next = buffer.next;
         let source_more = buffer.more;
         let fleet = fleet.map(|(fleet, _)| fleet.clone());
-        let state_version = buffer
-            .state
-            .as_ref()
-            .filter(|_| include_state)
-            .map(|_| buffer.state_version);
+        let state_pending = transcript_only
+            && include_state
+            && buffer.state.is_some()
+            && (gap.is_some() || self.state_version != Some(buffer.state_version));
+        let state_version = if transcript_only {
+            if gap.is_some() {
+                None
+            } else {
+                self.state_version
+            }
+        } else {
+            buffer
+                .state
+                .as_ref()
+                .filter(|_| include_state)
+                .map(|_| buffer.state_version)
+        };
         let state = state.map(|(state, _)| Box::new(state.clone()));
         drop(buffer);
         self.serial = self
@@ -325,9 +415,9 @@ impl Subscriber {
                 generation,
                 events,
                 cursor: cursor.clone(),
-                more: seq < next || source_more,
+                more: seq < next || source_more || transcript_more || state_pending,
                 gap,
-                transcript: Vec::new(),
+                transcript,
                 fleet,
                 state,
             },

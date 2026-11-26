@@ -26,6 +26,7 @@ pub(super) struct Watches {
 }
 
 pub(super) struct Buffer {
+    pub(super) transcript: super::transcript_buffer::TranscriptBuffer,
     pub(super) users: usize,
     pub(super) ready: bool,
     pub(super) version: u64,
@@ -47,6 +48,7 @@ pub(super) struct Buffer {
 impl Buffer {
     pub(super) fn new(revisions: Arc<AtomicU64>) -> Self {
         Self {
+            transcript: Default::default(),
             users: 0,
             ready: false,
             version: 0,
@@ -61,6 +63,16 @@ impl Buffer {
             state: None,
             state_version: 0,
             wakers: Vec::new(),
+        }
+    }
+
+    pub(super) fn publish_transcript(
+        &mut self,
+        ops: Vec<corral_protocol::subscription::TranscriptOp>,
+    ) {
+        if !ops.is_empty() {
+            self.transcript.publish(ops);
+            self.wake();
         }
     }
 

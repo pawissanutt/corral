@@ -11,8 +11,12 @@ use corral_protocol::app::APP_CONTROL_MAX;
 use crate::state::Shared;
 
 mod buffer;
+mod follower;
+#[cfg(test)]
+mod follower_tests;
 mod reader;
 mod subscriber;
+mod transcript_buffer;
 
 use buffer::Watches;
 use reader::{Sources, pass};

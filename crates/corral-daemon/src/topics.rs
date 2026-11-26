@@ -23,6 +23,7 @@ pub(crate) struct Subscriptions<'a> {
     pub(crate) model_discovery: crate::config::pi_hosted_tool_models::Pending,
     session_fleet: bool,
     session_state: bool,
+    session_transcript: bool,
     build_rows: bool,
     system: bool,
     host: bool,
@@ -39,6 +40,7 @@ impl<'a> Subscriptions<'a> {
             model_discovery: Default::default(),
             session_fleet: false,
             session_state: false,
+            session_transcript: false,
             build_rows: false,
             system: false,
             host: false,
@@ -48,6 +50,9 @@ impl<'a> Subscriptions<'a> {
 
     pub(crate) fn set_capabilities(&mut self, caps: &[String]) {
         self.session_fleet = caps.iter().any(|cap| cap == wire::app::SESSION_FLEET_V1);
+        self.session_transcript = caps
+            .iter()
+            .any(|cap| cap == wire::app::SESSION_TRANSCRIPT_V1);
         self.session_state = caps.iter().any(|cap| cap == wire::app::SESSION_STATE_V1);
         self.build_rows = caps.iter().any(|cap| cap == wire::app::BUILD_V1);
         self.system = caps.iter().any(|cap| cap == wire::app::SYSTEM_V1);
@@ -175,8 +180,13 @@ impl<'a> Subscriptions<'a> {
             }
         }
         self.terminals.flush(self.shared, conn)?;
-        self.sessions
-            .flush(self.shared, conn, self.session_fleet, self.session_state)
+        self.sessions.flush(
+            self.shared,
+            conn,
+            self.session_fleet,
+            self.session_state,
+            self.session_transcript,
+        )
     }
 }
 

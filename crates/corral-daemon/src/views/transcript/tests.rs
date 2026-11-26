@@ -322,3 +322,6 @@ fn transcript_symlink_is_refused() -> Result<()> {
     assert!(page(ID, &link, None, None).is_err());
     Ok(())
 }
+
+#[path = "cursor_tests.rs"]
+mod cursor_tests;

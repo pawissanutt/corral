@@ -1,3 +1,5 @@
+use super::follower::{Follower, HostOpen};
+use corral_protocol::subscription::TranscriptOp;
 use std::{
     collections::{BTreeMap, HashSet},
     path::{Path, PathBuf},
@@ -72,6 +74,8 @@ impl RingPage {
 pub(super) struct HostPage {
     #[serde(flatten)]
     ring: RingPage,
+    #[serde(default)]
+    open: Option<HostOpen>,
     events: Vec<HostEvent>,
     more: bool,
     fleet: Option<SessionFleet>,
@@ -90,6 +94,7 @@ pub(super) struct LivePage {
     pub(super) generation: Option<u32>,
     pub(super) events: Vec<(SessionLiveEvent, usize)>,
     pub(super) next: u64,
+    pub(super) host_tail: u64,
     pub(super) more: bool,
     pub(super) gap: Option<SessionLiveGap>,
     pub(super) fleet: Option<(SessionFleet, usize)>,
@@ -98,6 +103,12 @@ pub(super) struct LivePage {
 
 pub(super) struct LiveReader {
     socket: Option<PathBuf>,
+    journal: Option<PathBuf>,
+    resolved_journal: Option<PathBuf>,
+    journal_id: String,
+    follower: Follower,
+    operations: Vec<TranscriptOp>,
+    open: Option<HostOpen>,
     pub(super) cursors: Cursors,
     // On loss, keep the observed cursors for restart detection, but ask for
     // retained events and the current fleet when the host comes back.
@@ -109,6 +120,12 @@ impl Default for LiveReader {
     fn default() -> Self {
         Self {
             socket: None,
+            journal: None,
+            resolved_journal: None,
+            journal_id: String::new(),
+            follower: Follower::default(),
+            operations: Vec::new(),
+            open: None,
             cursors: Cursors::default(),
             replay: false,
             generation: 1,
@@ -118,7 +135,57 @@ impl Default for LiveReader {
 
 impl LiveReader {
     pub(super) fn read(&mut self, shared: &Shared, scope: &str) -> Result<LivePage> {
-        let resolved = crate::sessions::resolve(shared, scope)?;
+        let resolved = match crate::sessions::resolve(shared, scope) {
+            Ok(resolved) => resolved,
+            Err(error) => {
+                if let Some(path) = &self.journal {
+                    self.operations = self
+                        .follower
+                        .visit(&self.journal_id, path, None, None, None);
+                }
+                return Err(error);
+            }
+        };
+        let old_socket = self.socket.clone();
+        let old_generation = self.generation;
+        let replay = self.replay;
+        let page = self.read_resolved(&resolved);
+        if self.socket != old_socket
+            || old_generation != self.generation
+            || (replay && page.as_ref().is_ok_and(|p| p.generation.is_some()))
+            || self.resolved_journal != resolved.transcript
+            || (self.journal.is_none() && old_socket.is_none())
+            || page
+                .as_ref()
+                .is_ok_and(|p| p.generation.is_some() && p.gap.is_some())
+        {
+            self.journal = if page.as_ref().is_ok_and(|page| page.generation.is_some()) {
+                resolved.transcript_view().0
+            } else {
+                resolved.transcript.clone()
+            };
+        }
+        self.resolved_journal.clone_from(&resolved.transcript);
+        self.journal_id.clone_from(&resolved.id);
+        let path = if page.as_ref().is_ok_and(|page| page.generation.is_some()) {
+            self.journal.as_ref().or(resolved.transcript.as_ref())
+        } else {
+            resolved.transcript.as_ref().or(self.journal.as_ref())
+        };
+        if let Some(path) = path {
+            self.operations = self.follower.visit(
+                &resolved.id,
+                path,
+                resolved.transcript_scope(),
+                page.as_ref().ok(),
+                self.open.take(),
+            );
+        }
+        page
+    }
+
+    fn read_resolved(&mut self, resolved: &crate::sessions::Session) -> Result<LivePage> {
+        self.open = None;
         if resolved.is_empty_quick() {
             if self.socket.take().is_some() {
                 self.generation = self
@@ -132,13 +199,14 @@ impl LiveReader {
                 generation: None,
                 events: Vec::new(),
                 next: 0,
+                host_tail: 0,
                 more: false,
                 gap: None,
                 fleet: None,
                 state: None,
             });
         }
-        let live = self.read_host(&resolved);
+        let live = self.read_host(resolved);
         match live {
             Err(_)
                 if !resolved.unreachable
@@ -146,7 +214,7 @@ impl LiveReader {
                         || !matches!(resolved.session, Some(SessionRef::Pi { .. }))
                         || live.as_ref().is_err_and(crate::builds::disconnected)) =>
             {
-                let Some(fleet) = children::fleet(&resolved) else {
+                let Some(fleet) = children::fleet(resolved) else {
                     return live;
                 };
                 self.replay = true;
@@ -154,6 +222,7 @@ impl LiveReader {
                     generation: None,
                     events: Vec::new(),
                     next: 0,
+                    host_tail: 0,
                     more: false,
                     gap: Some(SessionLiveGap {
                         after: self.cursors.live,
@@ -216,6 +285,7 @@ impl LiveReader {
                 generation: Some(generation),
                 events: Vec::new(),
                 next: 0,
+                host_tail: 0,
                 more: live.ring.last != 0,
                 gap: None,
                 fleet: retained_fleet().map(bound_fleet).transpose()?,
@@ -280,11 +350,13 @@ impl LiveReader {
             live: live.ring.next,
         };
         self.replay = false;
+        self.open = live.open;
         self.generation = generation;
         Ok(LivePage {
             generation: Some(generation),
             events,
             next: live.ring.next,
+            host_tail: live.ring.last,
             more: live.more,
             gap,
             fleet,
@@ -513,6 +585,7 @@ pub(super) fn pass(
             if buffer.users == 0 {
                 continue;
             }
+            buffer.publish_transcript(std::mem::take(&mut source.reader.operations));
             match page {
                 Ok(page) => buffer.publish(page),
                 Err(_) => {

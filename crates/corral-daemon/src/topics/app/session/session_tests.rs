@@ -21,6 +21,8 @@ use std::sync::Arc;
 
 #[path = "pace_tests.rs"]
 mod pace;
+#[path = "transcript_subscriber_tests.rs"]
+mod transcript_subscriber;
 
 fn service() -> Arc<Watches> {
     Arc::default()
@@ -58,6 +60,7 @@ fn page(generation: u32, start: u64, end: u64, text: bool) -> LivePage {
             })
             .collect(),
         next: end,
+        host_tail: end,
         more: false,
         gap: None,
         fleet: None,
@@ -66,7 +69,7 @@ fn page(generation: u32, start: u64, end: u64, text: bool) -> LivePage {
 }
 
 fn delta(subscriber: &mut Subscriber) -> SubDelta {
-    let frame = subscriber.next(7, false, false).unwrap().unwrap();
+    let frame = subscriber.next(7, false, false, false).unwrap().unwrap();
     assert!(frame.payload.len() <= APP_CONTROL_MAX);
     let notification: rpc::Notification<SubDelta> = serde_json::from_slice(&frame.payload).unwrap();
     notification.params
@@ -86,7 +89,7 @@ fn receive(
         panic!("wrong live topic")
     };
     assert!(
-        subscriber.next(7, false, false).unwrap().is_none(),
+        subscriber.next(7, false, false, false).unwrap().is_none(),
         "second page escaped before ack"
     );
     subscriber.ack(cursor.clone()).unwrap();
@@ -186,7 +189,7 @@ fn slow_subscriber_gets_gap_instead_of_unbounded_buffer() {
             assert!(buffer.bytes <= SESSION_BUFFER_BYTES);
             assert!(buffer.events.front().unwrap().0.seq > 2);
         }
-        assert!(slow.next(7, false, false).unwrap().is_none());
+        assert!(slow.next(7, false, false, false).unwrap().is_none());
         slow.ack(cursor).unwrap();
         let (_, events, gap) = receive(&mut slow);
         assert!(
@@ -410,7 +413,7 @@ fn fleet_replacement(generation: u32, seq: u64, empty: bool) -> LivePage {
 }
 
 fn fleet_wire(subscriber: &mut Subscriber) -> serde_json::Value {
-    let frame = subscriber.next(7, true, false).unwrap().unwrap();
+    let frame = subscriber.next(7, true, false, false).unwrap().unwrap();
     assert!(frame.payload.len() <= APP_CONTROL_MAX);
     let notice: rpc::Notification<serde_json::Value> =
         serde_json::from_slice(&frame.payload).unwrap();
@@ -438,7 +441,7 @@ fn empty_fleet_clears_clients_but_transcript_pages_keep_the_current_projection()
     assert!(cleared.get("fleet").is_none());
     assert_eq!(cleared["events"][0]["kind"], "live_fleet");
     lock(&entry).publish(page(1, 4, 3, false));
-    assert!(subscriber.next(7, true, false).unwrap().is_none());
+    assert!(subscriber.next(7, true, false, false).unwrap().is_none());
 }
 
 #[test]
@@ -471,14 +474,14 @@ fn legacy_hosts_emit_no_fleet_updates_or_spurious_clears() {
     let mut subscriber = subscribe(service, "pm".into(), 7, None).unwrap();
     let entry = Arc::clone(&subscriber.watch.entry);
     lock(&entry).publish(page(1, 1, 0, false));
-    assert!(subscriber.next(7, true, false).unwrap().is_none());
+    assert!(subscriber.next(7, true, false, false).unwrap().is_none());
     lock(&entry).publish(page(1, 1, 1, false));
     let ordinary = fleet_wire(&mut subscriber);
     assert!(ordinary.get("fleet").is_none());
     assert!(ordinary["gap"].is_null());
     assert_eq!(ordinary["events"][0]["kind"], "live_queue");
     lock(&entry).publish(page(1, 2, 1, false));
-    assert!(subscriber.next(7, true, false).unwrap().is_none());
+    assert!(subscriber.next(7, true, false, false).unwrap().is_none());
 }
 
 fn lifecycle(last: u64, next: u64, gap: Option<SessionLiveGap>) -> RingPage {
@@ -609,7 +612,7 @@ fn regression_in_either_host_ring_resets_both_cursors() {
 }
 
 fn state_delta(subscriber: &mut Subscriber) -> SubDelta {
-    let frame = subscriber.next(7, false, true).unwrap().unwrap();
+    let frame = subscriber.next(7, false, true, false).unwrap().unwrap();
     let notification: rpc::Notification<SubDelta> = serde_json::from_slice(&frame.payload).unwrap();
     let SubDelta::Session { cursor, .. } = &notification.params else {
         panic!("wrong topic");
@@ -645,7 +648,7 @@ fn state_is_sent_once_per_change_and_again_after_a_gap() {
         SubDelta::Session { state: Some(state), events, gap: None, .. }
             if *state == first && events.is_empty()
     ));
-    assert!(legacy.next(7, false, false).unwrap().is_none());
+    assert!(legacy.next(7, false, false, false).unwrap().is_none());
 
     let mut duplicate = page(1, 1, 1, false);
     let event = &mut duplicate.events[0];
@@ -677,7 +680,7 @@ fn state_is_sent_once_per_change_and_again_after_a_gap() {
         state_delta(&mut current),
         SubDelta::Session { state: Some(state), events, .. } if state.turn == 2 && events.is_empty()
     ));
-    assert!(current.next(7, false, true).unwrap().is_none());
+    assert!(current.next(7, false, true, false).unwrap().is_none());
 
     let mut reconciling = page(1, 3, 3, false);
     reconciling.gap = Some(gap(1, 3));
@@ -692,7 +695,7 @@ fn state_is_sent_once_per_change_and_again_after_a_gap() {
         panic!("the gap did not resend the cached state");
     };
     assert_eq!(state.turn, 2);
-    assert!(current.next(7, false, true).unwrap().is_none());
+    assert!(current.next(7, false, true, false).unwrap().is_none());
 
     let mut resumed = subscribe(
         watches,
@@ -785,7 +788,7 @@ fn fleet_state_and_one_event_fit_the_control_frame() {
         state: Some(state),
         ..page(1, 2, 1, false)
     });
-    let frame = subscriber.next(7, true, true).unwrap().unwrap();
+    let frame = subscriber.next(7, true, true, false).unwrap().unwrap();
     assert!(frame.payload.len() <= APP_CONTROL_MAX);
     let notification: rpc::Notification<SubDelta> = serde_json::from_slice(&frame.payload).unwrap();
     assert!(matches!(

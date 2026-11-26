@@ -8,7 +8,7 @@ mod session_files;
 mod session_parts;
 mod system;
 mod terminal_screen;
-mod transcript;
+pub(crate) mod transcript;
 
 #[cfg(test)]
 mod board_wire_tests;

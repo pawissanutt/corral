@@ -34,10 +34,7 @@ pub(super) fn detail(
                     result => Some(result?),
                 }
             } else {
-                ensure!(
-                    query.page.is_none(),
-                    "invalid: session has no transcript to page"
-                );
+                ensure!(query.page.is_none(), transcript::StaleTranscriptCursor);
                 None
             };
             let replyable = reply_refusal.is_none();

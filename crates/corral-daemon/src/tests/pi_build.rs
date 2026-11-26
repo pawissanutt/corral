@@ -245,7 +245,7 @@ fn every_page_of_an_unchanged_transcript_carries_the_first_pages_etag_and_an_app
         json!({"kind": "session", "id": id, "page": cursor}),
     );
     assert!(second.next.is_none());
-    assert!(matches!(second.body, Some(DetailBody::Session(page)) if !page.messages.is_empty()));
+    assert!(matches!(&second.body, Some(DetailBody::Session(page)) if !page.messages.is_empty()));
     assert_eq!(first.etag, second.etag);
 
     let conditional = json!({"kind": "session", "id": id, "etag": first.etag});
@@ -263,13 +263,16 @@ fn every_page_of_an_unchanged_transcript_carries_the_first_pages_etag_and_an_app
     assert!(changed.body.is_some());
     assert_ne!(changed.etag, first.etag);
 
-    let stale = owner
-        .call(
-            wire::app::DETAIL_GET,
-            json!({"kind": "session", "id": id, "page": cursor}),
-        )
-        .unwrap_err();
-    assert_eq!(stale.code, rpc::ErrorCode::Conflict);
+    // History a client holds stays pageable while the journal grows.
+    let kept: DetailReply = owner.ok(
+        wire::app::DETAIL_GET,
+        json!({"kind": "session", "id": id, "page": cursor}),
+    );
+    assert!(matches!(
+        (second.body, kept.body),
+        (Some(DetailBody::Session(before)), Some(DetailBody::Session(after)))
+            if before.messages == after.messages
+    ));
     let malformed = owner
         .call(
             wire::app::DETAIL_GET,
