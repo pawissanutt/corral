@@ -15,6 +15,7 @@ pub mod home;
 pub mod host;
 pub mod landing;
 pub(crate) mod markdown;
+mod markdown_links;
 pub(crate) mod mermaid;
 pub mod sessions;
 pub mod settings;

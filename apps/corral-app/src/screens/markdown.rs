@@ -15,6 +15,14 @@ use crate::model::Form;
 use crate::model::artifacts::mermaid;
 use crate::model::cite;
 use crate::screens::cites::{keep_cited, link_blocks};
+use crate::screens::markdown_links::{
+    activate_link, install_link_selection_tracking, link_press_is_selection,
+};
+#[cfg(test)]
+use crate::screens::markdown_links::{
+    clear_selection_gesture, pointer_moved, selection_change_state, selection_changed_now,
+    take_selection_gesture,
+};
 use crate::state::AppState;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color, text_size};
@@ -465,9 +473,13 @@ pub(crate) fn diagram_nodes(blocks: &mut [Block]) {
 /// links open what they cite, its code blocks are the app's (with `diagrams`, a Mermaid fence
 /// is its diagram and other fences keep the text view's highlighted code blocks).
 fn shown(app: AppState, words: TextViewElement, diagrams: bool) -> AnyElement {
+    install_link_selection_tracking();
     let words = words
         .selectable(true)
         .on_link_press(move |press: &TextViewLinkPressEvent| {
+            if link_press_is_selection() {
+                return;
+            }
             activate_link(
                 &press.url,
                 |spelled| app.open_cite(spelled),
@@ -502,20 +514,60 @@ fn shown(app: AppState, words: TextViewElement, diagrams: bool) -> AnyElement {
     }
 }
 
-fn activate_link(url: &str, mut cite: impl FnMut(&str), mut external: impl FnMut(&str)) {
-    if let Some(spelled) = url.strip_prefix(cite::SCHEME) {
-        cite(spelled);
-    } else if url.split_once(':').is_some_and(|(scheme, rest)| {
-        (scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https"))
-            && rest.starts_with("//")
-    }) {
-        external(url);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nsh_engine::{EngineConfig, Root};
+    use nsh_testing::Headless;
+
+    #[component]
+    fn LinkFixture() -> impl IntoElement {
+        let app = AppState::install(Form::Desktop);
+        provide_styles(app);
+        view().child(markdown(
+            app,
+            "[External](https://www.w3.org/TR/scxml/?a=1#x) [Unsafe](javascript:alert(1))",
+            false,
+        ))
+    }
+
+    #[test]
+    fn rendered_external_link_opens_once_and_unsafe_link_does_not() {
+        let mut app = Headless::start(EngineConfig::new(Root::of::<LinkFixture>())).unwrap();
+        app.wait_for("text:External").unwrap();
+        app.press("text:External").unwrap();
+        assert_eq!(
+            app.screen().opened_urls(),
+            ["https://www.w3.org/TR/scxml/?a=1#x"]
+        );
+        app.press("text:Unsafe").unwrap();
+        assert_eq!(
+            app.screen().opened_urls(),
+            ["https://www.w3.org/TR/scxml/?a=1#x"]
+        );
+    }
+
+    #[test]
+    fn selection_gesture_is_exact_and_clears_before_later_activation() {
+        // The pointermove sample retains this collapse even if selectionchange is coalesced.
+        let (collapsed, changed) = selection_change_state(Some(&1), None, false, false);
+        assert!(collapsed && !changed);
+        assert!(!selection_changed_now(Some(&1), None, collapsed));
+        assert!(selection_changed_now(Some(&1), Some(&1), collapsed));
+        let (_, restored) = selection_change_state(Some(&1), Some(&1), collapsed, changed);
+        assert!(restored, "A -> collapsed -> A remains a selection gesture");
+
+        let (_, selected) = selection_change_state(None, Some(&1), false, false);
+        assert!(selected);
+        let (_, moved_selection) = selection_change_state(Some(&1), Some(&2), false, false);
+        assert!(moved_selection);
+        assert!(!selection_changed_now(Some(&1), Some(&1), false));
+        assert!(pointer_moved(0, 0, 1, 0));
+
+        let stale = std::cell::Cell::new(true);
+        clear_selection_gesture(&stale);
+        assert!(!take_selection_gesture(&stale));
+    }
 
     #[test]
     fn link_activation_routes_external_and_internal_separately() {
