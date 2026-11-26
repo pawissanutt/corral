@@ -33,9 +33,11 @@ pub fn parse(source: &str) -> Result<Diagram, String> {
         ));
     }
     let mut lines = statements(source);
-    let Some((_, header)) = lines.next() else {
+    let Some((first, header)) = lines.next() else {
         return Err("it is empty".into());
     };
+    // `flowchart TD; A --> B` puts statements on the header's line.
+    let (header, tail) = header.split_once(';').unwrap_or((header, ""));
     let kind = header
         .split_whitespace()
         .next()
@@ -44,7 +46,7 @@ pub fn parse(source: &str) -> Result<Diagram, String> {
     let mut built = Built::default();
     let diagram = match kind.as_str() {
         "graph" | "flowchart" => {
-            for (number, line) in lines {
+            for (number, line) in std::iter::once((first, tail)).chain(lines) {
                 flow_line(&mut built, line).map_err(|why| at(number, &why))?;
             }
             LensKind::State
@@ -359,7 +361,7 @@ fn arrow(rest: &mut &str) -> Option<String> {
     let mut words = String::new();
     let mut after = &text[end..];
     // Words inside the arrow: `-- words -->`, `== words ==>`, `-. words .->`.
-    if matches!(body, "--" | "==" | "-.") && after.starts_with(char::is_whitespace) {
+    if end == run && matches!(body, "--" | "==" | "-.") && after.starts_with(char::is_whitespace) {
         let ends = ["-->", "---", "==>", "===", ".->", ".-", "--o", "--x"];
         let (at, ending) = ends
             .iter()
@@ -482,7 +484,8 @@ const MESSAGES: &[&str] = &[
 
 fn sequence_line(built: &mut Built, line: &str) -> Result<(), String> {
     for word in ["participant ", "actor "] {
-        if line.len() > word.len() && line[..word.len()].eq_ignore_ascii_case(word) {
+        let head = line.get(..word.len());
+        if line.len() > word.len() && head.is_some_and(|head| head.eq_ignore_ascii_case(word)) {
             let declared = line[word.len()..].trim();
             let (id, words) = match declared.split_once(" as ") {
                 Some((id, words)) => (id.trim(), Some(label(words))),

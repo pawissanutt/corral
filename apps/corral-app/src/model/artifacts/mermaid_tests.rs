@@ -34,6 +34,15 @@ fn a_flowchart_reads_its_shapes_chains_and_arrow_words() {
     );
 }
 
+/// A circle or cross head is an arrow, not the start of its words, and statements may follow
+/// the header on its line.
+#[test]
+fn arrow_heads_and_header_statements_are_read() {
+    let diagram = parse("flowchart TD; A --o B\n  B --x C\n").unwrap();
+    assert_eq!(labels(&diagram.nodes), ["A", "B", "C"]);
+    assert_eq!(diagram.edges.len(), 2);
+}
+
 #[test]
 fn state_and_sequence_diagrams_read_their_ends_and_messages() {
     let states = parse(
@@ -63,6 +72,7 @@ fn unreadable_diagrams_are_errors_not_pictures() {
     assert!(parse("flowchart TD\n  A[open --> B\n").is_err());
     assert!(parse("flowchart TD\n").is_err());
     assert!(parse("sequenceDiagram\n  A says hi\n").is_err());
+    assert!(parse("sequenceDiagram\n  participa\u{e9}\u{e9}\n").is_err());
     let many: String = (0..=MAX_NODES).map(|n| format!("N{n}\n")).collect();
     assert!(parse(&format!("graph TD\n{many}")).is_err());
     assert!(parse(&"x".repeat(MAX_SOURCE + 1)).is_err());
