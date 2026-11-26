@@ -21,8 +21,41 @@ use super::{
 };
 use crate::state::Shared;
 
+mod entity;
+use entity::{Referrer, entity_change, insufficient, referrers_comparable};
+
 /// How far back a pinned head may be on the observed head's first-parent line.
 const HEAD_HISTORY: usize = 10_000;
+/// How many resolved head pins this daemon keeps vouching for.
+const COMPARED_HEADS: usize = 1024;
+
+/// Observed heads this daemon resolved for comparisons. A view keeps its pin after the project's
+/// head moves on, switches branch or is rewritten, without any client-named commit being
+/// accepted as a head. After a restart only the first-parent line of the current head vouches.
+#[derive(Default)]
+pub(crate) struct ComparedHeads(std::sync::Mutex<std::collections::VecDeque<(String, String)>>);
+
+impl ComparedHeads {
+    fn lock(&self) -> std::sync::MutexGuard<'_, std::collections::VecDeque<(String, String)>> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn record(&self, project: &str, commit: &str) {
+        let mut heads = self.lock();
+        if !heads.iter().any(|(p, c)| p == project && c == commit) {
+            heads.push_back((project.to_owned(), commit.to_owned()));
+            while heads.len() > COMPARED_HEADS {
+                heads.pop_front();
+            }
+        }
+    }
+
+    fn holds(&self, project: &str, commit: &str) -> bool {
+        self.lock().iter().any(|(p, c)| p == project && c == commit)
+    }
+}
 
 pub(super) fn compare(
     shared: &Shared,
@@ -123,7 +156,10 @@ fn resolve(
     };
     let (origin, commit) = match target {
         CompareTarget::ObservedHead => match observed() {
-            Ok(head) => (CompareOrigin::ObservedHead, head),
+            Ok(head) => {
+                shared.compared_heads.record(&subject.project, &head);
+                (CompareOrigin::ObservedHead, head)
+            }
             Err(resolution) => return Ok((*resolution, None)),
         },
         CompareTarget::Candidate => match latest_submission(engine, artifact, subject)? {
@@ -139,7 +175,7 @@ fn resolve(
             None => {
                 return Ok((
                     unavailable(
-                        "the commit is not a recorded submission of this task's latest worker run",
+                        "the commit is not a recorded submission of this task's worker runs",
                     ),
                     None,
                 ));
@@ -152,13 +188,14 @@ fn resolve(
             None,
         ));
     };
-    // A pinned head is only ever one the project's head stood at: the current observation or a
-    // recent commit on its first-parent line, never a merged side branch or an arbitrary commit
-    // labelled as the head. A head rewritten past it no longer vouches for it.
+    // A pinned head is only ever one the project's head stood at: one this daemon resolved for a
+    // comparison, else a recent commit on the current head's first-parent line; never a merged
+    // side branch or an arbitrary commit labelled as the head.
     if let CompareTarget::Pinned {
         origin: CompareOrigin::ObservedHead,
         ..
     } = target
+        && !shared.compared_heads.holds(&subject.project, &commit)
     {
         let head = match observed() {
             Ok(head) => head,
@@ -224,7 +261,9 @@ fn latest_submission(
     }))
 }
 
-/// A pinned candidate must still be a recorded submission of the task's latest worker run.
+/// A pinned candidate must be a recorded submission of one of the task's worker runs, the
+/// newest run that submitted it. A later run or submission does not retire it; it only retires
+/// the links that describe the task's current submission.
 fn recorded(
     engine: &Engine,
     artifact: &Artifact,
@@ -234,25 +273,30 @@ fn recorded(
     if engine.store.get_task(&artifact.task)?.is_none() {
         return Ok(None);
     }
-    let Some(run) = engine.store.latest_run(&artifact.task, Role::Worker)? else {
-        return Ok(None);
-    };
-    Ok(engine
-        .store
-        .submitted_revision_at(&artifact.task, &run.id, commit, i64::MAX)?
-        .filter(|submitted| {
-            submitted.sha == commit
-                && submitted
-                    .project
-                    .as_ref()
-                    .is_none_or(|project| project == &subject.project)
-        })
-        .map(|submitted| DiagramCandidate {
-            task: artifact.task.clone(),
-            run: run.id,
-            head: submitted.sha,
-            base: submitted.base_sha,
-        }))
+    let mut runs = engine.store.list_runs(&artifact.task)?;
+    runs.retain(|run| run.role == Role::Worker);
+    runs.sort_by_key(|run| run.id.get(1..).and_then(|n| n.parse::<u64>().ok()));
+    for run in runs.into_iter().rev() {
+        let submitted = engine
+            .store
+            .submitted_revision_at(&artifact.task, &run.id, commit, i64::MAX)?
+            .filter(|submitted| {
+                submitted.sha == commit
+                    && submitted
+                        .project
+                        .as_ref()
+                        .is_none_or(|project| project == &subject.project)
+            });
+        if let Some(submitted) = submitted {
+            return Ok(Some(DiagramCandidate {
+                task: artifact.task.clone(),
+                run: run.id,
+                head: submitted.sha,
+                base: submitted.base_sha,
+            }));
+        }
+    }
+    Ok(None)
 }
 
 /// The candidate's diff and Impact, only while they describe the comparison commit.
@@ -328,17 +372,29 @@ impl Sides<'_> {
             .clone()
     }
 
-    fn renamed(&mut self, path: &str) -> Result<Option<String>, ()> {
+    fn rename_map(&mut self) -> Result<&BTreeMap<String, String>, ()> {
         let Some(base) = self.base else {
             return Err(());
         };
-        let renames = self
-            .renames
-            .get_or_insert_with(|| renames(self.repo, base, self.target).map_err(|_| ()));
-        renames
+        let (repo, target) = (self.repo, self.target);
+        self.renames
+            .get_or_insert_with(|| renames(repo, base, target).map_err(|_| ()))
             .as_ref()
-            .map(|map| map.get(path).cloned())
             .map_err(|_| ())
+    }
+
+    /// Where Git finds the pinned commit's `path` at the target.
+    fn renamed(&mut self, path: &str) -> Result<Option<String>, ()> {
+        Ok(self.rename_map()?.get(path).cloned())
+    }
+
+    /// Which pinned commit's file Git finds became the target's `path`.
+    fn renamed_from(&mut self, path: &str) -> Result<Option<String>, ()> {
+        Ok(self
+            .rename_map()?
+            .iter()
+            .find(|(_, to)| *to == path)
+            .map(|(from, _)| from.clone()))
     }
 }
 
@@ -363,45 +419,52 @@ fn summary(sides: &mut Sides<'_>, recipe: &WorkflowRecipe) -> Vec<ElementSourceC
         .collect()
 }
 
-fn unknown(reason: &str) -> SourceChange {
-    SourceChange::Unknown {
-        reason: reason.into(),
-    }
+/// Where the bound text is read at the target.
+enum At {
+    Read(SourceRequest),
+    /// Proven absent by Git's tree or line diff.
+    Missing(&'static str),
+    /// Not compared: nothing is claimed about the target.
+    Unavailable(String),
+}
+
+fn not_compared(reason: &str) -> (SourceChange, At) {
+    (
+        SourceChange::Unknown {
+            reason: reason.into(),
+        },
+        At::Unavailable(reason.into()),
+    )
 }
 
 /// How the bound text changed, and where to read it at the target.
-fn source_change(
-    sides: &mut Sides<'_>,
-    request: &SourceRequest,
-) -> (SourceChange, Option<SourceRequest>) {
-    let same = Some(request.clone());
+fn source_change(sides: &mut Sides<'_>, request: &SourceRequest) -> (SourceChange, At) {
     if sides.base.is_none() {
-        return (
-            unknown("the pinned commit is not available locally as a Git commit"),
-            same,
-        );
+        return not_compared("the pinned commit is not available locally as a Git commit");
     }
     let (repo, target_commit) = (sides.repo, sides.target.commit().to_owned());
     let path = request.path.as_str();
     let (base_file, target_file) = match (sides.file(false, path), sides.file(true, path)) {
         (Ok(base), Ok(target)) => (base, target),
-        _ => return (unknown("could not read a committed tree"), same),
+        _ => return not_compared("could not read a committed tree"),
     };
     let (base_file, target_file, target_path) = match (base_file, target_file) {
         (None, None) => {
-            return (
-                unknown("the bound file is not a regular committed file at either commit"),
-                same,
-            );
+            return not_compared("the bound file is not a regular committed file at either commit");
         }
-        (None, Some(_)) => return (SourceChange::Added, same),
+        (None, Some(_)) => return (SourceChange::Added, At::Read(request.clone())),
         (Some(base_file), Some(target_file)) => (base_file, target_file, path.to_owned()),
         (Some(base_file), None) => match sides.renamed(path) {
-            Err(()) => return (unknown("Git's rename detection failed"), same),
-            Ok(None) => return (SourceChange::Removed, None),
+            Err(()) => return not_compared("Git's rename detection failed"),
+            Ok(None) => {
+                return (
+                    SourceChange::Removed,
+                    At::Missing("the file is absent at the comparison commit"),
+                );
+            }
             Ok(Some(renamed)) => match sides.file(true, &renamed) {
                 Ok(Some(target_file)) => (base_file, target_file, renamed),
-                _ => return (unknown("the renamed file could not be read"), same),
+                _ => return not_compared("the renamed file could not be read"),
             },
         },
     };
@@ -421,8 +484,15 @@ fn source_change(
                 path: target_path.clone(),
             },
         };
-        return (change, Some(at(None)));
+        return (change, At::Read(at(None)));
     };
+    // The bound lines must exist at the pinned commit before anything is said about them.
+    let Some(before) = sides.text(&base_file) else {
+        return not_compared("the committed source is unreadable as bounded UTF-8 text");
+    };
+    if span.start as usize > before.lines().count() {
+        return not_compared("the bound span is not in the file at the pinned commit");
+    }
     if base_file.blob() == target_file.blob() {
         let change = if renamed {
             SourceChange::Moved {
@@ -432,23 +502,17 @@ fn source_change(
         } else {
             SourceChange::Unchanged
         };
-        return (change, Some(at(Some(span.clone()))));
+        return (change, At::Read(at(Some(span.clone()))));
     }
     let (Some(before), Some(after)) = (sides.text(&base_file), sides.text(&target_file)) else {
-        return (
-            unknown("the committed source is unreadable as bounded UTF-8 text"),
-            same,
-        );
+        return not_compared("the committed source is unreadable as bounded UTF-8 text");
     };
     let before: Vec<&str> = before.lines().collect();
     let after: Vec<&str> = after.lines().collect();
     let first = span.start as usize - 1;
     let last = (span.end as usize).min(before.len());
     if first >= last {
-        return (
-            unknown("the bound span is not in the file at the pinned commit"),
-            same,
-        );
+        return not_compared("the bound span is not in the file at the pinned commit");
     }
     let bound = &before[first..last];
     if after.get(first..last) == Some(bound) {
@@ -460,7 +524,7 @@ fn source_change(
         } else {
             SourceChange::Unchanged
         };
-        return (change, Some(at(Some(span.clone()))));
+        return (change, At::Read(at(Some(span.clone()))));
     }
     let changed = SourceChange::Changed {
         path: target_path.clone(),
@@ -475,7 +539,7 @@ fn source_change(
         last as u64,
     );
     match mapped {
-        Err(_) => (unknown("Git's line diff of the bound file failed"), None),
+        Err(_) => not_compared("Git's line diff of the bound file failed"),
         Ok(Some((start, end))) => {
             let end = end.min(start + 199);
             let place = SourceSpan {
@@ -492,9 +556,9 @@ fn source_change(
                     path: target_path.clone(),
                     first: Some(start),
                 };
-                (moved, Some(at(Some(place))))
+                (moved, At::Read(at(Some(place))))
             } else {
-                (changed, Some(at(Some(place))))
+                (changed, At::Read(at(Some(place))))
             }
         }
         // Every bound line was deleted there: a single exact copy elsewhere is a move; none,
@@ -516,9 +580,14 @@ fn source_change(
                         path: target_path.clone(),
                         first: Some(u64::from(start)),
                     };
-                    (moved, Some(at(Some(place))))
+                    (moved, At::Read(at(Some(place))))
                 }
-                _ => (changed, None),
+                _ => (
+                    changed,
+                    At::Missing(
+                        "Git's line diff deleted the bound lines, and no single identical copy elsewhere is claimed as them",
+                    ),
+                ),
             }
         }
     }
@@ -553,14 +622,12 @@ fn inspect(
                 Some(base) => diagram::read_source(sides.repo, base, request),
                 None => missing_base(),
             };
-            let target = match (&change, at_target) {
-                (SourceChange::Removed, _) => SourceResult::Missing {
-                    reason: "the file is absent at the comparison commit".into(),
+            let target = match at_target {
+                At::Read(at) => diagram::read_source(sides.repo, sides.target, &at),
+                At::Missing(reason) => SourceResult::Missing {
+                    reason: reason.into(),
                 },
-                (_, None) => SourceResult::Missing {
-                    reason: "the bound lines were deleted at the comparison commit".into(),
-                },
-                (_, Some(at)) => diagram::read_source(sides.repo, sides.target, &at),
+                At::Unavailable(reason) => SourceResult::Unavailable { reason },
             };
             (base, target, change)
         }
@@ -594,7 +661,21 @@ fn inspect(
             (base, target)
         }
     };
-    let entity_change = entity_change(&base_entity, &target_entity);
+    let entity_change = match entity_change(&base_entity, &target_entity) {
+        EntityChange::Changed {
+            location,
+            added,
+            removed,
+        } => match comparable_referrers(shared, sides, &subject.project, &removed, &added) {
+            Ok(()) => EntityChange::Changed {
+                location,
+                added,
+                removed,
+            },
+            Err(why) => insufficient(why),
+        },
+        change => change,
+    };
     let mut paths: Vec<&str> = Vec::new();
     if let Some(request) = &source_request
         && !matches!(
@@ -640,6 +721,53 @@ fn inspect(
     }
 }
 
+/// Each added or removed reference's file, as the System facts at either commit read it.
+fn comparable_referrers(
+    shared: &Shared,
+    sides: &mut Sides<'_>,
+    project: &str,
+    removed: &[DiagramRelated],
+    added: &[DiagramRelated],
+) -> Result<(), String> {
+    let commits = [
+        sides.base.map(|rev| rev.commit().to_owned()),
+        Some(sides.target.commit().to_owned()),
+    ];
+    let facts = commits.map(|commit| {
+        let commit = commit?;
+        shared
+            .system
+            .diagram_at(shared, project, &commit)
+            .ok()
+            .filter(|snapshot| snapshot.head.as_deref() == Some(commit.as_str()))
+            .and_then(|snapshot| snapshot.facts)
+    });
+    let sides = std::cell::RefCell::new(sides);
+    referrers_comparable(
+        removed,
+        added,
+        |target, path| match sides.borrow_mut().file(target, path) {
+            Err(()) => None,
+            Ok(None) => Some(Referrer::Absent),
+            Ok(Some(_)) => {
+                facts[usize::from(target)]
+                    .as_ref()
+                    .map(|facts| match facts.file(path) {
+                        Some(file) if file.read_status == ReadStatus::Complete => Referrer::Read,
+                        _ => Referrer::Unread,
+                    })
+            }
+        },
+        |target, path| {
+            if target {
+                sides.borrow_mut().renamed(path)
+            } else {
+                sides.borrow_mut().renamed_from(path)
+            }
+        },
+    )
+}
+
 /// An entity binding at its renamed file, when Git found the file renamed at the target.
 fn renamed_entity(sides: &mut Sides<'_>, request: &EntityRequest) -> EntityRequest {
     let path = match request {
@@ -657,132 +785,4 @@ fn renamed_entity(sides: &mut Sides<'_>, request: &EntityRequest) -> EntityReque
         };
     }
     request.clone()
-}
-
-fn insufficient(reason: impl Into<String>) -> EntityChange {
-    EntityChange::Insufficient {
-        reason: reason.into(),
-    }
-}
-
-/// A relationship delta is claimed only when both sides resolved, read the file completely with
-/// the same basis, and listed every row they know.
-/// The facts basis an entity was read on: the provider, whether it failed, and what it provides.
-fn basis(evidence: &EntityEvidence) -> Option<(String, bool, Vec<String>, Vec<String>)> {
-    evidence.provider.as_ref().map(|provider| {
-        let mut provided = provider.coverage.provided.clone();
-        let mut not_provided = provider.coverage.not_provided.clone();
-        provided.sort();
-        not_provided.sort();
-        (
-            provider.extension.clone(),
-            provider.error.is_some(),
-            provided,
-            not_provided,
-        )
-    })
-}
-
-/// Built-in coverage and any provider's own skips, omissions and dropped files all count: a row
-/// missing from either side must not read as a removal.
-fn complete(evidence: &EntityEvidence, omitted: usize) -> bool {
-    evidence.read_status == ReadStatus::Complete
-        && !evidence.provider_pending
-        && evidence.coverage.failed == 0
-        && evidence.coverage.skipped_non_utf8_paths == 0
-        && omitted == 0
-        && evidence.provider.as_ref().is_none_or(|provider| {
-            provider.error.is_none()
-                && provider.coverage.dropped_unknown_files == 0
-                && provider
-                    .coverage
-                    .skipped
-                    .values()
-                    .chain(provider.coverage.omitted.values())
-                    .all(|&total| total == 0)
-        })
-}
-
-pub(super) fn entity_change(base: &EntityResult, target: &EntityResult) -> EntityChange {
-    use EntityResult as E;
-    match (base, target) {
-        (E::NotProvided, _) => EntityChange::NotProvided,
-        (E::Pending, _) | (_, E::Pending) => EntityChange::Pending,
-        // Without evidence, `missing` is Git's own answer: no such committed file. A missing
-        // definition counts only when both commits were read completely on the same basis.
-        (
-            E::Resolved {
-                evidence: base_evidence,
-                ..
-            },
-            E::Missing { reason, evidence },
-        ) => match evidence {
-            Some(target_evidence)
-                if basis(base_evidence) != basis(target_evidence)
-                    || !complete(base_evidence, 0)
-                    || !complete(target_evidence, 0) =>
-            {
-                insufficient("the comparison commit was read with different or incomplete coverage")
-            }
-            _ => EntityChange::Removed {
-                reason: reason.clone(),
-            },
-        },
-        (
-            E::Resolved {
-                location: base_at,
-                evidence: base_evidence,
-                related: base_rows,
-                omitted: base_omitted,
-            },
-            E::Resolved {
-                location: target_at,
-                evidence: target_evidence,
-                related: target_rows,
-                omitted: target_omitted,
-            },
-        ) => {
-            if basis(base_evidence) != basis(target_evidence) {
-                return insufficient("the two commits were read with different fact providers");
-            }
-            if !complete(base_evidence, *base_omitted)
-                || !complete(target_evidence, *target_omitted)
-            {
-                return insufficient(
-                    "coverage is incomplete at one commit, so a missing reference would not show a change",
-                );
-            }
-            let location = (base_at != target_at).then(|| LocationChange {
-                base: base_at.clone(),
-                target: target_at.clone(),
-            });
-            let added: Vec<_> = target_rows
-                .iter()
-                .filter(|row| !base_rows.contains(row))
-                .cloned()
-                .collect();
-            let removed: Vec<_> = base_rows
-                .iter()
-                .filter(|row| !target_rows.contains(row))
-                .cloned()
-                .collect();
-            if location.is_none() && added.is_empty() && removed.is_empty() {
-                EntityChange::Unchanged
-            } else {
-                EntityChange::Changed {
-                    location,
-                    added,
-                    removed,
-                }
-            }
-        }
-        (E::Resolved { .. }, E::Unavailable { reason, .. } | E::Ambiguous { reason, .. }) => {
-            insufficient(format!("at the comparison commit: {reason}"))
-        }
-        (
-            E::Missing { reason, .. } | E::Unavailable { reason, .. } | E::Ambiguous { reason, .. },
-            _,
-        ) => insufficient(format!("at the pinned commit: {reason}")),
-        (E::Resolved { .. }, E::NotProvided) => insufficient("no lookup at the comparison commit"),
-    }
 }

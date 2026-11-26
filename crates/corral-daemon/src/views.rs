@@ -4,6 +4,7 @@ mod citation;
 mod details;
 mod diagram;
 mod diagram_compare;
+pub(crate) use diagram_compare::ComparedHeads;
 mod review;
 pub(crate) mod rows;
 mod session_files;

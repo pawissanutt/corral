@@ -17,9 +17,9 @@ pub enum CompareTarget {
     ObservedHead,
     /// Resolve the latest submission of the artifact's own task worker run.
     Candidate,
-    /// Re-read a comparison an earlier reply resolved, at exactly that commit. A pinned head
-    /// must still be the observed head or on its recent first-parent line; a pinned candidate must still be
-    /// a recorded submission of the task's latest worker run.
+    /// Re-read a comparison an earlier reply resolved, at exactly that commit. A pinned head must
+    /// be one this daemon resolved, else on the current head's recent first-parent line; a
+    /// pinned candidate must be a recorded submission of one of the task's worker runs.
     Pinned {
         origin: CompareOrigin,
         commit: String,

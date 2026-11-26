@@ -8,6 +8,7 @@
 //! was left out of the list. `reach` says where "Open in System" can take an item.
 
 mod changes;
+pub mod expected;
 pub mod foot;
 mod groups;
 mod items;
@@ -63,6 +64,8 @@ pub struct State {
     pub category_open: BTreeMap<usize, bool>,
     /// Groups listed in full, by category and group index.
     pub more: BTreeSet<(usize, usize)>,
+    /// The submission a diagram comparison's link expects this task's Changes to show.
+    pub expect: Option<expected::Expected>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -83,6 +86,10 @@ pub enum Action {
         open: bool,
     },
     More(usize, usize),
+    /// A link names the submission Changes must show, or the owner lets that go.
+    Expect(Option<expected::Expected>),
+    /// The linked file was expanded; only the expected head remains.
+    Expanded,
 }
 
 impl State {
@@ -100,6 +107,12 @@ impl State {
     pub fn act(&mut self, action: Action) {
         match action {
             Action::View(view) => self.view = view,
+            Action::Expect(expect) => self.expect = expect,
+            Action::Expanded => {
+                if let Some(expect) = &mut self.expect {
+                    expect.path = None;
+                }
+            }
             Action::Item { key, target } => {
                 if self.item.as_deref() == Some(key.as_str()) {
                     self.item = None;

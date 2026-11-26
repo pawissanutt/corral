@@ -17,6 +17,7 @@ use crate::model::artifacts::diagram_compare::{
     COMPARE_CHOICES, COMPARE_HEAD, COMPARE_NOTE, Link, Side, retry,
 };
 use crate::model::nav::TaskTab;
+use crate::model::review::impact::expected::Expected;
 use crate::model::review::impact::{Action as ImpactAction, View as ChangesView};
 use crate::model::{Hue, Live};
 use crate::state::AppState;
@@ -178,26 +179,30 @@ pub(super) fn side(app: AppState, side: Side) -> AnyElement {
         .into_element()
 }
 
-/// A candidate link opens its task's Changes, at the named file's diff (expanded) or at Impact.
+/// A candidate link opens its task's Changes at the diff or Impact, expecting the submission
+/// it was served for: Changes show that one (the diff's file expanded once the task loads) or
+/// say they hold another (`model::review::impact::expected`).
 fn open(app: AppState, link: &Link) {
-    let (task, view, path) = match link {
-        Link::Diff { task, path, .. } => (task, ChangesView::Diff, Some(path.clone())),
-        Link::Impact { task, .. } => (task, ChangesView::Impact, None),
+    let (task, view, expect) = match link {
+        Link::Diff { task, head, path } => (
+            task,
+            ChangesView::Diff,
+            Expected {
+                head: head.clone(),
+                path: Some(path.clone()),
+            },
+        ),
+        Link::Impact { task, head } => (
+            task,
+            ChangesView::Impact,
+            Expected {
+                head: head.clone(),
+                path: None,
+            },
+        ),
     };
-    let id: crate::model::Id = task.as_str().into();
-    app.open_live(Live::Task(id.clone()));
+    app.open_live(Live::Task(task.as_str().into()));
     app.set_task_tab(TaskTab::Changes);
     app.impact_act(task, ImpactAction::View(view));
-    if let Some(path) = path {
-        let filter = app.scope_filter();
-        app.reduce(app.review, move |state, feed, selection, _| {
-            state.apply_live_filtered(
-                crate::model::review::Action::Expand(path),
-                feed,
-                selection,
-                Some(&id),
-                &filter,
-            )
-        });
-    }
+    app.impact_act(task, ImpactAction::Expect(Some(expect)));
 }

@@ -337,3 +337,58 @@ fn a_comparison_reads_elements_only_at_the_commit_it_pinned() {
         pinned.reads
     );
 }
+
+#[test]
+fn a_comparison_link_never_shows_a_later_submission_under_its_name() {
+    use crate::model::review::impact::expected::{Expected, Verdict, verdict};
+    use crate::model::review::impact::{Action as ImpactAction, State as ImpactState, View};
+    use corral_protocol::detail::{DetailRef, ReviewDetail};
+    let review = |head: &str| -> ReviewDetail {
+        serde_json::from_value(serde_json::json!({
+            "task": "T-1", "diff": null, "checks": [], "max_rounds": 3, "files": [],
+            "run": {
+                "id": "R2", "task": "T-1", "role": "worker", "profile": "p", "harness": "pi",
+                "worktree": "/w", "branch": "corral/T-1", "base": "main",
+                "base_sha": "0".repeat(40), "started": "2026-01-01T00:00:00Z", "head_sha": head
+            }
+        }))
+        .expect("a review detail")
+    };
+    let serve = |feed: &mut Feed, head: &str| {
+        let target = DetailRef::Review { task: "T-1".into() };
+        feed.details.insert(
+            detail_key(&target),
+            DetailCache {
+                transcript_seams: Default::default(),
+                target,
+                pages: Vec::new(),
+                loading: false,
+                stale: false,
+                error: None,
+                merged: Some(DetailBody::Review(review(head))),
+            },
+        );
+    };
+    let linked = Expected {
+        head: "a".repeat(40),
+        path: Some("src/review.rs".into()),
+    };
+    let mut feed = Feed::default();
+    assert_eq!(verdict(&feed, "T-1", View::Diff, &linked), Verdict::Waiting);
+    serve(&mut feed, &"a".repeat(40));
+    assert_eq!(verdict(&feed, "T-1", View::Diff, &linked), Verdict::Same);
+    // A newer submission superseded the one the comparison read.
+    serve(&mut feed, &"b".repeat(40));
+    assert!(matches!(
+        verdict(&feed, "T-1", View::Diff, &linked),
+        Verdict::Other(why) if why.contains("bbbbbbbbbbbb") && why.contains("aaaaaaaaaaaa")
+    ));
+    let mut state = ImpactState::default();
+    state.follow("T-1");
+    state.act(ImpactAction::Expect(Some(linked)));
+    state.follow("T-2");
+    assert_eq!(
+        state.expect, None,
+        "another task's page never inherits the expectation"
+    );
+}

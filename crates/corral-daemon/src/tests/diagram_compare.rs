@@ -62,6 +62,9 @@ fn socket_diagram_compare_reports_changed_moved_and_removed_bindings_at_the_cand
     });
     recipe["nodes"][2]["bindings"] = json!({"source":{"path":ANCHOR,"span":{"start":2,"end":2}}});
     recipe["nodes"][3]["bindings"] = json!({"source":{"path":DEPENDENT}});
+    // A span past the end of a file the candidate leaves unchanged is not "unchanged".
+    recipe["nodes"][0]["bindings"] =
+        json!({"source":{"path":"Cargo.toml","span":{"start":999,"end":999}}});
     let bytes = serde_json::to_vec(&recipe).unwrap();
     let artifact = engine
         .add_artifact_bytes(&id, &bytes, ArtifactKind::Report, "Submit to land")
@@ -162,7 +165,11 @@ fn socket_diagram_compare_reports_changed_moved_and_removed_bindings_at_the_cand
         })
     );
     assert_eq!(change("land"), Some(SourceChange::Removed));
-    assert_eq!(change("submit"), None);
+    assert!(
+        matches!(change("submit"), Some(SourceChange::Unknown { .. })),
+        "{:?}",
+        change("submit")
+    );
 
     let selected = gate.selected.unwrap();
     assert!(
@@ -221,6 +228,41 @@ fn socket_diagram_compare_reports_changed_moved_and_removed_bindings_at_the_cand
         if excerpt.commit == pinned && excerpt.path == DEPENDENT)
     );
     assert!(matches!(land.target_source, SourceResult::Missing { .. }));
+
+    // A new worker run supersedes the candidate: the view pinned to it still reads its evidence,
+    // and only the links that describe the task's current submission retire.
+    assert!(matches!(
+        Client::connect(&socket).op(
+            Op::Retry {
+                id: id.clone(),
+                profile: None,
+                fresh: false,
+                note: None
+            },
+            false
+        ),
+        OpReply::Done { .. }
+    ));
+    assert_eq!(
+        engine.store.list_runs(&id).unwrap().len(),
+        2,
+        "a new worker run"
+    );
+    let later = read(&query(
+        CompareTarget::Pinned {
+            origin: CompareOrigin::Candidate,
+            commit: candidate.clone(),
+        },
+        Some("land"),
+    ));
+    assert!(
+        matches!(&later.target, CompareResolution::Resolved { commit, current_candidate: false, .. } if *commit == candidate),
+        "{:?}",
+        later.target
+    );
+    let later = later.selected.unwrap();
+    assert_eq!(later.source_change, SourceChange::Removed);
+    assert!(later.links.is_empty());
 
     // A worker's commit the project head never reached is not accepted as a pinned head.
     let forged = read(&query(
