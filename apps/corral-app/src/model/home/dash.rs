@@ -65,7 +65,11 @@ pub fn tiles(feed: &Feed, scope: &Scope, since: &Since, cost: &Cost) -> Vec<Tile
         .board
         .tasks()
         .iter()
-        .filter(|task| scope.matches(task.project()) && task.status() == Status::Ready)
+        .filter(|task| {
+            scope.matches(task.project())
+                && task.status() == Status::Ready
+                && !crate::model::tasks::plans::is_summary(task)
+        })
         .collect();
     let held = ready
         .iter()

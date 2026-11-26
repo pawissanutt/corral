@@ -184,7 +184,9 @@ fn running(feed: &Feed, task: &Task) -> (String, String, Hold) {
 fn of(feed: &Feed, task: &Task) -> Band {
     let status = task.status();
     let step = || Hold::Step(next_step(task));
+    let plan = super::plans::state(task);
     let (what, how, hold) = match status {
+        _ if let Some(plan) = plan => (plan.phrase(), String::new(), step()),
         Status::Blocked => match work::blocked_card(task) {
             Some(card) => (
                 format!("Blocked: {}", card.reason),

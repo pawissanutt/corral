@@ -51,6 +51,62 @@ impl fmt::Display for BoardPlanRefusal {
 
 impl std::error::Error for BoardPlanRefusal {}
 
+/// Every parent a board plan was filed under, read from the durable filing receipts. The
+/// receipt, not having children, marks a summary: an ordinary task with children is not one.
+/// Callers first check that the receipt table exists.
+pub(crate) const FILED_PARENTS: &str = "SELECT DISTINCT json_extract(parent.value,'$.id')
+    FROM board_plan_receipts, json_each(board_plan_receipts.receipt,'$.parents') AS parent";
+
+impl Store {
+    /// Whether `id` was filed as a board plan's parent: a summary of its children, not work.
+    pub fn is_filed_plan_parent(&self, id: &str) -> Result<bool> {
+        if !self.has_board_plan_receipts()? {
+            return Ok(false);
+        }
+        self.connection
+            .query_row(&format!("SELECT ?1 IN ({FILED_PARENTS})"), [id], |row| {
+                row.get(0)
+            })
+            .context("look up filed plan parent")
+    }
+
+    /// Every filed plan parent that still exists, with its children's counts by status; a
+    /// parent without children has none.
+    pub fn filed_plan_children(&self) -> Result<BTreeMap<String, Vec<(Status, u64)>>> {
+        let mut plans = BTreeMap::<String, Vec<(Status, u64)>>::new();
+        if !self.has_board_plan_receipts()? {
+            return Ok(plans);
+        }
+        let mut statement = self
+            .connection
+            .prepare(&format!(
+                "WITH parents(id) AS ({FILED_PARENTS}),
+                 children(parent,status,n) AS (
+                    SELECT json_extract(document,'$.parent'),status,count(*) FROM tasks
+                    WHERE json_extract(document,'$.parent') IN (SELECT id FROM parents)
+                    GROUP BY 1,2)
+                 SELECT parents.id,children.status,children.n FROM parents
+                 JOIN tasks ON tasks.id=parents.id
+                 LEFT JOIN children ON children.parent=parents.id"
+            ))
+            .context("prepare filed plan children")?;
+        let mut rows = statement.query([]).context("query filed plan children")?;
+        while let Some(row) = rows.next().context("read filed plan child count")? {
+            let counts = plans.entry(row.get(0)?).or_default();
+            if let Some(status) = row.get::<_, Option<String>>(1)? {
+                let count: i64 = row.get(2)?;
+                counts.push((
+                    Status::parse(&status).context("parse stored task status")?,
+                    count
+                        .try_into()
+                        .context("child count must not be negative")?,
+                ));
+            }
+        }
+        Ok(plans)
+    }
+}
+
 fn invalid(reason: impl Into<String>) -> anyhow::Error {
     BoardPlanRefusal {
         code: "invalid_plan",
@@ -453,6 +509,82 @@ mod tests {
         );
         assert_eq!(store.latest_seq()?, 3);
         assert_eq!(store.next_task_number()?, 103);
+        Ok(())
+    }
+
+    /// A filed parent sat in Backlog as runnable work: its receipt marks it as a summary
+    /// whose child counts follow its children, and dispatch refuses it even when forced,
+    /// while an ordinary task that happens to have a child is neither.
+    #[test]
+    fn filed_plan_parents_are_summaries_that_dispatch_refuses() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let engine = Engine::init(root.path(), Some(100))?;
+        std::fs::write(
+            engine.state_dir.join("corral.toml"),
+            "[projects.example]\npath = '.'\n",
+        )?;
+        let store = &engine.store;
+        assert!(store.filed_plan_children()?.is_empty());
+        assert!(!store.is_filed_plan_parent("T-100")?);
+        let payload = br#"{
+            "title":"Parent", "project":"example", "why":"Proposal rationale",
+            "tasks":[
+                {"key":"first", "title":"First child", "depends":[], "body":"Brief"},
+                {"key":"second", "title":"Second child", "depends":[], "body":"Brief"}
+            ]
+        }"#;
+        Engine::file_board_plan(
+            root.path(),
+            "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+            false,
+            payload,
+        )?;
+        let ordinary = Task {
+            id: store.next_task_id()?,
+            title: "Ordinary".into(),
+            project: Some("example".into()),
+            ..Task::default()
+        };
+        store.insert_task(&ordinary)?;
+        store.insert_task(&Task {
+            id: store.next_task_id()?,
+            title: "Its child".into(),
+            parent: Some(ordinary.id.clone()),
+            ..Task::default()
+        })?;
+        let set = |id: &str, status: Status| -> Result<()> {
+            let mut task = store.require_task(id)?;
+            task.status = status;
+            store.update_task(&task)
+        };
+        set("T-101", Status::Done)?;
+        set("T-102", Status::Dropped)?;
+        assert!(store.is_filed_plan_parent("T-100")?);
+        assert!(!store.is_filed_plan_parent(&ordinary.id)?);
+        assert_eq!(
+            store.filed_plan_children()?,
+            BTreeMap::from([(
+                "T-100".to_owned(),
+                vec![(Status::Done, 1), (Status::Dropped, 1)]
+            )])
+        );
+        // Summaries are not open work in their project's counts.
+        assert_eq!(
+            store.open_project_status_counts()?["example"],
+            [(Status::Backlog, 1)]
+        );
+
+        for force in [false, true] {
+            let error = engine.dispatch("T-100", None, None, force).unwrap_err();
+            let refusal = crate::error::as_refusal(&error).expect("dispatch refusal");
+            assert!(
+                refusal.reason.contains("filed board plan parent"),
+                "{error:#}"
+            );
+        }
+        assert_eq!(store.require_task("T-100")?.status, Status::Backlog);
+        let error = engine.dispatch(&ordinary.id, None, None, true).unwrap_err();
+        assert!(!format!("{error:#}").contains("filed board plan parent"));
         Ok(())
     }
 }

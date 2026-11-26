@@ -144,6 +144,7 @@ pub(super) fn row(feed: &Feed, record: &TaskDetail, records: &[TaskDetail]) -> T
         resolved_profile: workspace::resolved_profile(feed, &record.task),
         recovery_session: None,
         gate_attempt: None,
+        plan_children: None,
     }
 }
 

@@ -59,6 +59,13 @@ impl Engine {
         self.check_force(force, || op(id))?;
         self.launch_transaction(id, |store, pending| {
             let mut task = store.require_task(id)?;
+            if store.is_filed_plan_parent(id)? {
+                return Err(refuse(
+                    "a filed board plan parent summarizes its children and is never dispatched, \
+                     even with --force; dispatch its children instead",
+                    Vec::new(),
+                ));
+            }
             if !matches!(task.status, Status::Backlog | Status::Ready) {
                 let move_op = Op::Move {
                     id: id.into(),

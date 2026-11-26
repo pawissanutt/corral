@@ -55,7 +55,16 @@ fn run_session(task: &Task) -> Option<crate::model::Id> {
 /// Running: Open session. Blocked: the engine's first `next` entry. Review the engine marked
 /// `ready`: Approve. Review while the gate or the reviewer runs, Done and Dropped: none
 /// (Reopen is under More).
+/// A filed plan parent is a summary whatever its stored status: View plan.
 pub fn next_step(task: &Task) -> Option<NextStep> {
+    if crate::model::tasks::plans::is_summary(task) {
+        return Some(NextStep {
+            label: "View plan".into(),
+            press: Press::Open(Live::Plan(task.id.clone())),
+            verb: None,
+            yours: false,
+        });
+    }
     let moved = |status: Status| {
         NextStep::step(
             format!("Move to {}", crate::model::status::status_word(status)),

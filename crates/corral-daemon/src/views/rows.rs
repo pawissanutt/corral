@@ -422,6 +422,7 @@ pub(super) fn task_rows(engine: &Engine, tasks: Vec<Task>) -> Result<Vec<TaskRow
         .flat_map(|task| task.depends_on.iter().map(String::as_str))
         .collect();
     let statuses = engine.store.task_statuses(&dependencies)?;
+    let mut plans = engine.store.filed_plan_children()?;
     let mut active = BTreeMap::<String, (Option<Run>, Option<Run>)>::new();
     for run in engine.store.live_runs(None)? {
         if run.session.is_some() {
@@ -455,7 +456,14 @@ pub(super) fn task_rows(engine: &Engine, tasks: Vec<Task>) -> Result<Vec<TaskRow
                 .store
                 .recovery_run(&task)?
                 .map(|r| format!("{}_{}", r.task, r.id));
+            let plan_children = plans.remove(&task.id).map(|counts| {
+                counts
+                    .into_iter()
+                    .map(|(status, count)| StatusCount { status, count })
+                    .collect()
+            });
             Ok(TaskRow {
+                plan_children,
                 recovery_session,
                 task,
                 run,

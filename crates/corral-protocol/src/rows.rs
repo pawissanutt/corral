@@ -40,6 +40,11 @@ pub struct TaskRow {
     /// Worker profile dispatch would select without an explicit override.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved_profile: Option<String>,
+    /// Present only for a filed board-plan parent: a summary, never dispatched, whose
+    /// state follows its children. Their nonzero counts by status, Done and Dropped included;
+    /// empty when it has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_children: Option<Vec<StatusCount>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

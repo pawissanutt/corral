@@ -10847,6 +10847,16 @@
               "null"
             ]
           },
+          "plan_children": {
+            "description": "Present only for a filed board-plan parent: a summary, never dispatched, whose\nstate follows its children. Their nonzero counts by status, Done and Dropped included;\nempty when it has none.",
+            "items": {
+              "$ref": "#/components/schemas/StatusCount"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "ready": {
             "description": "Whether the pipeline appended `ready` for the current review.",
             "type": "boolean"

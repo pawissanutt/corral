@@ -131,13 +131,16 @@ impl Store {
     }
 
     /// The receipt table is additive and created by the first successful filing.
-    pub(crate) fn board_plan_receipt(&self, id: &str) -> Result<Option<(String, String)>> {
-        let exists: bool = self.connection.query_row(
+    pub(crate) fn has_board_plan_receipts(&self) -> Result<bool> {
+        self.connection.query_row(
             "SELECT EXISTS(SELECT 1 FROM main.sqlite_schema WHERE type='table' AND name='board_plan_receipts')",
             [],
             |row| row.get(0),
-        ).context("check for board plan receipt table")?;
-        if !exists {
+        ).context("check for board plan receipt table")
+    }
+
+    pub(crate) fn board_plan_receipt(&self, id: &str) -> Result<Option<(String, String)>> {
+        if !self.has_board_plan_receipts()? {
             return Ok(None);
         }
         self.connection
@@ -380,17 +383,23 @@ impl Store {
         .collect()
     }
 
-    /// Per-project open counts grouped by status. Closed tasks are not counted.
+    /// Per-project open counts grouped by status. Closed tasks and filed plan parents, which
+    /// summarize their children rather than being work, are not counted.
     pub fn open_project_status_counts(
         &self,
     ) -> Result<std::collections::BTreeMap<String, Vec<(Status, u64)>>> {
+        let summaries = if self.has_board_plan_receipts()? {
+            format!("AND id NOT IN ({})", crate::board_plan::FILED_PARENTS)
+        } else {
+            String::new()
+        };
         let mut statement = self
             .connection
-            .prepare(
+            .prepare(&format!(
                 "SELECT project,status,count(*) FROM tasks
-             WHERE project IS NOT NULL AND status NOT IN ('done','dropped')
+             WHERE project IS NOT NULL AND status NOT IN ('done','dropped') {summaries}
              GROUP BY project,status",
-            )
+            ))
             .context("prepare project counts by status")?;
         let mut rows = statement
             .query([])

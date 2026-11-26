@@ -8,6 +8,7 @@ pub mod closed;
 pub mod columns;
 pub mod meta;
 pub mod page;
+pub mod plans;
 
 use std::borrow::Cow;
 use std::collections::BTreeSet;
@@ -141,11 +142,12 @@ pub fn page_tab(key: &str) -> Option<TaskTab> {
     TaskTab::ALL.get(at).copied()
 }
 
+/// The tasks in scope that are work: a filed plan parent is a summary listed apart.
 fn in_scope<'a>(feed: &'a Feed, scope: &'a Scope) -> impl Iterator<Item = &'a Task> {
     feed.board
         .tasks()
         .iter()
-        .filter(move |task| scope.matches(task.project()))
+        .filter(move |task| scope.matches(task.project()) && !plans::is_summary(task))
 }
 
 /// Whether corrald lists the task as a plan or the board holds one of its children.
@@ -172,6 +174,7 @@ fn inline_children<'a>(
 pub fn has_inline_children(feed: &Feed, scope: &Scope, state: &State, plan: &str) -> bool {
     feed.board.task(plan).is_some_and(|plan| {
         !folds(plan.status())
+            && !plans::is_summary(plan)
             && inline_children(feed, scope, &Filter::parse(&state.filter), plan)
                 .next()
                 .is_some()
@@ -210,6 +213,12 @@ pub fn sections(feed: &Feed, scope: &Scope, state: &State) -> Vec<Section> {
             })
         })
         .collect();
+    sections.extend(plans::sections(
+        feed,
+        scope,
+        &filter,
+        state.unfolded.contains(plans::COMPLETED_KEY),
+    ));
     sections.extend(closed::section(
         feed,
         scope,
@@ -223,6 +232,7 @@ pub fn sections(feed: &Feed, scope: &Scope, state: &State) -> Vec<Section> {
 /// The open tasks in scope and the dispatch slots corrald counts (a project with its own
 /// limit counts its own). The open count is unknown until the board is complete.
 pub fn summary(feed: &Feed, scope: &Scope) -> String {
+    // Plan summaries are not open work.
     let open = if feed.board.complete {
         in_scope(feed, scope)
             .filter(|task| !folds(task.status()))
@@ -295,12 +305,19 @@ pub struct TaskLine {
     /// How long ago an open task last changed (`3h`); the date a closed one closed.
     pub age: String,
     pub next: Option<NextStep>,
+    /// A filed plan parent's state from its children; its `status` and `now` follow it.
+    pub plan: Option<plans::PlanState>,
 }
 
 impl TaskLine {
     /// What a screen reader hears for the row.
     pub fn spoken(&self) -> String {
-        let mut spoken = format!("{} {}, {}", self.id, self.title, status_word(self.status));
+        let word = if self.plan.is_some() {
+            "plan"
+        } else {
+            status_word(self.status)
+        };
+        let mut spoken = format!("{} {}, {word}", self.id, self.title);
         if !self.now.is_empty() {
             spoken.push_str(", ");
             spoken.push_str(&self.now);
@@ -344,15 +361,17 @@ fn profile_of(task: &Task) -> Option<String> {
 }
 
 fn line_of(task: &Task, feed: &Feed) -> TaskLine {
-    let status = task.status();
+    let plan = plans::state(task);
+    let status = plan.map_or(task.status(), |plan| plan.shown(task.status()));
     TaskLine {
+        plan,
         id: task.id.clone(),
         status,
         title: task.title().to_owned(),
         priority: priority_tag(task.task().priority),
         rank: priority_word(task.task().priority),
         parent: task.parent().map(str::to_owned),
-        now: row_phrase(task, feed),
+        now: plan.map_or_else(|| row_phrase(task, feed), plans::PlanState::phrase),
         pipeline: observed_pipeline(task, feed),
         project: task.project().map(str::to_owned),
         profile: profile_of(task),

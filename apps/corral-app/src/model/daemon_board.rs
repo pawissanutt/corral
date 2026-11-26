@@ -23,10 +23,15 @@ pub enum Group {
     Ideas,
     /// Done or Dropped; the open-task topic does not normally carry these.
     Other,
+    /// A filed plan parent: a summary of its children, never work of its own.
+    Plan,
 }
 
 impl Group {
     pub fn of(row: &TaskRow) -> Group {
+        if row.plan_children.is_some() {
+            return Group::Plan;
+        }
         match row.task.status {
             Status::Blocked => Group::NeedsYou,
             Status::Review if row.ready => Group::NeedsYou,
