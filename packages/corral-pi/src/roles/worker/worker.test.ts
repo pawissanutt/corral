@@ -106,6 +106,7 @@ test("a host session activates exactly the loadout and loads the installed worke
   expect(skills.map((skill) => [skill.name, skill.filePath])).toEqual([
     ["corral-worker", join(assets.dir, SKILL_ASSET)],
     ["corral-plan", join(assets.dir, "assets/skills/corral-plan/SKILL.md")],
+    ["corral-diagrams", join(assets.dir, "assets/skills/corral-diagrams/SKILL.md")],
   ]);
   expect(readFileSync(skills[0]?.filePath ?? "", "utf8")).toBe(readFileSync(join(PACKAGE_ROOT, SKILL_ASSET), "utf8"));
   expect(host.session.systemPrompt).toContain("# corral worker contract (corral-pi)");

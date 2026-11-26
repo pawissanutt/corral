@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import type { HostIdentity } from "../types.ts";
 
 export const PLAN_SKILL_ASSET = "assets/skills/corral-plan/SKILL.md";
+export const DIAGRAM_SKILL_ASSET = "assets/skills/corral-diagrams/SKILL.md";
 
 export class RoleAssetMissing extends Error {
   readonly code = "role_asset_missing";

@@ -166,7 +166,7 @@ test("every role loads home skills, trusted project text and templates, never am
       // Then home and repository Agent Skills, both template sets and the workspace and project
       // context files load in ancestor order; the worker keeps its packaged role skill; and no
       // ~/.pi, project .pi or out-of-workspace resource is loaded.
-      const roleSkills = role === "worker" ? ["corral-plan", "corral-worker"] : role === "reviewer" ? ["corral-plan"] : [];
+      const roleSkills = role === "worker" ? ["corral-diagrams", "corral-plan", "corral-worker"] : role === "reviewer" ? ["corral-plan"] : [];
       expect(found.skills).toEqual([...roleSkills, "home-skill", "repo-skill"].sort());
       expect(found.prompts).toEqual(["home-review", "repo-prompt"]);
       expect(found.context).toEqual([join(root, "AGENTS.md"), join(cwd, "AGENTS.md")]);
@@ -185,10 +185,10 @@ test("every role loads home skills, trusted project text and templates, never am
   try {
     for (const { host } of [untrusted, strict, older]) await host.session.bindExtensions({});
     const text = loaded(untrusted.host);
-    expect([text.skills, text.prompts, text.context]).toEqual([["corral-plan", "corral-worker", "home-skill"], ["home-review"], []]);
+    expect([text.skills, text.prompts, text.context]).toEqual([["corral-diagrams", "corral-plan", "corral-worker", "home-skill"], ["home-review"], []]);
     for (const host of [strict.host, older.host]) {
       const found = loaded(host);
-      expect([found.skills, found.prompts, found.context]).toEqual([["corral-plan", "corral-worker"], [], []]);
+      expect([found.skills, found.prompts, found.context]).toEqual([["corral-diagrams", "corral-plan", "corral-worker"], [], []]);
       expect((host.state().guidance as { export: boolean }).export).toBeFalse();
     }
   } finally {
@@ -209,7 +209,9 @@ test("Pi pack lists and loads all six skills in a standard worker without OmO ro
     await bind(started);
     const resources = started.host.runtime.services.resourceLoader.getSkills();
     expect(resources.diagnostics).toEqual([]);
-    expect(loaded(started.host).skills).toEqual(["corral-plan", "corral-worker", ...names].sort());
+    expect(loaded(started.host).skills).toEqual(["corral-diagrams", "corral-plan", "corral-worker", ...names].sort());
+    await turn(started, "/skill:corral-diagrams");
+    expect(userTexts(started.host).some((text) => text.includes('<skill name="corral-diagrams"'))).toBeTrue();
     const tools = new Set(started.host.session.getActiveToolNames());
     for (const name of names) {
       const found = resources.skills.find((item) => item.name === name);

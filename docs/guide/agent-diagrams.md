@@ -6,7 +6,9 @@ diagram is an ordinary Markdown artifact recorded with `corral-next artifact add
 draws its Mermaid fences itself. No HTML, JavaScript or external renderer is involved.
 
 For the separate typed workflow format, see [workflow diagram recipes](workflow-diagram-recipes.md).
-The offline recipe validator does not yet provide an evidence-backed app view.
+The app can inspect evidence for typed recipes; the offline validator checks structure only.
+The portable skill at `packages/corral-pi/assets/skills/corral-diagrams/SKILL.md` is bundled
+with corral-pi workers and can also be installed as a skill directory by external harnesses.
 
 ## Workflow
 

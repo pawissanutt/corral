@@ -8,6 +8,7 @@ import gptAssistant from "../../assets/families/gpt/assistant.md" with { type: "
 import buildContract from "../../assets/build-contract.md" with { type: "text" };
 import gptBuild from "../../assets/families/gpt/build.md" with { type: "text" };
 import planSkill from "../../assets/skills/corral-plan/SKILL.md" with { type: "text" };
+import diagramSkill from "../../assets/skills/corral-diagrams/SKILL.md" with { type: "text" };
 import planApproved from "../../assets/plan-approved.md" with { type: "text" };
 import planMode from "../../assets/plan-mode.md" with { type: "text" };
 import requestExecution from "../../assets/request-execution.md" with { type: "text" };
@@ -25,6 +26,7 @@ export const INSTALL_FILES: Readonly<Record<string, string>> = {
   "assets/build-contract.md": buildContract,
   "assets/families/gpt/build.md": gptBuild,
   "assets/skills/corral-plan/SKILL.md": planSkill,
+  "assets/skills/corral-diagrams/SKILL.md": diagramSkill,
   "assets/plan-approved.md": planApproved,
   "assets/plan-mode.md": planMode,
   "assets/request-execution.md": requestExecution,
