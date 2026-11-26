@@ -1,15 +1,18 @@
 //! The sample's Timeline tasks (`TimelinePage.tasks`), shaped as corrald serves them: every
-//! task the window's runs and events name, their plans, those plans' other children and the
-//! tasks any of these depend on, each with its title, status, plan, dependencies and last
-//! landing (from the whole log, undone by a later reopen).
+//! task the window's runs and events name, their chains of plans, the children of each of them
+//! and of its plan, and the tasks any of these depend on, each with its title, status, plan,
+//! dependencies and last landing (Done tasks only; from the whole log, undone by a reopen).
 
 use std::collections::BTreeSet;
 
 use corral_protocol::detail::{TaskDetail, TimelineTask};
-use corral_types::{Event, EventKind, Outcome, Run};
+use corral_types::{Event, EventKind, Outcome, Run, Status};
 use jiff::Timestamp;
 
 use crate::model::daemon::Feed;
+
+/// How far up a window task's plans corrald walks.
+const ANCESTOR_DEPTH: usize = 8;
 
 /// Dependencies the Timeline sample serves beside the records' own, so the fixture draws an
 /// edge from a landing inside the window (T-2 into T-14), one from before it (T-5 into T-14)
@@ -25,16 +28,31 @@ pub(super) fn tasks(
     events: &[Event],
 ) -> Vec<TimelineTask> {
     let find = |id: &str| records.iter().find(|record| record.task.id == id);
-    let mut wanted: BTreeSet<String> = runs
+    let window: BTreeSet<String> = runs
         .iter()
         .map(|run| run.task.clone())
         .chain(events.iter().filter_map(|event| event.task.clone()))
         .collect();
-    let plans: BTreeSet<String> = wanted
+    let mut wanted = window.clone();
+    // Each window task's chain of plans, bounded as corrald bounds it.
+    for id in &window {
+        let mut at = id.clone();
+        for _ in 0..ANCESTOR_DEPTH {
+            let Some(parent) = find(&at).and_then(|record| record.task.parent.clone()) else {
+                break;
+            };
+            if !wanted.insert(parent.clone()) {
+                break;
+            }
+            at = parent;
+        }
+    }
+    // The children of every window task and of its immediate plan.
+    let heads: BTreeSet<String> = window
         .iter()
-        .filter_map(|id| find(id)?.task.parent.clone())
+        .cloned()
+        .chain(window.iter().filter_map(|id| find(id)?.task.parent.clone()))
         .collect();
-    wanted.extend(plans.iter().cloned());
     wanted.extend(
         records
             .iter()
@@ -43,7 +61,7 @@ pub(super) fn tasks(
                     .task
                     .parent
                     .as_ref()
-                    .is_some_and(|p| plans.contains(p))
+                    .is_some_and(|p| heads.contains(p))
             })
             .map(|record| record.task.id.clone()),
     );
@@ -77,13 +95,18 @@ fn depends_on(record: Option<&TaskDetail>, id: &str) -> Vec<String> {
             out.extend(more.iter().map(|d| (*d).to_owned()));
         }
     }
-    out.dedup();
+    let mut seen = BTreeSet::new();
+    out.retain(|dependency| seen.insert(dependency.clone()));
     out
 }
 
-/// The task's last landing in the whole log unless a later reopen undid it; a sample task whose
-/// landing the log does not hold lands when its landed run ended.
+/// A Done task's last landing in the whole log unless a later reopen undid it; a sample task
+/// whose landing the log does not hold lands when its landed run ended. A task that is not Done
+/// has no landing, as corrald serves it, even when moved back without a reopen.
 fn landed(feed: &Feed, record: &TaskDetail) -> Option<Timestamp> {
+    if record.task.status != Status::Done {
+        return None;
+    }
     let mut log: Vec<&Event> = feed
         .changes
         .values()

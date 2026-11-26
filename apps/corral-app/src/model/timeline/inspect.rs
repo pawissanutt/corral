@@ -109,18 +109,22 @@ pub fn inspect(
         ));
     }
     let dependencies: &[String] = served.map_or(&[], |t| t.depends_on.as_slice());
+    // The same start the lane's edges classify by, so the danger here matches the lane's `!`.
+    let task_start = page
+        .runs
+        .iter()
+        .filter(|run| run.task == task)
+        .map(|run| run.started)
+        .min();
     let waits: Vec<Link> = dependencies
         .iter()
         .map(|id| match tasks.get(id.as_str()) {
-            Some(dep) => {
-                let landing = Landing::of(dep, window);
-                Link {
-                    id: id.clone(),
-                    title: dep.title.clone(),
-                    words: landing.words(feed),
-                    danger: landing == Landing::NotLanded,
-                }
-            }
+            Some(dep) => Link {
+                id: id.clone(),
+                title: dep.title.clone(),
+                words: Landing::of(dep, window).words(feed),
+                danger: task_start.is_some_and(|started| plans::out_of_order(started, dep)),
+            },
             None => Link {
                 id: id.clone(),
                 title: String::new(),

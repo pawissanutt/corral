@@ -115,7 +115,7 @@ pub fn group(
                     .values()
                     .filter(|t| t.parent.as_deref() == Some(plan.as_str()))
                     .collect();
-                let landed = children.iter().filter(|t| t.landed.is_some()).count();
+                let landed = children.iter().filter(|t| counts_landed(t)).count();
                 (landed, children.len())
             }
             None => {
@@ -124,7 +124,7 @@ pub fn group(
                     .filter(|lane| {
                         tasks
                             .get(lane.id.as_str())
-                            .is_some_and(|t| t.landed.is_some())
+                            .is_some_and(|t| counts_landed(t))
                     })
                     .count();
                 (landed, members.len())
@@ -201,6 +201,12 @@ impl Landing {
             other => other.unlanded().unwrap_or_default().to_owned(),
         }
     }
+}
+
+/// Whether a plan's tally counts the task as landed: Done counts even when the log holds no
+/// landing (a task forced to Done), as the plan's work is finished either way.
+fn counts_landed(task: &TimelineTask) -> bool {
+    task.landed.is_some() || task.status == Status::Done
 }
 
 /// A dependent that started before its dependency landed, or while it has not landed, is out

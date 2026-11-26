@@ -14,7 +14,7 @@ pub use live::{
 };
 pub use plans::{Edge, Landing, PlanGroup};
 pub use scope::{BurnupScope, ScopeOption, burnup_request, scope_options};
-pub use words::{header_spoken, lane_verb, lane_words};
+pub use words::{CLOSE_INSPECTOR, header_spoken, lane_verb, lane_words};
 
 pub const BURNUP_SCOPE_LABEL: &str = "Burn-up scope";
 

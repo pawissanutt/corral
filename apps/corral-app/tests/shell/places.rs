@@ -283,8 +283,13 @@ fn timeline_keyboard_focus_survives_folding_a_plan_and_selecting_a_lane() {
     assert!(focused(&app, "plan-T-1"), "folding keeps the focus");
     app.press_key("enter").unwrap();
     app.wait_for("id:lane-T-11").unwrap();
-    app.press_key("tab").unwrap();
-    assert!(focused(&app, "lane-T-11"));
+    // The sample follows the real clock, so which of the plan's lanes precede T-11 varies.
+    let mut tabs = 0;
+    while !focused(&app, "lane-T-11") {
+        assert!(tabs < 10, "Tab from the plan header reached no lane-T-11");
+        app.press_key("tab").unwrap();
+        tabs += 1;
+    }
     app.press_key("enter").unwrap();
     app.wait_for("id:inspector").unwrap();
     assert!(

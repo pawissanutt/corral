@@ -13,6 +13,9 @@ pub fn lane_verb(lane: &PlacedLane) -> String {
     }
 }
 
+/// The inspector's button that deselects the lane.
+pub const CLOSE_INSPECTOR: &str = "Close";
+
 /// An out-of-order warning behind the danger mark: `! started before T-2 landed`.
 pub fn flagged(warning: &str) -> String {
     format!("! {warning}")

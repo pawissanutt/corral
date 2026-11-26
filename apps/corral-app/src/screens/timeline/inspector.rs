@@ -8,7 +8,7 @@ use nsh_core::prelude::*;
 
 use super::shown::Shown;
 use crate::model::list::inspector_width;
-use crate::model::timeline::{Inspector, Link};
+use crate::model::timeline::{CLOSE_INSPECTOR, Inspector, Link};
 use crate::model::{Form, Hue};
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, button};
@@ -192,7 +192,7 @@ fn body(app: AppState, inspector: Inspector) -> AnyElement {
         ))
         .child(button(
             app,
-            "Close",
+            CLOSE_INSPECTOR,
             ButtonKind::Quiet,
             "btn-inspector-close",
             move || app.act(app.timeline, |state, _| state.deselect()),

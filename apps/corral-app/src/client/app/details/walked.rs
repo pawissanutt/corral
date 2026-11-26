@@ -316,10 +316,10 @@ fn append(current: &mut Value, next: Value, field: &str) {
                 let mut positions: BTreeMap<String, usize> = current
                     .iter()
                     .enumerate()
-                    .filter_map(|(index, item)| item_key(item).map(|id| (id.into(), index)))
+                    .filter_map(|(index, item)| item_key(item).map(|id| (id, index)))
                     .collect();
                 for item in next {
-                    let id = item_key(&item).unwrap_or_default().to_owned();
+                    let id = item_key(&item).unwrap_or_default();
                     if let Some(index) = positions.get(&id) {
                         append(&mut current[*index], item, "");
                     } else {
@@ -349,8 +349,13 @@ fn append(current: &mut Value, next: Value, field: &str) {
     }
 }
 
-fn item_key(item: &Value) -> Option<&str> {
-    item.get("id").or_else(|| item.get("day"))?.as_str()
+/// A run's id (`R1`) is unique only within its task, so an item naming a task is keyed by both.
+fn item_key(item: &Value) -> Option<String> {
+    let id = item.get("id").or_else(|| item.get("day"))?.as_str()?;
+    Some(match item.get("task").and_then(Value::as_str) {
+        Some(task) => format!("{task}\0{id}"),
+        None => id.to_owned(),
+    })
 }
 
 #[cfg(test)]
@@ -392,6 +397,18 @@ mod tests {
         assert_eq!(first["annotations"][0]["messages"], json!(["one", "two"]));
         assert_eq!(first["annotations"][1]["id"], "note-2");
         assert_eq!(first["patch"], "first\nsecond\n");
+    }
+
+    #[test]
+    fn paged_runs_of_different_tasks_with_the_same_run_id_stay_separate() {
+        let mut first = json!({"runs":[{"id":"R1","task":"T-1","role":"worker"}]});
+        append(
+            &mut first,
+            json!({"runs":[{"id":"R1","task":"T-2","role":"worker"}]}),
+            "",
+        );
+        assert_eq!(first["runs"].as_array().map(Vec::len), Some(2));
+        assert_eq!(first["runs"][1]["task"], "T-2");
     }
 
     #[test]
