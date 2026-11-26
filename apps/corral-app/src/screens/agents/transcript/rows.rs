@@ -321,16 +321,19 @@ pub(super) fn footer(app: AppState, footer: &Footer, id: &str) -> AnyElement {
 /// Copy reply under a finished agent message (`btn-copy-reply-<id>`): its words whole, as
 /// written, for pasting into another session; where some block is only a preview, its words
 /// and receipt say the copy is partial.
-pub(super) fn copy_reply(app: AppState, reply: &Reply, id: &str) -> AnyElement {
+pub(in crate::screens::agents) fn copy_reply(
+    app: AppState,
+    partial: bool,
+    id: &str,
+    reply: impl Fn() -> Option<Reply> + 'static,
+) -> AnyElement {
     let copy = crate::ui::composer::copier(app);
-    let reply = reply.clone();
-    let label = reply.label();
     view()
         .flex_row()
         .when(app.form != Form::Terminal, |row| row.mt(px(2.0)))
         .child(button_with(
             app,
-            label,
+            Reply::label(partial),
             ButtonKind::Quiet,
             ButtonOptions {
                 compact: true,
@@ -338,8 +341,10 @@ pub(super) fn copy_reply(app: AppState, reply: &Reply, id: &str) -> AnyElement {
             },
             format!("btn-copy-reply-{id}"),
             move || {
-                copy(&reply.text);
-                app.toast(reply.receipt());
+                if let Some(reply) = reply() {
+                    copy(&reply.text);
+                    app.toast(reply.receipt());
+                }
             },
         ))
         .into_element()

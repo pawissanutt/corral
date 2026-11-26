@@ -1,7 +1,7 @@
 //! A finished agent message's words as one paste-ready text, for its Copy reply action: the
 //! Markdown it wrote, quotes and code included, without its time, tools or thinking.
 
-use super::{Message, MessageItem, MessageKind};
+use super::{Message, MessageItem, MessageKind, Transcript};
 
 /// What Copy reply puts on the clipboard.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15,8 +15,8 @@ pub struct Reply {
 
 impl Reply {
     /// The action's words: a partial copy never passes for the whole reply.
-    pub fn label(&self) -> &'static str {
-        if self.partial {
+    pub fn label(partial: bool) -> &'static str {
+        if partial {
             "Copy shown part"
         } else {
             "Copy reply"
@@ -30,6 +30,22 @@ impl Reply {
         } else {
             "Reply copied"
         }
+    }
+}
+
+impl Transcript {
+    /// The anchors of the messages a page edge may cut: the first while earlier pages exist,
+    /// the last while newer ones do (`newer`). A record split across pages stays one message,
+    /// so such a message may lack items another page holds and copies only as partial.
+    pub fn cut(&self, newer: bool) -> [Option<String>; 2] {
+        let older = self.older.is_some() || self.older_cursor.is_some();
+        let anchor = |message: Option<&Message>| message.map(|m| m.anchor.clone());
+        [
+            older.then(|| anchor(self.messages.first())).flatten(),
+            (newer || self.newer.is_some())
+                .then(|| anchor(self.messages.last()))
+                .flatten(),
+        ]
     }
 }
 
@@ -138,5 +154,24 @@ mod tests {
             None,
             "a reply still being written is not offered"
         );
+    }
+
+    /// A record split across pages stays one message whose other items are on a page not
+    /// loaded: the oldest message while earlier pages exist and the newest while newer ones
+    /// do are named as cut, so their copy is never passed off as whole.
+    #[test]
+    fn messages_at_a_page_edge_are_cut() {
+        let mut page = super::super::transcript(
+            &crate::model::Id::from("fixture"),
+            &crate::model::session::Ui::default(),
+            None,
+            &crate::model::daemon::Feed::default(),
+        );
+        let mut second = message(Vec::new());
+        second.anchor = "b".into();
+        page.messages = vec![message(Vec::new()), second];
+        assert_eq!(page.cut(false), [None, None]);
+        page.older_cursor = Some("older".into());
+        assert_eq!(page.cut(true), [Some("a".into()), Some("b".into())]);
     }
 }

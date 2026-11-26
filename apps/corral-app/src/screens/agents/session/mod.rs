@@ -344,6 +344,7 @@ pub fn compact(app: AppState, id: Id, page: Memo<SessionPage>, form: Compact) ->
         Compact::Sheet => view()
             .flex_col()
             .child(latest(app, id, page))
+            .child(latest_copy(app, page))
             .child(tail)
             .into_element(),
         Compact::Composer | Compact::Card => tail.into_element(),
@@ -406,6 +407,47 @@ fn latest(app: AppState, id: Id, page: Memo<SessionPage>) -> AnyElement {
                             .line_height(px(20.0))
                             .text_color(color(Token::Ink2)),
                     )
+                    .into_element()
+            })
+        })
+    })
+    .into_element()
+}
+
+/// Copy reply under the phone sheet's preview: the newest finished reply whole, read from its
+/// message rather than the three lines shown, partial when a page edge may cut it.
+fn latest_copy(app: AppState, page: Memo<SessionPage>) -> AnyElement {
+    use crate::model::session::transcript::{MessageKind, Reply};
+    let reply = move || -> Option<Reply> {
+        page.with_untracked(|p| {
+            let Body::Chat(chat) = &p.body else {
+                return None;
+            };
+            let transcript = &chat.transcript;
+            let message = transcript
+                .messages
+                .iter()
+                .rev()
+                .find(|message| message.kind == MessageKind::Agent)?;
+            let mut reply = message.reply()?;
+            reply.partial |= transcript
+                .cut(false)
+                .iter()
+                .flatten()
+                .any(|at| *at == message.anchor);
+            Some(reply)
+        })
+    };
+    let offered = computed(move || {
+        page.with(|_| ());
+        reply().map(|reply| reply.partial)
+    });
+    dynamic(move || {
+        offered.get().map(|partial| {
+            untracked(|| {
+                view()
+                    .px(px(10.0))
+                    .child(super::transcript::copy_reply(app, partial, "latest", reply))
                     .into_element()
             })
         })

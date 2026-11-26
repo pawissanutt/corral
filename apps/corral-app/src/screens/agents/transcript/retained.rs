@@ -184,6 +184,15 @@ pub(super) fn render(
             edge(button).into_element()
         })
     });
+    let edges = reader.clone();
+    let cut = computed(move || {
+        shown.with(|p| {
+            p.as_ref().map_or_else(Default::default, |p| {
+                let (_, newer, _) = edges.status(&p.scope);
+                p.cut(newer)
+            })
+        })
+    });
     let geometry = reader.clone();
     let listing = computed(move || shown.with(|p| p.as_ref().map_or_else(Vec::new, rows)));
     let messages = each(
@@ -207,7 +216,7 @@ pub(super) fn render(
                             Body::Echo(_) => None,
                         })
                     });
-                    let block = message_row(app, scope.clone(), message, shown);
+                    let block = message_row(app, scope.clone(), message, shown, cut);
                     anchored(&scope, &anchor, block)
                 }
             };
@@ -249,6 +258,7 @@ fn message_row(
     scope: String,
     message: Message,
     shown: Memo<Option<(Message, usize)>>,
+    cut: Memo<[Option<String>; 2]>,
 ) -> AnyElement {
     let anchor = message.anchor.clone();
     let column = (message.keys.len() == message.items.len() && message.kind == MessageKind::Agent)
@@ -304,16 +314,27 @@ fn message_row(
     let head_words =
         computed(move || shown.with(|r| r.as_ref().map_or_else(Vec::new, |(m, _)| m.head.clone())));
     let live = computed(move || shown.with(|r| r.as_ref().is_some_and(|(m, _)| m.live)));
-    let reply = computed(move || {
-        shown.with(|row| {
-            let (m, first) = row.as_ref()?;
-            Some((m.reply()?, first + m.items.len()))
+    // Only whether a reply is offered, and as whole or partial, is drawn; its words are read
+    // when it is pressed.
+    let reply = move || {
+        shown.with_untracked(|row| {
+            let (m, _) = row.as_ref()?;
+            let mut reply = m.reply()?;
+            // A page edge may hold the rest of this message's record.
+            reply.partial |=
+                cut.with_untracked(|cut| cut.iter().flatten().any(|at| *at == m.anchor));
+            Some(reply)
         })
+    };
+    let offered = computed(move || {
+        let n = shown.with(|row| row.as_ref().map(|(m, first)| first + m.items.len()))?;
+        cut.with(|_| ());
+        Some((reply()?.partial, n))
     });
     let copy = dynamic(move || {
-        reply
+        offered
             .get()
-            .map(|(reply, n)| rows::copy_reply(app, &reply, &n.to_string()))
+            .map(|(partial, n)| rows::copy_reply(app, partial, &n.to_string(), reply))
     });
     agent_message(
         app,

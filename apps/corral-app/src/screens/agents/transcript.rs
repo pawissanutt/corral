@@ -45,6 +45,7 @@ pub(crate) use anchors::content_origin;
 pub(super) use build_cards::gate_log;
 pub(crate) use jump::follow;
 pub use older::Earlier;
+pub(super) use rows::copy_reply;
 pub use watch::watch;
 
 use crate::model::Form;
