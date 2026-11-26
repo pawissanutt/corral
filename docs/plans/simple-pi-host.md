@@ -141,7 +141,7 @@ A role is a tool list and a prompt (`pi/roles/types.ts:132-161`). Four remain of
 
 **Daemon live stream.** `session.v1` serves the existing scoped `SubDelta::Session` page.
 One reader per watched scope polls `live_since` and `events_since` through `pi::Client` at
-most 10 Hz. Either ring can force a transcript reconciliation. A cursor beyond the host's
+10 Hz while the host is quiet and every 30 ms while it returns events. Either ring can force a transcript reconciliation. A cursor beyond the host's
 `last` resets both cursors and changes the page's in-memory `generation`; nothing is stored.
 
 The local and paired owner APIs use the same scopes: `T-001_R1` (the Agents row id),

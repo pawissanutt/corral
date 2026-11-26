@@ -18,6 +18,7 @@ use corral_types::SessionRef;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use super::{
+    SESSION_POLL, SESSION_STREAM_LINGER, SESSION_STREAM_POLL,
     buffer::{Buffer, Entry, Watches},
     lock,
 };
@@ -427,6 +428,10 @@ fn trim_state_tail<T: Serialize>(items: &mut Vec<T>, field: &str, bytes: &mut us
 pub(super) struct Source {
     entry: Weak<Mutex<Buffer>>,
     reader: LiveReader,
+    /// When its host last returned events: it is read at the streaming pace for a while after.
+    streamed: Option<Instant>,
+    /// It is not read again before this.
+    due: Option<Instant>,
 }
 
 #[derive(Default)]
@@ -435,13 +440,30 @@ pub(super) struct Sources {
     pending: Vec<(Arc<str>, Entry)>,
 }
 
-/// The seam keeps tests at the cursor/buffer layer, without processes or sockets.
+/// The seam keeps tests at the cursor/buffer layer, without processes or sockets: one read of
+/// every watched scope, whatever its pace.
+#[cfg(test)]
 pub(super) fn poll(
     service: &Watches,
     sources: &mut Sources,
+    read: impl FnMut(&str, &mut LiveReader) -> Result<LivePage>,
+    closed: impl FnMut() -> bool,
+) {
+    pass(service, sources, || None, read, closed);
+}
+
+/// Reads every watched scope that is due by `clock` (all of them without one) and returns how
+/// long until the next is. A scope whose host returned events within `SESSION_STREAM_LINGER`
+/// is due again after `SESSION_STREAM_POLL`, so a reply being written reaches its watchers
+/// in steps too short to see; a full page is followed at once; a quiet scope waits
+/// `SESSION_POLL`.
+pub(super) fn pass(
+    service: &Watches,
+    sources: &mut Sources,
+    mut clock: impl FnMut() -> Option<Instant>,
     mut read: impl FnMut(&str, &mut LiveReader) -> Result<LivePage>,
     mut closed: impl FnMut() -> bool,
-) {
+) -> Duration {
     let registered = lock(&service.entries);
     sources.readers.retain(|scope, source| {
         registered
@@ -454,6 +476,7 @@ pub(super) fn poll(
             .map(|(scope, entry)| (Arc::clone(scope), Arc::clone(entry))),
     );
     drop(registered);
+    let mut wait = SESSION_POLL;
     for (scope, entry) in sources.pending.drain(..) {
         if closed() {
             break;
@@ -467,18 +490,53 @@ pub(super) fn poll(
             .or_insert_with(|| Source {
                 entry: Arc::downgrade(&entry),
                 reader: LiveReader::default(),
+                streamed: None,
+                due: None,
             });
-        let page = read(&scope, &mut source.reader);
-        let mut buffer = lock(&entry);
-        if buffer.users == 0 {
+        if let Some(early) = clock()
+            .zip(source.due)
+            .and_then(|(now, due)| due.checked_duration_since(now))
+            .filter(|early| !early.is_zero())
+        {
+            wait = wait.min(early);
             continue;
         }
-        match page {
-            Ok(page) => buffer.publish(page),
-            Err(_) => {
-                source.reader.replay = true;
-                buffer.unavailable();
+        let page = read(&scope, &mut source.reader);
+        let (events, more) = page
+            .as_ref()
+            .map_or((false, false), |page| (!page.events.is_empty(), page.more));
+        {
+            let mut buffer = lock(&entry);
+            if buffer.users == 0 {
+                continue;
+            }
+            match page {
+                Ok(page) => buffer.publish(page),
+                Err(_) => {
+                    source.reader.replay = true;
+                    buffer.unavailable();
+                }
             }
         }
+        // Paced from the end of the read, so a host that answers slowly is not read back to back.
+        let Some(now) = clock() else {
+            continue;
+        };
+        if events {
+            source.streamed = Some(now);
+        }
+        let pace = if events && more {
+            Duration::ZERO
+        } else if source
+            .streamed
+            .is_some_and(|at| now.saturating_duration_since(at) < SESSION_STREAM_LINGER)
+        {
+            SESSION_STREAM_POLL
+        } else {
+            SESSION_POLL
+        };
+        source.due = Some(now + pace);
+        wait = wait.min(pace);
     }
+    wait
 }

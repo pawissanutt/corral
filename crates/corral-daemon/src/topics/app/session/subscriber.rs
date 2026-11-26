@@ -17,18 +17,35 @@ use super::{
     buffer::{Buffer, Entry, Watches},
     lock,
 };
-use crate::{state::Shared, topics::notification};
+use crate::{state::Shared, topics::notification, wake::Waker};
 
 pub(super) struct Watch {
     service: Arc<Watches>,
     scope: Arc<str>,
     pub(super) entry: Entry,
+    waker: Option<Arc<Waker>>,
+}
+
+impl Watch {
+    /// Publications to this scope wake `waker`'s connection for as long as it watches.
+    pub(super) fn wake(&mut self, waker: &Arc<Waker>) {
+        lock(&self.entry).wakers.push(Arc::clone(waker));
+        self.waker = Some(Arc::clone(waker));
+    }
 }
 
 impl Drop for Watch {
     fn drop(&mut self) {
         let mut entries = lock(&self.service.entries);
         let mut buffer = lock(&self.entry);
+        if let Some(waker) = &self.waker
+            && let Some(at) = buffer
+                .wakers
+                .iter()
+                .position(|held| Arc::ptr_eq(held, waker))
+        {
+            buffer.wakers.swap_remove(at);
+        }
         buffer.users -= 1;
         if buffer.users == 0 {
             entries.remove(&self.scope);
@@ -39,6 +56,8 @@ impl Drop for Watch {
 #[derive(Default)]
 pub(in crate::topics) struct SessionTopics {
     subscribers: BTreeMap<Arc<str>, Subscriber>,
+    /// Made with the first subscription: a connection that watches no session waits as before.
+    waker: Option<Arc<Waker>>,
 }
 
 impl SessionTopics {
@@ -52,14 +71,27 @@ impl SessionTopics {
             self.subscribers.contains_key(&scope) || self.subscribers.len() < SESSION_SUBSCRIPTIONS,
             "too many session subscriptions"
         );
-        let sub = subscribe(
+        let waker = match &self.waker {
+            Some(waker) => Arc::clone(waker),
+            None => {
+                let waker = Arc::new(Waker::new().context("opening the session wake signal")?);
+                self.waker = Some(Arc::clone(&waker));
+                waker
+            }
+        };
+        let mut sub = subscribe(
             Arc::clone(&shared.session_live.watches),
             Arc::clone(&scope),
             shared.epoch(),
             open.since,
         )?;
+        sub.watch.wake(&waker);
         self.subscribers.insert(scope, sub);
         Ok(())
+    }
+
+    pub fn waker(&self) -> Option<Arc<Waker>> {
+        self.waker.clone()
     }
 
     pub fn close(&mut self, scope: Option<String>) {
@@ -136,6 +168,7 @@ pub(super) fn subscribe(
             service,
             scope,
             entry,
+            waker: None,
         },
         epoch,
         version,

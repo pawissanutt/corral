@@ -134,6 +134,11 @@ impl<'a> Subscriptions<'a> {
         }
     }
 
+    /// Ends this connection's wait for client input when a watched session has a page.
+    pub(crate) fn waker(&self) -> Option<std::sync::Arc<crate::wake::Waker>> {
+        self.sessions.waker()
+    }
+
     pub fn flush(&mut self, conn: &mut dyn Conn) -> Result<()> {
         self.model_discovery.flush(conn)?;
         let mut i = 0;

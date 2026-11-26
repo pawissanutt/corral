@@ -2,6 +2,7 @@
 use std::{
     io::{self, Cursor, Read, Write},
     net::TcpStream,
+    os::fd::AsFd,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -23,6 +24,7 @@ use tungstenite::{
 use crate::{
     conn::{Conn, IO_TIMEOUT},
     devices::{Devices, SessionGuard},
+    wake::{self, Waker},
 };
 
 pub(super) const UPGRADE_MAX: usize = 8_192;
@@ -43,6 +45,8 @@ pub(super) struct Bounded {
     read_deadline: Instant,
     write_deadline: Instant,
     write_idle: Option<Duration>,
+    /// Ends a wait for the peer when the daemon has a page for this connection.
+    waker: Option<Arc<Waker>>,
 }
 
 fn remaining(deadline: Instant) -> io::Result<Duration> {
@@ -62,6 +66,7 @@ impl Bounded {
             read_deadline: deadline,
             write_deadline: deadline,
             write_idle: None,
+            waker: None,
         }
     }
 
@@ -93,6 +98,12 @@ impl Read for Bounded {
         }
         if !self.replay.get_ref().is_empty() {
             self.replay = Cursor::default();
+        }
+        if let Some(waker) = &self.waker
+            && !wake::readable(self.stream.as_fd(), Some(waker), timeout)?
+        {
+            // As a read slice that ran out: the caller flushes its topics and reads again.
+            return Err(io::ErrorKind::WouldBlock.into());
         }
         self.stream.set_read_timeout(Some(timeout))?;
         let len = match self.remaining {
@@ -361,6 +372,10 @@ impl Conn for WsConn {
 }
 
 impl WsConn {
+    pub(super) fn wake_with(&mut self, waker: Option<Arc<Waker>>) {
+        self.ws.get_mut().waker = waker;
+    }
+
     pub(super) fn recv(&mut self) -> Result<Option<Frame>> {
         self.ws.get_mut().budget(READ_SLICE, IO_TIMEOUT);
         let deadline = self.ws.get_mut().read_deadline;

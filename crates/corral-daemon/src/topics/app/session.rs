@@ -2,7 +2,7 @@
 use std::{
     sync::{Arc, Mutex, MutexGuard},
     thread::JoinHandle,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result, ensure};
@@ -15,10 +15,14 @@ mod reader;
 mod subscriber;
 
 use buffer::Watches;
-use reader::{Sources, poll};
+use reader::{Sources, pass};
 pub(in crate::topics) use subscriber::SessionTopics;
 
+/// How often a quiet watched scope's host is read.
 pub(crate) const SESSION_POLL: Duration = Duration::from_millis(100);
+/// How often it is read while it returns events, and for how long after the last of them.
+pub(crate) const SESSION_STREAM_POLL: Duration = Duration::from_millis(30);
+pub(crate) const SESSION_STREAM_LINGER: Duration = Duration::from_secs(1);
 pub(crate) const SESSION_SCOPES: usize = 128;
 pub(crate) const SESSION_SUBSCRIPTIONS: usize = 32;
 pub(crate) const SESSION_SCOPE_BYTES: usize = 512;
@@ -49,14 +53,15 @@ pub(crate) fn start_session_live(shared: &Arc<Shared>) -> Result<()> {
         .spawn(move || {
             let mut sources = Sources::default();
             while !shared_worker.lock().closed {
-                poll(
+                let wait = pass(
                     &shared_worker.session_live.watches,
                     &mut sources,
+                    || Some(Instant::now()),
                     |scope, reader| reader.read(&shared_worker, scope),
                     || shared_worker.lock().closed,
                 );
-                // Sleep after the complete pass: wakeups of unrelated topics cannot exceed 10 Hz.
-                std::thread::sleep(SESSION_POLL);
+                // Until the next scope is due: a quiet one is read at 10 Hz, never faster.
+                std::thread::sleep(wait);
             }
         })
         .context("starting session live worker")?;

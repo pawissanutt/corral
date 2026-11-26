@@ -15,6 +15,7 @@ use super::{
     SESSION_BUFFER_BYTES, SESSION_BUFFER_EVENTS,
     reader::{LivePage, nonempty_fleet},
 };
+use crate::wake::Waker;
 
 pub(super) type Entry = Arc<Mutex<Buffer>>;
 
@@ -38,6 +39,9 @@ pub(super) struct Buffer {
     pub(super) fleet: Option<(SessionFleet, usize)>,
     pub(super) state: Option<(SessionState, usize)>,
     pub(super) state_version: u64,
+    /// The connections watching this scope: each is woken when there is a page to send,
+    /// so none waits out its idle read slice with events buffered.
+    pub(super) wakers: Vec<Arc<Waker>>,
 }
 
 impl Buffer {
@@ -56,6 +60,13 @@ impl Buffer {
             fleet: None,
             state: None,
             state_version: 0,
+            wakers: Vec::new(),
+        }
+    }
+
+    fn wake(&self) {
+        for waker in &self.wakers {
+            waker.wake();
         }
     }
 
@@ -88,6 +99,7 @@ impl Buffer {
                     reconcile: true,
                 }),
             );
+            self.wake();
         }
     }
 
@@ -99,6 +111,8 @@ impl Buffer {
         let changed = !self.ready
             || self.generation != page.generation
             || (page.generation.is_none() && self.gap.is_some());
+        // An idle read publishes nothing a subscriber would send.
+        let mut wake = changed || page.gap.is_some() || !page.events.is_empty();
         if changed {
             self.fleet = None;
             self.state = None;
@@ -126,6 +140,7 @@ impl Buffer {
         {
             self.state = Some(state);
             self.state_version = self.state_version.wrapping_add(1);
+            wake = true;
         }
         for (event, bytes) in page.events {
             self.bytes += bytes;
@@ -138,5 +153,8 @@ impl Buffer {
         }
         self.next = page.next;
         self.more = page.more;
+        if wake {
+            self.wake();
+        }
     }
 }

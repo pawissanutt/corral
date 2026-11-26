@@ -8,7 +8,10 @@ use corral_protocol::{
     frame::{FrameKind, read_frame_until},
     rpc,
 };
-use std::os::unix::net::{UnixListener, UnixStream};
+use std::os::{
+    fd::AsFd,
+    unix::net::{UnixListener, UnixStream},
+};
 
 use crate::{
     app::dispatch,
@@ -19,6 +22,8 @@ use crate::{
 
 pub(crate) const MAX_CONNECTIONS: usize = 64;
 const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long a quiet connection waits for a client frame before checking its topics again.
+const IDLE_SLICE: Duration = Duration::from_millis(500);
 
 pub(crate) fn start(listener: UnixListener, shared: Arc<Shared>) -> Result<()> {
     listener
@@ -134,18 +139,11 @@ pub(super) fn serve(mut stream: UnixStream, shared: Arc<Shared>) -> Result<()> {
         }
         // Poll before reading so idle clients survive between requests, while a partial
         // frame still has a bounded read deadline. Shutdown never waits for the peer.
-        let ready = rustix::event::poll(
-            &mut [rustix::event::PollFd::new(
-                &stream,
-                rustix::event::PollFlags::IN,
-            )],
-            Some(&rustix::event::Timespec {
-                tv_sec: 0,
-                tv_nsec: 500_000_000,
-            }),
-        )
-        .context("waiting for client frame")?;
-        if ready == 0 {
+        // A watched session's page ends the wait too: the next pass flushes it.
+        let waker = topics.waker();
+        if !crate::wake::readable(stream.as_fd(), waker.as_deref(), IDLE_SLICE)
+            .context("waiting for client frame")?
+        {
             continue;
         }
         let deadline = if welcomed {

@@ -19,6 +19,9 @@ use corral_protocol::{
 use serde_json::json;
 use std::sync::Arc;
 
+#[path = "pace_tests.rs"]
+mod pace;
+
 fn service() -> Arc<Watches> {
     Arc::default()
 }

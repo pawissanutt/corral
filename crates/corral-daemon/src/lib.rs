@@ -21,6 +21,7 @@ mod state;
 mod system;
 mod topics;
 mod views;
+mod wake;
 
 pub mod client;
 

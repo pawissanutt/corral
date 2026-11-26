@@ -105,6 +105,7 @@ pub(super) fn serve(
             }
             topics.flush(&mut conn)?;
         }
+        conn.wake_with(topics.waker());
         let frame = match conn.recv() {
             Ok(Some(frame)) => frame,
             Ok(None) => continue,
