@@ -73,9 +73,13 @@ test("a reader behind the ring is told where the open turn is and what was writt
   const live = new LiveEvents(2);
   start(live);
   for (const text of ["one ", "two ", "three"]) delta(live, text);
-  expect(live.since(0, EVENT_PAGE_BYTES).open).toEqual({
-    turn: 7, message: 1, ended: false, text_offset: 0, text: "one two three", thinking_offset: 0, thinking: "",
+  const first = live.since(0, EVENT_PAGE_BYTES).open!;
+  expect(first).toEqual({
+    turn: 7, message: 1, ended: false, message_at: first.message_at,
+    text_offset: 0, text: "one two three", thinking_offset: 0, thinking: "",
   });
+  // The journal stamps the message's record on this clock, after this.
+  expect(Date.parse(first.message_at!)).toBeLessThanOrEqual(Date.now());
   expect(live.since(live.events.last, EVENT_PAGE_BYTES).open).toBeUndefined();
   delta(live, "é".repeat(20_000));
   const long = live.since(0, EVENT_PAGE_BYTES);

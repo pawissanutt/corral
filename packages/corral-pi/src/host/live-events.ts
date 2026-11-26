@@ -57,6 +57,10 @@ export interface OpenTurn {
   /** Ordinal of the turn's latest assistant message; 0 before the first. */
   readonly message: number;
   readonly ended: boolean;
+  /** When that message started, on the clock that stamps journal entries: its record is the
+   * assistant entry stamped at or after this, so a reader can tell whether the journal it
+   * reads already holds it. Absent before the turn's first message. */
+  readonly message_at?: string;
   readonly text_offset: number;
   readonly text: string;
   readonly thinking_offset: number;
@@ -77,6 +81,7 @@ export class LiveEvents {
   private thinkingOffset = 0;
   private turn: number | undefined;
   private messageEnded = true;
+  private messageAt: string | undefined;
   private written = { live_text: Buffer.alloc(0), live_thinking: Buffer.alloc(0) };
   private error: string | undefined;
   private readonly toolCompletions: Record<string, unknown>[] = [];
@@ -210,6 +215,7 @@ export class LiveEvents {
       const text = tail(this.written.live_text, this.messageEnded ? 0 : limit);
       const thinking = tail(this.written.live_thinking, this.messageEnded ? 0 : limit);
       const open = { turn: this.turn, message: this.message, ended: this.messageEnded,
+        ...(this.messageAt ? { message_at: this.messageAt } : {}),
         text_offset: this.textOffset - this.written.live_text.length + text.skipped, text: text.text,
         thinking_offset: this.thinkingOffset - this.written.live_thinking.length + thinking.skipped,
         thinking: thinking.text };
@@ -248,6 +254,7 @@ export class LiveEvents {
         this.thinkingOffset = 0;
         this.turn = turn;
         this.messageEnded = true;
+        this.messageAt = undefined;
         this.written = { live_text: Buffer.alloc(0), live_thinking: Buffer.alloc(0) };
         this.error = undefined;
         this.toolCompletions.length = 0;
@@ -271,6 +278,7 @@ export class LiveEvents {
         this.textOffset = 0;
         this.thinkingOffset = 0;
         this.messageEnded = false;
+        this.messageAt = new Date().toISOString();
         this.written = { live_text: Buffer.alloc(0), live_thinking: Buffer.alloc(0) };
         this.error = undefined;
         break;
