@@ -11,7 +11,7 @@ export interface ImageScope {
   readonly root?: string;
   refusal(path?: string): string | undefined;
   /** Authorize the prepared destination; return a check to repeat before publication. */
-  authorize?(path: string, prompt: string, identity: string): () => void;
+  authorize?(path: string, prompt: string, preparedPath: string, identity: string): () => void;
 }
 
 /** Shared by one host and its children: changing the tool binding cannot open another slot. */
@@ -50,7 +50,7 @@ export class ImageGeneration {
           if (root && path) {
             output = preparePng(root, path);
             if (!scope.authorize) throw new Error("image_generation_unavailable: write authorization is unavailable");
-            recheck = scope.authorize(path, prompt, output.identity);
+            recheck = scope.authorize(path, prompt, output.path, output.identity);
             check();
             output.revalidate();
             recheck?.();

@@ -10,7 +10,10 @@ import type { AuthModule } from "../auth/types.ts";
 import { EventLog } from "../bridge/events.ts";
 import { assistantRole } from "../roles/assistant/index.ts";
 import { CorralClient } from "../tools/corral.ts";
-import { APPROVAL_CHOICES as CHOICE } from "./pending-questions.ts";
+import { APPROVAL_CHOICES as CHOICE, PendingQuestions } from "./pending-questions.ts";
+import { ToolApprovals } from "./tool-approvals.ts";
+import { ImageGeneration } from "../extensions/image/tool.ts";
+import { authorizeImageDestination } from "./image-authorization.ts";
 import { guardedFetch } from "./restrict.ts";
 import { HostSession } from "./session.ts";
 
@@ -72,6 +75,35 @@ async function imageHost(run: (f: {
     try { await host?.close(); } finally { rmSync(base, { recursive: true, force: true }); }
   }
 }
+
+linuxTest("image_gen refuses a classification that differs from the prepared destination before creating an approval", async () => {
+  const base = mkdtempSync(join(tmpdir(), "corral-image-mismatch-"));
+  const root = join(base, "root"), outside = join(base, "outside"), other = join(base, "other");
+  mkdirSync(root); mkdirSync(outside); mkdirSync(other);
+  let requests = 0;
+  const questions = new PendingQuestions({ session: () => "session", entries: () => [], append: () => {},
+    changed: () => {}, deliver: async () => false });
+  const approvals = new ToolApprovals(questions, root, true);
+  const image = new ImageGeneration({ provider: "openai", model: "gpt-image-1" }, {
+    auth: { provider: "openai-codex", providers: ["openai"], credentials: () => ({
+      read: async () => ({ type: "api_key", key: "sk-fixtureOnly" }), list: async () => [],
+      modify: async () => { throw new Error("unexpected write"); }, delete: async () => {},
+    }) },
+    fetch: async () => { requests++; return Response.json({ data: [{ b64_json: png }] }); },
+  }, () => {});
+  try {
+    const destination = join(outside, "dot.png");
+    const tool = image.tool({ root, refusal: () => undefined,
+      authorize: (path, prompt, prepared, identity) => authorizeImageDestination(path, prompt, prepared, identity,
+        { cwd: root, root }, approvals, () => ({ action: "ask", path: prepared, canonical: join(other, "dot.png") })) });
+    await expect(tool.execute("mismatch", { prompt: "dot", path: destination }, undefined, undefined, {} as never))
+      .rejects.toThrow("changed since preparation");
+    expect(questions.pending()).toEqual([]);
+    expect(requests).toBe(0);
+    expect(readdirSync(outside)).toEqual([]);
+    expect(readdirSync(other)).toEqual([]);
+  } finally { image.close(); rmSync(base, { recursive: true, force: true }); }
+});
 
 linuxTest("image_gen requests approval before dispatch and allow-once covers only the exact request", async () => {
   await imageHost(async ({ host, outside, path, requests, draw, answer }) => {

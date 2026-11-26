@@ -90,8 +90,8 @@ import { observeTerminalInput, type InputObservation } from "./input-observation
 import { browserSettings, browserTools } from "../extensions/browser/index.ts";
 import { installLocalProvider, LocalModelUnavailable } from "./local-models.ts";
 import { ImageGeneration } from "../extensions/image/tool.ts";
-import { classifyWriteScope } from "../roles/assistant/write-scope.ts";
-import { resolveToolPath, within } from "../roles/assistant/paths.ts";
+import { within } from "../roles/assistant/paths.ts";
+import { authorizeImageDestination } from "./image-authorization.ts";
 import type { HostedRoute } from "./hosted-settings.ts";
 import { hostedSearchTool, webTools } from "../extensions/web/index.ts";
 import { registerConfiguredApiSearchModel, runSubscriptionSearch } from "../extensions/web/subscription.ts";
@@ -1019,19 +1019,9 @@ export class HostSession {
         }
       }
       return undefined;
-    }, authorize: (path, prompt, destinationIdentity) => {
+    }, authorize: (path, prompt, preparedPath, destinationIdentity) => {
       if (!scope) throw new Error("image_generation_unavailable: no write scope");
-      const target = resolve(scope.root, path);
-      if (resolveToolPath(target, scope.cwd) !== target) throw new Error("image_generation_unavailable: unsupported destination spelling");
-      const decision = classifyWriteScope(target, scope);
-      const reason = this.toolApprovals ? this.toolApprovals.write("image_gen", { path, prompt }, decision, destinationIdentity)
-        : decision.action === "deny" ? decision.reason
-        : decision.action === "ask" ? "An owner approval interface is unavailable; nothing was written." : undefined;
-      if (reason) throw new Error(reason);
-      return () => {
-        const current = classifyWriteScope(target, scope);
-        if (JSON.stringify(current) !== JSON.stringify(decision)) throw new Error("Image destination changed since authorization; nothing was written.");
-      };
+      return authorizeImageDestination(path, prompt, preparedPath, destinationIdentity, scope, this.toolApprovals);
     } });
   }
 
