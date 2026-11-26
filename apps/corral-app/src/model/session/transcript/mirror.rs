@@ -211,6 +211,55 @@ fn splice(page: &mut SessionPage, mirror: &mut Mirror, first: Option<&str>, olde
     }
 }
 
+/// The cursor before what this client holds reads nothing any more: the journal was
+/// replaced under messages it kept. A page of the latest messages read afresh has one that
+/// does, so the messages start again at that page. What the client holds from the first
+/// message both have stays, with whatever was written since the page was read.
+pub(crate) fn rejoin(cache: &mut DetailCache, head: &SessionPage) {
+    let Some(DetailBody::Session(page)) = &mut cache.merged else {
+        return;
+    };
+    let mirror = &mut cache.transcript_seams.mirror;
+    let shared = page
+        .messages
+        .iter()
+        .enumerate()
+        .find_map(|(held, message)| {
+            let fresh = head.messages.iter().position(|m| m.id == message.id)?;
+            Some((held, fresh))
+        });
+    // With no message in common, only the one being written is kept.
+    let (keep, fresh) = shared.unwrap_or_else(|| {
+        let open = mirror.open.as_deref();
+        let open = open.and_then(|id| page.messages.iter().position(|m| m.id == id));
+        (open.unwrap_or(page.messages.len()), head.messages.len())
+    });
+    for message in page.messages.drain(..keep) {
+        mirror.forget(&message.id);
+    }
+    for message in &head.messages {
+        mirror.before.remove(&message.id);
+    }
+    if shared.is_some()
+        && fresh == 0
+        && let (Some(held), Some(first)) = (page.messages.first_mut(), head.messages.first())
+    {
+        // The page may begin inside this message, where its cursor resumes.
+        mirror.sizes.remove(&first.id);
+        mirror.cuts.remove(&first.id);
+        *held = first.clone();
+    }
+    let mut messages = head.messages[..fresh].to_vec();
+    messages.append(&mut page.messages);
+    *page = SessionPage {
+        messages,
+        ..head.clone()
+    };
+    mirror.remember_edge(page);
+    cache.transcript_seams.empty_cursors.clear();
+    bound(cache);
+}
+
 impl Mirror {
     pub(crate) fn bytes(&self) -> usize {
         self.sizes.values().sum()

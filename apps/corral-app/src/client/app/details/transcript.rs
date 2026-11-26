@@ -225,7 +225,17 @@ impl AppState {
         }) {
             feed.update(|f| {
                 if let Some(cache) = f.details.get_mut(key) {
-                    if let Some(DetailBody::Session(held)) = &mut cache.merged {
+                    // The latest page, asked for because the cursor before the held
+                    // messages reads nothing any more: its cursor replaces that one.
+                    let lost = request.page.is_none()
+                        && cache
+                            .error
+                            .as_ref()
+                            .is_some_and(|error| error.code == HISTORY_CHANGED);
+                    if lost {
+                        replay::mirror::rejoin(cache, current);
+                        cache.pages = vec![page.clone()];
+                    } else if let Some(DetailBody::Session(held)) = &mut cache.merged {
                         if request.page.is_some() {
                             if request.page == held.older {
                                 let mirror = &mut cache.transcript_seams.mirror;

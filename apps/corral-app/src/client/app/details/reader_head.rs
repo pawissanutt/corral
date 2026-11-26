@@ -27,6 +27,24 @@ impl AppState {
         {
             // Returning from a detached reader means rejoining the mirrored head, not
             // publishing this independently fetched, possibly older snapshot over it.
+            // Its cursor is what the head lacks when the one before its messages reads
+            // nothing any more.
+            if shared.as_ref().is_some_and(|held| {
+                held.error
+                    .as_ref()
+                    .is_some_and(|error| error.code == "history_changed")
+            }) && let Some(DetailBody::Session(head)) = cache.body()
+            {
+                feed.update(|f| {
+                    if let Some(held) = f.details.get_mut(&key) {
+                        crate::model::session::transcript::mirror::rejoin(held, head);
+                        held.pages.clone_from(&cache.pages);
+                        held.loading = false;
+                        held.stale = false;
+                        held.error = None;
+                    }
+                });
+            }
             self.close_reader(feed, holder);
             return vec![];
         }

@@ -200,6 +200,74 @@ fn a_cut_message_keeps_what_was_paged_back_when_it_comes_again() {
     );
 }
 
+/// A reset that began at a held message kept the messages before it and their cursor. When
+/// the journal had been replaced that cursor read nothing, and Load latest kept it too.
+#[test]
+fn load_latest_gives_a_replaced_journal_a_cursor_that_reads() {
+    // From the transcript itself, and from a reader that returns to it.
+    latest_reads(false);
+    latest_reads(true);
+}
+
+fn latest_reads(reader: bool) {
+    let runtime = nsh_core::element::Runtime::default();
+    let _entered = runtime.enter();
+    let feed = signal(Feed::default());
+    feed.update(|f| {
+        f.capabilities.insert(SESSION_TRANSCRIPT_V1.into());
+    });
+    let mut app = AppState::new();
+    app.ready = true;
+    app.session_scopes.insert("B-1".into(), 1);
+    let get = read(&mut app, feed, None);
+    let rows: &[(&str, &[&str])] = &[("one", &["1"]), ("two", &["2"])];
+    reply(&mut app, feed, get, None, page("a", rows, Some("old")));
+    apply(
+        feed,
+        vec![
+            TranscriptOp::Reset {
+                older: Some("new-before-two".into()),
+            },
+            put("two", &["2"], None, false),
+            put("writing", &["so far"], None, true),
+        ],
+        false,
+    );
+    let [(_, params, tag)]: [Outgoing; 1] = read(&mut app, feed, Some("old")).try_into().unwrap();
+    let refused = Err((ErrorCode::Conflict, "replaced".into()));
+    app.detail_reply(feed, tag, params, refused).unwrap();
+    assert!(read(&mut app, feed, Some("old")).is_empty());
+
+    let get = if reader {
+        app.reader_step(
+            feed,
+            ReaderIntent {
+                holder: 1,
+                store: None,
+                scope: "B-1".into(),
+                resolved: "B-1".into(),
+                anchor: None,
+                step: ReaderStep::Latest,
+            },
+        )
+    } else {
+        app.latest_transcript(feed, "B-1".into())
+    };
+    let rows: &[(&str, &[&str])] = &[("two", &["2"])];
+    reply(&mut app, feed, get, None, page("b", rows, Some("new")));
+    let get = read(&mut app, feed, Some("new"));
+    let rows: &[(&str, &[&str])] = &[("one", &["1"])];
+    reply(&mut app, feed, get, Some("new"), page("c", rows, None));
+    assert_eq!(
+        shown(feed),
+        [
+            ("one".into(), vec!["1".into()]),
+            ("two".into(), vec!["2".into()]),
+            ("writing".into(), vec!["so far".into()])
+        ]
+    );
+}
+
 /// A long reply's record carries a preview of its words: the reply shrank to it when it
 /// ended, and grew back once the rest was read.
 #[test]

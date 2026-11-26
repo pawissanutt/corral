@@ -560,6 +560,10 @@ end the turn the host is in. While the journal cannot be read corrald still foll
 host's pages, which it does not ask for again, and the reply goes on growing. When the
 journal is read again corrald counts the records that reached it meanwhile and puts
 the messages still being written after the tail, from the words the host writes next.
+The tail it reads again is one page. When more than that was written since the last
+record it paired, it cannot tell which of the turn's messages are recorded: it leaves
+the rest of that turn's words out rather than guess, the records still arrive, and the
+next turn is followed from its start.
 
 Operations share the page's byte budget with its events. A subscriber's operations are a
 bounded backlog beside the buffered events; one that falls behind it is sent `reset` and
@@ -569,6 +573,12 @@ History cursors (`SessionPage.older`, `reset.older`, `put.before`) stay valid wh
 journal is appended to. They are stamped with the journal's identity, not its size or
 modification time, and pinned to a record by its id, so only a replaced journal or a
 record that is no longer there makes one stale (`history_changed`).
+
+A client that kept messages from before a `reset` (the reset began at one it held) kept
+their cursor with them, and a replaced journal makes that cursor stale. The app then
+offers Load latest: it reads the latest page afresh, starts its messages again at that
+page with the page's cursor, and keeps what it holds from the first message both have,
+so the message being written and anything put since the page was read stay.
 
 ### Children and agent messages
 
