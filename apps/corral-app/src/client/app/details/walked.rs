@@ -34,11 +34,44 @@ impl AppState {
                 .unwrap_or_default()
         });
         let chain = self.detail_pages.remove(&key).unwrap_or_default();
-        if request.page.is_some() && chain.is_empty() && request.etag.is_none() {
-            if self.over_budget(feed, &key, &id, &page, saved.len()) {
+        // A branch refresh starts a new window, not a replay of the old walked depth.
+        if matches!(request.target, DetailRef::ProjectBranches { .. }) && request.page.is_none() {
+            let current = if page.body.is_some() {
+                page
+            } else if let Some(kept) = saved.first().filter(|kept| kept.etag == page.etag) {
+                DetailReply {
+                    as_of: page.as_of,
+                    seq: page.seq,
+                    ..kept.clone()
+                }
+            } else {
+                self.detail_failed(
+                    feed,
+                    &key,
+                    &id,
+                    ClientError {
+                        code: "invalid_reply".into(),
+                        message: "Uncached branch page marked unchanged.".into(),
+                    },
+                );
+                return vec![];
+            };
+            if self.over_budget(feed, &key, &id, &current, 0) {
                 return vec![];
             }
+            self.publish(feed, &key, &id, &request.target, vec![current]);
+            return vec![];
+        }
+        if request.page.is_some() && chain.is_empty() && request.etag.is_none() {
             let mut pages = saved;
+            // Branch inventories can be arbitrarily large. Keep a small moving window rather
+            // than stranding the picker at the general detail cache's 256-page bound.
+            if matches!(request.target, DetailRef::ProjectBranches { .. }) {
+                trim_branch_window(&mut pages);
+            }
+            if self.over_budget(feed, &key, &id, &page, pages.len()) {
+                return vec![];
+            }
             pages.push(page);
             self.publish(feed, &key, &id, &request.target, pages);
             return vec![];
@@ -90,6 +123,13 @@ impl AppState {
                 vec![]
             }
         }
+    }
+}
+
+fn trim_branch_window(pages: &mut Vec<DetailReply>) {
+    const WINDOW: usize = 4;
+    if pages.len() >= WINDOW {
+        pages.drain(..pages.len() + 1 - WINDOW);
     }
 }
 
@@ -316,6 +356,27 @@ fn item_key(item: &Value) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn branch_window_advances_without_growing_and_keeps_latest_cursor() {
+        let mut pages = Vec::new();
+        for index in 0..6 {
+            trim_branch_window(&mut pages);
+            pages.push(DetailReply {
+                etag: index.to_string(),
+                as_of: "2026-11-14T00:00:00Z".into(),
+                seq: 1,
+                next: Some((index + 1).to_string()),
+                body: None,
+            });
+        }
+        assert_eq!(pages.len(), 4);
+        assert_eq!(pages[0].etag, "2");
+        assert_eq!(
+            pages.last().and_then(|page| page.next.as_deref()),
+            Some("6")
+        );
+    }
 
     #[test]
     fn paged_nested_rows_merge_by_id_and_fixed_stages_do_not_duplicate() {

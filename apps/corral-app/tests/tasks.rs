@@ -289,6 +289,12 @@ fn a_new_tasks_base_reaches_a_branch_past_the_first_page_and_keeps_it() {
     app.press(OLDER).unwrap();
     app.wait_for_gone("id:seg-base-release/0.9", wait).unwrap();
     app.wait_for("text:archive/older").unwrap();
+    // Reopening revalidates from the first page without losing the selected older value.
+    app.press(BASE).unwrap();
+    app.wait_for("id:btn-base-more").unwrap();
+    app.wait_for(OLDER).unwrap();
+    app.press(OLDER).unwrap();
+    app.wait_for_gone("id:seg-base-none", wait).unwrap();
 
     // Another project's branches do not hold it; the choice stays, named as kept.
     app.press(PROJECT).unwrap();

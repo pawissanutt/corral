@@ -12,7 +12,7 @@
 //! (`<field>-error`, `btn-<field>-retry`), after one failed.
 
 use corral_protocol::detail::{DetailGet, DetailRef};
-use nsh_base::{menu, menu_item};
+use nsh_base::{MenuEvent, menu, menu_item};
 use nsh_core::prelude::*;
 
 use crate::model::Form;
@@ -91,6 +91,20 @@ fn branch_paging(app: AppState, project: Memo<String>) -> Paging {
         let project = project.get();
         (!project.is_empty()).then(|| branches_ref(&project))
     });
+    // Git branches can change without a project row changing (especially beyond its top 100).
+    // Revalidate a retained list each time this form enters a project.
+    effect(move || {
+        if let Some(target) = target.get() {
+            untracked(|| {
+                if app
+                    .feed
+                    .with_untracked(|feed| feed.detail(&target).is_some())
+                {
+                    app.refresh(target);
+                }
+            });
+        }
+    });
     keep_details(
         app,
         computed(move || target.get().into_iter().collect()),
@@ -128,10 +142,18 @@ pub fn choice_field(
             .find(|choice| choice.value == value)
             .map_or(value, |choice| choice.label)
     };
+    let count = counted(app);
     let picker = menu()
         .popup_style(popup(form))
         .backdrop_style(backdrop)
-        .on_open_change(counted(app))
+        .on_open_change(move |event: &MenuEvent| {
+            count(event);
+            if matches!(event, MenuEvent::OpenChange(true, _))
+                && let Some((target, _)) = paging.and_then(|paging| paging.get_untracked())
+            {
+                app.refresh(target);
+            }
+        })
         .trigger(menu_trigger_reactive(
             app,
             move || shown().into(),
@@ -187,14 +209,28 @@ fn foot(app: AppState, group: &str, target: DetailRef, page: BranchPage) -> Vec<
         return vec![note.into_element(), retry];
     }
     if let Some(next) = page.next {
+        let next_target = target.clone();
         let more = action(app, MORE, &format!("btn-{group}-more"), true, move || {
             app.detail(DetailGet {
-                target: target.clone(),
+                target: next_target.clone(),
                 etag: None,
                 page: Some(next.clone()),
             });
         });
-        return vec![more];
+        let first = action(
+            app,
+            "First branches",
+            &format!("btn-{group}-first"),
+            false,
+            move || {
+                app.detail(DetailGet {
+                    target: target.clone(),
+                    etag: None,
+                    page: None,
+                });
+            },
+        );
+        return vec![more, first];
     }
     if page.loading {
         let note = content(form, words(form, LOADING.to_owned(), Token::Ink2))
@@ -202,6 +238,21 @@ fn foot(app: AppState, group: &str, target: DetailRef, page: BranchPage) -> Vec<
             .border_color(color(Token::Rule))
             .test_id(&format!("{group}-loading"));
         return vec![note.into_element()];
+    }
+    if !page.branches.is_empty() {
+        return vec![action(
+            app,
+            "First branches",
+            &format!("btn-{group}-first"),
+            true,
+            move || {
+                app.detail(DetailGet {
+                    target: target.clone(),
+                    etag: None,
+                    page: None,
+                });
+            },
+        )];
     }
     Vec::new()
 }

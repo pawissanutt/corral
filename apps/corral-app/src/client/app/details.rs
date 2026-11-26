@@ -154,6 +154,20 @@ impl AppState {
                 return vec![];
             }
         }
+        if matches!(request.target, DetailRef::ProjectBranches { .. })
+            && let Some(cursor) = request.page.as_deref()
+        {
+            let current = feed.with_untracked(|feed| {
+                feed.details.get(&key).is_some_and(|cache| {
+                    !cache.loading
+                        && cache.error.is_none()
+                        && cache.pages.last().and_then(|page| page.next.as_deref()) == Some(cursor)
+                })
+            });
+            if !current {
+                return vec![];
+            }
+        }
         if !latest_only && (walked || session) && request.page.is_none() && request.etag.is_none() {
             // Validate the newest held page, not the cursor of a previously read page.
             request.etag = feed.with_untracked(|feed| {
