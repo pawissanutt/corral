@@ -21,43 +21,77 @@ const MORE_SHORT: &str = "⋯";
 /// the owner's move, outlined otherwise. `wide` takes the room of its row, as a phone's bar
 /// does.
 pub fn next_button(app: AppState, record: &str, step: &NextStep, wide: bool) -> AnyElement {
-    let action = step.press.clone();
-    button_with(
+    let kind = if step.yours {
+        ButtonKind::Primary
+    } else {
+        ButtonKind::Ghost
+    };
+    sent_aware(
         app,
-        step.label.clone(),
-        if step.yours {
-            ButtonKind::Primary
-        } else {
-            ButtonKind::Ghost
-        },
+        record,
+        step,
+        kind,
         ButtonOptions {
             wide,
             ..ButtonOptions::default()
         },
-        next_id(record),
-        move || press(app, action.clone()),
     )
+}
+
+/// The step's button, which says the step is under way (`Moving to Ready…`) and takes no press
+/// from the moment it is sent until corrald answers. The outcome then shows as the task's
+/// status, a receipt or the refusal sheet.
+fn sent_aware(
+    app: AppState,
+    record: &str,
+    step: &NextStep,
+    kind: ButtonKind,
+    options: ButtonOptions,
+) -> AnyElement {
+    let op = step.op();
+    let sent = computed(move || op.as_ref().is_some_and(|op| app.op_pending(op)));
+    let (step, id) = (step.clone(), next_id(record));
+    dynamic(move || {
+        let sent = sent.get();
+        let label = sent
+            .then(|| step.pending_label())
+            .flatten()
+            .unwrap_or_else(|| step.label.clone());
+        let action = step.press.clone();
+        untracked(|| {
+            button_with(
+                app,
+                label,
+                kind,
+                ButtonOptions {
+                    disabled: sent,
+                    ..options
+                },
+                id.clone(),
+                move || press(app, action.clone()),
+            )
+        })
+    })
 }
 
 /// The record's next step as a list row carries it (test id `next-<record>`): sized to sit
 /// inside the row, filled when the step is the owner's move and otherwise only words, so a
 /// column of routine steps reads quietly and the one waiting on the owner stands out.
 pub fn row_next_button(app: AppState, record: &str, step: &NextStep) -> AnyElement {
-    let action = step.press.clone();
-    button_with(
+    let kind = if step.yours {
+        ButtonKind::Primary
+    } else {
+        ButtonKind::Quiet
+    };
+    sent_aware(
         app,
-        step.label.clone(),
-        if step.yours {
-            ButtonKind::Primary
-        } else {
-            ButtonKind::Quiet
-        },
+        record,
+        step,
+        kind,
         ButtonOptions {
             compact: true,
             ..ButtonOptions::default()
         },
-        next_id(record),
-        move || press(app, action.clone()),
     )
 }
 

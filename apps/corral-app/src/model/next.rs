@@ -36,6 +36,30 @@ impl NextStep {
             yours: step == Step::Approve,
         }
     }
+
+    /// The engine operation the step submits on one press; none for a step that opens a page
+    /// or runs a Blocked card's entry.
+    pub fn op(&self) -> Option<Op> {
+        match &self.press {
+            Press::Step { task, step } => Some(step.op(task)),
+            _ => None,
+        }
+    }
+
+    /// What the button says while its operation is sent and corrald has not answered:
+    /// `Moving to Ready…`. It names the operation under way, never its outcome.
+    pub fn pending_label(&self) -> Option<String> {
+        match &self.press {
+            Press::Step { step, .. } => Some(match step {
+                Step::Move(status) => {
+                    format!("Moving to {}…", crate::model::status::status_word(*status))
+                }
+                Step::Dispatch => "Dispatching…".into(),
+                Step::Approve => "Landing…".into(),
+            }),
+            _ => None,
+        }
+    }
 }
 
 /// The test id of a record's next-step button: `next-T-12`, `next-B-k3x9`.

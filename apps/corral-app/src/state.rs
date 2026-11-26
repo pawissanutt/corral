@@ -600,6 +600,7 @@ impl AppState {
             });
             // Another source has other operations.
             self.following.set(BTreeMap::new());
+            self.watching.set(BTreeMap::new());
             self.refusal.set(None);
             let uploads = self.ask_staged.with_untracked(|staged| {
                 staged

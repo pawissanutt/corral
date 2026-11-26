@@ -15,12 +15,26 @@ use crate::model::{Act, ActStatus, Id};
 
 const NO_SOURCE: &str = "Not connected. Choose Preview explicitly to use sample data.";
 
+/// The same operation, forced or not, as one already sent.
+fn same(sent: &Act, act: &Act) -> bool {
+    sent.op == act.op && sent.force == act.force
+}
+
 impl AppState {
     /// Submits the operation, after the confirm sheet when it is destructive or forced and the
     /// press that made it was not already its confirmation.
     pub fn dispatch(&self, act: Act) {
         if !untracked(|| self.daemon()) {
             self.toast(NO_SOURCE);
+            return;
+        }
+        // A second press while corrald has not answered the first would send the operation
+        // twice; the first one's outcome is still to come.
+        if self
+            .watching
+            .with_untracked(|watching| watching.values().any(|sent| same(sent, &act)))
+        {
+            self.toast(format!("{} · already sent, waiting for corrald", act.title));
             return;
         }
         if act.asks() && !act.confirmed {
@@ -109,6 +123,13 @@ impl AppState {
 
     pub fn close_refusal(&self) {
         self.refusal.set(None);
+    }
+
+    /// Whether `op` was sent from this app and its outcome has not come back: a next-step
+    /// button shows it as under way and takes no second press.
+    pub fn op_pending(&self, op: &corral_types::Op) -> bool {
+        self.watching
+            .with(|watching| watching.values().any(|sent| sent.op == *op))
     }
 
     /// Tracked status of an operation this app submitted.
