@@ -553,12 +553,18 @@ fn plans(engine: &Engine) -> Result<Vec<PlanRow>> {
 // in a control frame. The branch detail endpoint supplies the remainder on demand.
 const BRANCH_PREVIEW_BYTES: usize = 8 * 1024;
 
-fn branch_preview(branches: Vec<String>) -> Result<Vec<String>> {
+fn branch_preview(branches: Vec<String>, row_bytes: usize) -> Result<Vec<String>> {
+    // Reserve framing and cursor metadata as well as the row's other fields. If the row alone
+    // is already large, omit the optional preview rather than making the topic fail.
+    let budget = corral_protocol::app::APP_CONTROL_MAX
+        .saturating_sub(1024)
+        .saturating_sub(row_bytes)
+        .min(BRANCH_PREVIEW_BYTES);
     let mut used = 2usize; // JSON array brackets
     let mut preview = Vec::new();
     for branch in branches {
         let size = serde_json::to_vec(&branch)?.len().saturating_add(1);
-        if used.saturating_add(size) > BRANCH_PREVIEW_BYTES {
+        if used.saturating_add(size) > budget {
             break;
         }
         used += size;
@@ -576,9 +582,15 @@ mod branch_preview_tests {
         let names = (0..100)
             .map(|n| format!("{n:03}/{}", "a".repeat(700)))
             .collect();
-        let preview = branch_preview(names).unwrap();
+        let preview = branch_preview(names, 0).unwrap();
         assert!(preview.len() < 100);
         assert!(serde_json::to_vec(&preview).unwrap().len() <= BRANCH_PREVIEW_BYTES);
+        let near_limit = corral_protocol::app::APP_CONTROL_MAX - 1100;
+        assert!(
+            branch_preview(vec!["x".repeat(200)], near_limit)
+                .unwrap()
+                .is_empty()
+        );
     }
 }
 
@@ -596,12 +608,8 @@ fn projects(engine: &Engine) -> Result<Vec<ProjectRow>> {
             let effective = engine
                 .project_settings(id)
                 .or_else(|_| engine.config.effective_project(id))?;
-            let local_branches = engine
-                .project_local_branches(&effective.path)
-                .ok()
-                .map(branch_preview)
-                .transpose()?;
-            Ok(ProjectRow {
+            let local_branches = engine.project_local_branches(&effective.path).ok();
+            let mut row = ProjectRow {
                 id: id.clone(),
                 config: object(project)?,
                 open,
@@ -624,8 +632,13 @@ fn projects(engine: &Engine) -> Result<Vec<ProjectRow>> {
                     max_rounds: effective.max_rounds,
                     branch_prefix: effective.branch_prefix,
                 }),
-                local_branches,
-            })
+                local_branches: None,
+            };
+            let row_bytes = serde_json::to_vec(&row)?.len();
+            row.local_branches = local_branches
+                .map(|branches| branch_preview(branches, row_bytes))
+                .transpose()?;
+            Ok(row)
         })
         .collect()
 }

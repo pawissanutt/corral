@@ -309,6 +309,52 @@ fn a_new_tasks_base_reaches_a_branch_past_the_first_page_and_keeps_it() {
     app.wait_for_gone("id:verb", wait).unwrap();
 }
 
+/// More branches pressed from the keyboard lost the focus: the menu's rows were made again for
+/// the page it asked for, More with them, so Up then went to the menu's last row rather than on
+/// from More. The paging row stays one row while the page loads and arrives, so the focus stays
+/// on it: Up reaches the last branch the page brought, and Return chooses it. The title typed
+/// first kept the keys while the menu was open (End and Up moved its caret, Return sent the
+/// form); opening the menu ends that edit, so the keys reach the menu.
+#[test]
+fn more_branches_from_the_keyboard_keeps_the_focus_on_the_paging_row() {
+    // New task's fields: Project is the fourth, Base the twelfth (`model::work::verb_forms`).
+    const PROJECT: &str = "id:field-verb-3";
+    const BASE: &str = "id:field-verb-11";
+    // The sample serves `corral`'s branches two to a page: `main` and `release/0.9` first,
+    // `archive/older` on the second.
+    const OLDER: &str = "id:seg-base-archive/older";
+    let wait = Duration::from_secs(5);
+    let mut app = preview("tasks");
+    app.wait_for("id:btn-new-task").unwrap();
+    app.press("id:btn-new-task").unwrap();
+    app.wait_for("id:field-verb-0").unwrap();
+    app.type_text("id:field-verb-0", "Branch from the keyboard")
+        .unwrap();
+    app.press(PROJECT).unwrap();
+    app.press("id:seg-project-corral").unwrap();
+    app.wait_for_gone("id:seg-project-corral", wait).unwrap();
+
+    app.press(BASE).unwrap();
+    app.wait_for("id:btn-base-more").unwrap();
+    app.wait_for("id:btn-base-first").unwrap();
+    // End focuses the menu's last row, First branches; Up the one above it, More branches.
+    app.press_key("end").unwrap();
+    app.press_key("up").unwrap();
+    app.press_key("enter").unwrap();
+    app.wait_for(OLDER).unwrap();
+    // Still on the paging row, Up goes to the second page's last branch (a lost focus would
+    // have gone to First branches, which reads the first page again with the menu open).
+    app.press_key("up").unwrap();
+    app.press_key("enter").unwrap();
+    app.wait_for_gone("id:seg-base-none", wait).unwrap();
+    app.wait_for_gone("id:btn-base-first", wait).unwrap();
+    // The trigger names a branch past the first page.
+    assert!(
+        app.wait_for_gone("text:release/0.9", Duration::from_secs(1))
+            .is_ok()
+    );
+}
+
 /// Changes › Impact draws T-11's change on the System page's map at the task's head; its
 /// touched module opens the package's level with the module selected, and Open in System opens
 /// Activity › System at that level with the module selected.

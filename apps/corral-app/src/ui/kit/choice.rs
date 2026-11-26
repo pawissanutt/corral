@@ -10,6 +10,14 @@
 //! while corrald names a further page, which adds it without closing the menu; Loading
 //! (`<field>-loading`) while a page is on its way; and why none could be read, with Retry
 //! (`<field>-error`, `btn-<field>-retry`), after one failed.
+//!
+//! The menu's rows are keyed (each value by itself, the foot by its place), so a page arriving
+//! adds its branches without making the others again: the keyboard focus stays on the row it
+//! was on. More branches, Loading, Retry and First branches at the end are one row that reads
+//! each in turn, so the focus a press of More left there stays through the page it reads, and
+//! Up goes on from it to the last branch read.
+
+use std::rc::Rc;
 
 use corral_protocol::detail::{DetailGet, DetailRef};
 use nsh_base::{MenuEvent, menu, menu_item};
@@ -34,6 +42,8 @@ pub const MORE: &str = "More branches";
 pub const LOADING: &str = "Loading branches…";
 /// Retry's words, after a page failed.
 pub const RETRY: &str = "Retry";
+/// First branches' words: back to the first page.
+pub const FIRST: &str = "First branches";
 
 /// The `seg-<field>-…` group of a field's values.
 fn group(label: &str) -> String {
@@ -148,9 +158,17 @@ pub fn choice_field(
         .backdrop_style(backdrop)
         .on_open_change(move |event: &MenuEvent| {
             count(event);
-            if matches!(event, MenuEvent::OpenChange(true, _))
-                && let Some((target, _)) = paging.and_then(|paging| paging.get_untracked())
-            {
+            let opened = matches!(event, MenuEvent::OpenChange(true, _));
+            // A press on the trigger leaves the form's text field (the title takes the focus as
+            // the form opens) editing, and an editing field keeps the keys: End and Up moved its
+            // caret rather than the menu's focus, and Return sent the form. Opening ends the
+            // edit, as a press on a desktop's control takes the focus from the field, so the
+            // menu's keys reach its rows. A menu the keyboard opened from a focused trigger has
+            // no field editing; the focus on its row stays.
+            if opened && form != Form::Phone {
+                dismiss_keyboard();
+            }
+            if opened && let Some((target, _)) = paging.and_then(|paging| paging.get_untracked()) {
                 app.detail(DetailGet {
                     target,
                     etag: None,
@@ -164,24 +182,7 @@ pub fn choice_field(
             move || format!("{label}: {}", shown()).into(),
             &format!("field-verb-{index}"),
         ))
-        .child(dynamic(move || {
-            let chosen = current();
-            let choices = offered.get();
-            let paged = paging.and_then(|paging| paging.get());
-            untracked(|| {
-                let mut rows = choices
-                    .into_iter()
-                    .map(|choice| {
-                        let on = choice.value == chosen;
-                        item(app, &group, choice, on, values, index)
-                    })
-                    .collect::<Vec<_>>();
-                if let Some((target, page)) = paged {
-                    rows.extend(foot(app, &group, target, page));
-                }
-                view().children(rows).into_element()
-            })
-        }));
+        .child(rows(app, &group, offered, paging, values, index));
     view()
         .gap(px(if form == Form::Terminal { 0.0 } else { 6.0 }))
         .child(caption)
@@ -190,101 +191,230 @@ pub fn choice_field(
         .into_element()
 }
 
-/// What follows the branches served so far: why they could not all be read with Retry, More
-/// branches while corrald names a further page, Loading while one is on its way. A failed page
-/// leaves those already read offered.
-fn foot(app: AppState, group: &str, target: DetailRef, page: BranchPage) -> Vec<AnyElement> {
-    let form = app.form;
-    if let Some(error) = page.error {
-        let why = format!("Branches unavailable: {error}");
-        let note = content(form, words(form, why, Token::Ink2))
-            .border_t_1()
-            .border_color(color(Token::Rule))
-            .test_id(&format!("{group}-error"));
-        let retry = action(
-            app,
-            RETRY,
-            &format!("btn-{group}-retry"),
-            false,
+/// The menu's rows: the offered values, then (for a field that pages) the foot. Both are keyed,
+/// so a page arriving, a project's branches read again or a value chosen makes only the rows
+/// that came, and the one the keyboard focus is on stays with it.
+fn rows(
+    app: AppState,
+    group: &str,
+    offered: Memo<Vec<Choice>>,
+    paging: Option<Paging>,
+    values: Signal<Vec<String>>,
+    index: usize,
+) -> AnyElement {
+    let items = {
+        let group = group.to_owned();
+        each(
+            move || offered.get(),
+            |choice: &Choice| choice.value.clone(),
+            move |choice: ReadSignal<Choice>, _| item(app, &group, choice, values, index),
+        )
+    };
+    let tail = paging.map(|paging| {
+        let group = group.to_owned();
+        each(
             move || {
-                app.refresh(target.clone());
+                paging
+                    .get()
+                    .map_or_else(Vec::new, |(target, page)| foot(target, page))
             },
-        );
-        return vec![note.into_element(), retry];
+            Foot::slot,
+            move |part: ReadSignal<Foot>, _| foot_row(app, &group, part),
+        )
+    });
+    view().child(items).children(tail).into_element()
+}
+
+/// A part of what follows the branches served so far, known by its place in the foot.
+#[derive(Clone, PartialEq)]
+enum Foot {
+    /// Why the branches could not all be read; those already read stay offered.
+    Why(String),
+    /// The row that pages, as it reads now.
+    Lead(DetailRef, Lead),
+    /// First branches, under More.
+    First(DetailRef),
+}
+
+/// What the foot's paging row does: one menu row through all of them, so the keyboard focus on
+/// it stays as a page is asked for, read, or fails.
+#[derive(Clone, PartialEq)]
+enum Lead {
+    /// More branches: reads the page corrald named next.
+    More(String),
+    /// A page on its way; pressing it does nothing.
+    Loading,
+    /// A page failed: reads it again.
+    Retry,
+    /// Every page read: back to the first.
+    First,
+}
+
+impl Foot {
+    /// Its place in the foot, which keys its row.
+    fn slot(&self) -> &'static str {
+        match self {
+            Self::Why(_) => "why",
+            Self::Lead(..) => "lead",
+            Self::First(_) => "first",
+        }
+    }
+
+    /// The branches it reads, and how (its paging row's), if it acts.
+    fn act(&self) -> Option<(DetailRef, Lead)> {
+        match self {
+            Self::Why(_) => None,
+            Self::Lead(target, lead) => Some((target.clone(), lead.clone())),
+            Self::First(target) => Some((target.clone(), Lead::First)),
+        }
+    }
+}
+
+impl Lead {
+    fn words(&self) -> &'static str {
+        match self {
+            Self::More(_) => MORE,
+            Self::Loading => LOADING,
+            Self::Retry => RETRY,
+            Self::First => FIRST,
+        }
+    }
+
+    fn id(&self, group: &str) -> String {
+        match self {
+            Self::More(_) => format!("btn-{group}-more"),
+            Self::Loading => format!("{group}-loading"),
+            Self::Retry => format!("btn-{group}-retry"),
+            Self::First => format!("btn-{group}-first"),
+        }
+    }
+
+    /// Reads what it names of `target`'s branches.
+    fn run(self, app: AppState, target: DetailRef) {
+        match self {
+            Self::More(next) => {
+                app.detail(DetailGet {
+                    target,
+                    etag: None,
+                    page: Some(next),
+                });
+            }
+            Self::Loading => {}
+            Self::Retry => {
+                app.refresh(target);
+            }
+            Self::First => {
+                app.detail(DetailGet {
+                    target,
+                    etag: None,
+                    page: None,
+                });
+            }
+        }
+    }
+}
+
+/// What follows the branches served so far: why they could not all be read with Retry, More
+/// branches (and First branches) while corrald names a further page, Loading while one is on
+/// its way, First branches once all are read.
+fn foot(target: DetailRef, page: BranchPage) -> Vec<Foot> {
+    if let Some(error) = page.error {
+        return vec![Foot::Why(error), Foot::Lead(target, Lead::Retry)];
     }
     if let Some(next) = page.next {
-        let next_target = target.clone();
-        let more = action(app, MORE, &format!("btn-{group}-more"), true, move || {
-            app.detail(DetailGet {
-                target: next_target.clone(),
-                etag: None,
-                page: Some(next.clone()),
-            });
-        });
-        let first = action(
-            app,
-            "First branches",
-            &format!("btn-{group}-first"),
-            false,
-            move || {
-                app.detail(DetailGet {
-                    target: target.clone(),
-                    etag: None,
-                    page: None,
-                });
-            },
-        );
-        return vec![more, first];
+        return vec![
+            Foot::Lead(target.clone(), Lead::More(next)),
+            Foot::First(target),
+        ];
     }
     if page.loading {
-        let note = content(form, words(form, LOADING.to_owned(), Token::Ink2))
-            .border_t_1()
-            .border_color(color(Token::Rule))
-            .test_id(&format!("{group}-loading"));
-        return vec![note.into_element()];
+        return vec![Foot::Lead(target, Lead::Loading)];
     }
     if !page.branches.is_empty() {
-        return vec![action(
-            app,
-            "First branches",
-            &format!("btn-{group}-first"),
-            true,
-            move || {
-                app.detail(DetailGet {
-                    target: target.clone(),
-                    etag: None,
-                    page: None,
-                });
-            },
-        )];
+        return vec![Foot::Lead(target, Lead::First)];
     }
     Vec::new()
 }
 
+/// One part of the foot, made once for its place and reading `part` as it changes.
+fn foot_row(app: AppState, group: &str, part: ReadSignal<Foot>) -> AnyElement {
+    let form = app.form;
+    let run = move || {
+        if let Some((target, lead)) = part.with_untracked(Foot::act) {
+            lead.run(app, target);
+        }
+    };
+    match part.with_untracked(Foot::slot) {
+        "why" => {
+            let id = format!("{group}-error");
+            dynamic(move || {
+                let error = part.with(|part| match part {
+                    Foot::Why(error) => error.clone(),
+                    _ => String::new(),
+                });
+                untracked(|| {
+                    let why = format!("Branches unavailable: {error}");
+                    content(form, words(form, why, Token::Ink2))
+                        .border_t_1()
+                        .border_color(color(Token::Rule))
+                        .test_id(&id)
+                        .into_element()
+                })
+            })
+        }
+        "lead" => {
+            let group = group.to_owned();
+            action(
+                app,
+                move || {
+                    let lead = part.with(|part| match part {
+                        Foot::Lead(_, lead) => lead.clone(),
+                        _ => Lead::Loading,
+                    });
+                    // After a failure the note above carries the rule.
+                    let ruled = lead != Lead::Retry;
+                    (lead.words(), lead.id(&group), ruled)
+                },
+                run,
+            )
+        }
+        _ => {
+            let id = Lead::First.id(group);
+            action(app, move || (FIRST, id.clone(), false), run)
+        }
+    }
+}
+
 /// A row of the foot that acts rather than chooses: it keeps the menu open, so the branches it
-/// brings are there to choose from.
+/// brings are there to choose from. One menu item while `look` (its words, test id and whether
+/// a rule tops it) changes, so the keyboard focus on it stays.
 fn action(
     app: AppState,
-    label: &'static str,
-    id: &str,
-    ruled: bool,
+    look: impl Fn() -> (&'static str, String, bool) + 'static,
     run: impl Fn() + 'static,
 ) -> AnyElement {
     let form = app.form;
-    let row = content(form, words(form, label.to_owned(), Token::Ink));
-    let row = if ruled {
-        row.border_t_1().border_color(color(Token::Rule))
-    } else {
-        row
-    };
+    let look = Rc::new(look);
+    let said = look.clone();
     menu_item()
         .close_on_select(false)
-        .accessibility_label(label)
+        .accessibility_label(move || SharedString::from(said().0))
         .on_select(run)
         .cursor_pointer()
         .hover(|s| s.bg(color(Token::Hover)))
         .focus(|s| s.bg(color(Token::Hover)))
-        .child(row.test_id(id))
+        .child(dynamic(move || {
+            let (label, id, ruled) = look();
+            untracked(|| {
+                let row = content(form, words(form, label.to_owned(), Token::Ink));
+                let row = if ruled {
+                    row.border_t_1().border_color(color(Token::Rule))
+                } else {
+                    row
+                };
+                row.test_id(&id).into_element()
+            })
+        }))
         .into_element()
 }
 
@@ -320,16 +450,18 @@ fn content(form: Form, words: Text) -> View {
     }
 }
 
-/// One offered value: its words, bold on a selected ground while it is the chosen one.
+/// One offered value: its words, bold on a selected ground while it is the chosen one. Made
+/// once for its value (`choice` keyed by it), reading its words and whether it is chosen as
+/// they change, so the keyboard focus on it stays.
 fn item(
     app: AppState,
     group: &str,
-    choice: Choice,
-    chosen: bool,
+    choice: ReadSignal<Choice>,
     values: Signal<Vec<String>>,
     index: usize,
 ) -> AnyElement {
-    let Choice { value, label } = choice;
+    let form = app.form;
+    let value = choice.with_untracked(|choice| choice.value.clone());
     let id = format!(
         "seg-{group}-{}",
         if value.is_empty() {
@@ -338,13 +470,19 @@ fn item(
             value.as_str()
         }
     );
-    let words = words(app.form, label.clone(), Token::Ink)
-        .when(chosen, |t| t.font_weight(FontWeight::BOLD));
+    let chosen = {
+        let value = value.clone();
+        computed(move || values.with(|values| values.get(index) == Some(&value)))
+    };
+    let label = move || choice.with(|choice| choice.label.clone());
     menu_item()
-        .accessibility_label(if chosen {
-            format!("{label}, chosen")
-        } else {
-            label
+        .accessibility_label(move || {
+            let label = label();
+            SharedString::from(if chosen.get() {
+                format!("{label}, chosen")
+            } else {
+                label
+            })
         })
         .on_select(move || {
             values.update(|values| {
@@ -356,10 +494,16 @@ fn item(
         .cursor_pointer()
         .hover(|s| s.bg(color(Token::Hover)))
         .focus(|s| s.bg(color(Token::Hover)))
-        .child(
-            content(app.form, words)
-                .when(chosen, |c| c.bg(color(Token::Sel)))
-                .test_id(&id),
-        )
+        .child(dynamic(move || {
+            let (label, on) = (label(), chosen.get());
+            untracked(|| {
+                let words =
+                    words(form, label, Token::Ink).when(on, |t| t.font_weight(FontWeight::BOLD));
+                content(form, words)
+                    .when(on, |c| c.bg(color(Token::Sel)))
+                    .test_id(&id)
+                    .into_element()
+            })
+        }))
         .into_element()
 }

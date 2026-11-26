@@ -428,10 +428,11 @@ fn next_values(op: &Op) -> Option<(Verb, Vec<String>)> {
 impl State {
     pub(super) fn start_verb(&mut self, record: Record, verb: Verb, feed: &Feed) -> Vec<Effect> {
         self.menu = None;
-        let task = match &record {
-            Record::Task(id) => feed.board.task(id).map(|task| task.task()),
+        let row = match &record {
+            Record::Task(id) => crate::model::tasks::task_at(feed, id),
             Record::Workspace | Record::Session(_) => None,
         };
+        let task = row.as_ref().map(|row| row.task());
         let fields = fields(verb, task, &FormContext::new(feed, task));
         if fields.is_empty() {
             return match super::verb_build::op(&record, verb, &[], &[]) {
@@ -529,6 +530,43 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn edit_closed_task_prefills_saved_optional_fields() {
+        use crate::model::daemon::{DetailCache, detail_key};
+        use corral_protocol::detail::{ClosedPage, DetailBody, DetailRef};
+        let task = Task {
+            id: "T-1".into(),
+            profile: Some("retired".into()),
+            base: Some("old".into()),
+            project: Some("site".into()),
+            ..Task::default()
+        };
+        let target = DetailRef::Closed { before: None };
+        let mut feed = Feed::default();
+        feed.details.insert(
+            detail_key(&target),
+            DetailCache {
+                transcript_seams: Default::default(),
+                target,
+                pages: vec![],
+                loading: false,
+                stale: false,
+                error: None,
+                merged: Some(DetailBody::Closed(ClosedPage {
+                    total: Some(1),
+                    rows: vec![task],
+                    older: None,
+                })),
+            },
+        );
+        let mut state = State::default();
+        state.start_verb(Record::Task(Id::new("T-1")), Verb::Edit, &feed);
+        let composer = state.composer.unwrap();
+        assert_eq!(composer.fields[2].value, "site");
+        assert_eq!(composer.fields[8].value, "retired");
+        assert_eq!(composer.fields[9].value, "old");
+    }
 
     #[test]
     fn base_choices_follow_project_and_keep_prior_selection() {

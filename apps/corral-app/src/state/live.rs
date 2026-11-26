@@ -328,7 +328,9 @@ impl AppState {
             Effect::VerbMenu(record) => self.work.update(|state| state.menu = Some(record)),
             Effect::Device(op) => self.device(op),
             Effect::Detail(get) => {
+                // Reopening the branch picker must supersede an in-flight continuation.
                 let loading = get.page.is_none()
+                    && !matches!(get.target, DetailRef::ProjectBranches { .. })
                     && self.feed.with_untracked(|feed| {
                         feed.detail(&get.target).is_some_and(|cache| cache.loading)
                     });
