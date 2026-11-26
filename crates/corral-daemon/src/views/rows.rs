@@ -549,6 +549,39 @@ fn plans(engine: &Engine) -> Result<Vec<PlanRow>> {
     Ok(plans)
 }
 
+// The project topic pages whole rows, so even its optional branch preview must leave room
+// in a control frame. The branch detail endpoint supplies the remainder on demand.
+const BRANCH_PREVIEW_BYTES: usize = 8 * 1024;
+
+fn branch_preview(branches: Vec<String>) -> Result<Vec<String>> {
+    let mut used = 2usize; // JSON array brackets
+    let mut preview = Vec::new();
+    for branch in branches {
+        let size = serde_json::to_vec(&branch)?.len().saturating_add(1);
+        if used.saturating_add(size) > BRANCH_PREVIEW_BYTES {
+            break;
+        }
+        used += size;
+        preview.push(branch);
+    }
+    Ok(preview)
+}
+
+#[cfg(test)]
+mod branch_preview_tests {
+    use super::*;
+
+    #[test]
+    fn long_branch_names_cannot_overflow_project_topic_rows() {
+        let names = (0..100)
+            .map(|n| format!("{n:03}/{}", "a".repeat(700)))
+            .collect();
+        let preview = branch_preview(names).unwrap();
+        assert!(preview.len() < 100);
+        assert!(serde_json::to_vec(&preview).unwrap().len() <= BRANCH_PREVIEW_BYTES);
+    }
+}
+
 fn projects(engine: &Engine) -> Result<Vec<ProjectRow>> {
     let mut counts = engine.store.open_project_status_counts()?;
     engine
@@ -563,7 +596,11 @@ fn projects(engine: &Engine) -> Result<Vec<ProjectRow>> {
             let effective = engine
                 .project_settings(id)
                 .or_else(|_| engine.config.effective_project(id))?;
-            let local_branches = engine.project_local_branches(&effective.path).ok();
+            let local_branches = engine
+                .project_local_branches(&effective.path)
+                .ok()
+                .map(branch_preview)
+                .transpose()?;
             Ok(ProjectRow {
                 id: id.clone(),
                 config: object(project)?,

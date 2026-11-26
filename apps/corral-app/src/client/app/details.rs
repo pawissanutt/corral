@@ -566,11 +566,16 @@ impl AppState {
                 cache.stale = false;
                 cache.error = None;
             }
-            let response = feed
-                .details
-                .get(key)
-                .and_then(|cache| cache.pages.first())
-                .map(value);
+            // The branch picker reads only its bounded detail window. Keeping a duplicate page
+            // in each operation would grow with every More press, even after window eviction.
+            let response = if matches!(target, DetailRef::ProjectBranches { .. }) {
+                None
+            } else {
+                feed.details
+                    .get(key)
+                    .and_then(|cache| cache.pages.first())
+                    .map(value)
+            };
             if let Some(operation) = feed.operations.get_mut(id) {
                 operation.loading = false;
                 operation.value = response;

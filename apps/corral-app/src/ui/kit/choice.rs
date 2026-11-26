@@ -151,7 +151,11 @@ pub fn choice_field(
             if matches!(event, MenuEvent::OpenChange(true, _))
                 && let Some((target, _)) = paging.and_then(|paging| paging.get_untracked())
             {
-                app.refresh(target);
+                app.detail(DetailGet {
+                    target,
+                    etag: None,
+                    page: None,
+                });
             }
         })
         .trigger(menu_trigger_reactive(
