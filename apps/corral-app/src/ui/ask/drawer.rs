@@ -293,8 +293,10 @@ fn desktop_body(app: AppState) -> View {
 }
 
 /// Ask's tab: mounted the first time it is chosen, then kept (hidden while a session tab
-/// shows), so choosing it again resumes where it was.
+/// shows), so choosing it again resumes where it was. It draws with the pane's copy, as a
+/// session tab does, so a citation pressed in it is known to be the pane's.
 fn ask_tab(app: AppState) -> AnyElement {
+    let app = app.for_pane_citations();
     let open = computed(move || app.is_open(crate::model::Overlay::Ask));
     let opened = signal(false);
     effect(move || {
@@ -317,7 +319,8 @@ fn ask_tab(app: AppState) -> AnyElement {
     .into_element()
 }
 
-/// The narrow desktop fallback: the original drawer over the right of the page.
+/// The narrow desktop fallback: the original drawer over the right of the page, hidden (and
+/// kept) while it steps aside for a page a citation in it opened.
 pub(crate) fn overlay(app: AppState) -> AnyElement {
     // One short slide from the right edge, eased out; reduced motion skips it.
     let entrance = motion().entering(
@@ -337,6 +340,7 @@ pub(crate) fn overlay(app: AppState) -> AnyElement {
         .shadow_2xl()
         .shadow_color(color(Token::Shell))
         .bind_motion(&entrance)
+        .style_when(move || app.pane_aside(), |s| s.hidden())
         .into_element()
 }
 

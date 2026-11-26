@@ -539,7 +539,11 @@ fn field_view(app: AppState, field: AttachField) -> AnyElement {
     let form = app.form;
     let phone = form == Form::Phone;
     let terminal = form == Form::Terminal;
-    let entry = copyable_input(app, None, move || app.ask_field_text.get())
+    // In a side pane set aside the field is hidden: it gives the keyboard back, keeping what
+    // was typed, and its Enter attaches nothing until the pane comes back.
+    let handle = element_ref();
+    app.release_while_aside(handle);
+    let entry = copyable_input(app, Some(handle), move || app.ask_field_text.get())
         .test_id(match field {
             AttachField::Link => "attach-link-input",
             AttachField::Path(_) => "attach-path-input",
@@ -550,7 +554,11 @@ fn field_view(app: AppState, field: AttachField) -> AnyElement {
             app.ask_field_text.set(text.to_owned());
             app.ask_field_error.set(None);
         })
-        .on_submit(move |_: &str| app.submit_attach_field())
+        .on_submit(move |_: &str| {
+            if app.field_acts() {
+                app.submit_attach_field();
+            }
+        })
         .return_key_type(ReturnKeyType::Done)
         .keyboard_type(if field == AttachField::Link {
             KeyboardType::Url

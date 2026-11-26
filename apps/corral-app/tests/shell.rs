@@ -787,6 +787,206 @@ fn narrow_dock_dismisses_without_undocking_or_leaving_the_page() {
     assert_eq!(app.screen().count("id:dock-pane").unwrap(), 0);
 }
 
+/// A task cited in the side pane's chat opens that task's page and keeps the chat as it was:
+/// beside a wide page the pane stays; over a narrow one it steps aside, then one press brings
+/// it back with its draft, instead of closing unasked.
+#[test]
+fn a_task_cited_in_the_side_pane_opens_without_closing_the_chat() {
+    for (width, narrow) in [(1440.0, false), (800.0, true)] {
+        let mut config = desktop();
+        config.viewport = Size::new(Points(width), Points(900.0));
+        let mut app = preview(config, &[("corral.destination", "tasks")]);
+        app.wait_for("id:list-tasks").unwrap();
+        app.press_key("/").unwrap();
+        app.wait_for("id:side-pane >> id:cite-T-14").unwrap();
+        app.type_text("id:ask-input", "still here").unwrap();
+        app.press("id:side-pane >> id:cite-T-14").unwrap();
+        app.wait_for("id:task-page >> id:more-T-14").unwrap();
+        if narrow {
+            assert_eq!(app.screen().count("id:side-pane").unwrap(), 0);
+            app.press("id:pane-back").unwrap();
+        }
+        app.wait_for("id:side-pane >> id:cite-T-14").unwrap();
+        assert_eq!(
+            app.screen().input_text("id:ask-input").unwrap(),
+            Some("still here")
+        );
+        app.wait_for("id:task-page >> id:more-T-14").unwrap();
+    }
+}
+
+/// A narrow pane set aside stays mounted, hidden, but lets go of the keys: Enter and Alt+Enter
+/// on the page it stepped aside for do not send its hidden draft, which comes back as it was.
+#[test]
+fn a_pane_set_aside_does_not_send_its_hidden_draft() {
+    let mut config = desktop();
+    config.viewport = Size::new(Points(800.0), Points(900.0));
+    let mut app = preview(config, &[("corral.destination", "tasks")]);
+    app.wait_for("id:list-tasks").unwrap();
+    app.press_key("/").unwrap();
+    app.wait_for("id:side-pane >> id:cite-T-14").unwrap();
+    app.type_text("id:ask-input", "still here").unwrap();
+    app.press("id:side-pane >> id:cite-T-14").unwrap();
+    app.wait_for("id:task-page >> id:more-T-14").unwrap();
+    assert_eq!(app.screen().count("id:side-pane").unwrap(), 0);
+    for key in ["enter", "alt+enter"] {
+        app.press_key(key).unwrap();
+    }
+    app.press("id:pane-back").unwrap();
+    app.wait_for("id:side-pane >> id:cite-T-14").unwrap();
+    assert_eq!(
+        app.screen().input_text("id:ask-input").unwrap(),
+        Some("still here")
+    );
+}
+
+/// A session's answer card in a narrow pane set aside lets go of the keys too: its words field,
+/// hidden with the pane, keeps what was typed, and Enter on the page answers nothing.
+#[test]
+fn a_pane_set_aside_does_not_send_its_hidden_answer() {
+    const FIELD: &str = "id:side-pane >> id:field-answer-q-1-0";
+    let mut config = desktop();
+    config.viewport = Size::new(Points(800.0), Points(900.0));
+    let mut app = preview(config, &[("corral.destination", "tasks")]);
+    app.wait_for("id:list-tasks").unwrap();
+    app.press_key("ctrl+g").unwrap();
+    app.press("id:switch-side-A-15").unwrap();
+    app.wait_for("id:dock-tab-A-15").unwrap();
+    app.press("id:side-pane >> id:dock-q-1").unwrap();
+    app.wait_for(FIELD).unwrap();
+    app.wait_for("id:side-pane >> id:cite-T-14").unwrap();
+    app.type_text(FIELD, "UTC everywhere").unwrap();
+    app.press("id:side-pane >> id:cite-T-14").unwrap();
+    app.wait_for("id:task-page >> id:more-T-14").unwrap();
+    assert_eq!(app.screen().count("id:side-pane").unwrap(), 0);
+    app.press_key("enter").unwrap();
+    app.press("id:pane-back").unwrap();
+    app.wait_for(FIELD).unwrap();
+    assert_eq!(
+        app.screen().input_text(FIELD).unwrap(),
+        Some("UTC everywhere")
+    );
+    assert_eq!(
+        app.screen().count("id:field-answer-q-2-0").unwrap(),
+        0,
+        "the hidden answer was not sent"
+    );
+}
+
+/// Escape on Configuration with a profile shown alone goes back to the profile list while Ask's
+/// narrow pane is set aside: held, hidden, it does not stand over the page.
+#[test]
+fn escape_returns_to_the_profile_list_while_the_pane_is_aside() {
+    // Narrow enough that the page, even with the pane aside, has no room for the profile list
+    // beside a profile (Configuration's split wants 640 points).
+    let mut config = desktop();
+    config.viewport = Size::new(Points(640.0), Points(900.0));
+    let mut app = preview(
+        config,
+        &[
+            ("corral.destination", "settings"),
+            ("corral.settings", "config"),
+        ],
+    );
+    app.press("id:side-pane-toggle").unwrap();
+    app.wait_for("id:side-pane >> id:cite-T-14").unwrap();
+    app.press("id:side-pane >> id:cite-T-14").unwrap();
+    app.wait_for("id:task-page >> id:more-T-14").unwrap();
+    app.press("id:nav-settings").unwrap();
+    app.wait_for("id:tab-config-2").unwrap();
+    assert_eq!(app.screen().count("id:pane-back").unwrap(), 1);
+
+    app.press("id:tab-config-2").unwrap();
+    let row = "id:seg-config-profiles-pi-luna";
+    let model = "id:field-config-profiles.pi-luna.model";
+    app.press(row).unwrap();
+    app.wait_for(model).unwrap();
+    // The profile shows alone, in its list's place.
+    assert_eq!(app.screen().count(row).unwrap(), 0);
+
+    app.press_key("escape").unwrap();
+    app.wait_for(row).unwrap();
+    assert_eq!(app.screen().count(model).unwrap(), 0);
+    assert_eq!(app.screen().count("id:tab-config-2").unwrap(), 1);
+    assert_eq!(app.screen().count("id:pane-back").unwrap(), 1);
+}
+
+/// Only a citation pressed in the pane sets a narrow pane aside: one pressed in the page under
+/// it opens what it cites and leaves the pane over the page as it was.
+#[test]
+fn a_citation_pressed_in_the_page_leaves_a_narrow_pane_over_it() {
+    let mut config = desktop();
+    config.viewport = Size::new(Points(1000.0), Points(900.0));
+    let mut app = preview(config, &[("corral.destination", "tasks")]);
+    app.wait_for("id:list-tasks").unwrap();
+    app.press("id:palette-open").unwrap();
+    app.wait_for("id:palette-input").unwrap();
+    app.type_text("id:palette-input", "T-12 Timeline zoom presets")
+        .unwrap();
+    app.press("text:T-12 Timeline zoom presets").unwrap();
+    app.wait_for_gone("id:palette-input", Duration::from_secs(5))
+        .unwrap();
+    app.wait_for("id:cite-T-2:3#acceptance").unwrap();
+    app.press("id:side-pane-toggle").unwrap();
+    app.wait_for("id:side-pane >> id:cite-T-14").unwrap();
+    app.type_text("id:ask-input", "still here").unwrap();
+    app.press("id:task-page >> id:cite-T-2:3#acceptance")
+        .unwrap();
+    app.wait_for("id:artifact-full").unwrap();
+    app.wait_for("id:side-pane >> id:cite-T-14").unwrap();
+    assert_eq!(app.screen().count("id:pane-back").unwrap(), 0);
+    assert_eq!(
+        app.screen().input_text("id:ask-input").unwrap(),
+        Some("still here")
+    );
+}
+
+/// A citation pressed in a narrow pane over Configuration with an unsaved edit asks first. The
+/// pane stays over the page while the sheet asks and after Cancel (the edit kept), and steps
+/// aside only once Discard has left for the cited page.
+#[test]
+fn a_pane_citation_from_unsaved_configuration_steps_aside_only_once_it_leaves() {
+    let mut config = desktop();
+    config.viewport = Size::new(Points(800.0), Points(900.0));
+    let mut app = preview(
+        config,
+        &[
+            ("corral.destination", "settings"),
+            ("corral.settings", "config"),
+        ],
+    );
+    app.press("id:tab-config-2").unwrap();
+    let model = "id:field-config-profiles.pi-luna.model";
+    app.press("id:seg-config-profiles-pi-luna").unwrap();
+    app.type_text(model, "-custom").unwrap();
+    let drafted = app.screen().input_text(model).unwrap().unwrap().to_owned();
+    app.press("id:side-pane-toggle").unwrap();
+    app.wait_for("id:side-pane >> id:cite-T-14").unwrap();
+
+    app.press("id:side-pane >> id:cite-T-14").unwrap();
+    app.wait_for("id:confirm").unwrap();
+    assert_eq!(app.screen().count("id:side-pane").unwrap(), 1);
+    assert_eq!(app.screen().count("id:pane-back").unwrap(), 0);
+    app.press("id:confirm-cancel").unwrap();
+    app.wait_for_gone("id:confirm", Duration::from_secs(5))
+        .unwrap();
+    app.wait_for("id:side-pane >> id:cite-T-14").unwrap();
+    assert_eq!(app.screen().count("id:pane-back").unwrap(), 0);
+    assert_eq!(app.screen().count("id:task-page").unwrap(), 0);
+    assert_eq!(
+        app.screen().input_text(model).unwrap(),
+        Some(drafted.as_str())
+    );
+
+    app.press("id:side-pane >> id:cite-T-14").unwrap();
+    app.wait_for("id:confirm").unwrap();
+    app.press("id:confirm-confirm").unwrap();
+    app.wait_for("id:task-page >> id:more-T-14").unwrap();
+    assert_eq!(app.screen().count("id:side-pane").unwrap(), 0);
+    app.press("id:pane-back").unwrap();
+    app.wait_for("id:side-pane >> id:cite-T-14").unwrap();
+}
+
 #[test]
 fn docked_plan_and_file_open_in_page_without_replacing_the_pane() {
     let mut app = preview(desktop(), &[]);

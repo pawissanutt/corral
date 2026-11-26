@@ -23,6 +23,8 @@ pub const MOVE_BACK: &str = "Move back to the page";
 pub const OPEN_PAGE: &str = "Open session ↗";
 pub const HIDE: &str = "Hide side pane";
 pub const SHOW: &str = "Show side pane";
+/// What brings a narrow pane back over the page after a link in it opened that page.
+pub const BACK_TO_PANE: &str = "Back to side pane";
 pub const TOGGLE: &str = "Show or hide side pane";
 /// The chord that shows or hides the pane, as key caps write it and as it is bound.
 pub const KEY: &str = "Ctrl J";

@@ -577,6 +577,14 @@ impl NavState {
     pub fn newest(&self) -> Option<Overlay> {
         self.overlays.last().copied()
     }
+    /// Returns the newest open overlay other than `skip`.
+    pub fn newest_but(&self, skip: Overlay) -> Option<Overlay> {
+        self.overlays
+            .iter()
+            .rev()
+            .copied()
+            .find(|&overlay| overlay != skip)
+    }
     /// Docked Ask can share the page's keys as long as it does not have focus.
     pub fn blocks_page_keys(&self, ask_beside_unfocused: bool) -> bool {
         self.overlays

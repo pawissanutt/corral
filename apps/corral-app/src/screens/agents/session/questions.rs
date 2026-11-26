@@ -189,18 +189,21 @@ fn tab_keys(app: AppState, tabs: Memo<Vec<AnswerTab>>) {
         when: When::NotEditing,
         ..KeyOptions::default()
     };
-    for (key, step) in [("left", -1isize), ("right", 1isize)] {
-        on_key_with(key, options, move |_| {
-            let action = tabs.with_untracked(|tabs| {
-                let at = tabs.iter().position(|tab| tab.selected)?;
-                let next = at.checked_add_signed(step)?;
-                tabs.get(next).map(|tab| tab.action.clone())
+    // Not while a side pane it is drawn in is set aside, hidden over the page.
+    app.bind_while_shown(move || {
+        for (key, step) in [("left", -1isize), ("right", 1isize)] {
+            on_key_with(key, options, move |_| {
+                let action = tabs.with_untracked(|tabs| {
+                    let at = tabs.iter().position(|tab| tab.selected)?;
+                    let next = at.checked_add_signed(step)?;
+                    tabs.get(next).map(|tab| tab.action.clone())
+                });
+                if let Some(action) = action {
+                    run(app, action);
+                }
             });
-            if let Some(action) = action {
-                run(app, action);
-            }
-        });
-    }
+        }
+    });
 }
 
 /// The question tabs: each its label with `✓` or `○`, the shown one marked.

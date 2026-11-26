@@ -25,6 +25,24 @@ pub(super) struct DockUi {
     /// Asked for since the window last became too narrow to keep the pane beside the page:
     /// a narrow window shows the pane over the page only on request, never on its own.
     narrow_shown: Signal<bool>,
+    /// A narrow window's pane stepped aside for the page a citation in it opened: still held,
+    /// and mounted, until it is asked back.
+    aside: Signal<bool>,
+    /// This copy draws inside the side pane (Ask's tab or a session's): a citation pressed
+    /// through it was pressed in the pane, not in the page beside or under it.
+    in_pane: bool,
+    /// A citation pressed in the pane, between its press and the page it opens being reached.
+    cite: Signal<PaneCite>,
+}
+
+/// Where a citation pressed in the pane stands on its way to the page it opens.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PaneCite {
+    Idle,
+    /// Its effects are running; still `Armed` after them, the page went where it asked.
+    Armed,
+    /// Leaving unsaved Configuration asked first: the pane steps aside only if Discard goes on.
+    Deferred,
 }
 
 impl DockUi {
@@ -33,6 +51,9 @@ impl DockUi {
             contexts: signal(BTreeMap::new()),
             panel: None,
             narrow_shown: signal(false),
+            aside: signal(false),
+            in_pane: false,
+            cite: signal(PaneCite::Idle),
         }
     }
 }
@@ -41,7 +62,52 @@ impl AppState {
     /// A mounted pane's copy; never installed in the root AppState or saved.
     pub fn for_dock(mut self) -> Self {
         self.dock_ui.panel = Some(signal(Panel::default()));
+        self.for_pane_citations()
+    }
+
+    /// The copy the side pane draws with, Ask's tab as a session's: what it marks is that a
+    /// citation pressed through it was pressed in the pane. Nothing else about it changes.
+    pub fn for_pane_citations(mut self) -> Self {
+        self.dock_ui.in_pane = true;
         self
+    }
+
+    /// Whether this copy draws inside the side pane.
+    pub(super) fn cites_from_pane(&self) -> bool {
+        self.dock_ui.in_pane
+    }
+
+    /// Runs what a citation pressed in the pane opens. A narrow pane steps aside only once the
+    /// page has gone there, never before: leaving unsaved Configuration asks first, and the
+    /// pane waits for that answer (stepping aside on Discard, staying on Cancel).
+    pub(super) fn open_from_pane(&self, effects: Vec<crate::model::Effect>) {
+        self.dock_ui.cite.set(PaneCite::Armed);
+        self.run(effects);
+        if self.dock_ui.cite.get_untracked() == PaneCite::Armed {
+            self.dock_ui.cite.set(PaneCite::Idle);
+            self.set_pane_aside();
+        }
+    }
+
+    /// Leaving unsaved Configuration is about to ask first: a pane citation running now waits
+    /// for the answer, and any earlier one that waited is forgotten, its question replaced.
+    pub(super) fn defer_pane_cite(&self) {
+        let next = match self.dock_ui.cite.get_untracked() {
+            PaneCite::Armed => PaneCite::Deferred,
+            PaneCite::Idle | PaneCite::Deferred => PaneCite::Idle,
+        };
+        self.dock_ui.cite.set(next);
+    }
+
+    /// The confirm sheet's leave went on (Discard), or did not (`left` false): a pane citation
+    /// that waited for it steps a narrow pane aside only for the page it reached.
+    pub(super) fn settle_pane_cite(&self, left: bool) {
+        if self.dock_ui.cite.get_untracked() == PaneCite::Deferred {
+            self.dock_ui.cite.set(PaneCite::Idle);
+            if left {
+                self.set_pane_aside();
+            }
+        }
     }
 
     pub fn dock_panel(&self) -> Option<Signal<Panel>> {
@@ -212,15 +278,96 @@ impl AppState {
         }
     }
 
+    /// Tracked: whether the side pane holds a tab to show, over the page or set aside.
+    pub fn pane_held(&self) -> bool {
+        self.is_open(Overlay::Ask) || self.shown_dock().is_some()
+    }
+
+    /// Tracked: whether a narrow window's pane stepped aside for the page a citation in it
+    /// opened; it keeps its tab, transcript, scroll and draft for when it comes back.
+    pub fn pane_aside(&self) -> bool {
+        self.dock_ui.aside.get() && self.pane.placement() == Placement::Over && self.pane_held()
+    }
+
     /// Tracked: whether the side pane shows, on Ask's tab or a session's.
     pub fn pane_open(&self) -> bool {
-        self.is_open(Overlay::Ask) || self.shown_dock().is_some()
+        self.pane_held() && !self.pane_aside()
+    }
+
+    /// Tracked: whether the keys what this copy draws binds may be bound now. A pane set aside
+    /// stays mounted, hidden, and its keys (Alt+Enter's send, the `/` menu's and pickers' ↑ ↓,
+    /// a card's options) are the window's: while it is aside they are dropped, not just idle,
+    /// so they neither act on what it hides nor shadow the page's own keys. Outside the pane,
+    /// always.
+    pub fn binds_keys(&self) -> bool {
+        !self.dock_ui.in_pane || !self.pane_aside()
+    }
+
+    /// Binds what `bind` binds while [`Self::binds_keys`] holds, and again each time the pane
+    /// comes back; dropped meanwhile.
+    pub fn bind_while_shown(self, bind: impl Fn() + 'static) {
+        effect(move || {
+            if self.binds_keys() {
+                untracked(&bind);
+            }
+        });
+    }
+
+    /// A field this copy draws gives the keyboard back while the pane is set aside, and does
+    /// not take it again (Tab, a pending focus) until the pane comes back. What it holds stays,
+    /// for when it does; its Enter is guarded with [`Self::field_acts`].
+    pub fn release_while_aside(self, field: ElementRef) {
+        effect(move || {
+            if !self.binds_keys() {
+                field.blur();
+            }
+        });
+        field.on_focus_in(move || {
+            if !self.field_acts() {
+                field.blur();
+            }
+        });
+    }
+
+    /// Untracked: whether Enter in a field this copy draws may act now: not while the pane it
+    /// is drawn in is set aside, hidden over the page.
+    pub fn field_acts(&self) -> bool {
+        untracked(|| self.binds_keys())
+    }
+
+    /// Untracked: the newest overlay standing over the page. Ask's pane set aside for a narrow
+    /// page is held, not over it: Escape and the page's keys are the page's.
+    pub(crate) fn overlay_over_page(&self) -> Option<Overlay> {
+        if untracked(|| self.pane_aside()) {
+            self.nav.with_untracked(|nav| nav.newest_but(Overlay::Ask))
+        } else {
+            self.nav.with_untracked(crate::model::NavState::newest)
+        }
+    }
+
+    /// What a citation in the pane opened shows, once the page has gone there: beside a wide
+    /// pane, which stays; under a narrow one, which steps aside rather than closing, so nothing
+    /// is lost or closed unasked. Only [`Self::open_from_pane`] and [`Self::settle_pane_cite`]
+    /// call it, for a press in the pane that reached its page.
+    fn set_pane_aside(&self) {
+        if untracked(|| self.pane.placement() == Placement::Over && self.pane_open()) {
+            self.dock_ui.aside.set(true);
+            self.pane.focused.set(false);
+        }
+    }
+
+    /// Brings a pane that stepped aside back over the page, as it was left.
+    pub fn bring_pane_back(&self) {
+        if self.dock_ui.aside.get_untracked() {
+            self.dock_ui.aside.set(false);
+        }
     }
 
     /// Shows the pane on the session tab last chosen.
     pub fn show_dock(&self) {
         self.set_pane_hidden(false);
         self.dock_ui.narrow_shown.set(true);
+        self.bring_pane_back();
     }
 
     /// Hides the session tabs without closing them; they come back as they were.
@@ -228,6 +375,7 @@ impl AppState {
         self.set_pane_hidden(true);
         self.dock_ui.narrow_shown.set(false);
         self.pane.focused.set(false);
+        self.bring_pane_back();
     }
 
     /// Closes the pane, whichever tab it shows.
@@ -240,12 +388,15 @@ impl AppState {
     }
 
     /// The sidebar's Side pane row, the palette's and `Ctrl J`: closes the pane while it
-    /// shows, else shows it on its last session tab, or on Ask's when it holds none.
+    /// shows, brings it back when it stepped aside, else shows it on its last session tab, or
+    /// on Ask's when it holds none.
     pub fn toggle_pane(&self) {
         if !dock::supported(self.form) {
             return;
         }
-        if untracked(|| self.pane_open()) {
+        if untracked(|| self.pane_aside()) {
+            self.bring_pane_back();
+        } else if untracked(|| self.pane_open()) {
             self.close_pane();
         } else if untracked(|| self.visible_dock()).is_some() {
             self.show_dock();
@@ -267,7 +418,9 @@ impl AppState {
     }
 
     pub(super) fn dock_overlays_page(&self) -> bool {
-        self.pane.placement() == Placement::Over && self.shown_dock().is_some()
+        self.pane.placement() == Placement::Over
+            && self.shown_dock().is_some()
+            && !self.pane_aside()
     }
 
     /// Takes the pane off a narrow page without hiding it from a wide one.
@@ -405,13 +558,18 @@ impl AppState {
         }
     }
 
-    /// The window grew narrow: the pane leaves the page until it is asked for again.
+    /// The window grew narrow: the pane leaves the page until it is asked for again. Grown wide,
+    /// a pane that stepped aside shows beside the page again.
     pub(super) fn follow_dock(self) {
         let over = computed(move || self.pane.placement() == Placement::Over);
         effect(move || {
-            if over.get() {
-                untracked(|| self.dock_ui.narrow_shown.set(false));
-            }
+            let over = over.get();
+            untracked(|| {
+                self.bring_pane_back();
+                if over {
+                    self.dock_ui.narrow_shown.set(false);
+                }
+            });
         });
     }
 

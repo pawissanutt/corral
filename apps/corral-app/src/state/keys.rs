@@ -359,7 +359,10 @@ impl AppState {
     }
 
     pub(crate) fn overlay_blocks_page_keys(&self) -> bool {
-        if self.shown_dock().is_some()
+        // A pane set aside stands neither over the page nor in the keyboard's way.
+        let aside = self.pane_aside();
+        if !aside
+            && self.shown_dock().is_some()
             && (self.pane.focused.get()
                 || self.pane.placement() == crate::model::pane::Placement::Over)
         {
@@ -368,10 +371,11 @@ impl AppState {
         self.nav.with(|nav| {
             nav.blocks_page_keys(
                 self.form == Form::Desktop
-                    && matches!(
-                        self.pane.placement(),
-                        crate::model::pane::Placement::Beside { .. }
-                    )
+                    && (aside
+                        || matches!(
+                            self.pane.placement(),
+                            crate::model::pane::Placement::Beside { .. }
+                        ))
                     && !self.pane.focused.get(),
             )
         })

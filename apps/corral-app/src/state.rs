@@ -463,6 +463,7 @@ impl AppState {
             return;
         }
         self.change(|nav| nav.open(Overlay::Ask));
+        self.bring_pane_back();
         self.focus_ask();
     }
 
@@ -537,7 +538,8 @@ impl AppState {
             self.close_attach_field();
             return;
         }
-        if let Some(overlay) = self.nav.with_untracked(NavState::newest) {
+        // Ask set aside for a narrow page is not over it: Escape is the page's.
+        if let Some(overlay) = self.overlay_over_page() {
             self.close(overlay);
             return;
         }

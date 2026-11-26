@@ -77,6 +77,7 @@ impl AppState {
                 self.confirm.set(None);
                 self.act(self.settings, |state, _| state.discard_config());
                 self.nav.set(*nav);
+                self.settle_pane_cite(true);
             }
             None => {}
         }
@@ -86,6 +87,7 @@ impl AppState {
     pub fn confirm_no(&self) {
         if let Some(asked) = self.confirm.get_untracked() {
             self.confirm.set(None);
+            self.settle_pane_cite(false);
             if asked.sends() {
                 self.toast(format!("{} · cancelled, nothing was sent", asked.title()));
             }

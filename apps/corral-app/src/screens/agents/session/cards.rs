@@ -415,13 +415,18 @@ pub(super) fn options_list(
                     }
                 }
             }
-            let actions = options
+            let actions: Vec<_> = options
                 .iter()
                 .map(|choice| choice.action.clone())
                 .zip(handles)
                 .collect();
             if bind_keys {
-                option_keys(app, Rc::new(actions), armed, gate, keyed.is_some());
+                // Nor while a side pane it is drawn in is set aside, hidden over the page.
+                let actions = Rc::new(actions);
+                let docked = keyed.is_some();
+                app.bind_while_shown(move || {
+                    option_keys(app, actions.clone(), armed.clone(), gate.clone(), docked);
+                });
             }
             view()
                 .role(AccessibilityRole::List)

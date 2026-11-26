@@ -323,25 +323,37 @@ fn panel(app: AppState, picker: Memo<Option<Picker>>, kind: PickerKind, session:
     let form = app.form;
     let field = element_ref();
     after_answer(move || field.focus());
-    for (key, delta) in [("up", -1_i8), ("down", 1)] {
+    // In a side pane set aside the picker is hidden: its arrows go, and its filter gives the
+    // keyboard back, until the pane does.
+    {
         let session = session.clone();
-        on_key_with(
-            key,
-            KeyOptions {
-                when: When::Always,
-                ..KeyOptions::default()
-            },
-            move |_| {
-                act(
-                    app,
-                    Action::Picker(PickerAction::Step {
-                        session: session.clone(),
-                        delta,
-                    }),
+        app.bind_while_shown(move || {
+            for (key, delta) in [("up", -1_i8), ("down", 1)] {
+                let session = session.clone();
+                on_key_with(
+                    key,
+                    KeyOptions {
+                        when: When::Always,
+                        ..KeyOptions::default()
+                    },
+                    move |_| {
+                        act(
+                            app,
+                            Action::Picker(PickerAction::Step {
+                                session: session.clone(),
+                                delta,
+                            }),
+                        );
+                    },
                 );
-            },
-        );
+            }
+        });
     }
+    effect(move || {
+        if !app.binds_keys() {
+            field.blur();
+        }
+    });
     let filter = {
         let session = session.clone();
         let chosen = session.clone();
@@ -367,7 +379,9 @@ fn panel(app: AppState, picker: Memo<Option<Picker>>, kind: PickerKind, session:
                 );
             })
             .on_submit(move |_: &str| {
-                act(app, Action::Picker(PickerAction::Choose(chosen.clone())))
+                if app.field_acts() {
+                    act(app, Action::Picker(PickerAction::Choose(chosen.clone())));
+                }
             })
             .flex_1()
             .min_w(px(0.0))

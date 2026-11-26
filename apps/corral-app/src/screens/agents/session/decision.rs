@@ -204,6 +204,9 @@ pub(super) fn text_row(
     if focus {
         after_answer(move || entry.focus());
     }
+    // In a side pane set aside the card is hidden: the field gives the keyboard back, keeping
+    // what was typed, and its Enter answers nothing until the pane comes back.
+    app.release_while_aside(entry);
     let displayed = move || row.with(|r| r.as_ref().map(|r| r.text.clone()).unwrap_or_default());
     let field = copyable_input(app, Some(entry), displayed)
         .test_id(&first.id)
@@ -216,7 +219,7 @@ pub(super) fn text_row(
             }
         })
         .on_submit(move |_: &str| {
-            if !armed.get() {
+            if !armed.get() || !app.field_acts() {
                 return;
             }
             if let Some(action) = submit.get_untracked() {

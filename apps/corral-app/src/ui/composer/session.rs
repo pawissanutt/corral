@@ -175,15 +175,25 @@ fn build(
                 after_answer(move || entry.focus());
             }
         });
+        // In a side pane set aside the draft is hidden: Alt+Enter must neither send it nor
+        // shadow the page's, and the field gives the keyboard back.
         let id = id.clone();
-        on_key_with(
-            "alt+enter",
-            KeyOptions {
-                when: When::Always,
-                ..KeyOptions::default()
-            },
-            move |_| send(app, &id, composer, SendPolicy::FollowUp, ask, attach),
-        );
+        app.bind_while_shown(move || {
+            let id = id.clone();
+            on_key_with(
+                "alt+enter",
+                KeyOptions {
+                    when: When::Always,
+                    ..KeyOptions::default()
+                },
+                move |_| send(app, &id, composer, SendPolicy::FollowUp, ask, attach),
+            );
+        });
+        effect(move || {
+            if !app.binds_keys() {
+                entry.blur();
+            }
+        });
     }
     if ask.is_some() && take_focus {
         super::focus_on_open(app, entry);
@@ -249,6 +259,10 @@ fn field(
         .submit_behavior(SubmitBehavior::Submit)
         .return_key_type(ReturnKeyType::Send)
         .on_submit(move |_: &str| {
+            // Nor in a side pane set aside, hidden over the page: the draft stays as it is.
+            if !app.field_acts() {
+                return;
+            }
             if let Some(actions) = command.get_untracked() {
                 app.session_slash(&id, actions, ask.is_some());
                 return;

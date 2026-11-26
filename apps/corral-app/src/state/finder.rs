@@ -23,16 +23,21 @@ impl AppState {
         let effects = self
             .feed
             .with_untracked(|feed| crate::model::cite::press_text(feed, text));
-        // Ask draws the same transcript over the page; what a citation opens shows beneath it.
+        // The conversation the citation was pressed in is kept. Pressed in the desktop's side
+        // pane (Ask's tab or a session's, which mark the copy they draw with), the pane stays
+        // beside the page, or steps aside over a narrow one once the page has gone there;
+        // pressed in the page, the pane is left as it is. Ask over the page elsewhere closes so
+        // what it opens shows.
         let opens = effects
             .iter()
             .any(|effect| !matches!(effect, crate::model::Effect::Toast(_)));
-        if opens {
-            if self.dock_panel().is_some() {
-                self.dismiss_dock_overlay();
-            } else if self.is_open(crate::model::Overlay::Ask) {
-                self.close(crate::model::Overlay::Ask);
+        if opens && crate::model::dock::supported(self.form) {
+            if self.cites_from_pane() {
+                self.open_from_pane(effects);
+                return;
             }
+        } else if opens && self.is_open(crate::model::Overlay::Ask) {
+            self.close(crate::model::Overlay::Ask);
         }
         self.run(effects);
     }

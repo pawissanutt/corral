@@ -81,26 +81,30 @@ fn slash_list(app: AppState, menu: &SlashMenu, session: Id, ask: bool) -> AnyEle
     let form = app.form;
     if let Some(at) = menu.at {
         let len = menu.rows.len();
-        for (key, step) in [("up", -1_isize), ("down", 1)] {
-            let session = session.clone();
-            on_key_with(
-                key,
-                KeyOptions {
-                    when: When::Always,
-                    ..KeyOptions::default()
-                },
-                move |_| {
-                    let next = at.saturating_add_signed(step).min(len.saturating_sub(1));
-                    run(
-                        app,
-                        Action::Command(CommandAction::MenuAt {
-                            session: session.clone(),
-                            at: next,
-                        }),
-                    );
-                },
-            );
-        }
+        // Not while a side pane it is drawn in is set aside: the page keeps its arrows.
+        let session = session.clone();
+        app.bind_while_shown(move || {
+            for (key, step) in [("up", -1_isize), ("down", 1)] {
+                let session = session.clone();
+                on_key_with(
+                    key,
+                    KeyOptions {
+                        when: When::Always,
+                        ..KeyOptions::default()
+                    },
+                    move |_| {
+                        let next = at.saturating_add_signed(step).min(len.saturating_sub(1));
+                        run(
+                            app,
+                            Action::Command(CommandAction::MenuAt {
+                                session: session.clone(),
+                                at: next,
+                            }),
+                        );
+                    },
+                );
+            }
+        });
     }
     let items: Vec<AnyElement> = menu
         .rows

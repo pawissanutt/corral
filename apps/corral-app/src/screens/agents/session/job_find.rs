@@ -24,21 +24,28 @@ pub(super) const END_SLACK: f32 = 24.0;
 /// A search with no match stands on the newest one once there is.
 pub(super) const NEWEST: usize = usize::MAX;
 
-/// Whether a key on the page may act: no sheet, overlay or menu stands over it.
+/// Whether a key on the page may act: no sheet, overlay or menu stands over it (Ask's pane set
+/// aside for it does not).
 fn page_has_keys(app: AppState) -> bool {
-    app.nav.with_untracked(|nav| nav.newest().is_none())
+    app.overlay_over_page().is_none()
 }
 
-/// A bare key of the view: taken only while no field is edited and nothing stands over the page.
+/// A bare key of the view: taken only while no field is edited and nothing stands over the page;
+/// in a side pane set aside, not bound at all.
 pub(super) fn view_key(app: AppState, key: &str, act: impl Fn() + 'static) {
     let options = KeyOptions {
         when: When::Auto,
         ..KeyOptions::default()
     };
-    on_key_with(key, options, move |_| {
-        if page_has_keys(app) {
-            act();
-        }
+    let key = key.to_owned();
+    let act = std::rc::Rc::new(act);
+    app.bind_while_shown(move || {
+        let act = act.clone();
+        on_key_with(&key, options, move |_| {
+            if page_has_keys(app) {
+                act();
+            }
+        });
     });
 }
 
@@ -128,7 +135,7 @@ pub(super) fn keys(app: AppState, reading: Reading) {
         view_key(app, "shift+n", move || reading.step(-1));
     }
     effect(move || {
-        if !reading.finding.get() {
+        if !reading.finding.get() || !app.binds_keys() {
             return;
         }
         let always = KeyOptions {

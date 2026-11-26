@@ -139,6 +139,7 @@ impl AppState {
         if on_config(next) || !self.settings.with_untracked(|state| state.config.dirty()) {
             return false;
         }
+        self.defer_pane_cite();
         self.refusal.set(None);
         self.confirm
             .set(Some(Confirming::Leave(Box::new(next.clone()))));
@@ -154,6 +155,7 @@ impl AppState {
         }
         let mut next = self.nav.get_untracked();
         next.go(Destination::Settings);
+        self.defer_pane_cite();
         self.refusal.set(None);
         self.confirm.set(Some(Confirming::Leave(Box::new(next))));
         true
@@ -182,7 +184,8 @@ impl AppState {
     /// sheet, an overlay, a menu, the sidebar's labels): back to the list; whether it did.
     pub(super) fn escape_profile(&self) -> bool {
         let covered = untracked(|| self.sheet_open() || self.dock_overlays_page())
-            || self.nav.with_untracked(|nav| nav.newest().is_some())
+            // Ask's pane set aside for this page does not stand over it.
+            || self.overlay_over_page().is_some()
             || self.work.with_untracked(|state| state.menu.is_some())
             || self.menus.get_untracked() > 0
             || self.sidebar_peek.get_untracked();

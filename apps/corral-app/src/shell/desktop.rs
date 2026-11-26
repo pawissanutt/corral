@@ -826,6 +826,7 @@ fn content(app: AppState) -> AnyElement {
                 .into_element(),
         ))
         .child(super::pane::overlay(app))
+        .child(super::pane::back_to_pane(app))
         .child(palette(app))
         .child(crate::screens::agents::rewind_sheet(app))
         .child(crate::screens::agents::remove_sheet(app))

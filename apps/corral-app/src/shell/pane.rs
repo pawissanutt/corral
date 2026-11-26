@@ -4,9 +4,13 @@
 use nsh_base::{h_resizable, resizable_panel};
 use nsh_core::prelude::*;
 
+use crate::model::dock;
 use crate::model::pane::{PAGE_LEAST, Placement};
 use crate::state::AppState;
 use crate::ui::ask::drawer;
+use crate::ui::icons::Icon;
+use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
+use crate::ui::tokens::{Token, color};
 
 pub(super) fn group(app: AppState, page: AnyElement) -> AnyElement {
     let placement = computed(move || app.pane.placement());
@@ -49,10 +53,46 @@ pub(super) fn group(app: AppState, page: AnyElement) -> AnyElement {
         .into_element()
 }
 
+/// The pane over a narrow page. It stays mounted while it steps aside for a page a citation in
+/// it opened, so it comes back with its tab, transcript, scroll and draft as they were.
 pub(super) fn overlay(app: AppState) -> AnyElement {
     when(
-        move || app.pane_open() && app.pane.placement() == Placement::Over,
+        move || app.pane_held() && app.pane.placement() == Placement::Over,
         move || untracked(|| drawer::overlay(app)),
+    )
+    .into_element()
+}
+
+/// Over a narrow page while the pane stepped aside: the one press that brings it back, beside
+/// the side pane's toggles and `Ctrl J`, which do the same.
+pub(super) fn back_to_pane(app: AppState) -> AnyElement {
+    when(
+        move || app.pane_aside(),
+        move || {
+            untracked(|| {
+                view()
+                    .absolute()
+                    .right(px(16.0))
+                    .bottom(px(16.0))
+                    .rounded(px(8.0))
+                    .bg(color(Token::Surface))
+                    .shadow_lg()
+                    .shadow_color(color(Token::Shell))
+                    .child(button_with(
+                        app,
+                        dock::BACK_TO_PANE,
+                        ButtonKind::Ghost,
+                        ButtonOptions {
+                            icon: Some(Icon::Split),
+                            key_hint: Some(dock::KEY),
+                            ..ButtonOptions::default()
+                        },
+                        "pane-back",
+                        move || app.bring_pane_back(),
+                    ))
+                    .into_element()
+            })
+        },
     )
     .into_element()
 }
