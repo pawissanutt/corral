@@ -8,6 +8,7 @@ import { join } from "node:path";
 import type { JobSettings } from "./settings.ts";
 import { readOutput, type OutputOptions } from "./output.ts";
 import type { RegisterCapability } from "../registry.ts";
+import { openGroupAnchor, type GroupAnchor } from "./group-anchor.ts";
 
 export const OUTPUT_READ_DEFAULT = 16 * 1024;
 export const OUTPUT_READ_MAX = 64 * 1024;
@@ -17,16 +18,25 @@ const KILL_GRACE_MS = 2000;
 /** How long the host waits for SIGKILLed group members to disappear before reporting. */
 const SWEEP_WAIT_MS = 5000;
 const SWEEP_STEP_MS = 20;
+// Includes escalation and the group sweep, but stays inside the owner RPC deadline.
+const STOP_WAIT_MS = KILL_GRACE_MS + SWEEP_WAIT_MS + 500;
 /**
- * `$0` is the shell and `$1` the command. Nothing runs unless the host writes "run". SIGTERM
- * and SIGINT only interrupt the launcher's wait (the command keeps default handlers), so the
- * leader outlives the command; the host's group SIGKILL or its own EOF-triggered `kill 0` ends it.
+ * `$0` is the shell and `$1` the command. Nothing runs unless the host writes "run".
+ * The private lifeline also carries stop requests. Only a member of this group ever signals
+ * it (`kill … 0`), so even a lost launcher and reused numeric PID cannot redirect a stop.
+ * The command gets neither the lifeline nor the status pipe.
  */
 const LAUNCHER = [
   'IFS= read -r go || exit 125', '[ "$go" = run ] || exit 125', "trap : TERM INT",
+  'exec 3<&0',
+  "(", "trap '' TERM INT",
+  'while IFS= read -r action; do',
+  '  case "$action" in term) kill -TERM 0 ;; force) break ;; esac',
+  'done', 'kill -KILL 0',
+  ') <&3 3<&- &', 'exec 3<&-',
   '"$0" -c "$1" </dev/null >&2 &', "c=$!",
   'while :; do wait "$c"; s=$?; [ "$s" -gt 128 ] && kill -0 "$c" 2>/dev/null || break; done',
-  'printf "exit %s\\n" "$s"', "IFS= read -r _", "kill -KILL 0",
+  'printf "exit %s\\n" "$s"', "kill -KILL 0",
 ].join("\n");
 
 
@@ -72,6 +82,7 @@ interface Job {
   readonly child: ChildProcess;
   readonly pid: number;
   readonly start: string | undefined;
+  readonly group: GroupAnchor | undefined;
   state: "running" | "exited";
   exitCode: number | null;
   signal: string | null;
@@ -86,6 +97,7 @@ interface Job {
   readonly closed: Promise<void>;
   readonly exited: Promise<void>;
   cancelKill?: () => void;
+  stopOperation?: Promise<Record<string, unknown>>;
   status: string;
   commandStatus?: number;
   reason?: "deadline" | "cancelled" | "host_stopped";
@@ -93,6 +105,7 @@ interface Job {
 
 interface Stat {
   readonly state: string;
+  readonly parent: number;
   readonly pgrp: number;
   readonly start: string;
 }
@@ -102,7 +115,7 @@ function stat(pid: number): Stat | undefined {
     const text = readFileSync(`/proc/${pid}/stat`, "utf8");
     const fields = text.slice(text.lastIndexOf(")") + 2).split(" ");
     const [state, pgrp, start] = [fields[0], Number(fields[2]), fields[19]];
-    return state && start && /^\d+$/.test(start) ? { state, pgrp, start } : undefined;
+    return state && start && /^\d+$/.test(start) ? { state, parent: Number(fields[1]), pgrp, start } : undefined;
   } catch {
     return undefined;
   }
@@ -213,15 +226,21 @@ export class JobRuntime {
       const remove = this.options.registerCapability?.(child.pid);
       if (remove) child.once("exit", remove);
     } catch (error) {
-      child.kill("SIGKILL");
+      child.stdin?.end(); // The not-yet-armed launcher exits on EOF without running anything.
       closeSync(fd);
       this.options.onEvent?.("job_exited", { job: id, exit_code: 127 });
       throw error;
     }
+    const pid = child.pid, start = startTimeOf(pid);
+    const stillOurs = () => {
+      const leader = stat(pid);
+      return leader?.parent === process.pid && leader.pgrp === pid && leader.start === start;
+    };
+    const group = stillOurs() ? openGroupAnchor(pid, stillOurs) : undefined;
     let finish!: () => void;
     let close!: () => void;
     const job: Job = {
-      id, startedAt: undefined, endedAt: undefined, command, file, child, pid: child.pid, start: startTimeOf(child.pid), state: "running", exitCode: null,
+      id, startedAt: undefined, endedAt: undefined, command, file, child, pid, start, group, state: "running", exitCode: null,
       signal: null, groupClear: false, status: "", bytes: 0, stored: 0, fd, tail: Buffer.alloc(0), partial: "", lines: 0,
       closed: new Promise((resolve) => { close = resolve; }),
       exited: new Promise((resolve) => { finish = resolve; }),
@@ -233,6 +252,7 @@ export class JobRuntime {
     let cancelDeadline = () => {};
     child.once("close", (code, signal) => {
       cancelDeadline();
+      job.group?.close();
       if (job.partial) this.line(job, job.partial);
       job.partial = "";
       job.state = "exited";
@@ -261,28 +281,34 @@ export class JobRuntime {
     return { job: id, state: job.state, pid: child.pid, output_file: file };
   }
 
-  /** The launcher reports the command's status; the still-anchored group is then cleared. */
+  /** The launcher reports the command's status just before clearing its own group. */
   private statusLine(job: Job, chunk: Buffer): void {
     job.status = (job.status + chunk.toString("utf8")).slice(-256);
     const found = /^exit (\d+)$/m.exec(job.status);
     if (job.commandStatus !== undefined || !found) return;
     job.commandStatus = Number(found[1]);
-    this.groupSignal(job, "SIGKILL");
   }
 
   /**
-   * Once the leader has gone, waits for the members its group SIGKILL ended to disappear. This
-   * only reads /proc: with the leader gone the group can no longer be verified as this job's,
-   * so nothing is signalled here, and a group that did not empty stays for corral's reaper.
+   * Waits for remaining live members to disappear after launcher close. The numeric group ID
+   * is only a readback key here, including when a later group has already reused it.
    */
   private async sweep(job: Job): Promise<void> {
-    let members = processGroup(job.pid, job.start).members;
-    for (let waited = 0; waited < SWEEP_WAIT_MS && members > 0; waited += SWEEP_STEP_MS) {
+    const proc = existsSync("/proc/self/stat");
+    const groupPresent = () => {
+      if (proc) return processGroup(job.pid, job.start).members > 0;
+      // On other Unix hosts signal 0 is only an existence query, not a stop request.
+      try { process.kill(-job.pid, 0); return true; }
+      catch (error) { return (error as NodeJS.ErrnoException).code !== "ESRCH"; }
+    };
+    let present = groupPresent();
+    for (let waited = 0; waited < SWEEP_WAIT_MS && present; waited += SWEEP_STEP_MS) {
       await new Promise((resolve) => setTimeout(resolve, SWEEP_STEP_MS));
-      members = processGroup(job.pid, job.start).members;
+      present = groupPresent();
     }
-    job.groupClear = members === 0;
+    job.groupClear = !present;
     job.cancelKill?.();
+    job.cancelKill = undefined;
   }
 
   private capture(job: Job, chunk: Buffer): void {
@@ -329,26 +355,38 @@ export class JobRuntime {
     return () => this.lineListeners.delete(listener);
   }
 
-  /** Signals the job's group only while its recorded leader anchors it: never a reused pid. */
-  private groupSignal(job: Job, signal: NodeJS.Signals): void {
-    if (!processGroup(job.pid, job.start).owned) return;
-    try {
-      process.kill(-job.pid, signal);
-    } catch {
-      return;
-    }
+  /** A dead lifeline cannot be redirected to another process; close/sweep confirms the outcome. */
+  private requestGroupStop(job: Job, action: "term" | "force"): void {
+    const channel = job.child.stdin;
+    if (channel?.writable) channel.write(`${action}\n`);
   }
 
   async kill(id: string, reason: "cancelled" | "deadline" = "cancelled"): Promise<Record<string, unknown>> {
     const job = this.job(id);
-    if (job.state === "running" && job.commandStatus === undefined) job.reason ??= reason;
-    if (!job.groupClear) {
-      this.groupSignal(job, "SIGTERM");
-      job.cancelKill?.();
-      job.cancelKill = this.schedule(() => this.groupSignal(job, "SIGKILL"), KILL_GRACE_MS);
-      await job.exited;
+    if (job.stopOperation) return job.stopOperation;
+    const alreadyFinished = job.state === "exited" || job.commandStatus !== undefined;
+    if (!alreadyFinished) job.reason ??= reason;
+    const operation = this.stopJob(job, alreadyFinished);
+    job.stopOperation = operation;
+    try { return await operation; } finally { job.stopOperation = undefined; }
+  }
+
+  private async stopJob(job: Job, alreadyFinished: boolean): Promise<Record<string, unknown>> {
+    if (!job.groupClear && job.state === "running") {
+      this.requestGroupStop(job, "term");
+      // A concurrent shutdown or deadline must not restart the escalation grace period.
+      if (!job.cancelKill) job.cancelKill = this.schedule(() => {
+        job.cancelKill = undefined;
+        if (!job.group?.force()) this.requestGroupStop(job, "force");
+      }, KILL_GRACE_MS);
     }
-    return { ...this.peek(id), group_clear: job.groupClear };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    if (!job.groupClear) {
+      await Promise.race([job.exited, new Promise<void>(resolve => { timer = setTimeout(resolve, STOP_WAIT_MS); })]);
+      if (timer) clearTimeout(timer);
+    }
+    const confirmed = job.state === "exited" && job.groupClear;
+    return { ...this.peek(job.id), stop_outcome: confirmed ? (alreadyFinished ? "already_finished" : "stopped") : "outcome_unknown" };
   }
 
   /** Only acknowledged terminal results are eligible for bounded cache eviction. */
@@ -374,13 +412,12 @@ export class JobRuntime {
 
   private async stopJobs(): Promise<void> {
     await Promise.allSettled([...this.starting]);
-    await Promise.all([...this.jobs.values()].filter((job) => !job.groupClear).map(async (job) => {
+    const stops = await Promise.all([...this.jobs.values()].filter(job => !job.groupClear).map(async job => {
       if (job.state === "running" && job.commandStatus === undefined) job.reason ??= "host_stopped";
-      this.groupSignal(job, "SIGTERM");
-      job.cancelKill?.();
-      job.cancelKill = this.schedule(() => this.groupSignal(job, "SIGKILL"), KILL_GRACE_MS);
-      await job.closed;
+      return this.kill(job.id, "cancelled");
     }));
+    const unconfirmed = stops.filter(result => result.group_clear !== true);
+    if (unconfirmed.length) throw new JobError(`Could not confirm exit of command groups: ${unconfirmed.map(result => result.job).join(", ")}`);
   }
 
   /** Local observations only: exited/report-queued never means canonical settlement. */

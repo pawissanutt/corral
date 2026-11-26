@@ -203,8 +203,11 @@ function killPresenter(deps: ToolRenderDeps): Presenter {
     if (state === "writing" || state === "running") return { ...base, state };
     if (call.isError || typeof details?.["error"] === "string") return failedWith(base, text, details);
     if (details?.["state"] === "lost") return { ...base, state: "unknown", outcome: "job no longer tracked" };
+    if (details?.["stop_outcome"] === "outcome_unknown" || details?.["group_clear"] === false) {
+      return { ...base, state: "unknown", outcome: "process-group exit not confirmed" };
+    }
     const signal = typeof details?.["signal"] === "string" ? ` (${details["signal"]})` : "";
-    const before = details?.["termination"] === "exit" ? "had already exited" : `stopped${signal}`;
+    const before = details?.["stop_outcome"] === "already_finished" || details?.["termination"] === "exit" ? "had already exited" : `stopped${signal}`;
     return { ...base, state: "ok", outcome: `${before} · output kept` };
   };
 }

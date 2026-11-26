@@ -653,11 +653,17 @@ export class NativeWorkbench {
     if (!snapshot?.bound || !session || !this.options.jobControl) { this.notice("Command control unavailable: stale or unsupported host", "warning"); return; }
     const target = { job, session };
     if (action === "stop" && !await ui.confirm("Stop command?", "Stop the owned process group for " + plainLabel(job) + "? Output is retained.")) return;
+    if (action === "stop") this.notice(`Stopping command ${plainLabel(job)}…`);
     try {
       const result = await this.options.jobControl(target, action);
       if (action === "peek" && typeof result.text === "string") {
         const lines = result.text.split("\n").map(plainLabel);
         await this.inPager(() => openOutputPager(ui, "Peek " + plainLabel(job) + " · " + plainLabel(String(result.state)) + " · current logs", lines, lines.length));
+      } else if (action === "stop") {
+        const reason = typeof result.reason === "string" ? ` · ${plainLabel(result.reason)}` : "";
+        if (result.state === "stopped") this.notice(`Stopped ${plainLabel(job)} · output kept`, "success");
+        else if (result.state === "already_finished") this.notice(`${plainLabel(job)} already finished · output kept`);
+        else this.notice(`Stop ${result.state === "denied" ? "refused" : "not confirmed"}${reason}`, "warning");
       } else this.notice(plainLabel(JSON.stringify(result)), result.state === "denied" || result.state === "outcome_unknown" ? "warning" : "text");
     } catch (error) { this.notice("Command control outcome unknown; inspect before retrying: " + plainLabel(String(error)), "warning"); }
     this.options.changed();

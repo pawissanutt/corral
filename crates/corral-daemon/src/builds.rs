@@ -297,7 +297,7 @@ impl Build {
                     children.waiting += 1;
                     children.live += 1;
                 }
-                "queued" | "running" => children.live += 1,
+                "queued" | "running" | "stopping" => children.live += 1,
                 _ => {}
             }
         }

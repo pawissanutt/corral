@@ -60,7 +60,7 @@ export function firstLine(text: string): string {
 
 /** True when every row has finished, failed, been cancelled or lost its outcome. */
 export function taskRowsSettled(rows: readonly TaskCardRow[]): boolean {
-  return rows.every(row => row.state !== "queued" && row.state !== "running" && row.state !== "needs");
+  return rows.every(row => row.state !== "queued" && row.state !== "running" && row.state !== "needs" && row.state !== "stopping");
 }
 
 function childCardRow(child: ChildSnapshot, hue: number, now: number): TaskCardRow {

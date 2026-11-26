@@ -1,3 +1,5 @@
+import type { ChildState } from "./types.ts";
+
 /** A local run of one project's configured gate on the Build worktree. */
 export interface BuildGateResult {
   /** `G1`, `G2`, ...: unique within the session. */
@@ -32,7 +34,7 @@ export interface RecordSlice {
   /** `<provider>/<id>`. */
   readonly model: string;
   readonly effort?: string;
-  readonly state: "queued" | "running" | "needs" | "done" | "failed" | "cancelled";
+  readonly state: ChildState;
   readonly started?: string;
   readonly ended?: string;
   readonly usage: RecordUsage & { readonly turns: number };

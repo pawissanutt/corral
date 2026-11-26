@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { BridgeRefusal } from "../../bridge/protocol.ts";
 import { LIVE_CHILD_STATES, type ChildSnapshot, type FleetControl, type FleetSnapshot } from "../../build/types.ts";
+import type { FleetRuntime } from "../../extensions/fleet/runtime.ts";
 import type { HelperInspection } from "../../extensions/subagent/inspection.ts";
 import { helperState } from "./fleet.ts";
 import { parseChildId } from "./input.ts";
@@ -9,13 +10,16 @@ import { clipText, fitRows, isoTime, optionalText, optionalTime } from "./state.
 
 type Choices = Pick<FleetControl, "models" | "profiles">;
 const KiB = 1024;
+const actionable = (child: ChildSnapshot) => child.state !== "stopping" && LIVE_CHILD_STATES.includes(child.state);
 
-/** A previous host cannot own a live child. Keep only its settled snapshots. */
+/** A previous host cannot own a live child or confirm a stop it did not finish. */
 export function archivedChildren(file: string): readonly ChildSnapshot[] {
   try {
     const journal = JSON.parse(readFileSync(file, "utf8")) as { version?: number; children?: ChildSnapshot[] };
     return journal.version === 1 && Array.isArray(journal.children)
-      ? journal.children.filter(child => !LIVE_CHILD_STATES.includes(child.state)) : [];
+      ? journal.children.flatMap((child): ChildSnapshot[] => child.state === "stopping"
+        ? [{ ...child, state: "failed", error: "Host ended before child cleanup was confirmed" }]
+        : LIVE_CHILD_STATES.includes(child.state) ? [] : [child]) : [];
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw error;
@@ -70,14 +74,14 @@ export function childDetailsChanged(children: readonly ChildSnapshot[], helpers:
 
 export function registerChildren(registry: RemoteRegistry, source: {
   snapshot(): FleetSnapshot | undefined; helpers(): readonly HelperInspection[];
-  fleet(): FleetControl | undefined; ready(): boolean;
+  fleet(): (FleetControl & Pick<FleetRuntime, "settlement">) | undefined; ready(): boolean;
 }): void {
   registry.register({ name: "child", parse: ({ child }) => parseChildId(child), run: child => {
     const row = source.snapshot()?.children.find(row => row.id === child);
     const transcript = () => {
       try { return !!registry.get("child_file")?.({ child }); } catch { return false; }
     };
-    if (row) return childDetail(row, transcript(), LIVE_CHILD_STATES.includes(row.state) ? source.fleet() : undefined);
+    if (row) return childDetail(row, transcript(), actionable(row) ? source.fleet() : undefined);
     const helper = source.helpers().find(row => row.request === child);
     if (helper) return helperDetail(helper, transcript());
     throw new BridgeRefusal("child_missing", "no such child in this session");
@@ -93,8 +97,15 @@ export function registerChildren(registry: RemoteRegistry, source: {
     if (!source.ready()) throw new BridgeRefusal("host_not_ready", "session is not accepting child actions");
     const fleet = source.fleet();
     const child = source.snapshot()?.children.find(row => row.id === args.id);
-    if (!fleet || !child || !LIVE_CHILD_STATES.includes(child.state)) return { ok: false, reason: "Child is not live" };
-    if (args.action === "cancel") return fleet.cancel(args.id) ? { ok: true } : { ok: false, reason: "Child is not live" };
+    if (!fleet || !child) return { ok: false, reason: "No owned child with that id" };
+    if (child.state === "stopping") return { ok: false, reason: "Child is already stopping" };
+    if (!actionable(child)) return { ok: false, reason: "Child has already finished" };
+    if (args.action === "cancel") {
+      if (!fleet.cancel(args.id)) return { ok: false, reason: "Child is no longer running" };
+      return fleet.settlement(args.id).then(stopped => stopped?.state === "cancelled" && source.ready()
+        ? { ok: true }
+        : { ok: false, reason: clipText(stopped?.error ?? "The host could not confirm the child stopped", 512) });
+    }
     const model = fleet.profiles().find(profile => profile.name === args.model)?.model ?? args.model;
     if (!fleet.models().includes(model)) return { ok: false, reason: "Model is not approved for this fleet" };
     try { fleet.setModel(args.id, args.model); }

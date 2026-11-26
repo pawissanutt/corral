@@ -54,6 +54,52 @@ test("set_model is refused for a model the fleet has not approved", async () => 
   } finally { await fleet.close(); await work; }
 });
 
+test("owner cancellation is not terminal until the child runner has drained", async () => {
+  const release = Promise.withResolvers<{ report: string }>();
+  let failTeardown = false;
+  const signals = new Map<string, AbortSignal>();
+  const fleet = new FleetRuntime({ sdk, models: { getModels: () => [] } as unknown as ModelRuntime,
+    approved: ["approved"], parent: { provider: "approved", model: "parent" },
+    context: { dir: "/unused", settings: { maxParallel: 3, profiles: [] }, session: { worktree: "/unused", name: "test" } },
+    agentDir: "/unused", localTools: [], changed() {}, deliverToParent() {}, runner: { run(spec, _model, hooks, signal) {
+      signals.set(spec.id, signal);
+      hooks.onToolStart("write", { path: "kept.txt" });
+      const done = spec.id === "a" ? release.promise : new Promise<{ report: string }>((resolve, reject) => {
+        signal.addEventListener("abort", () => {
+          if (failTeardown && spec.id === "b") reject(new Error("cleanup unconfirmed")); else resolve({ report: "" });
+        }, { once: true });
+      });
+      return { done, usage: () => ({ input: 0, output: 0, turns: 0 }), async steer() {}, async setModel() { return "deferred"; } };
+    } } });
+  const register = new RemoteRegistry();
+  let ready = true;
+  registerChildren(register, { snapshot: () => fleet.snapshot(), fleet: () => fleet, ready: () => ready, helpers: () => [] });
+  await fleet.start("call", ["a", "b", "c"].map(id => ({ id, title: id, brief: "fixture", owns: [] })));
+  const act = register.get("child_act")!;
+  try {
+    let replied = false;
+    const stopping = Promise.resolve(act({ child: "a", action: "cancel" })).then(result => { replied = true; return result; });
+    expect(signals.get("a")?.aborted).toBeTrue();
+    expect(signals.get("b")?.aborted).toBeFalse();
+    expect(await register.get("child")!({ child: "a" })).toMatchObject({ state: "stopping", ended_at: undefined });
+    expect(replied).toBeFalse();
+    expect(await act({ child: "a", action: "cancel" })).toMatchObject({ ok: false, reason: "Child is already stopping" });
+    release.resolve({ report: "Interrupted" });
+    expect(await stopping).toEqual({ ok: true });
+    expect(fleet.snapshot().children[0]).toMatchObject({ state: "cancelled", edits: [{ path: "kept.txt" }] });
+    expect((await act({ child: "a", action: "cancel" }))).toMatchObject({ ok: false });
+    ready = false;
+    expect(() => act({ child: "b", action: "cancel" })).toThrow("session is not accepting child actions");
+    expect(signals.get("b")?.aborted).toBeFalse();
+    ready = true;
+    failTeardown = true;
+    expect(await act({ child: "b", action: "cancel" })).toMatchObject({ ok: false, reason: "cleanup unconfirmed" });
+    const disconnected = act({ child: "c", action: "cancel" });
+    ready = false;
+    expect(await disconnected).toMatchObject({ ok: false });
+  } finally { release.resolve({ report: "" }); await fleet.close(); }
+});
+
 test("an unpriced child leaves the usage total partial and not zero-priced", () => {
   const part = usagePart({ tokens: 0, cost_usd: 0, cost_partial: false, input: 0, output: 0,
     context_tokens: 0, context_window: 0, turns: 0 }, [child]);

@@ -4,7 +4,7 @@ import type { ModelRuntime, ToolDefinition } from "@earendil-works/pi-coding-age
 import { FleetRuntime, type FleetOptions } from "../extensions/fleet/runtime.ts";
 import { fleetTools } from "../extensions/fleet/tools.ts";
 import type { InputWake } from "../extensions/input-wake.ts";
-import { createSdkRunner, type ChildRunner } from "../extensions/fleet/child.ts";
+import { createSdkRunner, type ChildRunner, type SdkRunnerOptions } from "../extensions/fleet/child.ts";
 import { createBoard } from "./board.ts";
 import { engineRun, gitRun, type Run } from "./corral-cli.ts";
 import { createExit, type BuildExitControl } from "./exit.ts";
@@ -20,6 +20,7 @@ export interface BuildControlsOptions extends Omit<FleetOptions, "models" | "app
   readonly models: () => ModelRuntime;
   readonly approved: () => readonly string[];
   readonly localTools: () => readonly ToolDefinition[];
+  readonly managedCommands?: SdkRunnerOptions["managedCommands"];
   readonly run?: Run;
   readonly git?: Run;
   /** Ends the parent's agent_wait when input is queued for its next turn boundary. */

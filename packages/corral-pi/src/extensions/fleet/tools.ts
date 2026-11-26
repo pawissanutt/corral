@@ -107,9 +107,19 @@ export function fleetTools(runtime: FleetRuntime, allowedKinds: readonly ChildKi
       promptSnippet: "Cancel one child and its dependents",
       promptGuidelines: ["Cancel children whose work is no longer needed, then inspect existing edits and reports; cancellation does not roll back shared files."],
       parameters: Type.Object({ id: Type.String() }, { additionalProperties: false }),
-      async execute(_id, params: { id: string }) {
-        const cancelled = runtime.cancel(params.id);
-        return { content: [{ type: "text", text: cancelled ? `Cancelled ${params.id}; existing edits remain.` : `Child ${params.id} is not live; nothing cancelled.` }], details: { cancelled } };
+      async execute(_id, params: { id: string }, signal) {
+        if (signal?.aborted || !runtime.cancel(params.id)) {
+          return { content: [{ type: "text", text: `Child ${params.id} is not live or is already stopping; nothing cancelled.` }], details: { cancelled: false } };
+        }
+        const timeout = AbortSignal.timeout(8500);
+        const child = await runtime.settlement(params.id, signal ? AbortSignal.any([signal, timeout]) : timeout);
+        if (child?.state === "stopping") {
+          return { content: [{ type: "text", text: `Still stopping ${params.id}; existing edits remain.` }], details: { cancelled: false, stopping: true } };
+        }
+        const cancelled = child?.state === "cancelled";
+        return { content: [{ type: "text", text: cancelled ? `Cancelled ${params.id}; existing edits remain.`
+          : `Could not confirm ${params.id} stopped: ${child?.error ?? "unknown outcome"}` }],
+          details: { cancelled }, ...(cancelled ? {} : { isError: true }) };
       },
     },
   ];

@@ -95,7 +95,7 @@ interface ReplyWait {
   readonly seq: number;
   finish(result: Pick<MessageOutcome, "reply" | "report" | "unanswered">): void;
 }
-const STATE_CHAR = { queued: "q", running: "r", needs: "n", done: "d", failed: "f", cancelled: "c" } as const;
+const STATE_CHAR = { queued: "q", running: "r", needs: "n", stopping: "r", done: "d", failed: "f", cancelled: "c" } as const;
 function live(entry: Entry): boolean { return entry.value.state === "queued" || entry.value.state === "running" || entry.value.state === "needs"; }
 
 /** Compose only explicit Build handoff fields; a legacy brief stays byte-for-byte intact. */
@@ -395,9 +395,7 @@ export class FleetRuntime implements FleetControl {
       return { ...input, kind, after: [...input.after ?? []],
         brief: build ? assignment(input.brief, build.context, models.get(input.id)!.role, input.accept) : input.brief };
     });
-    if (build?.proactive) validateWriterWave([...this.entries.values()].map(entry => ({ ...entry.value,
-      // Cancellation becomes visible before the runner has finished cleaning up.
-      state: !entry.complete && entry.value.state === "cancelled" ? "running" : entry.value.state })), declarations);
+    if (build?.proactive) validateWriterWave([...this.entries.values()].map(entry => entry.value), declarations);
     const incoming = declarations.map(spec => ({ ...spec, owns: spec.owns.map(path => this.path(path)) }));
     const at = this.now();
     if (specs.length && this.startedAt === undefined) this.startedAt = at;
@@ -458,6 +456,13 @@ export class FleetRuntime implements FleetControl {
   private settle(entry: Entry): void {
     if (entry.complete) return;
     entry.complete = true;
+    if (entry.value.state === "stopping") {
+      entry.value.state = "cancelled";
+      entry.value.endedAt = this.now();
+      this.refreshUsage(entry);
+      entry.history.finish(entry.spec.id, "uncertain", entry.value.report);
+      this.touch(entry);
+    }
     entry.retained = this.retain(entry);
     clearTimeout(entry.timer);
     entry.settled.resolve();
@@ -475,14 +480,20 @@ export class FleetRuntime implements FleetControl {
     const outcome: Outcome = !entry.started ? "not_started" : entry.value.state === "done" ? "completed" : "uncertain";
     try { await this.options.record({ kind: "auxiliary", request: entry.request, usage_kind: entry.value.kind, action: "finish", outcome }); }
     catch (error) {
-      entry.value.state = "failed";
-      entry.value.error = `Child finish record refused: ${error instanceof Error ? error.message : String(error)}`;
-      this.touch(entry);
+      this.failSettlement(entry, `Child finish record refused: ${error instanceof Error ? error.message : String(error)}`);
     }
+  }
+  private failSettlement(entry: Entry, reason: string): void {
+    entry.value.state = "failed";
+    entry.value.endedAt = this.now();
+    entry.value.error = reason;
+    entry.history.finish(entry.spec.id, "uncertain", entry.value.report);
+    this.touch(entry);
   }
   private finish(entry: Entry, state: "done" | "failed" | "cancelled", error?: string, report?: string): void {
     if (!live(entry)) return;
-    entry.value.state = state; entry.value.endedAt = this.now();
+    entry.value.state = state === "cancelled" ? "stopping" : state;
+    if (state !== "cancelled") entry.value.endedAt = this.now();
     entry.value.activity = undefined; entry.value.question = undefined;
     entry.value.pendingModel = undefined; entry.pending = undefined;
     if (error !== undefined) entry.value.error = error;
@@ -492,9 +503,9 @@ export class FleetRuntime implements FleetControl {
     if (state === "cancelled") {
       for (const wait of [...this.replies]) if (wait.from === entry.spec.id || wait.recipients.has(entry.spec.id)) wait.finish({ unanswered: "recipient_finished", report: entry.value.report });
     }
-    entry.history.finish(entry.spec.id, state === "done" ? "completed" : "uncertain", report);
+    if (state !== "cancelled") entry.history.finish(entry.spec.id, state === "done" ? "completed" : "uncertain", report);
     this.touch(entry);
-    // A running cancellation is visible immediately, but its caller still owns the cleanup wait.
+    // A cancellation is visible immediately as stopping, not as proof the runner has drained.
     if (entry.value.startedAt === undefined) {
       if (!this.options.record) this.settle(entry);
       else {
@@ -502,6 +513,7 @@ export class FleetRuntime implements FleetControl {
           try { await entry.admission; } catch { /* A refused prepare never started billable work. */ }
           await this.recordFinish(entry);
           this.settle(entry);
+          this.pump();
         })();
         this.jobs.add(cleanup);
         void cleanup.finally(() => { this.jobs.delete(cleanup); });
@@ -520,7 +532,7 @@ export class FleetRuntime implements FleetControl {
           if (entry.value.state !== "queued") continue;
           if (this.options.record && !entry.admitted) continue;
           const dependencies = entry.value.after.map(id => this.entries.get(id)!);
-          const failed = dependencies.find(dependency => dependency.value.state === "failed" || dependency.value.state === "cancelled");
+          const failed = dependencies.find(dependency => dependency.value.state === "failed" || dependency.value.state === "cancelled" || dependency.value.state === "stopping");
           if (failed) { this.finish(entry, "cancelled", `Dependency ${failed.spec.id} ${failed.value.state}`); again = true; continue; }
           if (dependencies.some(dependency => dependency.value.state !== "done" || !dependency.complete) || this.active >= this.options.context.settings.maxParallel) continue;
           const exploreCap = this.options.research?.settings.max_parallel;
@@ -605,15 +617,14 @@ export class FleetRuntime implements FleetControl {
           this.finish(entry, failed ? "failed" : "done", failed, result.report);
         }
         else entry.value.report = result.report.slice(0, 32768);
-      } catch (error) { this.finish(entry, "failed", error instanceof Error ? error.message : String(error)); }
-      finally {
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        if (entry.value.state === "stopping") {
+          if (!entry.controller.signal.aborted || error !== entry.controller.signal.reason) this.failSettlement(entry, reason);
+        } else this.finish(entry, "failed", reason);
+      } finally {
         try {
           if (this.options.record) await this.recordFinish(entry);
-          if (entry.value.state === "cancelled") {
-            this.refreshUsage(entry);
-            entry.value.endedAt = this.now();
-            this.touch(entry);
-          }
         } finally {
           this.active--;
           this.settle(entry);
@@ -653,8 +664,21 @@ export class FleetRuntime implements FleetControl {
   cancel(id: string): boolean {
     const entry = this.entries.get(id);
     if (!entry || !live(entry)) return false;
-    // The state says it was cancelled; `error` is kept for a reason the owner did not cause.
     this.finish(entry, "cancelled"); entry.controller.abort(); this.pump(); return true;
+  }
+  /** Observe one child's teardown without collecting or suppressing its report to the parent. */
+  async settlement(id: string, signal?: AbortSignal): Promise<ChildSnapshot | undefined> {
+    const entry = this.entries.get(id);
+    if (!entry) return undefined;
+    if (!signal) await entry.settled.promise;
+    else if (!signal.aborted) {
+      const interrupted = Promise.withResolvers<void>();
+      const abort = () => interrupted.resolve();
+      signal.addEventListener("abort", abort, { once: true });
+      try { await Promise.race([entry.settled.promise, interrupted.promise]); }
+      finally { signal.removeEventListener("abort", abort); }
+    }
+    return this.copy(entry);
   }
   private adopt(entry: Entry, model: ResolvedModel): void {
     entry.model = model; entry.value.profile = model.profile;

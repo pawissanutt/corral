@@ -11,6 +11,7 @@ import { PassThrough } from "node:stream";
 import {
   JobRuntime, type JobRuntimeOptions, type Schedule, processGroup, startTimeOf,
 } from "../src/extensions/jobs/runtime.ts";
+import { openGroupAnchor } from "../src/extensions/jobs/group-anchor.ts";
 
 const dirs: string[] = [];
 const runtimes: JobRuntime[] = [];
@@ -116,6 +117,27 @@ test("job_kill waits for a TERM-ignoring command and reports the forced exit", a
   expect(startTimeOf(pid as number)).toBeUndefined();
 }, 30_000);
 
+test("forced stop clears a suspended group without relying on its control reader", async () => {
+  const fx = fixture({ schedule(run, ms) { if (ms < 60_000) queueMicrotask(run); return () => {}; } });
+  const ready = fx.fifo("suspend-ready");
+  const started = readFile(ready, "utf8");
+  const { job, pid } = await fx.runtime.start(`trap '' TERM; echo ready > ${ready}; exec sleep 30`);
+  expect(await started).toBe("ready\n");
+  if (typeof job !== "string" || typeof pid !== "number") throw new Error("job identity missing");
+  const start = startTimeOf(pid);
+  const anchor = openGroupAnchor(pid, () => start !== undefined && startTimeOf(pid) === start);
+  if (!anchor) { console.log("process-group pidfd unavailable; suspended stop not exercised"); return; }
+  anchor.close();
+  try {
+    process.kill(-pid, "SIGSTOP");
+    expect(await fx.runtime.kill(job)).toMatchObject({ stop_outcome: "stopped", signal: "SIGKILL", group_clear: true });
+  } finally {
+    if (startTimeOf(pid) === start && processGroup(pid, start).owned) {
+      try { process.kill(-pid, "SIGCONT"); } catch { /* already exited */ }
+    }
+  }
+}, 12_000);
+
 test("losing the runtime output file falls back to the in-memory tail", async () => {
   // Given a finished job.
   const fx = fixture();
@@ -175,8 +197,10 @@ for (const path of ["job_kill", "runtime limit", "leader exit", "shutdown"] as c
   });
 }
 
-const PIDFD_WAIT = "import os, select, sys\nfd = os.pidfd_open(int(sys.argv[1]))\nprint('ARMED', flush=True)\n"
-  + "ready, _, _ = select.select([fd], [], [], 30)\nprint('EXITED' if ready else 'TIMEOUT', flush=True)\n";
+const PIDFD_WAIT = "import os, select, sys, time\nfds = {os.pidfd_open(int(pid)) for pid in sys.argv[1:]}\n"
+  + "print('ARMED', flush=True)\nend = time.monotonic() + 30\nwhile fds:\n"
+  + " ready, _, _ = select.select(list(fds), [], [], max(0, end - time.monotonic()))\n if not ready: break\n fds.difference_update(ready)\n"
+  + "print('TIMEOUT' if fds else 'EXITED', flush=True)\n";
 
 function lines(stream: NodeJS.ReadableStream): (pattern: RegExp) => Promise<string> {
   let buffer = "";
@@ -233,25 +257,29 @@ test("crash handshakes reject a truncated identity or a failed peer instead of h
   await expect(armed).rejects.toThrow("peer failed");
 });
 
-test("a host killed between supervisor spawn and command release leaves no command running", async () => {
-  // The fixture stops at capability registration, before writing to the supervisor's stdin.
+for (const phase of ["gated", "active"]) test(`a crash during the ${phase} phase leaves no owned command running`, async () => {
+  // Synchronize either before run admission or after the TERM-ignoring command has started.
   const dir = mkdtempSync(join(tmpdir(), "corral-jobs-crash-"));
   dirs.push(dir);
   const marker = join(dir, "ran");
   const runtimeDir = join(dir, "runtime");
   const fixturePath = fileURLToPath(new URL("./fixtures/jobs/crash-host.ts", import.meta.url));
-  const host = spawn(process.execPath, [fixturePath, runtimeDir, marker], { stdio: ["ignore", "pipe", "inherit"] });
+  const host = spawn(process.execPath, [fixturePath, runtimeDir, marker, ...(phase === "active" ? [phase] : [])],
+    { stdio: ["ignore", "pipe", "inherit"] });
   // Arm exit observations at spawn, before waiting on either peer's handshake.
   const gone = new Promise((resolve) => host.once("close", resolve));
   let waiter: ChildProcess | undefined;
   let waiterGone: Promise<unknown> | undefined;
-  let pid: number | undefined;
-  let start: string | undefined;
+  const identities = new Map<number, string>();
   try {
-    pid = Number(await lines(host.stdout)(/^STARTED (\d+)$/));
-    start = startTimeOf(pid);
-    expect(start).toBeDefined();
-    waiter = spawn("python3", ["-I", "-c", PIDFD_WAIT, String(pid)], { stdio: ["ignore", "pipe", "inherit"] });
+    const pids = (await lines(host.stdout)(/^STARTED (\d+(?: \d+)?)$/)).split(" ");
+    expect(pids).toHaveLength(phase === "active" ? 2 : 1);
+    for (const raw of pids) {
+      const pid = Number(raw), start = startTimeOf(pid);
+      if (start === undefined) throw new Error("owned process exited before readiness handshake");
+      identities.set(pid, start);
+    }
+    waiter = spawn("python3", ["-I", "-c", PIDFD_WAIT, ...pids], { stdio: ["ignore", "pipe", "inherit"] });
     waiterGone = new Promise((resolve) => waiter?.once("close", resolve));
     const next = lines(waiter.stdout!);
     expect(await next(/^(ARMED)$/)).toBe("ARMED");
@@ -259,17 +287,17 @@ test("a host killed between supervisor spawn and command release leaves no comma
     host.kill("SIGKILL");
     await gone;
     rmSync(runtimeDir, { recursive: true, force: true });
-    // Then the gated launcher exits by itself and the command never ran.
+    // Then EOF clears the launcher and the running command, if it had been admitted.
     expect(await next(/^(EXITED|TIMEOUT)$/)).toBe("EXITED");
     await waiterGone;
-    expect(startTimeOf(pid)).toBeUndefined();
+    for (const pid of identities.keys()) expect(startTimeOf(pid)).toBeUndefined();
     expect(existsSync(marker)).toBeFalse();
   } finally {
     host.kill("SIGKILL");
     waiter?.kill("SIGKILL");
     await Promise.all([gone, waiterGone]);
-    // Only on failure: never leave a gated launcher behind after a broken handshake.
-    if (pid !== undefined && start !== undefined && startTimeOf(pid) === start) {
+    // Only on failure: never leave an observed fixture process behind after a broken handshake.
+    for (const [pid, start] of identities) if (startTimeOf(pid) === start) {
       try { process.kill(pid, "SIGKILL"); } catch { /* already exited */ }
     }
   }

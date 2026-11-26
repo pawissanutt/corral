@@ -598,6 +598,7 @@ export class HostSession {
         ...Object.entries(options.capabilities?.hosted_tools ?? {}).filter(([, route]) => route && route !== "off").map(([name]) => name)],
       hostedTools: childHosted,
       localTools: () => this.childLocalTools().filter(tool => !this.buildControls?.tools.includes(tool)),
+      managedCommands: () => this.jobs && this.commands ? { jobs: this.jobs, commands: this.commands } : undefined,
       deliverToParent: async text => {
         const result = await this.submitAutomated(text);
         if (result.disposition === "rejected") throw new Error(`Fleet parent delivery rejected: ${result.reason}`);

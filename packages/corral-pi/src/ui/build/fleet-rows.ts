@@ -41,7 +41,6 @@ export function childProfile(child: { readonly kind?: string; readonly profile: 
   return child.kind === "explore" || child.kind === "review" ? `${child.kind} · ${clean(child.profile)}` : clean(child.profile);
 }
 
-/** One to one: queued, running, needs, done, failed, cancelled. */
 export function childState(state: ChildState): AgentState { return state; }
 
 /** Steerable now: running or needs (the runtime refuses a child that has no session yet). */
@@ -65,6 +64,7 @@ export function childActivity(child: ChildSnapshot, fleet: FleetSnapshot): strin
   switch (child.state) {
     case "running": return clean(child.activity ?? "") || "working";
     case "needs": return "waiting for your answer";
+    case "stopping": return "stopping · waiting for cleanup";
     case "queued": {
       const blocker = waitingFor(child, fleet);
       return blocker === undefined ? "waits for a free slot" : `waits for ${clean(blocker)}`;
@@ -156,6 +156,7 @@ export function childRow(child: ChildSnapshot, fleet: FleetSnapshot, now: number
     meta, notes,
     capabilities: control ? { open: true, transcript, steer: true, cancel: true, model: true, answer: child.state === "needs" } : { open: true, transcript },
     ...(!control ? {} : finished ? { disabled: { steer: "not running", cancel: "not running", model: "not running" } }
+      : child.state === "stopping" ? { disabled: { steer: "stopping", cancel: "stopping", model: "stopping" } }
       : child.state === "queued" ? { disabled: { steer: "not started yet" } } : {}),
     conversation: { request: child.id, prompt: child.brief, phase: child.state, messages: child.messages,
       ...(child.report === undefined ? {} : { result: child.report }),
@@ -231,14 +232,16 @@ export function childActions(host: ChildActionHost): Required<Pick<AgentActions,
       const found = find(key);
       if (!found) return;
       const { child, fleet } = found, id = clean(child.id);
-      if (!live(child.state)) { host.notice(`${id} is no longer running`, "warning"); return; }
+      if (child.state === "stopping") { host.notice(`${id} is already stopping`, "warning"); return; }
+      if (!live(child.state)) { host.notice(`${id} has already finished`, "warning"); return; }
       const also = dependents(fleet, child.id).map(clean);
       const message = "Its edits so far stay in the worktree."
         + (also.length ? ` ${also.join(", ")} ${also.length === 1 ? "waits" : "wait"} for it and ${also.length === 1 ? "is" : "are"} cancelled too.` : "");
       void host.confirm(`Cancel ${id}?`, message).then(confirmed => {
         if (!confirmed) return;
-        if (host.fleet.cancel(child.id)) host.notice(`Cancelled ${id} · its edits stay in the worktree`, "success");
-        else host.notice(`${id} is no longer running`, "warning");
+        if (!host.fleet.cancel(child.id)) { host.notice(`${id} is no longer accepting cancellation`, "warning"); return; }
+        if (find(key)?.child.state === "cancelled") host.notice(`Cancelled ${id} · its edits stay in the worktree`, "success");
+        else host.notice(`Stopping ${id} · its edits stay in the worktree`, "text");
       }, failed);
     },
     model(key) {

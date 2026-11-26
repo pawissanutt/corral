@@ -137,8 +137,8 @@ export interface BuildContext {
 
 // ---------- children ----------
 
-export type ChildState = "queued" | "running" | "needs" | "done" | "failed" | "cancelled";
-export const LIVE_CHILD_STATES: readonly ChildState[] = ["queued", "running", "needs"];
+export type ChildState = "queued" | "running" | "needs" | "stopping" | "done" | "failed" | "cancelled";
+export const LIVE_CHILD_STATES: readonly ChildState[] = ["queued", "running", "needs", "stopping"];
 
 /**
  * What a child may do. `slice` writes inside the shared worktree; `explore` is read-only research;

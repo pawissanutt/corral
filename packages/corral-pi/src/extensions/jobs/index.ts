@@ -37,7 +37,8 @@ async function guarded(name: string, id: string, run: () => Promise<unknown> | u
 }
 const waitBudget = Type.Optional(Type.Integer({ minimum: 0, maximum: 600000 }));
 
-export function jobTools(jobs: JobRuntime, monitor = true, commands?: Commands, wake?: InputWake): readonly ToolDefinition[] {
+export function jobTools(jobs: JobRuntime, monitor = true, commands?: Commands, wake?: InputWake,
+  onStart?: (job: string) => void): readonly ToolDefinition[] {
   const tools: ToolDefinition[] = [
     ...(commands ? [{
       name: "bash", label: "Run a managed command",
@@ -48,7 +49,7 @@ export function jobTools(jobs: JobRuntime, monitor = true, commands?: Commands, 
         timeout: Type.Optional(Type.Number({ minimum: 1 })), wait_ms: waitBudget }),
       async execute(id: string, params: { command: string; timeout?: number; wait_ms?: number }, signal?: AbortSignal, onUpdate?: AgentToolUpdateCallback<unknown>) {
         return guarded("bash", id, () => commands.run(params.command, {
-          ...params, ...(signal ? { signal } : {}), ...(onUpdate ? { onUpdate } : {}), nested: nestedChild("bash", id) !== undefined }), true, true);
+          ...params, signal, onUpdate, onStart, nested: nestedChild("bash", id) !== undefined }), true, true);
       },
     } satisfies ToolDefinition] : []),
     {
@@ -61,7 +62,7 @@ export function jobTools(jobs: JobRuntime, monitor = true, commands?: Commands, 
         + "Turn endings do not stop it. The hard runtime cap, job_kill, or owning host teardown stops its process group. Completion is announced automatically.",
       parameters: Type.Object({ command: Type.String({ minLength: 1, maxLength: 4096 }) }),
       async execute(id, params: { command: string }, signal) {
-        return guarded("job_start", id, () => commands ? commands.run(params.command, { wait_ms: 0, ...(signal ? { signal } : {}) })
+        return guarded("job_start", id, () => commands ? commands.run(params.command, { wait_ms: 0, signal, onStart })
           : jobs.start(params.command));
       },
     },

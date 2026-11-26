@@ -70,7 +70,7 @@ export function sparkline(pulse: readonly number[], cells: number): string {
 export interface Status { readonly glyph: string; readonly tone: Tone; readonly word: string; readonly time?: string }
 
 export type AgentState =
-  | "preparing" | "queued" | "running" | "needs" | "done" | "failed" | "cancelled" | "uncertain" | "not_started";
+  | "preparing" | "queued" | "running" | "needs" | "stopping" | "done" | "failed" | "cancelled" | "uncertain" | "not_started";
 /** The shared vocabulary for an agent state; `time` is kept only for states that ran. */
 export function agentStatus(state: AgentState, time?: string): Status {
   const timed = (status: Omit<Status, "time">): Status => time === undefined ? status : { ...status, time };
@@ -79,6 +79,7 @@ export function agentStatus(state: AgentState, time?: string): Status {
     case "queued": return { glyph: "○", tone: "muted", word: "queued" };
     case "running": return timed({ glyph: "●", tone: "accent", word: "running" });
     case "needs": return timed({ glyph: "▲", tone: "warning", word: "needs you" });
+    case "stopping": return timed({ glyph: "○", tone: "warning", word: "stopping" });
     case "done": return timed({ glyph: "✓", tone: "success", word: "done" });
     case "failed": return timed({ glyph: "✗", tone: "error", word: "failed" });
     case "cancelled": return timed({ glyph: "✗", tone: "error", word: "cancelled" });
@@ -252,7 +253,7 @@ export interface AgentObservation {
 }
 
 const LIVE: Readonly<Record<AgentState, boolean>> = {
-  preparing: true, queued: true, running: true, needs: true, done: false, failed: false, cancelled: false, uncertain: false, not_started: false,
+  preparing: true, queued: true, running: true, needs: true, stopping: true, done: false, failed: false, cancelled: false, uncertain: false, not_started: false,
 };
 
 function firstLine(text: string): string {
@@ -395,7 +396,7 @@ export function liveCount(model: AgentsModel): number {
 export function isLive(state: AgentState): boolean { return LIVE[state]; }
 
 const AGENT_GROUP: Readonly<Record<AgentState, number>> = {
-  needs: 0, running: 1, queued: 2, preparing: 2, not_started: 2, failed: 3, cancelled: 3, uncertain: 3, done: 4,
+  needs: 0, running: 1, stopping: 1, queued: 2, preparing: 2, not_started: 2, failed: 3, cancelled: 3, uncertain: 3, done: 4,
 };
 /** Group by urgency without disturbing host order within a group. */
 export function orderedAgents(agents: readonly AgentRow[]): AgentRow[] {

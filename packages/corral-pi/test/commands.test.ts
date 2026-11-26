@@ -260,6 +260,6 @@ test("inspector refuses stale/foreign/disabled selections; stop runs the shared 
     allowed: () => true, record: entry => records.push(entry) });
   expect(await authorized(target, "background")).toMatchObject({ state: "running", background: true });
   expect(fx.jobs.peek(String(job)).state).toBe("running");
-  expect(await authorized(target, "stop")).toMatchObject({ state: "exited", termination: "cancelled", group_clear: true });
+  expect(await authorized(target, "stop")).toMatchObject({ state: "stopped", termination: "cancelled", group_clear: true });
   expect(fx.jobs.peek(String(job)).text).toBe("alive\n");
 });

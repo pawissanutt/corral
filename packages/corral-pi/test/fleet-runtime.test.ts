@@ -321,7 +321,7 @@ test("agent_wait collects a cancelled child's final report and usage without an 
   try {
     expect(runtime.cancel("stopping")).toBe(true);
     expect(runner.children.get("stopping")!.signal.aborted).toBe(true);
-    expect(runtime.snapshot().children[0]!.state).toBe("cancelled");
+    expect(runtime.snapshot().children[0]!.state).toBe("stopping");
     expect(runtime.snapshot().children[0]!.error).toBeUndefined();
     await flush();
     expect(returned).toBe(false);

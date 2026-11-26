@@ -134,7 +134,8 @@ export class Commands {
     }
   }
 
-  async run(command: string, options: { timeout?: number; wait_ms?: number; nested?: boolean; signal?: AbortSignal; onUpdate?: (update: CommandUpdate) => void } = {}): Promise<Record<string, unknown>> {
+  async run(command: string, options: { timeout?: number; wait_ms?: number; nested?: boolean; signal?: AbortSignal;
+    onUpdate?: (update: CommandUpdate) => void; onStart?: (job: string) => void } = {}): Promise<Record<string, unknown>> {
     this.prune();
     if (options.signal?.aborted) throw new JobError("command cancelled before launch; nothing ran");
     this.starting++;
@@ -150,6 +151,7 @@ export class Commands {
     const record: Command = { job, done: this.options.jobs.settled(job), consumed: false, holds: 1,
       notifying: false, canonicalExit: false, release: new Set() };
     this.commands.set(job, record);
+    options.onStart?.(job);
     this.fact(record);
     void record.done.then(() => {
       record.result = this.options.jobs.peek(job, { max_bytes: 50 * 1024, tail_lines: 2000 });
@@ -164,9 +166,10 @@ export class Commands {
     try {
       const state = await this.observe(record, budget, options.signal, options.onUpdate);
       if (state === "aborted") {
-        await this.options.jobs.kill(job);
+        const stopped = await this.options.jobs.kill(job);
         this.consume(record);
-        throw new JobError(`command ${job} cancelled; its owned process group was stopped`);
+        throw new JobError(stopped.group_clear === true ? `command ${job} cancelled; its owned process group was stopped`
+          : `command ${job} cancelled; process-group exit could not be confirmed`);
       }
       if (record.result) { this.consume(record); return record.result; }
       return { ...started, ...this.options.jobs.peek(job), state: "running", background: true };
@@ -259,7 +262,7 @@ export class Commands {
     command.holds++;
     try {
       const result = this.owns(job) ? await this.options.jobs.kill(job) : command.result ?? { job, state: "lost" };
-      this.consume(command);
+      if (result.stop_outcome !== "outcome_unknown") this.consume(command);
       return result;
     } finally { command.holds--; this.announce(command); }
   }

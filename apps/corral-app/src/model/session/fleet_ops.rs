@@ -257,10 +257,16 @@ fn job_act(
             job: job.clone(),
             name,
         },
-        _ => FleetRequest::Stop {
-            job: job.clone(),
-            name,
-        },
+        _ => {
+            state
+                .ui_mut(session)
+                .notices
+                .push(Hue::Neutral, format!("Stopping {name}…"), feed.now);
+            FleetRequest::Stop {
+                job: job.clone(),
+                name,
+            }
+        }
     };
     let key = sent(state, session, request);
     vec![Effect::SessionJob {
@@ -432,13 +438,17 @@ pub(in crate::model::session) fn settle(ui: &mut Ui, feed: &Feed) {
                                 .unwrap_or_else(|| "the host gave no reason".into())
                         ),
                     ),
-                    _ => match &request {
+                    Some(_) => match &request {
                         FleetRequest::Model { child, model } => (
                             Hue::Neutral,
                             format!("{child} switches to {model} at its next turn"),
                         ),
                         _ => (Hue::Neutral, format!("{} is cancelled", request.subject())),
                     },
+                    None => (
+                        Hue::Fail,
+                        format!("{what}: the host did not confirm the outcome"),
+                    ),
                 }
             }
             FleetRequest::Stop { name, .. } | FleetRequest::Background { name, .. } => {
@@ -448,9 +458,16 @@ pub(in crate::model::session) fn settle(ui: &mut Ui, feed: &Feed) {
                         if let Some(reason) = acted.reason {
                             words.push_str(&format!(" · {reason}"));
                         }
-                        (Hue::Neutral, words)
+                        let hue = match acted.state.as_str() {
+                            "denied" | "outcome_unknown" => Hue::Fail,
+                            _ => Hue::Neutral,
+                        };
+                        (hue, words)
                     }
-                    None => (Hue::Neutral, format!("{what}: the host answered")),
+                    None => (
+                        Hue::Fail,
+                        format!("{what}: the host did not confirm the outcome"),
+                    ),
                 }
             }
         };

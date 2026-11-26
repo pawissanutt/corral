@@ -369,20 +369,21 @@ const expertPresenter: Presenter = call => {
   };
 };
 
-/** A build control reports a no-op in its text and a boolean in its details; either means nothing happened. */
-function buildControl(verb: string, flag: string, refused: RegExp, missed: string): Presenter {
-  return call => {
-    const id = str(call.args.id), text = str(call.args.text);
-    const live = runningState(call);
-    const base = { verb, ...(id ? { target: id } : {}) };
-    if (live) return { ...base, state: live, ...(text ? { body: proseBody(text, live === "writing") } : {}) };
-    const reply = resultText(call.result).trim(), details = fields(call.result?.details);
-    if (call.isError || details[flag] === false || refused.test(reply)) {
-      return { ...base, state: "failed", outcome: missed, outcomeTone: "error", body: reasonBody(reply) };
-    }
-    return { ...base, state: "ok", ...(text ? { body: proseBody(text, false), expanded: expandedView({ prose: text }) } : {}) };
-  };
-}
+/** A request is not proof of cancellation: only settled runner teardown reports success. */
+const cancelAgentPresenter: Presenter = call => {
+  const id = str(call.args.id);
+  const target = id ? { target: id } : {};
+  const live = runningState(call);
+  if (live) return { ...target, verb: "Stopping", state: live };
+  const reply = resultText(call.result).trim(), details = fields(call.result?.details);
+  if (details.stopping === true || /^Still stopping /i.test(reply)) {
+    return { ...target, verb: "Stop", state: "waiting", outcome: "still stopping" };
+  }
+  if (call.isError || details.cancelled === false || /nothing cancelled/i.test(reply)) {
+    return { ...target, verb: "Stop", state: "failed", outcome: "not confirmed stopped", outcomeTone: "error", body: reasonBody(reply) };
+  }
+  return { ...target, verb: "Cancelled", state: "ok" };
+};
 
 /** An agent tool's outcome: its details, or the JSON of its text (a Code Mode child carries only text). */
 function agentOutcome(call: CallInput): Fields {
@@ -480,7 +481,7 @@ const OTHER: Readonly<Record<string, Presenter>> = {
   agent_message: agentMessagePresenter,
   agent_wait: agentWaitPresenter,
   agent_roster: agentRosterPresenter,
-  agent_cancel: buildControl("Cancelled", "cancelled", /nothing cancelled/i, "not cancelled"),
+  agent_cancel: cancelAgentPresenter,
 };
 
 /** The row presenter of a corral tool, or undefined for any other tool. */

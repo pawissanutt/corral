@@ -1,11 +1,18 @@
 import { expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { createAssistantMessageEventStream, getCurrentSystemPrompt, getCurrentTools, type Api, type Model, type AssistantMessage } from "@earendil-works/pi-ai";
 import * as Sdk from "@earendil-works/pi-coding-agent";
 import { ImageGeneration } from "../image/tool.ts";
+import { Commands } from "../jobs/commands.ts";
+import { jobTools } from "../jobs/index.ts";
+import { JobRuntime } from "../jobs/runtime.ts";
+import { within } from "../../../test/support/wait.ts";
+import { RemoteRegistry } from "../../host/remote/registry.ts";
+import { registerChildren } from "../../host/remote/children.ts";
+import { FleetRuntime } from "./runtime.ts";
 import { runAuxiliarySession } from "../subagent/session.ts";
 import { PACKAGE_ROOT } from "../../../test/support/fixture-install.ts";
 import type { ExtensionAPI, ModelRuntime, ToolDefinition } from "@earendil-works/pi-coding-agent";
@@ -141,6 +148,53 @@ function fixture() {
     cleanup() { rmSync(dir, { recursive: true, force: true }); },
   };
 }
+
+for (const kind of ["slice", "review"] as const) test(`owner Cancel clears a ${kind}'s detached command without touching the parent's job`, async () => {
+  const f = fixture();
+  const command = "git status";
+  // A literal read-only Git operation is allowed even for reviewers. Substitute a sleeping fixture.
+  writeFileSync(join(f.dir, "git"), "#!/bin/sh\ntrap '' TERM\necho retained\nexec sleep 30\n", { mode: 0o700 });
+  const jobs = new JobRuntime({ cwd: f.dir, runtimeDir: f.dir, settings: { max_jobs: 2, max_runtime_secs: 30, max_output_bytes: 4096 },
+    environment: () => ({ PATH: `${f.dir}:${process.env.PATH}` }),
+    schedule(run, ms) {
+      if (ms < 30000) queueMicrotask(run);
+      return () => {};
+    } });
+  const commands = new Commands({ jobs, journal() {}, monitorJournal() {}, notify: async () => "held" });
+  const ready = Promise.withResolvers<void>(), launched = Promise.withResolvers<string>();
+  const drained = Promise.withResolvers<void>();
+  jobs.onLine((_id, line) => { if (line === "retained") ready.resolve(); });
+  f.body(async () => {
+    if (kind === "slice") writeFileSync(join(f.dir, "kept.txt"), "edited\n");
+    const input = { command, wait_ms: 0 };
+    expect(await f.emit("tool_call", { toolName: "bash", input })).toBeUndefined();
+    const result = await f.registered.get("bash")!.execute("child-command", input, undefined, undefined,
+      {} as Parameters<ToolDefinition["execute"]>[4]);
+    const details = result.details as { job?: unknown };
+    if (typeof details.job !== "string") { launched.reject(new Error("child command did not return a job")); return; }
+    launched.resolve(details.job);
+    await drained.promise;
+  });
+  const parent = await commands.run("exec sleep 30", { wait_ms: 0 });
+  const options = { ...f.options, localTools: jobTools(jobs, false, commands), managedCommands: () => ({ jobs, commands }) };
+  const fleet = new FleetRuntime({ ...options, approved: ["openai-codex"], parent: { provider: "openai-codex", model: "fixture" },
+    changed() {}, deliverToParent() {}, runner: createSdkRunner(options) });
+  const registry = new RemoteRegistry();
+  registerChildren(registry, { fleet: () => fleet, snapshot: () => fleet.snapshot(), ready: () => true, helpers: () => [] });
+  try {
+    await fleet.start("task", [{ id: "child", kind, title: "Child", brief: "Process the fixture", owns: [] }]);
+    const [job] = await within(Promise.all([launched.promise, ready.promise]), 5000, "child command readiness");
+    const cancelled = Promise.resolve(registry.get("child_act")!({ child: "child", action: "cancel" }));
+    expect(f.aborted).toBeTrue();
+    // Killing the detached command must not wait for the provider/tool loop to drain.
+    await within(jobs.settled(job), 3000, "owned job exit");
+    expect(jobs.peek(job)).toMatchObject({ state: "exited", group_clear: true, text: "retained\n" });
+    expect(jobs.peek(String(parent.job)).state).toBe("running");
+    if (kind === "slice") expect(readFileSync(join(f.dir, "kept.txt"), "utf8")).toBe("edited\n");
+    drained.resolve();
+    expect(await cancelled).toEqual({ ok: true });
+  } finally { drained.resolve(); await fleet.close(); await jobs.shutdown(); f.cleanup(); }
+});
 
 test("a Build Explore profile sends Codex priority and keeps its configured effort", async () => {
   const f = fixture();

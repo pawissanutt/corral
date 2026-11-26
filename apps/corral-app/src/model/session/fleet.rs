@@ -272,6 +272,7 @@ fn child_state(state: &str) -> (Mark, Hue, &'static str) {
         "queued" => (Mark::Next, Hue::Neutral, "queued"),
         "running" => (Mark::Active, Hue::Worker, "running"),
         "needs" => (Mark::Active, Hue::You, "asks you"),
+        "stopping" => (Mark::Active, Hue::Held, "stopping"),
         "done" => (Mark::Done, Hue::Ok, "done"),
         "failed" => (Mark::Fail, Hue::Fail, "failed"),
         "cancelled" => (Mark::Na, Hue::Neutral, "cancelled"),
@@ -345,6 +346,7 @@ fn now_words(child: &SessionChild) -> Option<String> {
         ("done", Some(SessionChildVerdict::Approve)) => "approved".into(),
         ("done", Some(SessionChildVerdict::Changes)) => "changes requested".into(),
         ("cancelled", _) => "cancelled · its edits stay in the worktree".into(),
+        ("stopping", _) => "waiting for cleanup".into(),
         ("queued", _) if !child.after.is_empty() => {
             format!("waits for {}", child.after.join(", "))
         }

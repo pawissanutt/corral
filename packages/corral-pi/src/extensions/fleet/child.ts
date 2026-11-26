@@ -15,6 +15,9 @@ import { classifyBuildWrite } from "../../roles/build/guard.ts";
 import { classifyWriteScope } from "../../roles/assistant/write-scope.ts";
 import { childToolBindings, executionRefusal, exploreLoadout, type ChildHostedTools } from "../../roles/common/execution.ts";
 import { researchCode } from "../codemode/research.ts";
+import type { Commands } from "../jobs/commands.ts";
+import { jobTools } from "../jobs/index.ts";
+import type { JobRuntime } from "../jobs/runtime.ts";
 import type { HelperEvent } from "../subagent/inspection.ts";
 import { observeHelperEvent, withChildBaseCalibration } from "../subagent/session.ts";
 import { ANSWER_FORMAT, CODE_METHOD, DEPTH_GUIDANCE, GAP_CHECK_MAX_MS, GAP_CHECK_PROMPT, GAP_CHECK_RESERVE_MS, researchBudget, researchPrompt, researchResult, strongerThinking, wantsGapCheck,
@@ -71,6 +74,7 @@ export interface SdkRunnerOptions {
   readonly agentDir: string;
   readonly localTools: readonly ToolDefinition[];
   readonly hostedTools?: ChildHostedTools;
+  readonly managedCommands?: () => { jobs: JobRuntime; commands: Commands } | undefined;
   readonly shellRefusal?: (command: string) => string | undefined;
   /** Bound children intersect their fixed ceiling with the parent's enabled capabilities. */
   readonly parentLoadout?: readonly string[];
@@ -284,7 +288,19 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
     const level = (configured?: string) => strongerThinking(thinkingFloor, thinking(configured)) as ThinkingLevel;
     const communication = agentCommunicationTools(hooks);
     const parent = options.parentLoadout ?? [];
-    const { local: localTools, hosted, loadout: withHosted } = childToolBindings(parent, options.localTools,
+    // Build slices and reviewers can inherit managed Bash. Track their launches, not every job in the parent runtime.
+    const managed = !options.bound && kind !== "explore" ? options.managedCommands?.() : undefined;
+    const ownedJobs = new Set<string>(), stopping = new Map<string, Promise<boolean>>();
+    const stopOwned = (job: string) => {
+      if (!managed || stopping.has(job) || !managed.commands.owns(job)) return;
+      stopping.set(job, managed.commands.kill(job).then(result => result.group_clear === true, () => false));
+    };
+    const launches = managed && jobTools(managed.jobs, false, managed.commands, undefined, job => {
+      ownedJobs.add(job);
+      if (signal.aborted) stopOwned(job);
+    }).filter(tool => tool.name === "bash" || tool.name === "job_start");
+    const local = options.localTools.map(tool => launches?.find(launch => launch.name === tool.name) ?? tool);
+    const { local: localTools, hosted, loadout: withHosted } = childToolBindings(parent, local,
       options.hostedTools?.({ kind, owns: spec.owns }) ?? []);
     const baseLoadout = options.bound
       ? kind === "slice" ? BASE_TOOLS.filter(name => parent.includes(name))
@@ -332,7 +348,10 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
     void ready.catch(() => {});
     const done = (async () => {
       let unsubscribe = () => {};
-      const abort = () => { if (session) void session.abort().catch(() => {}); };
+      const abort = () => {
+        if (signal.aborted) for (const job of ownedJobs) stopOwned(job);
+        if (session) void session.abort().catch(() => {});
+      };
       const result = (failed?: string): Awaited<ChildHandle["done"]> => {
         // A discarded gap check leaves the first answer as the result.
         const messages = kept === undefined ? session?.messages ?? [] : session!.messages.slice(0, kept);
@@ -391,6 +410,7 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
               return { content: [{ type: "text", text: answer }], details: {} };
             } });
           pi.on("tool_call", event => {
+            if (signal.aborted) return { block: true, reason: "Child is stopping" };
             let reason: string | undefined;
             if (kind === "explore") reason = executionRefusal(event.toolName, event.parentToolCallId !== undefined,
               event.parentToolCallId !== undefined ? nestedAllowed : allowed);
@@ -490,11 +510,14 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
         signal.addEventListener("abort", abort, { once: true });
         signal.throwIfAborted();
         await session.bindExtensions({ mode: "print", abortHandler: abort });
+        signal.throwIfAborted();
         // Make steering available only after the initial prompt has been submitted.
         const brief = `${spec.brief}\n\n${kind === "slice" ? `Owned files (repository-relative):\n${spec.owns.length ? spec.owns.map(path => `- ${path}`).join("\n") : "No explicit file ownership restrictions."}` : "Read-only child: owns does not grant write permission."}\n\n${hooks.openingPrompt()}`;
         const prompting = session.prompt(research
           ? researchPrompt(brief, execution?.research ?? {}, cwd, [...allowed], maxTurns!, orientation)
-          : kind === "explore" && orientation ? `${brief}\n\n${orientation}` : brief, { source: "rpc" });
+          : kind === "explore" && orientation ? `${brief}\n\n${orientation}` : brief, {
+          source: "rpc", preflightResult: disposition => { if (disposition === "started") signal.throwIfAborted(); },
+        });
         readyResolve();
         await prompting;
         if (pending && !signal.aborted) { const choice = pending; pending = undefined; await apply(choice); }
@@ -549,7 +572,14 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
         finally {
           complete = true;
           try { if (session) closeResidentSession(session.sessionId); }
-          finally { session?.dispose(); await code?.runtime.close(); }
+          finally {
+            try { session?.dispose(); await code?.runtime.close(); }
+            finally {
+              if (signal.aborted && (await Promise.all(stopping.values())).some(clear => !clear)) {
+                throw new Error("Could not confirm exit of the child's owned command groups");
+              }
+            }
+          }
         }
       }
     })();

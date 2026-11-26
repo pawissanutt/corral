@@ -37,9 +37,12 @@ export function jobControl(options: Options): JobControl {
       }
       options.record({ ...entry, phase: "started" });
       const result = action === "stop" ? await options.commands.kill(job) : options.commands.background(job);
-      if (action === "stop") await options.after?.(id, job, false);
-      options.record({ ...entry, phase: "finished", result });
-      return result;
+      const confirmed = result.stop_outcome === "stopped" || result.stop_outcome === "already_finished";
+      if (action === "stop") await options.after?.(id, job, !confirmed);
+      const ownerResult = action !== "stop" ? result : confirmed ? { ...result, state: result.stop_outcome }
+        : { ...result, state: "outcome_unknown", reason: "Process-group exit could not be confirmed" };
+      options.record({ ...entry, phase: "finished", result: ownerResult });
+      return ownerResult;
     } catch (error) {
       // No automatic retry after hooks or signalling could have acted.
       const reason = error instanceof Error ? error.message : String(error);

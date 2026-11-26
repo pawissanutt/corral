@@ -10,6 +10,7 @@ import { Type } from "typebox";
 
 import { EventLog } from "../src/bridge/events.ts";
 import { type JobRuntime, startTimeOf } from "../src/extensions/jobs/runtime.ts";
+import type { Commands } from "../src/extensions/jobs/commands.ts";
 import { loadModules } from "../src/host/modules.ts";
 import { guardedFetch, restrictEnvironment } from "../src/host/restrict.ts";
 import { HostSession } from "../src/host/session.ts";
@@ -177,7 +178,7 @@ test("a worker starts, peeks and kills managed jobs; a nested monitor wakes it o
   }
 }, 120_000);
 
-test("host close clears normal and TERM-resistant job groups", async () => {
+test("owner Stop escalates on the chosen job and retains output; host close clears the other group", async () => {
   const assets = buildFixtureInstall();
   const cwd = mkdtempSync(join(tmpdir(), "corral-pi-close-start-"));
   let host: HostSession | undefined;
@@ -201,10 +202,39 @@ test("host close clears normal and TERM-resistant job groups", async () => {
     const ready = join(cwd, "ready");
     expect(spawnSync("mkfifo", [ready]).status).toBe(0);
     const normal = await jobs.start("sleep 30");
-    const stubborn = await jobs.start(`trap '' TERM; echo ready > "${ready}"; exec sleep 30`);
+    const commands = (host as unknown as { commands: Commands }).commands;
+    const stubborn = await commands.run(`trap '' TERM; echo retained; echo ready > "${ready}"; exec sleep 30`, { wait_ms: 0 });
     await readFile(ready, "utf8");
+    host.installRemoteParts();
+    const stop = () => host!.remoteRegistry.get("job_act")!({ job: stubborn.job, action: "stop" });
+    transport.holdNext();
+    const ended = nextEvent(events, event => event.kind === "turn_ended");
+    try {
+      expect((await host.submitLocal({ text: "Wait for the fixture", busyPolicy: "prompt", origin: "owner" })).disposition).toBe("started");
+      await transport.whenHeld();
+      const delivered = nextEvent(events, event => event.kind === "job_control" && event.phase === "started");
+      const stopping = stop();
+      expect(await stop()).toMatchObject({ state: "denied" });
+      await delivered;
+      // A concurrent runtime caller joins the same escalation rather than resetting grace.
+      const duplicate = jobs.kill(String(stubborn.job));
+      expect(await stopping).toMatchObject({ state: "stopped" });
+      expect(await duplicate).toMatchObject({ state: "exited", stop_outcome: "stopped", group_clear: true });
+      expect(transport.held).toBeTrue();
+      expect(jobs.peek(String(stubborn.job))).toMatchObject({ state: "exited", signal: "SIGKILL", group_clear: true, text: "retained\n" });
+      expect(jobs.peek(String(normal.job))).toMatchObject({ state: "running" });
+    } finally { transport.release(); await ended; }
+    await host.drained();
+    expect(await stop()).toMatchObject({ state: "already_finished" });
+    // Independently retain the host-close escalation regression after exercising owner Stop.
+    const closeReady = join(cwd, "close-ready");
+    expect(spawnSync("mkfifo", [closeReady]).status).toBe(0);
+    const closeStubborn = await jobs.start(`trap '' TERM; echo ready > "${closeReady}"; exec sleep 30`);
+    await readFile(closeReady, "utf8");
     await host.close();
-    for (const { pid } of [normal, stubborn]) {
+    expect(jobs.peek(String(closeStubborn.job))).toMatchObject({ state: "exited", signal: "SIGKILL", group_clear: true });
+    expect(await stop()).toMatchObject({ state: "denied" });
+    for (const { pid } of [normal, stubborn, closeStubborn]) {
       if (typeof pid !== "number") throw new Error("job did not report its launcher PID");
       expect(startTimeOf(pid)).toBeUndefined();
     }
