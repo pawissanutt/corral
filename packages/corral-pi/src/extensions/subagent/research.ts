@@ -106,7 +106,7 @@ export function researchDepth(messages: readonly AgentMessage[], observed?: numb
       turns++;
       toolCalls += message.content.filter(block => block.type === "toolCall" && block.name !== "codemode").length;
     } else if (message.role === "toolResult") {
-      for (const block of message.content) if (block.type === "text") resultBytes += block.text.length;
+      for (const block of message.content) if (block.type === "text") resultBytes += Buffer.byteLength(block.text, "utf8");
     }
   }
   return { turns, toolCalls: observed ?? toolCalls, resultBytes };

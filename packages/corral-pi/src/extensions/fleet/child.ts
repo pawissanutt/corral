@@ -508,13 +508,17 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
           let reason: string | undefined;
           // The optional phase ends well before the child deadline, so a slow follow-up falls back
           // to the first answer instead of timing the whole child out.
+          // Settle on the cutoff itself: an in-flight tool (e.g. an LSP wait) may ignore the abort.
           const deadlineAt = execution?.deadlineAt;
+          const reserve = Promise.withResolvers<void>();
           const cutoff = deadlineAt === undefined ? undefined : setTimeout(() => {
             reason = "time reserve reached";
             void session!.abort().catch(() => {});
+            reserve.resolve();
           }, Math.max(0, deadlineAt - GAP_CHECK_RESERVE_MS - (options.now ?? Date.now)()));
-          try { await session.prompt(GAP_CHECK_PROMPT, { source: "rpc" }); }
-          catch (error) { reason ??= error instanceof Error ? error.message : String(error); }
+          const followUp = session.prompt(GAP_CHECK_PROMPT, { source: "rpc" })
+            .catch((error: unknown) => { reason ??= error instanceof Error ? error.message : String(error); });
+          try { await Promise.race([followUp, reserve.promise]); }
           finally { clearTimeout(cutoff); }
           // Explicit cancellation and the child's own deadline keep their usual meaning.
           signal.throwIfAborted();

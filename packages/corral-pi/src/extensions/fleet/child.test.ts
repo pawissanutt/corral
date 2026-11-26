@@ -195,6 +195,27 @@ test("a failed gap check keeps the first answer instead of failing the explore c
   } finally { f.cleanup(); }
 });
 
+test("a gap check stuck in a tool that ignores abort settles on the first answer at its time reserve", async () => {
+  const f = fixture();
+  let clock = 0;
+  // First read: the gap-check decision (75s left); second: the cutoff (already at the reserve).
+  const now = () => clock++ === 0 ? 0 : 60_000;
+  f.hooks.execution!.deadlineAt = 75_000;
+  f.body(async () => {
+    if (f.prompts.length === 1) f.messages.push(answer("First answer"));
+    else await new Promise(() => {});
+  });
+  try {
+    const done = await createSdkRunner({ ...f.options, now }).run({ id: "explore", title: "Explore", brief: "Trace", owns: [], kind: "explore" },
+      { profile: "fixture", provider: "openai-codex", model: "fixture" }, f.hooks, new AbortController().signal).done;
+    expect(f.prompts).toHaveLength(2);
+    expect(f.aborted).toBe(true);
+    expect(done.failed).toBeUndefined();
+    expect(done.report.startsWith("First answer")).toBe(true);
+    expect(done.report).toContain("time reserve reached");
+  } finally { f.cleanup(); }
+});
+
 test("a thin research answer gets one gap check with project orientation, a quick one does not", async () => {
   for (const effort of ["standard", "quick"] as const) {
     const f = fixture();
