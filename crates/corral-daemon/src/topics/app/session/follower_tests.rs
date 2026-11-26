@@ -22,10 +22,15 @@ fn append(path: &Path, entry: Value) -> Result<()> {
 }
 
 fn page(events: Vec<Kind>) -> LivePage {
+    page_after(0, events)
+}
+
+/// The host's events after `seq`, to the end of its ring.
+fn page_after(seq: u64, events: Vec<Kind>) -> LivePage {
     LivePage {
         generation: Some(1),
-        next: events.len() as u64,
-        host_tail: events.len() as u64,
+        next: seq + events.len() as u64,
+        host_tail: seq + events.len() as u64,
         more: false,
         gap: None,
         fleet: None,
@@ -36,7 +41,7 @@ fn page(events: Vec<Kind>) -> LivePage {
             .map(|(i, kind)| {
                 (
                     SessionLiveEvent {
-                        seq: i as u64 + 1,
+                        seq: seq + i as u64 + 1,
                         at: "now".into(),
                         generation: 1,
                         kind,
@@ -73,9 +78,21 @@ fn journal_and_live_words_share_one_tail() -> Result<()> {
             text: "hello".into(),
         },
     ]);
+    let ops = follower.visit("s", &path, None, Some(&page(vec![])), None);
+    assert!(matches!(
+        ops.as_slice(),
+        [
+            Op::Reset { older: None },
+            Op::Put { before: None, .. },
+            Op::Put {
+                before: Some(_),
+                ..
+            }
+        ]
+    ));
     let ops = follower.visit("s", &path, None, Some(&started), None);
     assert!(
-        matches!(ops.as_slice(), [Op::Reset {older: None}, Op::Put {before: None, ..}, Op::Put {before: Some(_), ..}, Op::Put {message, open: true,..}, Op::Append {offset:0,..}] if message.id == "s/open/1.2.1")
+        matches!(ops.as_slice(), [Op::Put {message, open: true,..}, Op::Append {offset:0,..}] if message.id == "s/open/1.2.1")
     );
 
     append(
@@ -89,6 +106,7 @@ fn journal_and_live_words_share_one_tail() -> Result<()> {
             before: Some(_),
             replaces: Some(replaces),
             open: false,
+            cut: false,
         },
     ] = ops.as_slice()
     else {
@@ -163,5 +181,173 @@ fn gap_seeds_the_open_ordinal_and_rebases_offsets() -> Result<()> {
     )?;
     let ops = follower.visit("s", &path, None, Some(&page(vec![])), None);
     assert!(matches!(ops.as_slice(), [Op::Put {replaces: Some(id),..}] if id == "s/open/1.2.2"));
+    Ok(())
+}
+
+/// A reader joined a running turn whose start was on the host's second page: the journal's
+/// records of the turn had been read with the first, so the words of a recorded message
+/// were opened again as a message being written.
+#[test]
+fn joining_a_turn_does_not_replay_the_words_of_recorded_messages() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("journal.jsonl");
+    append(
+        &path,
+        json!({"type":"message", "id":"a", "parentId":null, "timestamp":"2026-11-18T12:00:05Z",
+            "message":{"role":"assistant","content":"first"}}),
+    )?;
+    let mut follower = Follower::default();
+    let mut first = page(vec![Kind::LiveQueue {
+        steer: 0,
+        follow_up: 0,
+    }]);
+    first.host_tail = 3;
+    first.more = true;
+    let ops = follower.visit("s", &path, None, Some(&first), None);
+    assert!(matches!(
+        ops.as_slice(),
+        [Op::Reset { .. }, Op::Put { open: false, .. }]
+    ));
+    let second = page_after(
+        1,
+        vec![
+            Kind::LiveTurn {
+                turn: 2,
+                state: SessionLiveTurnState::Started,
+            },
+            Kind::LiveText {
+                turn: 2,
+                message: 1,
+                offset: 0,
+                text: "first".into(),
+            },
+        ],
+    );
+    let ops = follower.visit("s", &path, None, Some(&second), None);
+    assert!(ops.is_empty(), "{ops:?}");
+    Ok(())
+}
+
+/// A message of seven calls or more was cut as a history page cuts it: the stream carried
+/// its last calls only, after messages the reader already held, so the first calls could
+/// not be reached.
+#[test]
+fn a_message_of_many_calls_is_carried_whole_until_it_cannot_be() -> Result<()> {
+    let calls = |count: usize, argument: &str| -> Vec<Value> {
+        (0..count)
+            .map(|n| json!({"type":"toolCall","id":format!("c{n}"),"name":"read","arguments":{"path":argument}}))
+            .collect()
+    };
+    let held = |op: &Op| match op {
+        Op::Put { message, cut, .. } => (
+            message.id.clone(),
+            message
+                .items
+                .iter()
+                .filter(|item| matches!(item, SessionItem::ToolCall { .. }))
+                .count(),
+            *cut,
+        ),
+        _ => panic!("{op:?}"),
+    };
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("journal.jsonl");
+    append(
+        &path,
+        json!({"type":"message", "id":"u", "parentId":null,"message":{"role":"user","content":"hi"}}),
+    )?;
+    append(
+        &path,
+        json!({"type":"message", "id":"a", "parentId":"u","message":{"role":"assistant","content":calls(8, "a")}}),
+    )?;
+    let mut follower = Follower::default();
+    // A reader that joins is given the newest record whole too.
+    let ops = follower.visit("s", &path, None, Some(&page(vec![])), None);
+    let [Op::Reset { older: Some(_) }, joined] = ops.as_slice() else {
+        panic!("{ops:?}");
+    };
+    assert_eq!(held(joined), ("s/entry/a".into(), 8, false));
+
+    append(
+        &path,
+        json!({"type":"message", "id":"b", "parentId":"a","message":{"role":"assistant","content":calls(8, "b")}}),
+    )?;
+    let ops = follower.visit("s", &path, None, Some(&page(vec![])), None);
+    let [followed] = ops.as_slice() else {
+        panic!("{ops:?}");
+    };
+    assert_eq!(held(followed), ("s/entry/b".into(), 8, false));
+
+    // More calls than one operation holds at any preview size: the reader starts again at
+    // the message's last calls and pages back to the rest.
+    append(
+        &path,
+        json!({"type":"message", "id":"c", "parentId":"b","message":{"role":"assistant","content":calls(120, &"x".repeat(3000))}}),
+    )?;
+    let ops = follower.visit("s", &path, None, Some(&page(vec![])), None);
+    let [Op::Reset { older: Some(_) }, last] = ops.as_slice() else {
+        panic!("{ops:?}");
+    };
+    let (id, count, cut) = held(last);
+    assert_eq!((id.as_str(), cut), ("s/entry/c", true));
+    assert!((1..120).contains(&count));
+    Ok(())
+}
+
+/// A subscriber that fell behind a very long reply was given its first words and then
+/// appends from further on, which it could not place.
+#[test]
+fn a_long_reply_stops_at_the_bound_its_tail_holds() -> Result<()> {
+    use super::{follower::OPEN_PART_BYTES, transcript_buffer::TranscriptBuffer};
+    let written = |ops: &[Op]| {
+        ops.iter()
+            .map(|op| match op {
+                Op::Append { offset, text, .. } => {
+                    assert!(offset + text.len() as u64 <= OPEN_PART_BYTES);
+                    text.len() as u64
+                }
+                _ => 0,
+            })
+            .sum::<u64>()
+    };
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("journal.jsonl");
+    append(
+        &path,
+        json!({"type":"message", "id":"u", "parentId":null,"message":{"role":"user","content":"hi"}}),
+    )?;
+    let mut follower = Follower::default();
+    let mut ops = follower.visit("s", &path, None, Some(&page(vec![])), None);
+    let long = page(vec![
+        Kind::LiveTurn {
+            turn: 2,
+            state: SessionLiveTurnState::Started,
+        },
+        Kind::LiveText {
+            turn: 2,
+            message: 1,
+            offset: 0,
+            text: "a".repeat(OPEN_PART_BYTES as usize - 1),
+        },
+        // The two-byte character would end past the bound, so none of this is carried.
+        Kind::LiveText {
+            turn: 2,
+            message: 1,
+            offset: OPEN_PART_BYTES - 1,
+            text: "éz".into(),
+        },
+        Kind::LiveText {
+            turn: 2,
+            message: 1,
+            offset: OPEN_PART_BYTES + 2,
+            text: "past".into(),
+        },
+    ]);
+    ops.extend(follower.visit("s", &path, None, Some(&long), None));
+    assert_eq!(written(&ops), OPEN_PART_BYTES - 1);
+    let mut buffer = TranscriptBuffer::default();
+    buffer.publish(ops);
+    let snapshot: Vec<Op> = buffer.snapshot().into_iter().map(|(op, _)| op).collect();
+    assert_eq!(written(&snapshot), OPEN_PART_BYTES - 1);
     Ok(())
 }

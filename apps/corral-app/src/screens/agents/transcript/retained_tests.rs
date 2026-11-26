@@ -131,6 +131,7 @@ fn ReplacementFixture() -> impl IntoElement {
             before: None,
             replaces: replaces.map(str::to_owned),
             open,
+            cut: false,
         };
         mirror::apply(
             &mut cache,

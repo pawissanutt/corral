@@ -8,6 +8,7 @@ fn put(id: &str, words: &[&str], replaces: Option<&str>, open: bool) -> Transcri
         before: Some(format!("before-{id}")),
         replaces: replaces.map(str::to_owned),
         open,
+        cut: false,
     }
 }
 
@@ -110,6 +111,21 @@ fn transcript_operations_splice_replace_write_and_drop_in_order() {
             ("record".into(), vec!["updated".into()])
         ]
     );
+    // Only the last items of a record too large to carry: what is held before it no
+    // longer joins it, and its earlier items are a page back.
+    let mut last = put("record", &["last"], None, false);
+    if let TranscriptOp::Put { cut, .. } = &mut last {
+        *cut = true;
+    }
+    apply(feed, vec![last], false);
+    assert_eq!(shown(feed), [("record".into(), vec!["last".into()])]);
+    feed.with_untracked(|feed| {
+        let Some(DetailBody::Session(page)) = feed.detail(&target()).and_then(DetailCache::body)
+        else {
+            panic!("session")
+        };
+        assert_eq!(page.older.as_deref(), Some("before-record"));
+    });
     apply(
         feed,
         vec![
@@ -122,6 +138,74 @@ fn transcript_operations_splice_replace_write_and_drop_in_order() {
         shown(feed),
         [("another-branch".into(), vec!["branch".into()])]
     );
+}
+
+/// A long reply's record carries a preview of its words: the reply shrank to it when it
+/// ended, and grew back once the rest was read.
+#[test]
+fn a_long_reply_keeps_its_words_when_its_record_carries_a_preview() {
+    let runtime = nsh_core::element::Runtime::default();
+    let _entered = runtime.enter();
+    let feed = signal(Feed::default());
+    let mut app = AppState::new();
+    app.ready = true;
+    let get = read(&mut app, feed, None);
+    reply(
+        &mut app,
+        feed,
+        get,
+        None,
+        page("a", &[("a", &["one"])], None),
+    );
+    let words = "word ".repeat(600);
+    let whole = SessionItem::Text {
+        text: words.clone(),
+    };
+    let record = |bytes: u64| {
+        let mut record = put("record", &[&words[..255]], Some("open"), false);
+        if let TranscriptOp::Put { message, .. } = &mut record {
+            message.items.push(SessionItem::Continuation {
+                token: "rest".into(),
+                bytes,
+            });
+        }
+        record
+    };
+    let size = serde_json::to_vec(&whole).unwrap().len() as u64;
+    let held = || {
+        feed.with_untracked(|feed| {
+            let Some(DetailBody::Session(page)) =
+                feed.detail(&target()).and_then(DetailCache::body)
+            else {
+                panic!("session")
+            };
+            page.messages[1].items.clone()
+        })
+    };
+    apply(
+        feed,
+        vec![
+            put("open", &[], None, true),
+            TranscriptOp::Append {
+                id: "open".into(),
+                part: TranscriptPart::Text,
+                offset: 0,
+                text: words.clone(),
+            },
+            record(size),
+        ],
+        false,
+    );
+    assert_eq!(held(), [whole.clone()]);
+    // The record comes again when a tool result is folded into it.
+    apply(feed, vec![record(size)], false);
+    assert_eq!(held(), [whole]);
+    // Words that are not the record's are not kept in its place.
+    apply(feed, vec![record(size + 1)], false);
+    assert!(matches!(
+        held().as_slice(),
+        [SessionItem::Text { text }, SessionItem::Continuation { .. }] if text.len() == 255
+    ));
 }
 
 #[test]

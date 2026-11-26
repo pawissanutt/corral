@@ -54,8 +54,19 @@ impl Default for Script {
                 }
                 let seq = request["args"]["seq"].as_u64().unwrap() as usize;
                 let last = state.events.len();
+                // As the host does, a reader's first page says where the open turn is.
+                let open = (seq == 0 && state.open).then(|| {
+                    let text: String = state
+                        .events
+                        .iter()
+                        .filter(|event| event["kind"] == "live_text")
+                        .filter_map(|event| event["text"].as_str())
+                        .collect();
+                    json!({"turn": 1, "message": 1, "ended": false, "text_offset": 0,
+                        "text": text, "thinking_offset": 0, "thinking": ""})
+                });
                 json!({"last": last, "next": last, "events": state.events.get(seq..).unwrap_or(&[]),
-                    "more": false, "gap": null, "state": state.projection})
+                    "more": false, "gap": null, "state": state.projection, "open": open})
             }),
             ("submit_input", submit),
             (
@@ -162,14 +173,6 @@ pub(super) struct HostState {
 }
 
 impl HostState {
-    /// A turn that starts after every record the journal holds (those are stamped `AT`).
-    pub(super) fn begin(&mut self) {
-        self.events.push(
-            json!({"seq": self.events.len() + 1, "at": "2026-11-18T12:30:00Z",
-            "kind": "live_turn", "turn": 1, "state": "started"}),
-        );
-    }
-
     pub(super) fn emit(&mut self, text: &str) {
         self.events.push(
             json!({"seq": self.events.len() + 1, "at": AT, "kind": "live_text",

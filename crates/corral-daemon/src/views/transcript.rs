@@ -284,10 +284,12 @@ pub(super) fn page(
         }
         result => result?,
     };
-    read_page(id, &mut file, page, false).map(|(page, _, _, _)| page)
+    read_page(id, &mut file, page, false).map(|(page, ..)| page)
 }
 
-type PageRead = (Page, Vec<Row>, u64, Option<String>);
+/// Where the record a page cut starts, and the entry it follows.
+type Cut = (u64, Option<String>);
+type PageRead = (Page, Vec<Row>, u64, Option<String>, Option<Cut>);
 
 fn read_page(
     id: &str,
@@ -332,6 +334,7 @@ fn read_page(
     // Include both array brackets, and budget one separator per message and item.
     let mut size = 2;
     let mut records = 0;
+    let mut cut = None;
     while records < RECORDS || pin_pending {
         if end == 0 || matches!(branch, Branch::Root) {
             break;
@@ -369,11 +372,16 @@ fn read_page(
         } else {
             branch
         };
-        let (selection, done) = select(id, value, start, end, &mut skip, &mut size)?;
+        let follows = value
+            .get("parentId")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let (selection, done) = select(id, value, start, end, &mut skip, &mut size, PAGE_BYTES)?;
         if let Some(selection) = selection {
             let before = if done {
                 parent.cursor(&identity, start, Skipped::default())
             } else {
+                cut = Some((start, follows));
                 branch.cursor(&identity, end, skip)
             };
             rows.push(before);
@@ -393,11 +401,17 @@ fn read_page(
     let mut messages = Vec::with_capacity(selected.len());
     let mut retained = Vec::new();
     for (selection, before) in selected.into_iter().zip(rows) {
-        let (message, row) = tail::render(id, selection, before, page.is_none() && keep_calls)?;
+        let keep_calls = page.is_none() && keep_calls;
+        let (message, row) = tail::render(id, selection, before, keep_calls, ITEM_BYTES)?;
         if !message.items.is_empty() || !message.attachments.is_empty() {
             retained.push(row);
             messages.push(message);
         }
+    }
+    if cut.is_some()
+        && let Some(first) = retained.first_mut()
+    {
+        first.cut = true;
     }
     ensure!(
         json_len(&messages)? <= PAGE_BYTES,
@@ -413,6 +427,7 @@ fn read_page(
         retained,
         offset,
         leaf,
+        cut,
     ))
 }
 
@@ -423,6 +438,7 @@ fn select(
     end: u64,
     skip: &mut Skipped,
     size: &mut usize,
+    budget: usize,
 ) -> Result<(Option<Selection>, bool)> {
     if let Some(mut message) = entries::message(value, Some((id, start)))? {
         entries::bound_header(&mut message);
@@ -444,7 +460,7 @@ fn select(
         // Leave room for a body item as long as there is one left; later pages
         // may carry only metadata for this same message ID.
         let reserve = first.as_ref().map_or(0, SelectedItem::cost);
-        if *size + cost + reserve > PAGE_BYTES {
+        if *size + cost + reserve > budget {
             ensure!(*size > 2, "transcript record exceeds page budget");
             return Ok((None, false));
         }
@@ -455,7 +471,7 @@ fn select(
                 } else {
                     1
                 };
-            if *size + cost + extra + reserve > PAGE_BYTES {
+            if *size + cost + extra + reserve > budget {
                 break;
             }
             cost += extra;
@@ -467,7 +483,7 @@ fn select(
         for item in first.into_iter().map(Ok).chain(remaining) {
             let item = item?;
             let extra = item.cost();
-            if *size + cost + extra > PAGE_BYTES {
+            if *size + cost + extra > budget {
                 break;
             }
             cost += extra;
@@ -521,7 +537,14 @@ fn pair_tools(messages: &mut [Selection]) {
     }
 }
 
-fn append_preview(id: &str, items: &mut Vec<SessionItem>, selected: SelectedItem) -> Result<()> {
+/// The item whole when it is at most `bound` bytes, else a preview of it and where the rest
+/// is read.
+fn append_preview(
+    id: &str,
+    items: &mut Vec<SessionItem>,
+    selected: SelectedItem,
+    bound: usize,
+) -> Result<()> {
     let Some(mut value) = selected.value else {
         return Ok(());
     };
@@ -529,13 +552,13 @@ fn append_preview(id: &str, items: &mut Vec<SessionItem>, selected: SelectedItem
         Some(size) => size,
         None => json_len(&value)?,
     };
-    if size <= ITEM_BYTES {
+    if size <= bound {
         items.push(value);
     } else {
         let token = tokens::begin(id, selected.source, selected.pair, &value)?;
         for limit in [256, 128, 64, 16, 0] {
             entries::clip_item(&mut value, limit);
-            if json_len(&value)? <= ITEM_BYTES {
+            if json_len(&value)? <= bound {
                 break;
             }
         }

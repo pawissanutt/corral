@@ -4,8 +4,32 @@ use std::{collections::VecDeque, io::BufRead};
 
 pub(crate) struct Row {
     pub(crate) before: Option<String>,
+    /// Only the record's last items, as a history page cut it: `before` resumes inside it.
+    pub(crate) cut: bool,
     calls: Vec<Call>,
     raw_bytes: usize,
+    /// The size up to which an item of this message is carried whole.
+    bound: usize,
+}
+
+/// A record read forward is carried whole, where a history page would cut it: a reader
+/// holds what came before it and could not reach the items a cut left out. Its message is
+/// at most this, so that one operation fits a page of the session topic.
+const PUT_BYTES: usize = 48 * 1024;
+/// What the items of a record are sized for; the rest is room for previews that could not
+/// be made as small as asked.
+const PUT_TARGET: usize = 40 * 1024;
+/// A continuation item: a signed token naming the item and its pair.
+const CONTINUATION_BYTES: usize = 640;
+
+/// The size an item of this record is carried whole at, so that all of them fit one
+/// operation with every call's result folded in: a history page's size for a record of a
+/// few items, less for one of many.
+fn put_bound((message, items): &Selection) -> Result<usize> {
+    let room = PUT_TARGET.saturating_sub(json_len(message)?);
+    Ok((room / items.len().max(1))
+        .saturating_sub(CONTINUATION_BYTES)
+        .min(ITEM_BYTES))
 }
 
 struct Call {
@@ -20,6 +44,7 @@ pub(super) fn render(
     (mut message, items): Selection,
     before: Option<String>,
     keep_calls: bool,
+    bound: usize,
 ) -> Result<(SessionMessage, Row)> {
     let mut calls = Vec::new();
     let mut raw_bytes = 0usize;
@@ -46,14 +71,16 @@ pub(super) fn render(
                 calls.clear();
             }
         }
-        append_preview(id, &mut message.items, item)?;
+        append_preview(id, &mut message.items, item, bound)?;
     }
     Ok((
         message,
         Row {
             before,
+            cut: false,
             calls,
             raw_bytes,
+            bound,
         },
     ))
 }
@@ -64,7 +91,8 @@ impl Row {
     }
 }
 
-pub(crate) type Message = (SessionMessage, Option<String>);
+/// A message, the page before it, and whether it is only the last items of its record.
+pub(crate) type Message = (SessionMessage, Option<String>, bool);
 pub(crate) type Change = (Option<Message>, bool);
 
 pub(crate) struct Tail {
@@ -85,7 +113,7 @@ impl Tail {
         scope: Option<&Path>,
     ) -> Result<(Self, Option<String>, Vec<Message>)> {
         let mut file = Transcript::open(path, scope)?;
-        let (page, rows, offset, leaf) = read_page(id, &mut file, None, true)?;
+        let (page, rows, offset, leaf, cut) = read_page(id, &mut file, None, true)?;
         let mut tail = Self {
             journal: (file.metadata.dev(), file.metadata.ino()),
             len: file.metadata.len(),
@@ -96,9 +124,32 @@ impl Tail {
             stamp: identity(id, &file.metadata)?,
             pending: false,
         };
+        drop(file);
+        if let Some((start, follows)) = cut {
+            // The page begins inside a record. Read forward from where that record starts
+            // instead, so the tail begins with a whole message a reader can join at.
+            let newest = (tail.offset, tail.leaf.take());
+            (tail.offset, tail.leaf, tail.pending) = (start, follows, true);
+            let mut messages: Vec<Message> = Vec::new();
+            let changes = tail.advance(id, path, scope)?.into_iter().flatten();
+            for message in changes.filter_map(|(row, _)| row) {
+                // A call's message comes again with each result folded in.
+                match messages.iter_mut().find(|held| held.0.id == message.0.id) {
+                    Some(held) => *held = message,
+                    None => messages.push(message),
+                }
+            }
+            if let Some((_, before, _)) = messages.first() {
+                return Ok((tail, before.clone(), messages));
+            }
+            // It cannot be carried whole, or the journal forks after it: its last items.
+            (tail.offset, tail.leaf) = newest;
+            (tail.pending, tail.bytes) = (false, 0);
+            tail.rows.clear();
+        }
         let mut messages = Vec::new();
         for (message, row) in page.messages.into_iter().zip(rows) {
-            messages.push((message.clone(), row.before.clone()));
+            messages.push((message.clone(), row.before.clone(), row.cut));
             tail.remember(message, row)?;
         }
         Ok((tail, page.older, messages))
@@ -181,7 +232,6 @@ impl Tail {
         let start = self.offset;
         let end = start + bytes.len() as u64;
         let mut parent = Branch::Latest;
-        let mut branch = Branch::Latest;
         if let Some(entry) = value.get("id").and_then(Value::as_str)
             && value.get("parentId").is_some()
         {
@@ -193,24 +243,31 @@ impl Tail {
                 .as_deref()
                 .map_or(Branch::Root, |id| Branch::Parent(branch_key(id)));
             self.leaf = Some(entry.to_owned());
-            branch = Branch::Parent(branch_key(entry));
         }
         self.offset = end;
         let mut skip = Skipped::default();
         let assistant = value.pointer("/message/role").and_then(Value::as_str) == Some("assistant");
-        if let (Some(mut selection), done) = select(id, value, start, end, &mut skip, &mut 2)? {
-            let before = if done {
-                parent.cursor(&self.stamp, start, Skipped::default())
-            } else {
-                branch.cursor(&self.stamp, end, skip)
-            };
+        // Every item of the record: a cut would leave out items no reader could reach.
+        let selected = select(id, value, start, end, &mut skip, &mut 2, usize::MAX)?;
+        if let (Some(mut selection), _) = selected {
+            let before = parent.cursor(&self.stamp, start, Skipped::default());
             pair_tools(std::slice::from_mut(&mut selection));
             for item in &mut selection.1 {
-                self.fold(id, item, changes)?;
+                if !self.fold(id, item, changes)? {
+                    return Ok(false);
+                }
             }
-            let (message, row) = render(id, selection, before, true)?;
+            let bound = put_bound(&selection)?;
+            let (message, row) = render(id, selection, before, true, bound)?;
+            if json_len(&message)? > PUT_BYTES {
+                // More items than one operation holds at any size: a history page's cut.
+                return Ok(false);
+            }
             if !message.items.is_empty() || !message.attachments.is_empty() {
-                changes.push((Some((message.clone(), row.before.clone())), assistant));
+                changes.push((
+                    Some((message.clone(), row.before.clone(), false)),
+                    assistant,
+                ));
                 self.remember(message, row)?;
                 return Ok(true);
             }
@@ -221,14 +278,20 @@ impl Tail {
         Ok(true)
     }
 
-    fn fold(&mut self, id: &str, item: &mut SelectedItem, changes: &mut Vec<Change>) -> Result<()> {
+    /// Whether the call's message still fits one operation with the result folded in.
+    fn fold(
+        &mut self,
+        id: &str,
+        item: &mut SelectedItem,
+        changes: &mut Vec<Change>,
+    ) -> Result<bool> {
         let Some(SessionItem::ToolCall {
             call_id,
             result: Some(_),
             ..
         }) = &item.value
         else {
-            return Ok(());
+            return Ok(true);
         };
         for (message, row, cost) in self.rows.iter_mut().rev() {
             let Some(index) = row.calls.iter().rposition(|call| &call.id == call_id) else {
@@ -255,6 +318,7 @@ impl Tail {
                     pair: Some(item.source),
                     size: None,
                 },
+                row.bound,
             )?;
             let end = index
                 + 1
@@ -272,10 +336,13 @@ impl Tail {
             self.bytes -= *cost;
             *cost = row.cost(message)?;
             self.bytes += *cost;
-            changes.push((Some((message.clone(), row.before.clone())), false));
+            if json_len(message)? > PUT_BYTES {
+                return Ok(false);
+            }
+            changes.push((Some((message.clone(), row.before.clone(), row.cut)), false));
             break;
         }
         self.trim();
-        Ok(())
+        Ok(true)
     }
 }

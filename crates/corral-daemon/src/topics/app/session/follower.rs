@@ -32,6 +32,7 @@ pub(super) struct Follower {
     pending_end: Option<u64>,
     recorded: u64,
     open: BTreeMap<u64, Open>,
+    from_start: bool,
 }
 
 struct Open {
@@ -39,7 +40,18 @@ struct Open {
     offsets: [u64; 2],
 }
 
+/// The words of one part of an open message that are carried. Past it the part stops
+/// growing until the message's record arrives, for every subscriber alike, so the tail a
+/// late subscriber is given and the appends that follow it count from the same start.
+pub(super) const OPEN_PART_BYTES: u64 = 128 * 1024;
+
 impl Follower {
+    /// The next page was asked for from the start of the host's ring: what it replays is
+    /// older than the journal this follower has read, so it joins as on a gap.
+    pub(super) fn reads_from_start(&mut self) {
+        self.from_start = true;
+    }
+
     pub(super) fn visit(
         &mut self,
         id: &str,
@@ -66,8 +78,13 @@ impl Follower {
         seed: Option<HostOpen>,
     ) -> Result<Vec<Op>> {
         let generation = page.and_then(|p| p.generation);
+        let from_start = std::mem::take(&mut self.from_start);
         let gap = self.generation != generation
-            || page.is_some_and(|p| p.generation.is_some() && p.gap.is_some());
+            || page.is_some_and(|p| {
+                p.generation.is_some() && (p.gap.is_some() || (from_start && p.host_tail > 0))
+            });
+        // Joining the host's stream, not only re-reading the journal on another branch.
+        let join = gap || self.tail.is_none();
         if self.generation != generation {
             self.skip_through = 0;
         }
@@ -101,7 +118,7 @@ impl Follower {
                 let replaces = if assistant {
                     let at = row
                         .as_ref()
-                        .and_then(|(message, _)| message.at.as_deref())
+                        .and_then(|(message, ..)| message.at.as_deref())
                         .and_then(|at| at.parse().ok());
                     if let Some(start) = locate_start(&mut starts, at, self.turn.is_some()) {
                         start.records += 1;
@@ -115,12 +132,13 @@ impl Follower {
                 } else {
                     None
                 };
-                if let Some((message, before)) = row {
+                if let Some((message, before, cut)) = row {
                     ops.push(Op::Put {
                         message,
                         before,
                         replaces,
                         open: false,
+                        cut,
                     });
                 } else if let Some(id) = replaces {
                     ops.push(Op::Drop { id });
@@ -133,23 +151,30 @@ impl Follower {
             self.pending_end = None;
             self.recorded = 0;
             self.open.clear();
-            if page.is_some_and(|p| p.gap.is_some()) || seed.is_some() {
+            if join {
+                // What the ring still holds cannot be paired by order with records this
+                // snapshot already has: a turn's start may be pages away from its words,
+                // and the snapshot is one page of its records. The host's `open` says
+                // where the turn is, and only what it emits after this page is followed.
                 self.skip_through = page.map_or(0, |page| page.host_tail);
-            }
-            for (message, _) in &messages {
-                if message.author == "assistant"
-                    && let Some(at) = message.at.as_deref().and_then(|at| at.parse().ok())
-                    && let Some(start) = locate_start(&mut starts, Some(at), true)
-                {
-                    start.records += 1;
+                starts.clear();
+            } else {
+                for (message, ..) in &messages {
+                    if message.author == "assistant"
+                        && let Some(at) = message.at.as_deref().and_then(|at| at.parse().ok())
+                        && let Some(start) = locate_start(&mut starts, Some(at), true)
+                    {
+                        start.records += 1;
+                    }
                 }
             }
             ops.push(Op::Reset { older });
-            ops.extend(messages.into_iter().map(|(message, before)| Op::Put {
+            ops.extend(messages.into_iter().map(|(message, before, cut)| Op::Put {
                 message,
                 before,
                 replaces: None,
                 open: false,
+                cut,
             }));
         }
         let (Some(generation), Some(page)) = (generation, page) else {
@@ -260,8 +285,12 @@ impl Follower {
                     let base = open.offsets[usize::from(part == Part::Thinking)];
                     let overlap =
                         usize::try_from(base.saturating_sub(*offset)).unwrap_or(usize::MAX);
+                    let at = offset.saturating_sub(base);
+                    let room =
+                        usize::try_from(OPEN_PART_BYTES.saturating_sub(at)).unwrap_or(usize::MAX);
                     if let Some(text) = text.get(overlap..) {
-                        chunks(&mut ops, &open.id, part, offset.saturating_sub(base), text);
+                        let text = &text[..text.floor_char_boundary(room)];
+                        chunks(&mut ops, &open.id, part, at, text);
                     }
                 }
                 _ => {}
@@ -327,6 +356,7 @@ fn start(
         before: None,
         replaces: None,
         open: true,
+        cut: false,
     });
     Open {
         id,

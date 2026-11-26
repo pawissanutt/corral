@@ -125,7 +125,6 @@ fn worker_live_replay_cancel_and_paused_engine_send_back_share_the_session() {
     {
         let mut state = host.state.lock().unwrap();
         state.open = true;
-        state.begin();
         state.emit("worker live text");
     }
     crate::topics::start_session_live(fixture.shared()).unwrap();

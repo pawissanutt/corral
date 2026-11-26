@@ -46,14 +46,16 @@ pub(crate) fn apply(cache: &mut DetailCache, ops: Vec<TranscriptOp>, more: bool)
     let mirror = &mut cache.transcript_seams.mirror;
     mirror.active = true;
     let mut spliced = false;
+    let mut restarted = false;
     for op in ops {
         match op {
             TranscriptOp::Reset { older } => mirror.reset = Some(older),
             TranscriptOp::Put {
-                message,
+                mut message,
                 before,
                 replaces,
                 open,
+                cut,
             } => {
                 if let Some(older) = mirror.reset.take() {
                     splice(page, mirror, Some(&message.id), older);
@@ -64,6 +66,9 @@ pub(crate) fn apply(cache: &mut DetailCache, ops: Vec<TranscriptOp>, more: bool)
                     let replaces = replaces.as_deref()?;
                     page.messages.iter().position(|m| m.id == replaces)
                 });
+                if let Some(at) = at {
+                    keep_words(&page.messages[at], &mut message);
+                }
                 mirror.sizes.insert(id.clone(), size(&message));
                 if let Some(at) = at {
                     let old = &page.messages[at].id;
@@ -84,6 +89,16 @@ pub(crate) fn apply(cache: &mut DetailCache, ops: Vec<TranscriptOp>, more: bool)
                         .or_insert_with(|| id.clone());
                 } else if mirror.open.as_ref() == Some(&id) {
                     mirror.open = None;
+                }
+                if cut {
+                    // Only the record's last items: its earlier ones are a page back, so
+                    // nothing held before it joins it. The document starts here again.
+                    let at = page.messages.iter().position(|m| m.id == id).unwrap_or(0);
+                    for message in page.messages.drain(..at) {
+                        mirror.forget(&message.id);
+                    }
+                    page.older.clone_from(&before);
+                    restarted = true;
                 }
                 mirror.before.insert(id, before);
             }
@@ -109,12 +124,46 @@ pub(crate) fn apply(cache: &mut DetailCache, ops: Vec<TranscriptOp>, more: bool)
         splice(page, mirror, None, older);
         spliced = true;
     }
-    if spliced {
+    if restarted {
+        cache.pages.clear();
+    }
+    if spliced || restarted {
         cache.transcript_seams.empty_cursors.clear();
         cache.stale = false;
         cache.error = None;
     }
     bound(cache);
+}
+
+/// A record carries a long item as a preview and where the rest is read. Words this client
+/// was sent whole while they were written are those same words, so they stay: a reply does
+/// not shrink to its preview and grow back when its record arrives, or when a tool result
+/// is folded into it later.
+fn keep_words(held: &SessionMessage, message: &mut SessionMessage) {
+    for whole in &held.items {
+        let (SessionItem::Text { text: words } | SessionItem::Thinking { text: words }) = whole
+        else {
+            continue;
+        };
+        let Ok(size) = serde_json::to_vec(whole).map(|bytes| bytes.len() as u64) else {
+            continue;
+        };
+        let preview = message.items.windows(2).position(|pair| {
+            let same = match (&pair[0], whole) {
+                (SessionItem::Text { text }, SessionItem::Text { .. })
+                | (SessionItem::Thinking { text }, SessionItem::Thinking { .. }) => {
+                    words.starts_with(text.as_str())
+                }
+                _ => false,
+            };
+            // The continuation says how large the whole item is.
+            same && matches!(&pair[1], SessionItem::Continuation { bytes, .. } if *bytes == size)
+        });
+        if let Some(at) = preview {
+            message.items[at] = whole.clone();
+            message.items.remove(at + 1);
+        }
+    }
 }
 
 fn splice(page: &mut SessionPage, mirror: &mut Mirror, first: Option<&str>, older: Option<String>) {

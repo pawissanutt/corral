@@ -407,6 +407,10 @@ pub enum TranscriptOp {
         /// to it follow.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         open: bool,
+        /// Only the last items of a record too large for one operation: `before` resumes
+        /// inside it, and the client holds nothing before this message until it pages back.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        cut: bool,
     },
     /// Words of the open message `id`, at a UTF-8 byte offset of its one `text` or
     /// `thinking` item, which the first chunk makes (thinking goes before text). Writing a

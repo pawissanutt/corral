@@ -123,6 +123,7 @@ pub(super) fn page(feed: &mut Feed, scope: &str) -> bool {
                 message: message.clone(),
                 before: None,
                 open: false,
+                cut: false,
                 replaces: (message.author == "assistant" && index >= records.len())
                     .then(|| replaces.take())
                     .flatten(),

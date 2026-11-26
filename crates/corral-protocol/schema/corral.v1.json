@@ -10831,6 +10831,10 @@
                   "null"
                 ]
               },
+              "cut": {
+                "description": "Only the last items of a record too large for one operation: `before` resumes\ninside it, and the client holds nothing before this message until it pages back.",
+                "type": "boolean"
+              },
               "message": {
                 "$ref": "#/components/schemas/SessionMessage"
               },

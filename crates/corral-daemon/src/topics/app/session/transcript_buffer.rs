@@ -8,7 +8,9 @@ use corral_protocol::{
 use super::{SESSION_BUFFER_BYTES, SESSION_BUFFER_EVENTS, SESSION_PAGE_BYTES, follower::chunks};
 use crate::views::json_len;
 
-const OPEN_BYTES: usize = 256 * 1024;
+/// Both parts of an open message at the follower's bound: the tail holds every word the
+/// stream carried, so a reset and the appends after it agree.
+const OPEN_BYTES: usize = 2 * super::follower::OPEN_PART_BYTES as usize;
 const TAIL_BYTES: usize = 28 * 1024;
 
 pub(super) type SizedOp = (Op, usize);

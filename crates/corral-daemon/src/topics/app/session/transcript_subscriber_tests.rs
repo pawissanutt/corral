@@ -21,6 +21,7 @@ fn capable_subscriber_snapshots_and_recovers_without_live_words() {
         before: None,
         replaces: None,
         open: false,
+        cut: false,
     };
     let receive = |subscriber: &mut Subscriber, cap| {
         let frame = subscriber.next(7, false, false, cap).unwrap().unwrap();

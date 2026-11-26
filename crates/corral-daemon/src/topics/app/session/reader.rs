@@ -149,6 +149,9 @@ impl LiveReader {
         let old_socket = self.socket.clone();
         let old_generation = self.generation;
         let replay = self.replay;
+        if replay || self.cursors.live == 0 {
+            self.follower.reads_from_start();
+        }
         let page = self.read_resolved(&resolved);
         if self.socket != old_socket
             || old_generation != self.generation

@@ -456,6 +456,12 @@ page older history; it never re-reads to follow a turn, and the two rules above 
 re-reading when a tool or a turn ends do not apply to it. It is not sent `live_text` or
 `live_thinking` events, whose words the stream carries.
 
+The app draws a reply's words only from this stream. Against a corrald that does not
+offer the capability it shows the recorded messages and reads the transcript again when a
+tool or a turn ends, by the two rules above, and no words while a reply is written: it
+keeps no second way to draw them from `live_text` events. A connection that does not
+request the capability is sent those events as before.
+
 corrald is the one producer. It reads the same journal `detail.get` pages and projects
 records with the same code, so a message is the same `SessionMessage` with the same id
 whichever way it arrived, and it lays the host's live words over the journal's tail
@@ -471,7 +477,8 @@ itself. No client stitches the two.
 - `put { message, before, replaces, open }`: the message takes the place of the held
   message with the same id, or of the open message `replaces`, or else goes at the end.
   `before` is the `detail.get` page before this message, so a client that drops its oldest
-  messages to stay within its own budget can still page back to them. A record is sent
+  messages to stay within its own budget can still page back to them. `cut` is described
+  below. A record is sent
   again with the same id when it changes: a tool result that arrives is folded into the
   call's message exactly as a history page folds it.
 - An open message (`open: true`) is the assistant message being written. Its id is
@@ -489,24 +496,47 @@ itself. No client stitches the two.
   item of a message the stream has put, and decorates that item until its result arrives
   in a `put`.
 
-A `put` is bounded like a history page: items are previews with continuation tokens. A
-record too large for one operation is put with only its last items, and `before` then
-resumes inside that record, exactly as a history page that splits a record does; the
-earlier items page in as older history under the same message id.
+A `put` carries a whole record. Its items are previews with continuation tokens, as in a
+history page, but where a history page would cut a record of many items (seven tool calls
+can be enough) the stream does not: the client holds what came before the record and
+could never reach the items a cut left out. A record of many items has smaller previews
+instead, so that all of them fit one operation with every call's result folded in. The
+tail after a `reset` begins with a whole record for the same reason.
+
+Only a record that fits one operation at no preview size (more than about sixty long
+items) is cut. corrald then sends `reset` and a `put` with `cut: true` that holds the
+record's last items; its `before` resumes inside the record, and it is sent again, still
+cut, when a result is folded into it. A client drops everything it holds before a cut
+message, which is its first message again, and pages back from `before`: the earlier
+items join the message under the same id, as when a history page splits a record.
+
+A client that was sent an item's words whole keeps them when a `put` carries a preview of
+that same item (the words begin with the preview, and the continuation's `bytes` is the
+whole item's size). A long reply therefore does not shrink to its preview when its record
+arrives, or when a tool result is folded into the record later.
+
+corrald carries at most 128 KiB of each of an open message's `thinking` and `text`. Past
+that the part stops growing for every subscriber until the record arrives, so the tail a
+late subscriber is given and the `append`s that follow it count from the same start.
 
 corrald pairs the host's live words with journal records by order. Within a turn the
 `n`th assistant message the host streams is the `n`th assistant record the journal gains
 after the turn started; words for a message the journal already holds are not shown
-again. When corrald joins a turn it did not see start (its first read, or a gap in the
-host's ring), the host says where the turn is: the `live_since` reply to a reader with a
-gap carries `open: { turn, message, ended, text_offset, text, thinking_offset, thinking }`
-while a turn is open. `message` is the ordinal of the latest assistant message (0 before
-the first) and `ended` whether it has finished, so corrald knows which ordinals the
-journal already has or will have without their words. While it is being written, `text`
-and `thinking` are the tails of what was written, at those byte offsets, cut on character
-boundaries so the serialized `open` stays within 24 KiB. A host that sends no `open` on a
-gap (an older one) has its words left out until its next turn starts; its records still
-arrive.
+again. That holds only for a turn corrald saw start. When it joins a host's stream (its
+first read, a read from the start of the ring after the host came back, or a gap in the
+ring) it does not pair what the ring still holds: a turn's start can be pages away from
+its words, and the journal tail it has read is one page of the turn's records. It follows
+only what the host emits after the page it joined at, and the host says where the turn
+is: the `live_since` reply to a read from `seq` 0 or to a reader with a gap carries
+`open: { turn, message, ended, text_offset, text, thinking_offset, thinking }` while a
+turn is open. `message` is the ordinal of the latest assistant message (0 before the
+first) and `ended` whether it has finished, so corrald knows which ordinals the journal
+already has or will have without their words. While it is being written, `text` and
+`thinking` are the tails of what was written, at those byte offsets, cut on character
+boundaries so the serialized `open` stays within 24 KiB, and within less when the reply
+also carries the fleet and the state: those come whole, and the reply with one event
+still fits the bridge's frame. A host that sends no `open` (an older one) has its words
+left out until its next turn starts; its records still arrive.
 
 Operations share the page's byte budget with its events. A subscriber's operations are a
 bounded backlog beside the buffered events; one that falls behind it is sent `reset` and
