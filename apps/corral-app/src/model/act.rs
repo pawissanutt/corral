@@ -433,13 +433,15 @@ pub fn created(feed: &Feed, key: &str) -> Option<String> {
 /// The receipt a settled operation toasts. A new task has no id until the engine gives it one,
 /// so its receipt names the id from the reply: "New task T-21 · Done".
 pub fn receipt(feed: &Feed, act: &Act, status: &ActStatus) -> String {
-    // The link dropped after the request left: corrald may have applied it. Neither success nor
+    // The link dropped after the request left, or a restarted corrald no longer knows the
+    // operation this device was following: it may have been applied. Neither success nor
     // failure is claimed, and nothing is sent again.
-    let lost = feed
-        .operations
-        .get(&act.key)
-        .and_then(|operation| operation.error.as_ref())
-        .is_some_and(|error| error.code == "disconnected");
+    let lost = feed.operations.get(&act.key).is_some_and(|operation| {
+        operation.error.as_ref().is_some_and(|error| {
+            error.code == "disconnected"
+                || (operation.method == corral_protocol::op::OP_RESULT && error.code == "not_found")
+        })
+    });
     if lost {
         return format!(
             "{} · outcome unknown: the connection dropped before corrald answered; the task's status shows whether it ran",

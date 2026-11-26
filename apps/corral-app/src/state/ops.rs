@@ -2,7 +2,7 @@
 //! asks, `op.submit`, the receipt toast, and the refusal sheet whose buttons are the engine's
 //! typed next steps. No daemon round trip happens before a submit.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use corral_protocol::op::OpSubmit;
 use nsh_core::prelude::*;
@@ -15,12 +15,36 @@ use crate::model::{Act, ActStatus, Id};
 
 const NO_SOURCE: &str = "Not connected. Choose Preview explicitly to use sample data.";
 
-/// The same operation, forced or not, as one already sent.
+/// The same operation, forced or not, as one already sent. Operations that add something
+/// (a task, a comment, a reply, an artifact, usage) may be meant twice and never count.
 fn same(sent: &Act, act: &Act) -> bool {
-    sent.op == act.op && sent.force == act.force
+    use corral_types::Op;
+    let adds = matches!(
+        act.op,
+        Op::New { .. }
+            | Op::Comment { .. }
+            | Op::Reply { .. }
+            | Op::LensDraft { .. }
+            | Op::LensRepair { .. }
+            | Op::ArtifactAdd { .. }
+            | Op::UsageAdd { .. }
+    );
+    !adds && sent.op == act.op && sent.force == act.force
 }
 
 impl AppState {
+    /// A second press while corrald has not answered the first would send the operation
+    /// twice; the first one's outcome is still to come, so this one is dropped with a toast.
+    fn already_sent(&self, act: &Act) -> bool {
+        let sent = self
+            .watching
+            .with_untracked(|watching| watching.values().any(|sent| same(sent, act)));
+        if sent {
+            self.toast(format!("{} · already sent, waiting for corrald", act.title));
+        }
+        sent
+    }
+
     /// Submits the operation, after the confirm sheet when it is destructive or forced and the
     /// press that made it was not already its confirmation.
     pub fn dispatch(&self, act: Act) {
@@ -28,13 +52,7 @@ impl AppState {
             self.toast(NO_SOURCE);
             return;
         }
-        // A second press while corrald has not answered the first would send the operation
-        // twice; the first one's outcome is still to come.
-        if self
-            .watching
-            .with_untracked(|watching| watching.values().any(|sent| same(sent, &act)))
-        {
-            self.toast(format!("{} · already sent, waiting for corrald", act.title));
+        if self.already_sent(&act) {
             return;
         }
         if act.asks() && !act.confirmed {
@@ -46,6 +64,10 @@ impl AppState {
     }
 
     fn submit(&self, act: Act) {
+        // The confirm sheet may have stood open while the same operation went out elsewhere.
+        if self.already_sent(&act) {
+            return;
+        }
         let key = act.key.clone();
         self.watching
             .update(|watching| _ = watching.insert(key.clone(), act.clone()));
@@ -195,9 +217,64 @@ impl AppState {
         });
     }
 
+    /// Another daemon store or device identity clears the client's reply table, so an
+    /// operation sent before it can never settle here. It stops counting as sent (a step
+    /// button would otherwise stay pending for good); its outcome is unknown, not retried.
+    fn forget_other_namespace(self) {
+        // The namespace each watched operation was first seen under.
+        let sent_under = stored(BTreeMap::<Id, (String, String)>::new());
+        effect(move || {
+            let watched = self.watching.get();
+            let orphaned: Vec<Act> = self.feed.with(|feed| {
+                let Some(namespace) = feed
+                    .store
+                    .clone()
+                    .zip(feed.session.as_ref().map(|s| s.device.id.clone()))
+                else {
+                    return Vec::new();
+                };
+                sent_under.with(|sent| {
+                    sent.retain(|key, _| watched.contains_key(key));
+                    watched
+                        .values()
+                        .filter(|act| {
+                            let under = sent
+                                .entry(act.key.clone())
+                                .or_insert_with(|| namespace.clone());
+                            *under != namespace && !feed.operations.contains_key(&act.key)
+                        })
+                        .cloned()
+                        .collect()
+                })
+            });
+            if orphaned.is_empty() {
+                return;
+            }
+            untracked(move || {
+                self.watching.update(|watching| {
+                    for act in &orphaned {
+                        watching.remove(&act.key);
+                    }
+                });
+                self.following.update(|following| {
+                    for act in &orphaned {
+                        following.remove(&act.key);
+                    }
+                });
+                for act in orphaned {
+                    self.toast(format!(
+                        "{} · outcome unknown: corrald changed before it answered",
+                        act.title
+                    ));
+                }
+            });
+        });
+    }
+
     /// Each watched operation's outcome, once: a refusal opens its sheet, anything else toasts.
     pub(super) fn watch_receipts(self) {
         self.follow_running();
+        self.forget_other_namespace();
         effect(move || {
             let mut watched = self.watching.get();
             // An operation still followed has not settled; its outcome is still to come.
