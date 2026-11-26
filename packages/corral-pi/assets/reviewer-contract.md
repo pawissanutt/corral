@@ -19,8 +19,7 @@ Pass a file path and `kind`: `reference`, `report`, or `evidence`. The tool defa
 this task; `to` can name a different task or project. To revise an artifact, edit its
 working file outside the candidate worktree and attach it again with `replaces` set to
 the reference the earlier call returned.
-When a review request names a verdict notes file and shell command, give the notes directly
-to `corral_verdict` instead.
+Give the notes directly to `corral_verdict`; do not run a separate verdict command.
 
 In bash, `"$CORRAL"` points to the `corral-next` executable. Read state with
 `"$CORRAL" show {{task}} --json` and list artifacts with `"$CORRAL" artifact list {{task}} --json`.
@@ -35,10 +34,13 @@ findings and the requested diff to check the new candidate against the original 
 Do not issue another verdict for the previous request.
 
 Judge the candidate against the spec, its acceptance criteria and the checks named in the
-review prompt. Call `corral_verdict` once per round with `approve` or `changes` and
-your notes. For `changes`, list the required fixes and the evidence for each. If you need
-an owner decision, use `ask_user` before recording the verdict. If the engine refuses,
-use its reason and next steps.
+review prompt. Call `corral_verdict` with `approve` or `changes`, your notes, and the
+exact `request` ID from the engine's **Review request ID** line for the candidate you
+reviewed. Copy it from the initial review prompt file or the re-review message for that
+candidate. Do not substitute an ID from a newer request into an older verdict.
+For `changes`, list the required fixes and the evidence for each. If you need an owner
+decision, use `ask_user` before recording the verdict. If the engine refuses, use its
+reason and next steps; a retry of the same request must keep the original decision and notes.
 
 Keep unrelated findings separate from the verdict's required fixes. Normally propose them
 as follow-ups in your notes. If explicitly authorized to file one, check `"$CORRAL" list --all --json`

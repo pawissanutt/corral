@@ -9,9 +9,10 @@ use std::rc::Rc;
 use corral_protocol::detail::DetailRef;
 use nsh_core::prelude::*;
 
-use crate::model::Id;
 use crate::model::daemon::{Feed, Link};
+use crate::model::tasks::band::can_refresh_verdict;
 use crate::model::work;
+use crate::model::{DataState, Id};
 use crate::state::AppState;
 
 /// Keeps every detail of `targets` loaded while corrald grants `capability` (none: always).
@@ -60,10 +61,9 @@ pub(crate) fn keep_details(
 pub(crate) type Wanted = Option<(Id, bool, bool)>;
 
 /// Keeps a task's detail loaded while `target` names it: requests it when absent or stale,
-/// revalidates it once when it leaves or joins the open-task list, and pins it in the client's
-/// cache while it is shown, letting go when the target changes or the view goes. A served row's
-/// change refreshes the pinned detail in the client itself. Requests and pins go to the source
-/// the view mounted on (`AppState::scope`).
+/// revalidates it when it leaves or joins the open-task list, and pins it while shown. A
+/// served row's change refreshes pinned detail. Reopening a Pi review also revalidates it,
+/// since a Pi verdict spool can be written without a board event.
 pub(crate) fn keep_loaded(app: AppState, target: Memo<Wanted>) {
     let app = untracked(|| app.scope());
     let seen = stored(None::<(Id, bool)>);
@@ -73,7 +73,8 @@ pub(crate) fn keep_loaded(app: AppState, target: Memo<Wanted>) {
     effect(move || {
         let wanted = target.get();
         let shown = wanted.as_ref().map(|(id, _, _)| id.clone());
-        if *kept.borrow() != shown {
+        let entered = *kept.borrow() != shown;
+        if entered {
             let was = kept.replace(shown.clone());
             untracked(|| {
                 if let Some(gone) = was {
@@ -91,7 +92,12 @@ pub(crate) fn keep_loaded(app: AppState, target: Memo<Wanted>) {
         let previous = seen.replace(Some((id.clone(), open)));
         let moved = previous.is_some_and(|(known, was_open)| known == id && was_open != open);
         untracked(|| {
-            if moved {
+            let recheck_verdict = entered
+                && app.data.get_untracked() == DataState::Daemon
+                && app.feed.with_untracked(|feed| {
+                    feed.link == Link::Up && can_refresh_verdict(feed, id.as_str())
+                });
+            if moved || recheck_verdict {
                 app.refresh(reference);
             } else if needed {
                 app.load(reference);

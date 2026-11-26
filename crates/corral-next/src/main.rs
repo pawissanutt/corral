@@ -1,5 +1,6 @@
 mod args;
 mod board_plan;
+mod cli;
 mod editor;
 mod ext;
 mod hook;
@@ -33,7 +34,7 @@ use args::{
     ArtifactCommand, Cli, Command, ConfigCommand, ExtCommand, Id, Message, Text, UsageCommand,
     Verdict,
 };
-use output::{Output, TaskView};
+use output::Output;
 
 fn main() -> ExitCode {
     let args: Vec<_> = env::args_os().collect();
@@ -70,7 +71,7 @@ fn main() -> ExitCode {
         json: cli.json,
         stdout: io::stdout().lock(),
     };
-    let code = match run(cli.command, &mut output) {
+    let code = match corral_engine::pin_binary_path().and_then(|()| run(cli.command, &mut output)) {
         Ok(code) => code,
         Err(error) => output.report(&error),
     };
@@ -223,16 +224,7 @@ fn run(command: Command, out: &mut Output<'_>) -> Result<u8> {
                 output::tasks(out, tasks)
             })?;
         }
-        Command::Show(Id { id }) => {
-            let task = engine.store.require_task(&id)?;
-            out.show(&TaskView {
-                references: engine.artifact_references(&task.body),
-                task,
-                runs: engine.store.list_runs(&id)?,
-                checks: engine.store.list_latest_checks(&id)?,
-                artifacts: engine.list_artifacts(Some(&id))?,
-            })?;
-        }
+        Command::Show(Id { id }) => cli::show(&engine, out, &id)?,
         Command::Log(Id { id }) => {
             engine.store.require_task(&id)?;
             let events = engine.store.list_events(&id)?;
@@ -302,6 +294,9 @@ fn run(command: Command, out: &mut Output<'_>) -> Result<u8> {
                 },
                 false,
             )?;
+        }
+        Command::ReviewVerdict { task, run, request } => {
+            cli::review_verdict(&engine, out, &task, &run, &request)?;
         }
         Command::Changes(Text { id, text }) => {
             apply(&engine, out, Op::Changes { id, text }, false)?

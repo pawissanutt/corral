@@ -12,6 +12,9 @@ use crate::{
     testing::FakeRunner,
 };
 
+#[path = "review_verdict_tests.rs"]
+mod review_verdict_tests;
+
 struct Fixture {
     _root: tempfile::TempDir,
     repo: PathBuf,

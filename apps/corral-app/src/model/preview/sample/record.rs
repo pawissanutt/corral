@@ -63,6 +63,7 @@ pub(super) fn record(feed: &Feed, seed: &Seed) -> TaskDetail {
         )
     };
     let mut record = TaskDetail {
+        pending_review_verdict: None,
         task: Task {
             id: seed.id.into(),
             title: seed.title.into(),

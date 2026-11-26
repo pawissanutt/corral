@@ -5,6 +5,7 @@ import { TOML } from "bun";
 import { engineRun, type Run } from "../build/corral-cli.ts";
 import type { HostIdentity } from "../roles/types.ts";
 import { transcriptPage, type HistoryRequest } from "./history.ts";
+import { publishVerdictIntent } from "./verdict-intent.ts";
 
 /** Stable JSON for host-local comparisons and hashes. */
 export function canonicalJson(value: unknown): string {
@@ -89,6 +90,35 @@ export class CorralClient {
     const stdout = await this.execute(argv, true, cwd);
     try { return JSON.parse(stdout); }
     catch (cause) { throw new Error(`${argv[0]} returned invalid JSON`, { cause }); }
+  }
+
+  async recordVerdict(request: string, verdict: string, notes: string, drain?: () => Promise<unknown>): Promise<unknown> {
+    const { identity, root, sessionDir } = this.options;
+    if (identity.role !== "reviewer" || !identity.task || !identity.run || !sessionDir) {
+      throw new CorralCommandError("Review verdicts require a bound reviewer task, run and private session directory.");
+    }
+    const intent = publishVerdictIntent(sessionDir, identity.run, request, verdict, notes);
+    const argv = ["review-verdict", identity.task, identity.run, request];
+    try {
+      // Save even if draining usage is slow; the engine may close this host once it records the verdict.
+      await drain?.();
+      const receipt = await this.command(argv, root);
+      if (!receipt || typeof receipt !== "object" || !("recorded" in receipt) || receipt.recorded !== true) {
+        throw new Error("Engine did not return a valid verdict receipt (expected recorded: true).");
+      }
+      return receipt;
+    } catch (error) {
+      const quote = (arg: string) => /^[\w./:=+-]+$/.test(arg) ? arg : `'${arg.replaceAll("'", "'\\''")}'`;
+      const retry = [this.executable || "corral-next", "--root", root, "--json", ...argv].map(quote).join(" ");
+      const reason = error instanceof CorralCommandError ? error.reason : error instanceof Error ? error.message : String(error);
+      const next = error instanceof CorralCommandError ? error.next : undefined;
+      const detail = (error instanceof CorralCommandError ? error.diagnostic : undefined)
+        ?? [reason, ...(next ?? []).map(step => `next: ${typeof step === "string" ? step : JSON.stringify(step)}`)].join("\n");
+      let diagnostic = `Review verdict saved but not confirmed. Retry with: ${retry}\n${detail}`;
+      try { intent.recordError(detail); }
+      catch (writeError) { diagnostic += `\nCould not save the diagnostic: ${writeError}`; }
+      throw new CorralCommandError(next === undefined ? diagnostic : reason, next, diagnostic);
+    } finally { intent.close(); }
   }
 
   artifact(owner: string, path: string, kind: string, title?: string, replaces?: string): Promise<unknown> {

@@ -5,6 +5,7 @@
 //! models via [`Store`]; neither needs direct SQL access.
 
 pub mod artifacts;
+mod binary;
 pub mod board_plan;
 mod checkout;
 mod citations;
@@ -28,6 +29,7 @@ mod prompt;
 pub mod react;
 mod repair_queue;
 mod review;
+mod review_verdict;
 pub mod runner;
 mod session_recovery;
 pub mod store;
@@ -42,6 +44,8 @@ use std::{
 
 use anyhow::{Context, Result};
 
+pub(crate) use binary::binary_path;
+pub use binary::pin_binary_path;
 pub use citations::ArtifactCitation;
 pub use config::Config;
 pub use error::{as_refusal, refuse};
@@ -285,13 +289,6 @@ fn select_runner(config: &Config) -> Result<Box<dyn Runner>> {
             ),
             vec![],
         )),
-    }
-}
-
-pub(crate) fn binary_path() -> Result<PathBuf> {
-    match std::env::var_os("CORRAL_NEXT_BIN").filter(|name| !name.is_empty()) {
-        Some(bin) => std::path::absolute(bin).context("resolve CORRAL_NEXT_BIN"),
-        None => std::env::current_exe().context("resolve current corral executable"),
     }
 }
 

@@ -1,5 +1,6 @@
 // Offline stand-in for the pinned Codex SSE endpoint (ported from tools/pi-probe). The host's
 // guarded fetch hands it every allowed request; it never opens a socket.
+import { readFileSync } from "node:fs";
 import { zstdDecompressSync } from "node:zlib";
 
 import type { Fetch } from "../../../src/auth/types.ts";
@@ -17,6 +18,8 @@ export interface FakeStep {
   /** Awaited after the first chunk is sent, so a partially streamed reply can be observed. */
   readonly afterFirstChunk?: () => Promise<void>;
   readonly toolCalls?: readonly FakeToolCall[];
+  /** Copy an engine-generated review binding instead of precomputing a request in the fixture. */
+  readonly copyReviewRequest?: "prompt-file" | "user-input";
   /** Structured offline provider failure (for example confirmed subscription quota). */
   readonly error?: { readonly status: number; readonly body: Record<string, unknown> };
   /** Terminal provider usage; defaults preserve the standard fixture's 32 input / 3 output. */
@@ -64,6 +67,20 @@ function lastUserText(body: unknown): string {
     }
   }
   return "";
+}
+
+function bindReviewRequest(step: FakeStep, userText: string): FakeStep {
+  if (!step.copyReviewRequest) return step;
+  let source = userText;
+  if (step.copyReviewRequest === "prompt-file") {
+    const path = /^Read (.+) in full and follow it:/.exec(userText)?.[1];
+    if (!path) throw new Error("Fixture could not find the engine review prompt file");
+    source = readFileSync(path, "utf8");
+  }
+  const request = Array.from(source.matchAll(/^Review request ID: `([0-9]+-[0-9]+-(?:[0-9a-f]{40}|[0-9a-f]{64}))`$/gm)).at(-1)?.[1];
+  if (!request) throw new Error("Fixture could not find the engine review request ID");
+  return { ...step, toolCalls: step.toolCalls?.map(call => call.name === "corral_verdict"
+    ? { ...call, arguments: { ...call.arguments, request } } : call) };
 }
 
 export function requestBody(init: RequestInit | undefined): unknown {
@@ -128,8 +145,8 @@ export function fakeCodexTransport(): FakeTransport {
         { status: 503, headers: { "content-type": "application/json" } });
     }
     const index = queue.findIndex((entry) => entry.match === undefined || prompt.includes(entry.match));
-    const step = (index < 0 ? undefined : queue.splice(index, 1)[0])
-      ?? { text: /Reply only ([A-Z_]+)\./.exec(prompt)?.[1] ?? "FAKE_TRANSPORT_OK" };
+    const step = bindReviewRequest((index < 0 ? undefined : queue.splice(index, 1)[0])
+      ?? { text: /Reply only ([A-Z_]+)\./.exec(prompt)?.[1] ?? "FAKE_TRANSPORT_OK" }, prompt);
     if (step.error) {
       failures++;
       return Response.json(step.error.body, { status: step.error.status });

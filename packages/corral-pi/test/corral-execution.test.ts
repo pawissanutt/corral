@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { executionRefusal } from "../src/roles/common/execution.ts";
@@ -42,9 +42,9 @@ test("one loadout check decides direct and Code Mode calls; every Corral tool is
 test("a terminal verdict flushes reported usage before an engine that can close the reviewer", async () => {
   const root = mkdtempSync(join(tmpdir(), "corral-verdict-"));
   try {
-    const engine = writeFakeEngine(root);
+    const engine = writeFakeEngine(root, { "review-verdict": { result: { recorded: true } } });
     const identity = { store: "local", project: "demo", role: "reviewer" as const, task: "T-1", run: "R2" };
-    const client = new CorralClient({ corral: engine.path, root, cwd: root, identity });
+    const client = new CorralClient({ corral: engine.path, root, cwd: join(root, "removed"), sessionDir: root, identity });
     const usage = Promise.withResolvers<void>();
     const waiting = Promise.withResolvers<void>();
     const tool = defineCorralTool(verdictTool, {
@@ -53,12 +53,45 @@ test("a terminal verdict flushes reported usage before an engine that can close 
       todo() { throw new Error("unexpected todo"); },
       checkpoint() { throw new Error("unexpected checkpoint"); },
     });
-    const verdict = tool.execute("approve", { verdict: "approve", notes: "Looks good" }, undefined, undefined, {} as never);
+    const request = `9-0-${"a".repeat(40)}`;
+    const verdict = tool.execute("approve", { request, verdict: "approve", notes: "Looks good" }, undefined, undefined, {} as never);
     await Promise.race([waiting.promise, verdict]);
+    expect(JSON.parse(readFileSync(join(root, `verdict-${identity.run}-${request}.json`), "utf8")))
+      .toEqual({ verdict: "approve", notes: "Looks good" });
     expect(engine.calls()).toEqual([]);
     usage.resolve();
-    await verdict;
-    expect(engine.calls()).toEqual([["--root", root, "--json", "verdict", "T-1", "approve", "--notes", "Looks good"]]);
+    expect(await verdict).toMatchObject({ terminate: true, details: { recorded: true } });
+    expect(engine.calls()).toEqual([["--root", root, "--json", "review-verdict", "T-1", "R2", request]]);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("a verdict without a valid receipt reports the failure without terminating the turn", async () => {
+  const root = mkdtempSync(join(tmpdir(), "corral-verdict-receipt-"));
+  try {
+    const identity = { store: "local", project: "demo", role: "reviewer" as const, task: "T-1", run: "R2" };
+    const request = `9-0-${"a".repeat(40)}`;
+    const reason = "Cannot record the verdict: " + "🔒".repeat(1100);
+    const next = [{ cmd: "corral-next show T-1" }];
+    for (const failure of [{ result: {} }, { stdout: JSON.stringify({ reason, next }), code: 2 }]) {
+      const engine = writeFakeEngine(root, { "review-verdict": failure });
+      const tool = defineCorralTool(verdictTool, {
+        identity, client: new CorralClient({ corral: engine.path, root, cwd: root, sessionDir: root, identity }),
+        async drained() {},
+        todo() { throw new Error("unexpected todo"); },
+        checkpoint() { throw new Error("unexpected checkpoint"); },
+      });
+      const result = await tool.execute("approve", { request, verdict: "approve", notes: "Looks good" }, undefined, undefined, {} as never);
+      expect(result.isError).toBe(true);
+      expect(result.terminate).toBeUndefined();
+      const bytes = readFileSync(join(root, `verdict-${identity.run}-${request}.error`));
+      expect(bytes.length).toBeLessThanOrEqual(4096);
+      const diagnostic = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+      if (failure.code) {
+        expect(diagnostic).toContain("Cannot record the verdict");
+        expect(result.details).toEqual({ reason, next });
+      }
+      else expect(diagnostic).toContain("expected recorded: true");
+    }
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

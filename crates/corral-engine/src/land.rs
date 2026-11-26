@@ -8,6 +8,7 @@ use crate::{
     pipeline::OperationFailure,
     refuse,
     review::{SendBack, gate_notes, next_done},
+    review_verdict::changed_approved_candidate,
     tasks::{next_retry, set_lifecycle},
 };
 
@@ -104,6 +105,14 @@ impl Engine {
             let target_sha = corral_git::rev_sha(&checkout.repo, &target_ref)
                 .context("read landing target SHA")?;
             let source_sha = checkout.merge_base()?;
+            if actor == Actor::Auto
+                && let Some(approved) = self.store.bound_approval_sha(&task)?
+                && corral_git::rev_sha(&checkout.repo, &checkout.branch_ref())
+                    .context("verify automatically approved candidate before rebase")?
+                    != approved
+            {
+                return Err(changed_approved_candidate());
+            }
             effects_started = true;
             match corral_git::rebase_onto(&checkout.path, &source_sha, &target_sha)
                 .context("rebase landing worktree")?

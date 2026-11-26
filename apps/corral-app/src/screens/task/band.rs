@@ -14,11 +14,13 @@ use nsh_core::element::color as for_appearance;
 use nsh_core::prelude::*;
 
 use crate::model::hue::Hue;
-use crate::model::tasks::band::{Band, Hold, band};
+use crate::model::tasks::band::{
+    Band, Hold, VERDICT_RETRY, band, can_refresh_verdict, pending_verdict,
+};
 use crate::model::work::{self, ReplyBox};
-use crate::model::{Effect, Form, Id};
+use crate::model::{DataState, Effect, Form, Id};
 use crate::state::AppState;
-use crate::ui::composer::copyable_input;
+use crate::ui::composer::{copyable_input, terminal_selectable};
 use crate::ui::icons::Icon;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button, button_with};
 use crate::ui::kit::marks::hue_ink;
@@ -81,6 +83,7 @@ pub(crate) fn decision(app: AppState, id: Id, flat: bool) -> AnyElement {
             })
         })
     });
+    let pending = pending_review(app, id.clone(), inset);
     let held = dynamic(move || {
         let kind = kind.get()?;
         let id = id.clone();
@@ -91,7 +94,11 @@ pub(crate) fn decision(app: AppState, id: Id, flat: bool) -> AnyElement {
             Kind::Step => step(app, model),
         }))
     });
-    let band = view().test_id("task-band").child(words).child(held);
+    let band = view()
+        .test_id("task-band")
+        .child(words)
+        .child(pending)
+        .child(held);
     match (form, flat) {
         (Form::Terminal, true) => band.into_element(),
         (Form::Terminal, false) => band.child(term::hrule()).into_element(),
@@ -104,6 +111,53 @@ pub(crate) fn decision(app: AppState, id: Id, flat: bool) -> AnyElement {
             .bg(color(Token::Surface))
             .into_element(),
     }
+}
+
+fn pending_review(app: AppState, id: Id, inset: bool) -> AnyElement {
+    let watched = id.clone();
+    let model = computed(move || {
+        if app.data.get() != DataState::Daemon {
+            return None;
+        }
+        app.feed.with(|feed| {
+            can_refresh_verdict(feed, watched.as_str())
+                .then(|| pending_verdict(feed, watched.as_str()))
+        })
+    });
+    dynamic(move || {
+        let pending = model.get()?;
+        let notice = pending.map(|pending| {
+            let command = view().child(mono(app, pending.command).select_text());
+            let command = if app.form == Form::Terminal {
+                terminal_selectable(app, command.selectable(true))
+            } else {
+                command
+            };
+            view()
+                .test_id("task-pending-review-verdict")
+                .child(plain(app, pending.title).font_weight(FontWeight::BOLD))
+                .child(plain(app, pending.reason))
+                .child(dim(app, VERDICT_RETRY))
+                .child(command)
+        });
+        let id = id.clone();
+        Some(
+            view()
+                .when(inset, |row| row.px(term::cells(1.0)))
+                .pb(space(app, 8.0))
+                .children(notice)
+                .child(button(
+                    app,
+                    "Refresh verdict status",
+                    ButtonKind::Quiet,
+                    "btn-refresh-verdict",
+                    move || {
+                        app.refresh(work::task_ref(&id));
+                    },
+                ))
+                .into_element(),
+        )
+    })
 }
 
 /// What is happening in bold, the failing command when known, then the worker or task context.

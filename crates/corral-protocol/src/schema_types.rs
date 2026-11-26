@@ -29,6 +29,7 @@ shared! {
     ConfigProblem: "object",
     Event: "object",
     Op: ["string", "object"],
+    PendingReviewVerdict: "object",
     #[cfg(test)]
     Refusal: "object",
     Run: "object",

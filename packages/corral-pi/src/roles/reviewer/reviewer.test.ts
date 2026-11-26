@@ -55,8 +55,8 @@ async function startReviewer() {
   const network = guardedFetch(transport.send);
   globalThis.fetch = network.fetch as typeof globalThis.fetch;
   const sdk = await import("@earendil-works/pi-coding-agent");
-  const corral = writeFakeEngine(dir);
-  const client = new CorralClient({ corral: corral.path, root: dir, cwd, identity });
+  const corral = writeFakeEngine(dir, { "review-verdict": { result: { recorded: true } } });
+  const client = new CorralClient({ corral: corral.path, root: dir, cwd, sessionDir: dir, identity });
   const host = await HostSession.create({
     sdk, identity, cwd, agentDir: join(dir, "pi-agent"), model: "gpt-6.1-sol", modules, client, events, network,
     sessionManager: sdk.SessionManager.create(cwd, join(dir, "sessions")),
@@ -120,21 +120,23 @@ test("a host session activates exactly the loadout and denies a write the model 
   }
 });
 
-test("corral_verdict sends the bound task, verdict and notes as engine argv", async () => {
+test("corral_verdict saves the notes and sends the bound task, run and request to the engine", async () => {
   const { host, events, corral, dir, transport } = await startReviewer();
   try {
+    const request = `15-0-${"a".repeat(40)}`;
     const notes = "Changes needed:\n- add the regression test";
     transport.script([
-      { toolCalls: [{ callId: "call-verdict", name: "corral_verdict", arguments: { verdict: "changes", notes } }] },
+      { toolCalls: [{ callId: "call-verdict", name: "corral_verdict", arguments: { request, verdict: "changes", notes } }] },
     ]);
     const ended = nextEvent(events, (event) => event.kind === "turn_ended" && event.turn === 1);
     expect(await host.submitLocal({ text: "Record changes.", busyPolicy: "prompt", origin: "owner" }))
       .toEqual({ disposition: "started", turn: 1 });
     await ended;
     await host.drained();
-    expect(corral.calls().filter((argv) => argv[3] === "verdict")).toEqual([
-      ["--root", dir, "--json", "verdict", identity.task, "changes", "--notes", notes],
+    expect(corral.calls().filter((argv) => argv[3] === "review-verdict")).toEqual([
+      ["--root", dir, "--json", "review-verdict", identity.task, identity.run, request],
     ]);
+    expect(JSON.parse(readFileSync(join(dir, `verdict-${identity.run}-${request}.json`), "utf8"))).toEqual({ verdict: "changes", notes });
   } finally {
     await host.close();
   }

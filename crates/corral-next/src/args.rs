@@ -155,6 +155,12 @@ pub(crate) enum Command {
         #[arg(long)]
         notes_file: Option<PathBuf>,
     },
+    /// Record or retry a saved reviewer verdict request.
+    ReviewVerdict {
+        task: String,
+        run: String,
+        request: String,
+    },
     /// Send work back with an owner note.
     Changes(Text),
     /// Land a task and clean up its worktree.

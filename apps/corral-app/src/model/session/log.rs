@@ -203,6 +203,7 @@ mod tests {
         });
         run.ended = Some(jiff::Timestamp::UNIX_EPOCH);
         let record = TaskDetail {
+            pending_review_verdict: None,
             task: bare_task("T-6", "Landing page copy", Status::Done, run.started),
             runs: vec![run],
             checks: Vec::new(),

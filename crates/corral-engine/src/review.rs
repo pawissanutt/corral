@@ -21,6 +21,7 @@ use crate::{
     pipeline::{GATE_FAILED, OperationFailure, PIPELINE_FAILED},
     prompt::{PromptReferences, rereview_request},
     refuse,
+    review_verdict::{Decision, is_pi_reviewer, stale_request},
     runner::pi::Pickup,
     tasks::{next_changes, next_force_approve, next_reply, next_retry, set_lifecycle},
 };
@@ -319,7 +320,11 @@ impl Engine {
                 && reviewer.ended.is_none()
             {
                 let session = self.live_session(&reviewer)?;
-                if let Some(session) = session {
+                // A reviewer started before the bound-verdict protocol can only
+                // send the legacy, unbound command. Replace it rather than reusing it.
+                if let Some(session) = session
+                    && (!is_pi_reviewer(&reviewer) || store.has_bound_review_request(&reviewer)?)
+                {
                     if store.has_review_request_since_done(id, &reviewer.id, task.round)? {
                         return Ok(reviewer);
                     }
@@ -329,7 +334,10 @@ impl Engine {
                         .join(id)
                         .join(&reviewer.id)
                         .join("prompt.md");
-                    let references = PromptReferences::load(self, store, &task, None)?;
+                    let mut references = PromptReferences::load(self, store, &task, None)?;
+                    if is_pi_reviewer(&reviewer) {
+                        references.review_request = Some(store.pi_review_request(&task)?);
+                    }
                     let request = rereview_request(
                         &crate::binary_path()?,
                         &task,
@@ -400,34 +408,84 @@ impl Engine {
         } else if task.attention.take().is_some() {
             store.update_task(task)?;
         }
+        let mut detail = json!({"profile":run.profile,"round":task.round,"pickup":pickup});
+        if is_pi_reviewer(run) {
+            detail["request"] = json!(store.pi_review_request(task)?.id);
+        }
         self.event(
             store,
             Some(&task.id),
             Some(&run.id),
             EventKind::ReviewStarted,
             actor,
-            json!({"profile":run.profile,"round":task.round,"pickup":pickup}),
+            detail,
         )
     }
 
     pub fn verdict(&self, id: &str, approve: bool, notes: Option<&str>) -> Result<Option<Run>> {
-        let (run, close) = self.launch_transaction(|store, pending| {
+        self.verdict_selected(id, approve, notes, None)
+    }
+
+    pub(crate) fn bound_verdict(&self, id: &str, run: &str, request: &str) -> Result<()> {
+        self.verdict_selected(id, false, None, Some((run, request)))
+            .map(|_| ())
+    }
+
+    fn verdict_selected(
+        &self,
+        id: &str,
+        approve: bool,
+        notes: Option<&str>,
+        bound: Option<(&str, &str)>,
+    ) -> Result<Option<Run>> {
+        let (run, close, recorded) = self.launch_transaction(|store, pending| {
             let mut task = store.require_task(id)?;
+            let mut reviewer = store.latest_run(id, Role::Reviewer)?;
+            let intent;
+            let (approve, notes, actor) = if let Some((run, request)) = bound {
+                let target = store.get_run(id, run)?.filter(is_pi_reviewer).ok_or_else(stale_request)?;
+                if store.recorded_review_verdict(&target, request)? {
+                    return Ok((Some(target), false, false));
+                }
+                intent = self.read_authorized_verdict(store, &task, &target, request)?;
+                reviewer = Some(target);
+                // Reconciliation may have blocked the task before an owner could
+                // retry the saved verdict. Restore Review only after authorization.
+                if task.status == Status::Blocked {
+                    set_lifecycle(&mut task, Status::Review);
+                    store.update_task(&task)?;
+                }
+                (intent.verdict == Decision::Approve, Some(intent.notes.as_str()), Actor::Reviewer)
+            } else {
+                if self.actor == Actor::Reviewer {
+                    let caller = std::env::var("CORRAL_RUN").ok();
+                    let called_from_pi = caller
+                        .as_deref()
+                        .map(|run| store.get_run(id, run))
+                        .transpose()?
+                        .flatten()
+                        .as_ref()
+                        .is_some_and(is_pi_reviewer);
+                    if called_from_pi || reviewer.as_ref().is_some_and(is_pi_reviewer) {
+                        return Err(refuse("Pi reviewer verdicts require a bound review request; use corral_verdict in a current Pi reviewer session", vec![]));
+                    }
+                }
+                (approve, notes, self.actor)
+            };
             if task.status != Status::Review {
                 return Err(refuse(
                     "verdict requires a task in Review",
                     vec![next_done(id), next_force_approve(id)],
                 ));
             }
-            let mut reviewer = store.latest_run(id, Role::Reviewer)?;
             let mut close = false;
             if let Some(run) = &mut reviewer
-                && run.ended.is_none()
+                && (run.ended.is_none() || bound.is_some())
             {
                 run.head_sha = store
                     .latest_run(id, Role::Worker)?
                     .and_then(|worker| worker.head_sha);
-                if approve {
+                if approve && run.ended.is_none() {
                     self.end_run(store, run, Outcome::Done, false)?;
                     close = true;
                 } else {
@@ -445,20 +503,18 @@ impl Engine {
                 },
                 notes: notes.map(str::to_owned),
                 log: None,
-                by: self.actor,
+                by: actor,
                 at: Timestamp::now(),
                 round: Some(task.round),
                 run: reviewer.as_ref().map(|run| run.id.clone()),
             };
             store.insert_check(&check)?;
-            self.event(
-                store,
-                Some(id),
-                check.run.as_deref(),
-                EventKind::Verdict,
-                self.actor,
-                json!({"approve":approve,"notes":notes,"round":task.round}),
-            )?;
+            let mut detail = json!({"approve":approve,"notes":notes,"round":task.round});
+            if let Some((_, request)) = bound {
+                detail["request"] = json!(request);
+                detail["candidate"] = json!(reviewer.as_ref().and_then(|run| run.head_sha.as_ref()));
+            }
+            self.event(store, Some(id), check.run.as_deref(), EventKind::Verdict, actor, detail)?;
             if approve && task.attention.take().is_some() {
                 store.update_task(&task)?;
             }
@@ -471,8 +527,11 @@ impl Engine {
                     SendBack::Automatic { onto: None },
                 )?;
             }
-            Ok((reviewer, close))
+            Ok((reviewer, close, true))
         })?;
+        if !recorded {
+            return Ok(run);
+        }
         // A reviewer can call verdict from the very session this closes. Publish
         // the verdict and start the next step before touching its process or pane.
         let advanced = self.kick_pipeline(id);

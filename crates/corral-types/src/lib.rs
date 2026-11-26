@@ -142,6 +142,17 @@ pub struct Task {
     pub updated: Timestamp,
 }
 
+/// A saved review decision which has not been admitted by the engine.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingReviewVerdict {
+    pub message: String,
+    pub task: String,
+    pub run: String,
+    pub request: String,
+    pub verdict: String,
+    pub reason: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Blocked {
     pub reason: String,

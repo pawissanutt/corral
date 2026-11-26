@@ -12,7 +12,7 @@ use crate::model::daemon::{Feed, Task};
 use crate::model::next::{NextStep, next_step};
 use crate::model::pipeline::{phrase, pipeline};
 use crate::model::status::{Stage, status_word};
-use crate::model::work::{self, BlockedCard};
+use crate::model::work::{self, BlockedCard, loaded_task};
 
 use super::task_at;
 
@@ -49,6 +49,41 @@ pub struct Band {
     pub how: String,
     pub attention: Option<String>,
     pub hold: Hold,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerdictNotice {
+    pub title: String,
+    pub reason: String,
+    pub command: String,
+}
+
+pub const VERDICT_RETRY: &str = "Retry from the workspace root:";
+
+pub fn can_refresh_verdict(feed: &Feed, id: &str) -> bool {
+    loaded_task(feed, id).is_some_and(|detail| {
+        matches!(detail.task.status, Status::Review | Status::Blocked)
+            && detail
+                .runs
+                .iter()
+                .rev()
+                .find(|run| run.role == Role::Reviewer)
+                .is_some_and(|run| run.harness == "pi")
+    })
+}
+
+pub fn pending_verdict(feed: &Feed, id: &str) -> Option<VerdictNotice> {
+    let verdict = loaded_task(feed, id)?.pending_review_verdict.as_ref()?;
+    let [task, run, request] = [&verdict.task, &verdict.run, &verdict.request]
+        .map(|arg| format!("'{}'", arg.replace('\'', "'\\''")));
+    Some(VerdictNotice {
+        title: format!(
+            "{} ({} · {})",
+            verdict.message, verdict.run, verdict.verdict
+        ),
+        reason: verdict.reason.clone(),
+        command: format!("corral-next review-verdict {task} {run} {request}"),
+    })
 }
 
 /// The base a review lands onto: the run's, else the task's.

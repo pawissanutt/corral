@@ -83,6 +83,7 @@ fn body(engine: &Engine, target: &DetailRef) -> Result<DetailBody> {
             let mut events = store.event_page(Some(id), None, None, true, 50)?;
             events.reverse();
             DetailBody::Task(TaskDetail {
+                pending_review_verdict: engine.pending_review_verdict(&task)?,
                 task,
                 runs: store.list_runs(id)?,
                 checks: store.list_checks(id)?,

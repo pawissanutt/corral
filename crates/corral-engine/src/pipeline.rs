@@ -11,7 +11,7 @@ use serde_json::json;
 use crate::{
     Actor, Blocked, CheckKind, CheckResult, Engine, Next, Op, PipelineMode, Status, Store, Task,
     as_refusal, checkout::Checkout, events::EventKind, review::gate_notes,
-    tasks::next_force_approve,
+    review_verdict::changed_approved_candidate, tasks::next_force_approve,
 };
 
 pub(crate) const GATE_FAILED: &str = "gate failed";
@@ -106,6 +106,13 @@ impl Engine {
         let checkout = Checkout::from_run(&worker)?;
         let head = corral_git::rev_sha(&checkout.repo, &checkout.branch_ref())
             .context("read pipeline branch HEAD")?;
+        if self
+            .store
+            .bound_approval_sha(&task)?
+            .is_some_and(|sha| sha != head)
+        {
+            return Err(changed_approved_candidate());
+        }
         let project = self.project_for(&task)?;
         if let Some(project) = project.as_ref().filter(|p| !p.gate.is_empty()) {
             let check = match self.store.latest_check(id, CheckKind::Gate, &head)? {
@@ -125,6 +132,17 @@ impl Engine {
         let task = self.store.require_task(id)?;
         if task.status != Status::Review {
             return Ok(());
+        }
+        // A gate may have run for a while, or a reviewer may have recorded a
+        // verdict during it. Verify the approval before consuming it for readiness.
+        if let Some(approved) = self.store.bound_approval_sha(&task)?
+            && (head != approved
+                || (*effects_started
+                    && corral_git::rev_sha(&checkout.repo, &checkout.branch_ref())
+                        .context("verify approved candidate after gate")?
+                        != approved))
+        {
+            return Err(changed_approved_candidate());
         }
         let review = if self.store.has_verdict_since_done(id, task.round)? {
             self.store

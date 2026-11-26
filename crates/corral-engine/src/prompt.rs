@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use crate::{
     ArtifactCitation, Engine, Role, Run, Store, Task,
     config::{Config, shell_quote},
+    review_verdict::ReviewRequest,
 };
 use corral_types::{Artifact, ArtifactGroup};
 
@@ -13,6 +14,7 @@ pub(crate) struct PromptReferences {
     attached: Vec<Artifact>,
     cited: Vec<ArtifactCitation>,
     parent: Option<(String, String)>,
+    pub(crate) review_request: Option<ReviewRequest>,
 }
 
 impl PromptReferences {
@@ -36,6 +38,7 @@ impl PromptReferences {
             attached: store.list_artifacts(Some(&task.id))?,
             cited,
             parent,
+            review_request: None,
         })
     }
 }
@@ -86,13 +89,19 @@ When the work is complete, run:
 
     {bin} done {id} --summary 'What changed and how you verified it'"#
         )?,
-        Role::Reviewer => writeln!(
-            prompt,
-            "\n## Review round {}\n\nInspect the change with `git diff {}...HEAD`. Do not edit files in the worktree.\n{}",
-            task.round,
-            run.base_sha,
-            verdict_commands(&bin, id, file)?
-        )?,
+        Role::Reviewer => {
+            let sha = references
+                .review_request
+                .as_ref()
+                .map_or("HEAD", |r| r.sha.as_str());
+            writeln!(
+                prompt,
+                "\n## Review round {}\n\nInspect the change with `git diff {}...{sha}`. Do not edit files in the worktree.\n{}",
+                task.round,
+                run.base_sha,
+                verdict_instructions(&bin, id, file, references)?
+            )?;
+        }
     }
     fs::write(file, prompt).with_context(|| format!("write run prompt {}", file.display()))
 }
@@ -233,15 +242,19 @@ pub(crate) fn rereview_request(
 ) -> Result<String> {
     let bin = shell_quote(bin.to_str().context("corral binary path is not UTF-8")?)?;
     let mut request = format!("Review round {} for {}.\n\n", task.round, task.id);
+    let sha = references
+        .review_request
+        .as_ref()
+        .map_or("HEAD", |r| r.sha.as_str());
     if let Some(head) = &run.head_sha {
         writeln!(
             request,
-            "See what changed since your last verdict with `git diff {head}..HEAD`."
+            "See what changed since your last verdict with `git diff {head}..{sha}`."
         )?;
     } else {
         writeln!(
             request,
-            "Inspect the change with `git diff {}...HEAD`.",
+            "Inspect the change with `git diff {}...{sha}`.",
             run.base_sha
         )?;
     }
@@ -249,12 +262,23 @@ pub(crate) fn rereview_request(
     write!(
         request,
         "Do not edit files in the worktree.\n{}",
-        verdict_commands(&bin, &task.id, prompt)?
+        verdict_instructions(&bin, &task.id, prompt, references)?
     )?;
     Ok(request)
 }
 
-fn verdict_commands(bin: &str, id: &str, prompt: &Path) -> Result<String> {
+fn verdict_instructions(
+    bin: &str,
+    id: &str,
+    prompt: &Path,
+    references: &PromptReferences,
+) -> Result<String> {
+    if let Some(request) = &references.review_request {
+        return Ok(format!(
+            "Review request ID: `{}`\nUse this exact ID as `request` when calling `corral_verdict` for this candidate.",
+            request.id
+        ));
+    }
     let notes = prompt.with_file_name("verdict.md");
     let notes = shell_quote(notes.to_str().context("verdict notes path is not UTF-8")?)?;
     Ok(format!(

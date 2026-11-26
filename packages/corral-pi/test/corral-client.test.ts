@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CorralClient, CorralCommandError } from "../src/tools/corral.ts";
@@ -35,6 +35,32 @@ test("engine argv preserves corrective commands and uses artifact references dir
       ["--root", root, "artifact", "show", "--", "T-1:2"],
       ["--root", root, "artifact", "show", "--", "-../project name:1"],
     ]);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("a verdict survives engine ENOENT and only the original intent can be retried", async () => {
+  const root = mkdtempSync(join(tmpdir(), "corral-review-intent-"));
+  try {
+    const identity = { store: "local", project: "demo", role: "reviewer" as const, task: "T-1", run: "R2" };
+    const client = new CorralClient({ corral: join(root, "corral-next"), root, cwd: join(root, "gone"), sessionDir: root, identity });
+    const request = `21-1-${"b".repeat(64)}`;
+    const notes = "Keep this original review:\n- Verify the 🔒 regression.";
+    const intent = `verdict-${identity.run}-${request}.json`, diagnostic = `verdict-${identity.run}-${request}.error`;
+    // The configured executable does not exist. Even a failed spawn must leave the full notes.
+    await expect(client.recordVerdict(request, "changes", notes)).rejects.toThrow(`review-verdict T-1 R2 ${request}`);
+    expect(readdirSync(root).sort()).toEqual([diagnostic, intent]);
+    expect(readFileSync(join(root, diagnostic), "utf8")).toContain("ENOENT");
+    const original = readFileSync(join(root, intent), "utf8");
+    expect(JSON.parse(original)).toEqual({ verdict: "changes", notes });
+    expect(statSync(join(root, intent)).mode & 0o777).toBe(0o600);
+    const engine = writeFakeEngine(root, { "review-verdict": { result: { recorded: true } } });
+    await expect(client.recordVerdict(request, "approve", notes)).rejects.toThrow("was not replaced");
+    await expect(client.recordVerdict(request, "changes", "new notes")).rejects.toThrow("was not replaced");
+    expect(engine.calls()).toEqual([]);
+    expect(readFileSync(join(root, intent), "utf8")).toBe(original);
+    expect(await client.recordVerdict(request, "changes", notes)).toEqual({ recorded: true });
+    expect(engine.calls()).toEqual([["--root", root, "--json", "review-verdict", "T-1", "R2", request]]);
+    expect(readFileSync(join(root, intent), "utf8")).toBe(original);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

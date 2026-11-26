@@ -26,10 +26,10 @@ const verdict = (callId: string, verdict: string, notes: string) => ({ callId, n
 const steps: FakeStep[] = [
   { match: `${first}/R1/prompt.md`, toolCalls: [edit("draft", "original", "draft")] },
   { match: `${first}/R1/prompt.md`, toolCalls: [done("first-done", "Drafted one line")] },
-  { match: `${first}/R2/prompt.md`, toolCalls: [verdict("changes", "changes", reviewNotes)] },
+  { match: `${first}/R2/prompt.md`, copyReviewRequest: "prompt-file", toolCalls: [verdict("changes", "changes", reviewNotes)] },
   { match: reviewNotes, toolCalls: [edit("final", "draft", "final")] },
   { match: reviewNotes, toolCalls: [done("second-done", "Revised one line")] },
-  { match: `Review round 1 for ${first}.`, toolCalls: [verdict("approve", "approve", approvalNotes)] },
+  { match: `Review round 1 for ${first}.`, copyReviewRequest: "user-input", toolCalls: [verdict("approve", "approve", approvalNotes)] },
   { match: `${second}/R1/prompt.md`, toolCalls: [edit("failing", "final", "paused candidate")] },
   { match: workerInput, text: workerText },
   { match: "Gate failed:", text: resumedText },

@@ -42,14 +42,15 @@ export function defineCorralTool(spec: CorralToolSpec, host: ToolHost): ToolDefi
           case "todo": result = await host.todo(payload); break;
           case "checkpoint": result = host.checkpoint(String(payload.note)); break;
           case "done":
-          case "verdict":
             if (!task) throw new Error("No task is attached to this session");
             // The engine can close this host or remove its worktree as soon as
             // it accepts the submission. Flush already-reported requests first.
             await host.drained();
-            result = await host.client.command(spec.op === "done"
-              ? ["done", task, ...option("--summary", String(payload.summary))]
-              : ["verdict", task, String(payload.verdict), ...option("--notes", String(payload.notes))]);
+            result = await host.client.command(["done", task, ...option("--summary", String(payload.summary))]);
+            break;
+          case "verdict":
+            result = await host.client.recordVerdict(String(payload.request), String(payload.verdict), String(payload.notes),
+              () => host.drained());
             break;
           case "artifact": {
             const owner = typeof payload.to === "string" ? payload.to : task || host.identity.project;

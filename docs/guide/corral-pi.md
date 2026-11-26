@@ -265,13 +265,31 @@ conversation records and never forces Git to delete a worktree or branch.
 - **Worker:** edits the task worktree and submits with `corral_done`. Corral commits
   the change, runs the gate and forwards any review notes. The owner lands a ready
   change with `corral-next approve <task>`.
-- **Reviewer:** inspects the change and calls `corral_verdict` with `changes` or
-  `approve`. After `changes`, the next review request goes to the same reviewer
-  conversation. With automatic landing off, the owner still chooses when to land.
+- **Reviewer:** inspects the submitted commit and calls `corral_verdict` with the
+  prompt's review request ID, a decision (`changes` or `approve`), and notes.
+  After `changes`, the next review request goes to the same reviewer conversation.
+  With automatic landing off, the owner still chooses when to land.
 - **Assistant:** chats with you and can run the same `corral-next` commands you can.
   It does not need a separate PM or an automation grant.
 - **Build:** works in Git directly, without a task. You choose whether to keep,
   continue or land the work.
+
+### Recovering a Pi code-review verdict
+
+Pi saves the decision and notes before starting `corral-next`. If the engine has
+not recorded the verdict, `corral-next show <task>` and the app's task details
+show **Verdict not recorded**, the reason when available, and the retry command.
+If the task page was already open, use **Refresh verdict status**: a failed spawn
+may not produce a board update. If needed, restore the configured Corral CLI to
+a compatible version before running the retry command. It reuses the saved
+decision and notes, not the review transcript.
+An already recorded request returns the original receipt; an unrecorded request
+for a replaced run or submission cannot be applied to its successor. Saved notes
+alone never approve or land a change.
+
+This uses the bound-verdict protocol in both the Corral CLI and Pi package. When
+upgrading an older installation, update both components. Stop and relaunch any
+live reviewer that still runs the old Pi package to use this recovery flow.
 
 ### Attaching artifacts
 

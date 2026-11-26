@@ -6,8 +6,8 @@ use std::{
 
 use anyhow::{Context, Result};
 use corral_engine::{
-    Actor, Applied, Artifact, ArtifactCitation, Check, Event, Next, Run, Task, UsageSummary,
-    UsageTotal, as_refusal,
+    Actor, Applied, Artifact, ArtifactCitation, Check, Event, Next, PendingReviewVerdict, Run,
+    Task, UsageSummary, UsageTotal, as_refusal,
 };
 use serde::Serialize;
 use unicode_width::UnicodeWidthStr;
@@ -82,6 +82,7 @@ impl Output<'_> {
                 checks,
                 artifacts,
                 references,
+                pending_review_verdict,
             } = view;
             writeln!(out, "{}: {}", task.id, task.title)?;
             writeln!(
@@ -91,6 +92,15 @@ impl Output<'_> {
                 task.priority,
                 task.round
             )?;
+            if let Some(view) = pending_review_verdict {
+                let pending = &view.pending;
+                writeln!(
+                    out,
+                    "{} ({}): {}",
+                    pending.message, pending.run, pending.reason
+                )?;
+                writeln!(out, "next: {}", view.retry)?;
+            }
             for (label, value) in [
                 ("Project", &task.project),
                 ("Kind", &task.kind),
@@ -222,6 +232,15 @@ pub(crate) struct TaskView {
     pub checks: Vec<Check>,
     pub artifacts: Vec<Artifact>,
     pub references: Vec<ArtifactCitation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pending_review_verdict: Option<PendingVerdictView>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct PendingVerdictView {
+    #[serde(flatten)]
+    pub pending: PendingReviewVerdict,
+    pub retry: String,
 }
 
 pub(crate) fn tasks(out: &mut impl Write, tasks: &[Task]) -> io::Result<()> {

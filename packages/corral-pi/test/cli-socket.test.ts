@@ -208,13 +208,14 @@ test("reviewer answers an automated re-review and reopens the same transcript af
   const clients: TestClient[] = [];
   try {
     const promptFile = join(dir, "prompt.md");
-    writeFileSync(promptFile, "# T-1 Review the candidate\n\n## Review round 0\n");
-    const engine = writeFakeEngine(dir);
-    const rereview = "Review round 1 for T-1.\n\nVerify the required fix.";
+    const first = `9-0-${"a".repeat(40)}`, second = `16-1-${"b".repeat(40)}`;
+    writeFileSync(promptFile, `# T-1 Review the candidate\n\n## Review round 0\n\nReview request ID: \`${first}\`\n`);
+    const engine = writeFakeEngine(dir, { "review-verdict": { result: { recorded: true } } });
+    const rereview = `Review round 1 for T-1.\n\nVerify the required fix.\nReview request ID: \`${second}\``;
     const assets = scriptedFixtureInstall(dir, [
-      { toolCalls: [{ callId: "first-verdict", name: "corral_verdict",
+      { copyReviewRequest: "prompt-file", toolCalls: [{ callId: "first-verdict", name: "corral_verdict",
         arguments: { verdict: "changes", notes: "Add regression coverage." } }] },
-      { match: rereview, toolCalls: [{ callId: "second-verdict", name: "corral_verdict",
+      { match: rereview, copyReviewRequest: "user-input", toolCalls: [{ callId: "second-verdict", name: "corral_verdict",
         arguments: { verdict: "approve", notes: "Regression coverage verified." } }] },
     ]);
     const socket = join(dir, "r.sock");
@@ -245,11 +246,14 @@ test("reviewer answers an automated re-review and reopens the same transcript af
     expect(before).toContain("Add regression coverage.");
     expect(before).toContain("Review round 1 for T-1.");
     expect(before).toContain("Regression coverage verified.");
-    const verdicts = () => engine.calls().filter(argv => argv[3] === "verdict");
+    const verdicts = () => engine.calls().filter(argv => argv[3] === "review-verdict");
     expect(verdicts()).toEqual([
-      ["--root", dir, "--json", "verdict", "T-1", "changes", "--notes", "Add regression coverage."],
-      ["--root", dir, "--json", "verdict", "T-1", "approve", "--notes", "Regression coverage verified."],
+      ["--root", dir, "--json", "review-verdict", "T-1", "R2", first],
+      ["--root", dir, "--json", "review-verdict", "T-1", "R2", second],
     ]);
+    const intent = (request: string) => JSON.parse(readFileSync(join(run, `verdict-${env.CORRAL_RUN}-${request}.json`), "utf8"));
+    expect(intent(first)).toEqual({ verdict: "changes", notes: "Add regression coverage." });
+    expect(intent(second)).toEqual({ verdict: "approve", notes: "Regression coverage verified." });
     initial.host.child.kill("SIGKILL");
     await within(initial.host.exit, 10_000, "the reviewer to stop");
     const reopened = await start();

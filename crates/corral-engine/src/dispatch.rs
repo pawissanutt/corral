@@ -562,7 +562,10 @@ impl Engine {
         pending.dir = Some(dir.clone());
         let prompt_file = dir.join("prompt.md");
         let bin = crate::binary_path()?;
-        let references = PromptReferences::load(self, store, task, note)?;
+        let mut references = PromptReferences::load(self, store, task, note)?;
+        if crate::review_verdict::is_pi_reviewer(&run) {
+            references.review_request = Some(store.pi_review_request(task)?);
+        }
         write_prompt(
             &prompt_file,
             &bin,

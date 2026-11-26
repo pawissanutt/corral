@@ -5454,6 +5454,10 @@
         ],
         "type": "object"
       },
+      "PendingReviewVerdict": {
+        "type": "object",
+        "x-rust-type": "corral_types::PendingReviewVerdict"
+      },
       "PiChildProfile": {
         "properties": {
           "effort": {
@@ -10650,6 +10654,16 @@
               "$ref": "#/components/schemas/Event"
             },
             "type": "array"
+          },
+          "pending_review_verdict": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PendingReviewVerdict"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "runs": {
             "items": {
