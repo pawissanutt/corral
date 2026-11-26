@@ -477,8 +477,10 @@ itself. No client stitches the two.
 - `put { message, before, replaces, open }`: the message takes the place of the held
   message with the same id, or of the open message `replaces`, or else goes at the end.
   `before` is the `detail.get` page before this message, so a client that drops its oldest
-  messages to stay within its own budget can still page back to them. `cut` is described
-  below. A record is sent
+  messages to stay within its own budget can still page back to them. When the message
+  is the client's first, `before` is its cursor for earlier messages from then on: a
+  history page may have begun inside that record, and the record now comes whole. `cut`
+  is described below. A record is sent
   again with the same id when it changes: a tool result that arrives is folded into the
   call's message exactly as a history page folds it.
 - An open message (`open: true`) is the assistant message being written. Its id is
@@ -561,9 +563,10 @@ host's pages, which it does not ask for again, and the reply goes on growing. Wh
 journal is read again corrald counts the records that reached it meanwhile and puts
 the messages still being written after the tail, from the words the host writes next.
 The tail it reads again is one page. When more than that was written since the last
-record it paired, it cannot tell which of the turn's messages are recorded: it leaves
-the rest of that turn's words out rather than guess, the records still arrive, and the
-next turn is followed from its start.
+record it paired, or since the start of a turn whose `live_turn started` it follows only
+afterwards, it cannot tell which of the turn's messages are recorded: it leaves the rest
+of that turn's words out rather than guess, the records still arrive, and the next turn
+is followed from its start.
 
 Operations share the page's byte budget with its events. A subscriber's operations are a
 bounded backlog beside the buffered events; one that falls behind it is sent `reset` and

@@ -268,6 +268,51 @@ fn latest_reads(reader: bool) {
     );
 }
 
+/// A page that begins inside a record resumes inside it. When the record then came whole
+/// the cursor still did, and the page before it gave the record's first items again.
+#[test]
+fn a_first_message_that_comes_whole_moves_the_cursor_before_it() {
+    let runtime = nsh_core::element::Runtime::default();
+    let _entered = runtime.enter();
+    let feed = signal(Feed::default());
+    feed.update(|f| {
+        f.capabilities.insert(SESSION_TRANSCRIPT_V1.into());
+    });
+    let mut app = AppState::new();
+    app.ready = true;
+    app.session_scopes.insert("B-1".into(), 1);
+    let get = read(&mut app, feed, None);
+    let rows: &[(&str, &[&str])] = &[("big", &["last"])];
+    reply(
+        &mut app,
+        feed,
+        get,
+        None,
+        page("a", rows, Some("inside-big")),
+    );
+    apply(
+        feed,
+        vec![put("big", &["first", "last"], None, false)],
+        false,
+    );
+    let get = read(&mut app, feed, Some("before-big"));
+    let rows: &[(&str, &[&str])] = &[("start", &["prompt"])];
+    reply(
+        &mut app,
+        feed,
+        get,
+        Some("before-big"),
+        page("b", rows, None),
+    );
+    assert_eq!(
+        shown(feed),
+        [
+            ("start".into(), vec!["prompt".into()]),
+            ("big".into(), vec!["first".into(), "last".into()])
+        ]
+    );
+}
+
 /// A long reply's record carries a preview of its words: the reply shrank to it when it
 /// ended, and grew back once the rest was read.
 #[test]

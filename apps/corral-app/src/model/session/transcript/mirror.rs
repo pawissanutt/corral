@@ -129,6 +129,11 @@ pub(crate) fn apply(cache: &mut DetailCache, ops: Vec<TranscriptOp>, more: bool)
                     restarted = true;
                     mirror.before.insert(id, before);
                 } else {
+                    // The first message came whole: what is before it is before all of
+                    // it, wherever a page that began inside its record resumed.
+                    if !open && page.messages.first().is_some_and(|first| first.id == id) {
+                        page.older.clone_from(&before);
+                    }
                     mirror.before.insert(id, before);
                 }
             }
