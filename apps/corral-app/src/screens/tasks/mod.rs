@@ -32,7 +32,7 @@ use crate::ui::kit::button::{ButtonKind, button};
 use crate::ui::kit::chip::chip;
 use crate::ui::kit::hint::hinted;
 use crate::ui::kit::list::{
-    ListPage, Row, cell_mono, cell_text, cell_title, list_page_with, phone_lines,
+    ListPage, Row, cell_mono, cell_text, cell_title_kept, list_page_with, phone_lines,
 };
 use crate::ui::kit::more::press;
 use crate::ui::kit::next::{more_button, next_button};
@@ -448,21 +448,23 @@ fn cell(
         "id" => cell_mono(app, shown, false),
         "title" => {
             let title = dynamic(move || {
-                // The Priority column says it; its tag on the title is the fallback.
+                // The Priority column says it; its tag on the title is the fallback, kept in a
+                // narrow cell where the other tags step out, since the row shows it nowhere else.
                 let column = app.task_columns.with(|chosen| chosen.shows("priority"));
                 line.with(|line| {
                     line.as_ref().map(|line| {
-                        let tags = line
+                        let kept = line
                             .priority
                             .filter(|_| !column)
-                            .map(str::to_owned)
+                            .map(|priority| chip(app, priority, Hue::Neutral))
                             .into_iter()
-                            .chain(
-                                line.parent
-                                    .as_ref()
-                                    .filter(|_| !under)
-                                    .map(|parent| format!("in {parent}")),
-                            )
+                            .collect();
+                        let tags = line
+                            .parent
+                            .as_ref()
+                            .filter(|_| !under)
+                            .map(|parent| format!("in {parent}"))
+                            .into_iter()
                             .map(|tag| chip(app, tag, Hue::Neutral))
                             .chain(
                                 meta::row_tags(&line.tags)
@@ -470,7 +472,7 @@ fn cell(
                                     .map(|tag| chip(app, tag, Hue::Neutral)),
                             )
                             .collect();
-                        cell_title(app, line.title.clone(), tags)
+                        cell_title_kept(app, line.title.clone(), kept, tags)
                     })
                 })
             });

@@ -707,6 +707,17 @@ pub fn cell_title(
     title: impl Into<SharedString>,
     tags: Vec<AnyElement>,
 ) -> AnyElement {
+    cell_title_kept(app, title, Vec::new(), tags)
+}
+
+/// [`cell_title`] with `kept` tags before the others that stay in a narrow cell: a fact the row
+/// shows nowhere else, such as a priority whose column is hidden.
+pub fn cell_title_kept(
+    app: AppState,
+    title: impl Into<SharedString>,
+    kept: Vec<AnyElement>,
+    tags: Vec<AnyElement>,
+) -> AnyElement {
     let form = app.form;
     let words = text(title.into())
         .truncate()
@@ -734,6 +745,14 @@ pub fn cell_title(
         .gap(px(if form == Form::Terminal { GAP } else { 6.0 }))
         .on_layout(move |frame: &Bounds<Points>| width.set(frame.size.width.0))
         .child(words)
+        .children(kept.into_iter().map(|tag| {
+            view()
+                .flex_row()
+                .items_center()
+                .flex_shrink_0()
+                .child(tag)
+                .into_element()
+        }))
         .child(
             view()
                 .flex_row()

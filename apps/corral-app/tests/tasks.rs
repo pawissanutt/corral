@@ -331,10 +331,12 @@ fn the_columns_control_keeps_its_choice_on_this_device_until_restored() {
     .unwrap();
 }
 
-/// A chosen Priority column that gave way on a narrow page took the title's tag with it, so a
-/// P1 task showed its priority nowhere on its row: the column stays while the others give way.
+/// On a narrow page a P1 task showed its priority nowhere on its row: a chosen Priority column
+/// gave way with the title's tag suppressed, and a hidden one left its fallback tag among the
+/// tags a cramped title drops. The chosen column stays while the others give way, and once the
+/// owner hides it the title keeps the priority's tag.
 #[test]
-fn a_chosen_priority_column_stays_on_a_narrow_page() {
+fn a_narrow_page_keeps_every_rows_priority_with_the_column_chosen_or_hidden() {
     let mut app = preview("tasks");
     app.wait_for("id:col-title").unwrap();
     app.set_viewport(Size::new(Points(560.0), Points(900.0)))
@@ -345,4 +347,16 @@ fn a_chosen_priority_column_stays_on_a_narrow_page() {
     .unwrap();
     assert!(column_shown(app.screen(), "priority"));
     assert!(app.screen().shows("P1"));
+    app.press("id:btn-columns").unwrap();
+    app.wait_for("id:seg-column-priority").unwrap();
+    app.press("id:seg-column-priority").unwrap();
+    app.press_key("escape").unwrap();
+    app.wait_until("the column leaves", Duration::from_secs(5), |screen| {
+        !column_shown(screen, "priority")
+    })
+    .unwrap();
+    app.wait_until("the tag stays", Duration::from_secs(5), |screen| {
+        screen.shows("P1")
+    })
+    .unwrap();
 }
