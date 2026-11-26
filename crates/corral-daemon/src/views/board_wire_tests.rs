@@ -600,3 +600,73 @@ fn project_branch_detail_distinguishes_empty_and_unavailable_repositories() {
     assert!(page.branches.is_empty());
     assert!(empty.next.is_none());
 }
+
+/// Tasks served a filed parent as plain Backlog work, and dropped it from the board once
+/// closed by hand: it is served with its children's counts whatever its own status, those
+/// counts follow a child closing and reopening, and an ordinary parent stays unmarked.
+#[test]
+fn served_filed_plan_parents_carry_child_counts_whatever_their_status() {
+    let fixture = Fixture::new();
+    fixture.project();
+    let root = fixture.shared.root().to_path_buf();
+    fs::write(
+        root.join(".corral-next/corral.toml"),
+        "[projects.demo]\npath = \"repo\"\n",
+    )
+    .unwrap();
+    let receipt = corral_engine::Engine::file_board_plan(
+        &root,
+        "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+        false,
+        br#"{"title":"Plan","project":"demo","why":"Why",
+            "tasks":[{"key":"a","title":"Child","depends":[],"body":"Brief"}]}"#,
+    )
+    .unwrap();
+    let (parent, child) = (&receipt.parents[0].id, &receipt.tasks[0].id);
+    let ordinary = fixture.named_task("Ordinary", None);
+    fixture.task(NewTask {
+        title: "Ordinary child".into(),
+        parent: Some(ordinary.clone()),
+        ..Default::default()
+    });
+    let engine = fixture.shared.engine().unwrap();
+    let mut stored = engine.store.require_task(parent).unwrap();
+    stored.status = Status::Dropped;
+    engine.store.update_task(&stored).unwrap();
+    let served = |status: Status| {
+        engine
+            .apply(
+                Op::Move {
+                    id: child.clone(),
+                    status,
+                },
+                true,
+            )
+            .unwrap();
+        fixture.shared.publish();
+        let SubDelta::Tasks { delta } = subscribe(&fixture.shared, Topic::Tasks) else {
+            panic!("expected task rows");
+        };
+        let row = |id: &str| delta.rows.iter().find(|row| row.task.id == id).cloned();
+        assert_eq!(row(&ordinary).unwrap().plan_children, None);
+        row(parent).unwrap().plan_children.unwrap()
+    };
+    assert_eq!(
+        served(Status::Done),
+        [StatusCount {
+            status: Status::Done,
+            count: 1
+        }]
+    );
+    assert_eq!(
+        served(Status::Backlog),
+        [StatusCount {
+            status: Status::Backlog,
+            count: 1
+        }]
+    );
+    assert_eq!(
+        engine.store.require_task(parent).unwrap().status,
+        Status::Dropped
+    );
+}

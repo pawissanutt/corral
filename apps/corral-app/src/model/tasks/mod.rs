@@ -165,6 +165,7 @@ fn inline_children<'a>(
 ) -> impl Iterator<Item = &'a Task> {
     feed.board.children(plan.id.as_str()).filter(move |child| {
         child.status() == plan.status()
+            && !plans::is_summary(child)
             && scope.matches(child.project())
             && filter.matches(child.task())
     })
@@ -362,7 +363,7 @@ fn profile_of(task: &Task) -> Option<String> {
 
 fn line_of(task: &Task, feed: &Feed) -> TaskLine {
     let plan = plans::state(task);
-    let status = plan.map_or(task.status(), |plan| plan.shown(task.status()));
+    let status = plan.map_or(task.status(), plans::PlanState::shown);
     TaskLine {
         plan,
         id: task.id.clone(),

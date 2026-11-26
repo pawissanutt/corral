@@ -391,6 +391,12 @@ impl Engine {
     ) -> Result<Run> {
         self.launch_transaction(id, |store, pending| {
             let mut task = store.require_task(id)?;
+            if store.is_filed_plan_parent(id)? {
+                return Err(refuse(
+                    "a filed board plan parent summarizes its children and never runs a worker",
+                    Vec::new(),
+                ));
+            }
             if let Some(run) = selected {
                 store.require_relaunch_target(&task, Role::Worker, run)?;
             }

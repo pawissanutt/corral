@@ -395,21 +395,28 @@ fn poll_task_attempts(shared: &Shared, old: &Arc<Rows>, rows: &[TaskRow]) -> Res
     Ok(updated.map_or_else(|| Arc::clone(old), |rows| Arc::new(Rows::Tasks(rows))))
 }
 
+/// Open tasks, and every filed plan parent whatever its stored status: a summary's shown
+/// state follows its children, so one closed by hand still returns when a child reopens.
 fn tasks(engine: &Engine) -> Result<Vec<TaskRow>> {
-    task_rows(
-        engine,
-        engine.store.list_tasks(&TaskFilter {
-            statuses: vec![
-                Status::Idea,
-                Status::Backlog,
-                Status::Ready,
-                Status::Running,
-                Status::Blocked,
-                Status::Review,
-            ],
-            ..Default::default()
-        })?,
-    )
+    let mut tasks = engine.store.list_tasks(&TaskFilter {
+        statuses: vec![
+            Status::Idea,
+            Status::Backlog,
+            Status::Ready,
+            Status::Running,
+            Status::Blocked,
+            Status::Review,
+        ],
+        ..Default::default()
+    })?;
+    for id in engine.store.filed_plan_children()?.into_keys() {
+        if let Some(parent) = engine.store.get_task(&id)?
+            && matches!(parent.status, Status::Done | Status::Dropped)
+        {
+            tasks.push(parent);
+        }
+    }
+    task_rows(engine, tasks)
 }
 
 /// The caller reads the tasks and their related facts in one store snapshot.

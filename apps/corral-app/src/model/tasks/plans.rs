@@ -35,11 +35,11 @@ impl PlanState {
         !matches!(self, PlanState::Active { .. })
     }
 
-    /// The status whose mark the row shows: Done and Dropped stay distinct among completed
-    /// plans; an active one keeps its own.
-    pub fn shown(self, own: Status) -> Status {
+    /// The status whose mark the row shows, whatever the parent's stored one: Done and
+    /// Dropped stay distinct among completed plans; an active one shows open work's mark.
+    pub fn shown(self) -> Status {
         match self {
-            PlanState::Active { .. } => own,
+            PlanState::Active { .. } => Status::Backlog,
             PlanState::Complete { .. } => Status::Done,
             PlanState::Closed { .. } => Status::Dropped,
         }
@@ -87,11 +87,8 @@ pub fn state(task: &Task) -> Option<PlanState> {
 pub fn sections(feed: &Feed, scope: &Scope, filter: &Filter, completed_open: bool) -> Vec<Section> {
     let (mut active, mut completed) = (Vec::new(), Vec::new());
     for task in feed.board.tasks() {
-        // A parent closed by hand lists among Done and Dropped with every other closed task.
-        if crate::model::status::folds(task.status())
-            || !scope.matches(task.project())
-            || !filter.matches(task.task())
-        {
+        // A parent's own stored status, even one closed by hand, does not decide its place.
+        if !scope.matches(task.project()) || !filter.matches(task.task()) {
             continue;
         }
         match state(task) {
@@ -220,20 +217,31 @@ mod tests {
         assert_eq!(closed.now, "Plan closed · 1 done, 1 dropped");
         assert_eq!(keys(&feed, &State::default())[0].0, COMPLETED_KEY);
 
+        // Even a parent dropped by hand returns, and is not listed among closed tasks.
         feed.board.apply_batch(
             1,
             vec![task(
                 "T-1",
-                Status::Backlog,
+                Status::Dropped,
                 Some(&[(Status::Done, 1), (Status::Ready, 1)]),
             )],
             &[],
         );
+        let mut state = State::default();
+        state.toggle(super::super::closed::KEY);
         assert_eq!(
-            keys(&feed, &State::default()),
+            keys(&feed, &state),
             [(ACTIVE_KEY.into(), 1, vec!["T-1".into()])]
         );
+        assert!(
+            super::super::sections(&feed, &Scope::All, &state)
+                .iter()
+                .all(
+                    |section| !section.rows.contains(&Id::from("T-1")) || section.key == ACTIVE_KEY
+                )
+        );
         let active = line(&feed, "T-1").unwrap();
+        assert_eq!(active.status, Status::Backlog);
         assert_eq!(active.now, "Plan · 1 of 2 done");
         assert_eq!(active.next.unwrap().label, "View plan");
     }

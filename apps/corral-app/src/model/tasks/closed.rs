@@ -107,9 +107,15 @@ pub fn section(
         .iter()
         .filter(|task| folds(task.status()))
         .map(|task| task.task());
+    // A filed plan parent lists among the plans whatever its stored status.
+    let summary = |id: &str| feed.board.task(id).is_some_and(super::plans::is_summary);
     for task in board.chain(served(feed, closed)) {
         let id = Id::from(task.id.as_str());
-        if scope.matches(task.project.as_deref()) && filter.matches(task) && !rows.contains(&id) {
+        if scope.matches(task.project.as_deref())
+            && filter.matches(task)
+            && !summary(&task.id)
+            && !rows.contains(&id)
+        {
             rows.push(id);
         }
     }
