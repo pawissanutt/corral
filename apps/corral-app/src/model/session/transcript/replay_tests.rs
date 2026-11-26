@@ -317,6 +317,49 @@ fn a_live_reply_that_follows_two_tool_calls_is_shown_after_them() {
     assert_eq!(kinds, ["tool", "tool", "text"]);
 }
 
+/// The words being written were keyed by where they stood in the live turn, so their view was
+/// made again each time a call before them was recorded.
+#[test]
+fn live_words_keep_their_key_when_a_call_before_them_is_recorded() {
+    let turn = |tools: Vec<LiveTool>| LiveSession {
+        open: true,
+        turn: Some(4),
+        tools,
+        messages: vec![LiveMessage {
+            ordinal: 2,
+            text: "Committing the label".into(),
+            thinking: String::new(),
+            settled_at: None,
+        }],
+        ..Default::default()
+    };
+    let words = |tools| {
+        let mut feed = feed(Vec::new());
+        feed.live.insert(Id::from(ID), turn(tools));
+        let page = shown(&feed);
+        let live = &page.live[0];
+        assert_eq!(live.keys.len(), live.items.len());
+        let at = live
+            .items
+            .iter()
+            .position(|item| matches!(item, MessageItem::Prose(_)))
+            .unwrap();
+        (at, live.keys[at].clone())
+    };
+    let (after_call, key) = words(vec![LiveTool {
+        call: "e1".into(),
+        tool: "edit".into(),
+        args: None,
+        args_truncated: false,
+        partial: None,
+        state: LiveToolState::Running,
+        elapsed_ms: None,
+        settled_at: None,
+        after: 0,
+    }]);
+    assert_eq!((after_call, words(Vec::new())), (1, (0, key)));
+}
+
 /// Appends a message to the served page.
 fn arrive(feed: &mut daemon::Feed, target: &DetailRef, author: &str, at: &str, text: &str) {
     let Some(DetailBody::Session(page)) = feed

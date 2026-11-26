@@ -18,7 +18,7 @@ fn TableFixture() -> impl IntoElement {
     view()
         .w(px(240.0))
         .test_id("conversation")
-        .child(prose(app, &words, "fixture"))
+        .child(prose(app, &words, "fixture", None))
 }
 
 #[test]

@@ -16,7 +16,9 @@ impl AppState {
                 feed.update(|feed| feed.health_received(health));
                 Ok(self.poll_changes(feed))
             }
-            Event::Rows { delta, replacement } => self.rows(feed, delta, replacement),
+            // One round of the views for a page, however many times applying it writes the
+            // feed: a session's live pages arrive many times a second.
+            Event::Rows { delta, replacement } => batch(|| self.rows(feed, delta, replacement)),
             Event::TopicError {
                 topic,
                 scope,

@@ -12,6 +12,11 @@ use super::live::{LiveMessage, LiveSession};
 use super::replay::{Cx, avatar, head, millis, thinking};
 use super::{Marker, Message, MessageItem, MessageKind, More, Prose, group, tool};
 
+/// Where a part of the turn stands: after which message, words before calls, then call order.
+type Order = (u64, u8, usize);
+/// A part of the turn under its key.
+type Keyed = (String, MessageItem);
+
 /// How many assistant messages of the live turn the recorded page already holds: those
 /// written at or after the turn's start, by the host's own clock. Each live message is the
 /// turn's n-th assistant message (its ordinal), so a recorded n-th retires the live one.
@@ -50,23 +55,44 @@ pub(super) fn overlay(
         turn.generation.unwrap_or(0),
         turn.turn.unwrap_or(0)
     );
-    // A message stands before the calls it made; a call before the next message.
-    let mut parts: Vec<((u64, u8, usize), Vec<MessageItem>)> = turn
+    // A message stands before the calls it made; a call before the next message. Each part
+    // is keyed by what it is, not where it stands, so the words being written keep their
+    // view when the parts before them are recorded or fold into one row.
+    let mut parts: Vec<(Order, Keyed)> = turn
         .messages
         .iter()
         .filter(|message| message.ordinal > held)
-        .map(|message| ((message.ordinal, 0, 0), words(message, &base, cx)))
+        .flat_map(|message| {
+            let order = (message.ordinal, 0, 0);
+            words(message, &base, cx)
+                .into_iter()
+                .map(move |part| (order, part))
+        })
         .collect();
     parts.extend(
         turn.tools
             .iter()
             .enumerate()
             .filter(|(_, call)| !calls.contains(call.call.as_str()))
-            .map(|(at, call)| ((call.after, 1, at), vec![tool::live(call, cx)])),
+            .map(|(at, call)| {
+                let key = format!("{base}|call:{}", call.call);
+                ((call.after, 1, at), (key, tool::live(call, cx)))
+            }),
     );
+    // Stable: a message's thinking stays before its words.
     parts.sort_by_key(|(order, _)| *order);
-    let items: Vec<MessageItem> = parts.into_iter().flat_map(|(_, items)| items).collect();
+    let (keys, items): (Vec<String>, Vec<MessageItem>) =
+        parts.into_iter().map(|(_, part)| part).unzip();
     let items = group::fold(items, cx);
+    // A folded run keeps the key of its first call.
+    let mut each = keys.into_iter();
+    let mut keys = Vec::with_capacity(items.len());
+    for item in &items {
+        keys.extend(each.next());
+        if let MessageItem::Group(group) = item {
+            each.by_ref().take(group.count - 1).for_each(drop);
+        }
+    }
     let live = if items.is_empty() {
         Vec::new()
     } else {
@@ -92,7 +118,7 @@ pub(super) fn overlay(
             tag: None,
             tag_facts: None,
             items,
-            keys: Vec::new(),
+            keys,
             footer: None,
             live: true,
         }]
@@ -135,24 +161,31 @@ pub(super) fn overlay(
 }
 
 /// One live message's thinking, then its words; streaming until the message is complete.
-fn words(message: &LiveMessage, base: &str, cx: Cx<'_>) -> Vec<MessageItem> {
+fn words(message: &LiveMessage, base: &str, cx: Cx<'_>) -> Vec<(String, MessageItem)> {
     let streaming = message.settled_at.is_none();
+    let key = format!("{base}|{}", message.ordinal);
     let mut items = Vec::new();
     if !message.thinking.is_empty() {
-        items.push(MessageItem::Thinking(thinking(
-            &message.thinking,
-            format!("{base}|{}", message.ordinal),
-            More::Whole,
-            streaming,
-            cx,
-        )));
+        items.push((
+            format!("{key}|thinking"),
+            MessageItem::Thinking(thinking(
+                &message.thinking,
+                key.clone(),
+                More::Whole,
+                streaming,
+                cx,
+            )),
+        ));
     }
     if !message.text.is_empty() {
-        items.push(MessageItem::Prose(Prose {
-            markdown: message.text.clone(),
-            more: More::Whole,
-            streaming,
-        }));
+        items.push((
+            format!("{key}|text"),
+            MessageItem::Prose(Prose {
+                markdown: message.text.clone(),
+                more: More::Whole,
+                streaming,
+            }),
+        ));
     }
     items
 }

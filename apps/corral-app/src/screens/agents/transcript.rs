@@ -258,15 +258,22 @@ pub(crate) fn transcript(
 
 /// One item of a message, numbered `n` across the page, drawn at `spot` when it is keyed.
 fn item(app: AppState, entry: &MessageItem, n: usize, spot: Option<Spot<'_>>) -> AnyElement {
-    numbered(n, item_body(app, entry, n, spot))
+    numbered(n, item_body(app, entry, n, spot, None))
 }
 
-fn item_body(app: AppState, entry: &MessageItem, n: usize, spot: Option<Spot<'_>>) -> AnyElement {
+/// `live` is the words of an item still being written, which change without `entry` doing so.
+fn item_body(
+    app: AppState,
+    entry: &MessageItem,
+    n: usize,
+    spot: Option<Spot<'_>>,
+    live: Option<Memo<String>>,
+) -> AnyElement {
     let id = n.to_string();
     match entry {
         MessageItem::Paragraph(words) => paragraph(app, words),
-        MessageItem::Prose(words) => prose::prose(app, words, &id),
-        MessageItem::Thinking(thought) => prose::thinking(app, thought, &id),
+        MessageItem::Prose(words) => prose::prose(app, words, &id, live),
+        MessageItem::Thinking(thought) => prose::thinking(app, thought, &id, live),
         MessageItem::Tool(call) => tool::tool(app, call, &id),
         MessageItem::Group(folded) => group::group(app, folded, &id, spot),
         MessageItem::Cell(cell) => code_cell::cell(app, cell, &id),

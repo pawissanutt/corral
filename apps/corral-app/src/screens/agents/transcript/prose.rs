@@ -7,7 +7,7 @@ use nsh_core::prelude::*;
 use crate::model::Form;
 use crate::model::session::transcript::{Prose, Thinking};
 use crate::screens::cites::cited;
-use crate::screens::markdown::chat_markdown;
+use crate::screens::markdown::{chat_markdown, chat_markdown_streaming};
 use crate::state::AppState;
 use crate::ui::tokens::{FONT_TEXT, Token, color};
 
@@ -43,15 +43,25 @@ pub(super) fn caret(app: AppState) -> AnyElement {
 }
 
 /// Words of a message: rendered Markdown at most ~70 characters wide on the desktop, then
-/// where the rest of a continued item stands.
-pub(super) fn prose(app: AppState, words: &Prose, id: &str) -> AnyElement {
+/// where the rest of a continued item stands. `live` is the words while they are still being
+/// written, drawn in a view that stays as they grow.
+pub(super) fn prose(
+    app: AppState,
+    words: &Prose,
+    id: &str,
+    live: Option<Memo<String>>,
+) -> AnyElement {
+    let body = match live {
+        Some(live) => chat_markdown_streaming(app, live),
+        None => chat_markdown(app, &words.markdown, words.streaming),
+    };
     view()
         .min_w(px(0.0))
         .when(app.form == Form::Desktop, |block| {
             block.max_w(px(PARAGRAPH))
         })
         .when(app.form != Form::Terminal, |block| block.mb(px(6.0)))
-        .child(chat_markdown(app, &words.markdown, words.streaming))
+        .child(body)
         .children(
             (!words.streaming)
                 .then(|| cited(app, &words.markdown))
@@ -64,7 +74,13 @@ pub(super) fn prose(app: AppState, words: &Prose, id: &str) -> AnyElement {
 /// Thinking: a bold `thinking` lead, then the reasoning muted so it never reads as the answer;
 /// folded, one row says what it hides. Pressing the lead folds or shows it; while the session
 /// hides all thinking, the row is `thinking hidden · Alt+H shows it` and pressing it shows all.
-pub(super) fn thinking(app: AppState, thought: &Thinking, id: &str) -> AnyElement {
+/// `live` is the reasoning while it is still being written, as for `prose`.
+pub(super) fn thinking(
+    app: AppState,
+    thought: &Thinking,
+    id: &str,
+    live: Option<Memo<String>>,
+) -> AnyElement {
     let form = app.form;
     let bold = if form == Form::Terminal {
         FontWeight::BOLD
@@ -110,7 +126,11 @@ pub(super) fn thinking(app: AppState, thought: &Thinking, id: &str) -> AnyElemen
         id,
     );
     let reasoning = thought.open.then(|| {
-        let words = text(thought.text.clone()).text_color(color(Token::Ink3));
+        let words = match live {
+            Some(live) => text(move || live.get()),
+            None => text(thought.text.clone()),
+        }
+        .text_color(color(Token::Ink3));
         let words = if form == Form::Terminal {
             words
         } else {

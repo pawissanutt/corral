@@ -6,8 +6,8 @@
 //! assistant's.
 
 use nsh_base::text_view::{
-    Block, CodeBlock, Document, Inline, MarkdownOptions, Parser, Table, TextViewLinkPressEvent,
-    TextViewPart as Part, TextViewParts, text_view,
+    Block, CodeBlock, Document, Inline, MarkdownOptions, Parser, Table, TextViewElement,
+    TextViewLinkPressEvent, TextViewPart as Part, TextViewParts, text_view,
 };
 use nsh_core::prelude::*;
 
@@ -317,6 +317,42 @@ fn cited(app: AppState, markdown: &str, streaming: bool, images: bool, chat: boo
     .into_element()
 }
 
+/// Chat words still being written, in a view that stays while they grow: the text view keeps
+/// the blocks a beat leaves as they were and lays out only the one being written, where
+/// drawing the words again would make every block anew on each beat. A citation is linked
+/// once it resolves, and its details are kept loaded for as long as the words name it.
+pub(crate) fn chat_markdown_streaming(app: AppState, markdown: Memo<String>) -> AnyElement {
+    let cites = computed(move || markdown.with(|markdown| cite::cites(markdown)));
+    let open = computed(move || {
+        cites.with(|cites| {
+            if cites.is_empty() {
+                Vec::new()
+            } else {
+                app.feed.with(|feed| cite::opening(feed, cites))
+            }
+        })
+    });
+    let kept = dynamic(move || {
+        let cites = cites.get();
+        if !cites.is_empty() {
+            untracked(|| keep_cited(app, &cites));
+        }
+        None::<AnyElement>
+    });
+    let words = shown(
+        app,
+        text_view().document(move || {
+            let open = open.get();
+            markdown.with(|markdown| document(app, markdown, true, true, true, &open))
+        }),
+    );
+    view()
+        .min_w(px(0.0))
+        .child(kept)
+        .child(words)
+        .into_element()
+}
+
 fn laid_out(
     app: AppState,
     markdown: &str,
@@ -325,6 +361,20 @@ fn laid_out(
     chat: bool,
     open: &[String],
 ) -> AnyElement {
+    let document = document(app, markdown, streaming, images, chat, open);
+    shown(app, text_view().document(document))
+}
+
+/// `markdown` read as the app shows it: images as their alt text unless `images`, the
+/// citations among `open` as links, tables as records where they would not fit.
+fn document(
+    app: AppState,
+    markdown: &str,
+    streaming: bool,
+    images: bool,
+    chat: bool,
+    open: &[String],
+) -> Document {
     let options = MarkdownOptions {
         math: false,
         html: false,
@@ -348,8 +398,12 @@ fn laid_out(
             note.children = records(std::mem::take(&mut note.children));
         }
     }
-    let rendered = text_view()
-        .document(document)
+    document
+}
+
+/// A text view of the app's: its links open what they cite, its code blocks are the app's.
+fn shown(app: AppState, words: TextViewElement) -> AnyElement {
+    let rendered = words
         .selectable(app.form == Form::Terminal)
         .on_link_press(move |press: &TextViewLinkPressEvent| {
             if let Some(spelled) = press.url.strip_prefix(cite::SCHEME) {

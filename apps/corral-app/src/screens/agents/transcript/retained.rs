@@ -1,6 +1,7 @@
 use super::*;
 use crate::model::session::Action;
 use crate::model::session::Echo;
+use crate::model::session::transcript::{Prose, Thinking};
 use std::collections::HashMap;
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -322,6 +323,37 @@ fn message_row(
     )
 }
 
+/// The words of an item still being written, which each beat adds to.
+fn written(item: &MessageItem) -> Option<&str> {
+    match item {
+        MessageItem::Prose(words) if words.streaming => Some(&words.markdown),
+        MessageItem::Thinking(thought) if thought.streaming && thought.open => Some(&thought.text),
+        _ => None,
+    }
+}
+
+/// `item` without what a beat adds to it: all that its view is made from.
+fn settled(item: &MessageItem) -> MessageItem {
+    match item {
+        MessageItem::Prose(words) if words.streaming => MessageItem::Prose(Prose {
+            markdown: String::new(),
+            more: words.more.clone(),
+            streaming: true,
+        }),
+        MessageItem::Thinking(thought) if thought.streaming && thought.open => {
+            MessageItem::Thinking(Thinking {
+                text: String::new(),
+                // Read only while folded: it counts the lines written so far.
+                hidden: String::new(),
+                more: thought.more.clone(),
+                action: thought.action.clone(),
+                ..*thought
+            })
+        }
+        other => other.clone(),
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Hash)]
 enum ItemKey {
     Recorded(String),
@@ -391,7 +423,12 @@ fn item_list(
                 ItemKey::Fallback(..) => None,
             });
             let number = computed(move || row.with(|row| row.number));
-            let item = computed(move || row.with(|row| row.body.clone()));
+            // A beat of a reply being written changes only its words. They are drawn in a
+            // view that stays; the item is made again only when something else about it
+            // changes, where making it on every beat tore down and rebuilt all its blocks.
+            let item = computed(move || row.with(|row| settled(&row.body)));
+            let words =
+                computed(move || row.with(|row| written(&row.body).unwrap_or_default().to_owned()));
             let content = {
                 let scope = scope.clone();
                 let anchor = anchor.clone();
@@ -406,12 +443,13 @@ fn item_list(
                         number,
                         dynamic(move || {
                             let body = item.get();
+                            let live = written(&body).is_some().then_some(words);
                             let spot = key.as_deref().map(|key| Spot {
                                 scope: &scope,
                                 anchor: &anchor,
                                 key,
                             });
-                            untracked(|| item_body(app, &body, number, spot))
+                            untracked(|| item_body(app, &body, number, spot, live))
                         }),
                     )
                 })

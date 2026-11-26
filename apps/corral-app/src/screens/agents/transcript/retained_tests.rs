@@ -56,9 +56,9 @@ fn StreamingFixture() -> impl IntoElement {
             "live",
             true,
             if step == 0 {
-                "stream initial"
+                "stream settled\n\nstream initial"
             } else {
-                "stream updated"
+                "stream settled\n\nstream updated"
             },
         )];
         Some(page)
@@ -117,13 +117,32 @@ fn streaming_delta_retains_mounted_messages_and_item_wrappers() {
             item(first + 1).parent,
         ]
     };
+    // The paragraph of the reply being written that the delta leaves as it was.
+    let earlier = |app: &mut Headless| {
+        let nodes = app.screen().layout_nodes();
+        nodes
+            .iter()
+            .find(|node| {
+                node.text
+                    .as_ref()
+                    .is_some_and(|t| t.text.text == "stream settled")
+            })
+            .unwrap()
+            .id
+    };
     let original = nodes(&mut app, 0);
+    let words = earlier(&mut app);
     app.press("id:advance").unwrap();
     app.wait_for("text:stream updated").unwrap();
     assert_eq!(
         original,
         nodes(&mut app, 0),
         "stream delta remounted retained nodes"
+    );
+    assert_eq!(
+        words,
+        earlier(&mut app),
+        "stream delta remounted the reply's earlier words"
     );
     app.press("id:advance").unwrap();
     app.wait_for("id:item-3").unwrap();
