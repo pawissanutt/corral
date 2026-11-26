@@ -206,7 +206,7 @@ FACTS
     assert_eq!(gate_on.source, gate_off.source);
     assert!(
         matches!(gate_on.entity, EntityResult::Resolved { evidence, related, .. }
-        if evidence.provider.as_ref().unwrap().coverage.skipped["unsupported"] == 1 && related == &[DiagramRelated::FileReference {
+        if evidence.provider.as_ref().unwrap().coverage.skipped["unsupported"] == 1 && related == [DiagramRelated::FileReference {
             path: DEPENDENT.into(), basis: ReferenceBasis::Resolved, reference_kind: ReferenceKind::Call, count: 1,
         }])
     );
