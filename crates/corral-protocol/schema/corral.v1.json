@@ -10306,6 +10306,13 @@
               "topic": {
                 "const": "session",
                 "type": "string"
+              },
+              "transcript": {
+                "description": "Operations on the transcript's tail, in order, for `session.transcript.v1`\nclients only.",
+                "items": {
+                  "$ref": "#/components/schemas/TranscriptOp"
+                },
+                "type": "array"
               }
             },
             "required": [
@@ -10791,6 +10798,131 @@
             "type": "string"
           }
         ]
+      },
+      "TranscriptOp": {
+        "description": "One operation on the tail of a session's transcript, for a `session.transcript.v1`\nclient. Applied in order to the messages the client holds, the operations give the\ntranscript's current branch up to the present, the message being written included, so\nsuch a client never reads `detail.get { session }` again to follow a turn.",
+        "oneOf": [
+          {
+            "description": "What the client holds no longer continues into what follows: the first page of a\nsubscription, another branch, a replaced journal, or a client that fell behind. The\n`put`s after it are the newest messages; `older` is the `detail.get` page before the\nfirst of them. A client that holds that first message keeps what it holds before it.",
+            "properties": {
+              "older": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "op": {
+                "const": "reset",
+                "type": "string"
+              }
+            },
+            "required": [
+              "op"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The message with this id: in place of the held message with the same id, or of the\nopen message `replaces` whose record it is, or else at the end.",
+            "properties": {
+              "before": {
+                "description": "The `detail.get` page before this message; absent when nothing precedes it or\nthe message is open.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "message": {
+                "$ref": "#/components/schemas/SessionMessage"
+              },
+              "op": {
+                "const": "put",
+                "type": "string"
+              },
+              "open": {
+                "description": "Still being written: it has no record yet, its id names no record, and `append`s\nto it follow.",
+                "type": "boolean"
+              },
+              "replaces": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "op",
+              "message"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Words of the open message `id`, at a UTF-8 byte offset of its one `text` or\n`thinking` item, which the first chunk makes (thinking goes before text). Writing a\nchunk at its offset is idempotent.",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "offset": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "op": {
+                "const": "append",
+                "type": "string"
+              },
+              "part": {
+                "$ref": "#/components/schemas/TranscriptPart"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "op",
+              "id",
+              "part",
+              "offset",
+              "text"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The open message `id` ended without a record.",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "op": {
+                "const": "drop",
+                "type": "string"
+              }
+            },
+            "required": [
+              "op",
+              "id"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "op": {
+                "const": "other",
+                "type": "string"
+              }
+            },
+            "required": [
+              "op"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "TranscriptPart": {
+        "enum": [
+          "text",
+          "thinking"
+        ],
+        "type": "string"
       },
       "UploadAck": {
         "properties": {
@@ -12092,6 +12224,17 @@
                 "type": "string"
               }
             ]
+          }
+        },
+        {
+          "name": "transcript",
+          "required": false,
+          "schema": {
+            "description": "Operations on the transcript's tail, in order, for `session.transcript.v1`\nclients only.",
+            "items": {
+              "$ref": "#/components/schemas/TranscriptOp"
+            },
+            "type": "array"
           }
         }
       ],

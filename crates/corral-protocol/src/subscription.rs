@@ -113,6 +113,10 @@ pub enum SubDelta {
         cursor: BoardCursor,
         more: bool,
         gap: Option<SessionLiveGap>,
+        /// Operations on the transcript's tail, in order, for `session.transcript.v1`
+        /// clients only.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        transcript: Vec<TranscriptOp>,
         /// Current fleet replacement for capable clients; omission means no current fleet.
         #[serde(default, skip_serializing_if = "fleet_is_empty")]
         fleet: Option<SessionFleet>,
@@ -370,6 +374,58 @@ pub enum SessionLiveToolState {
     },
     #[serde(other)]
     Other,
+}
+
+/// One operation on the tail of a session's transcript, for a `session.transcript.v1`
+/// client. Applied in order to the messages the client holds, the operations give the
+/// transcript's current branch up to the present, the message being written included, so
+/// such a client never reads `detail.get { session }` again to follow a turn.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "op", rename_all = "snake_case")]
+pub enum TranscriptOp {
+    /// What the client holds no longer continues into what follows: the first page of a
+    /// subscription, another branch, a replaced journal, or a client that fell behind. The
+    /// `put`s after it are the newest messages; `older` is the `detail.get` page before the
+    /// first of them. A client that holds that first message keeps what it holds before it.
+    Reset {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        older: Option<String>,
+    },
+    /// The message with this id: in place of the held message with the same id, or of the
+    /// open message `replaces` whose record it is, or else at the end.
+    Put {
+        message: crate::detail::SessionMessage,
+        /// The `detail.get` page before this message; absent when nothing precedes it or
+        /// the message is open.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        before: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        replaces: Option<String>,
+        /// Still being written: it has no record yet, its id names no record, and `append`s
+        /// to it follow.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        open: bool,
+    },
+    /// Words of the open message `id`, at a UTF-8 byte offset of its one `text` or
+    /// `thinking` item, which the first chunk makes (thinking goes before text). Writing a
+    /// chunk at its offset is idempotent.
+    Append {
+        id: String,
+        part: TranscriptPart,
+        offset: u64,
+        text: String,
+    },
+    /// The open message `id` ended without a record.
+    Drop { id: String },
+    #[serde(other)]
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TranscriptPart {
+    Text,
+    Thinking,
 }
 
 /// Drop the live overlay and reconcile from `detail.get { session }`. A zero

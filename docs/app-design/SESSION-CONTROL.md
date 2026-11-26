@@ -445,6 +445,59 @@ runtime directory. Reading neither writes the store nor sends input.
   Session discontinuities themselves use the gap field and keep the topic open.
   Ignore unknown `Other` kinds/states without treating them as durable content.
 
+### Transcript stream
+
+A connection that requests `session.transcript.v1` gets the transcript itself on this
+topic: each page's `transcript` holds ordered `TranscriptOp`s on the tail of the session's
+transcript. Applied in order to the messages the client holds, they give the current
+branch from the first held message to the present, the message being written included.
+Such a client reads `detail.get { session }` once to open a session and again only to
+page older history; it never re-reads to follow a turn, and the two rules above about
+re-reading when a tool or a turn ends do not apply to it. It is not sent `live_text` or
+`live_thinking` events, whose words the stream carries.
+
+corrald is the one producer. It reads the same journal `detail.get` pages and projects
+records with the same code, so a message is the same `SessionMessage` with the same id
+whichever way it arrived, and it lays the host's live words over the journal's tail
+itself. No client stitches the two.
+
+- `reset { older }`: what the client holds does not continue into what follows. It is the
+  first operation of a subscription, and is sent again when the journal's branch changes
+  (rewind, switch), the journal is replaced, the host's live stream has a gap, or this
+  subscriber fell behind corrald's bounded backlog. The `put`s after it are the newest
+  messages (at most one history page of them) and `older` is the `detail.get` page before
+  the first. A client that already holds that first message, by id, keeps everything it
+  holds before it and replaces what follows; otherwise it replaces all it holds.
+- `put { message, before, replaces, open }`: the message takes the place of the held
+  message with the same id, or of the open message `replaces`, or else goes at the end.
+  `before` is the `detail.get` page before this message, so a client that drops its oldest
+  messages to stay within its own budget can still page back to them. A record is sent
+  again with the same id when it changes: a tool result that arrives is folded into the
+  call's message exactly as a history page folds it.
+- An open message (`open: true`) is the assistant message being written. Its id is
+  `<session>/open/<generation>.<turn>.<ordinal>` and names no record; it has at most one
+  `thinking` item followed by at most one `text` item. `append { id, part, offset, text }`
+  writes a chunk at a UTF-8 byte offset of that item, making the item when it is the
+  first chunk. Offsets count from the start of the text the client was given: when
+  corrald joins a message the host has partly forgotten, the message starts with what
+  the host still holds. The record, when the journal has it, arrives as a `put` whose
+  `replaces` is the open id: the client puts it in the same place and must keep the
+  message's view, not make another.
+- `drop { id }`: the open message ended without a record (the turn ended, or was
+  aborted, before the journal held it).
+- Tool progress stays on `live_tool` events: `call` is the `call_id` of a `tool_call`
+  item of a message the stream has put, and decorates that item until its result arrives
+  in a `put`.
+
+Operations share the page's byte budget with its events. A subscriber's operations are a
+bounded backlog beside the buffered events; one that falls behind it is sent `reset` and
+the current tail again, never a hole. Acknowledging a page acknowledges its operations.
+
+History cursors (`SessionPage.older`, `reset.older`, `put.before`) stay valid while the
+journal is appended to. They are stamped with the journal's identity, not its size or
+modification time, and pinned to a record by its id, so only a replaced journal or a
+record that is no longer there makes one stale (`history_changed`).
+
 ### Children and agent messages
 
 A connection that requests `session.fleet.v1` receives the watched session's child agents

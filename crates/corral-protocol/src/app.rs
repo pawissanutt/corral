@@ -17,6 +17,9 @@ pub const SESSION_V1: &str = "session.v1";
 pub const SESSION_FLEET_V1: &str = "session.fleet.v1";
 /// Grants live state and its events, session parts, and session host operations whenever requested.
 pub const SESSION_STATE_V1: &str = "session.state.v1";
+/// The session topic carries the transcript's tail as ordered operations
+/// (`SubDelta::Session::transcript`) in place of `live_text` and `live_thinking` events.
+pub const SESSION_TRANSCRIPT_V1: &str = "session.transcript.v1";
 /// Bounded read-only listing and file previews inside a session's dedicated checkout.
 pub const SESSION_FILES_V1: &str = "session.files.v1";
 /// Chunked reads of standalone HTML inside a session's dedicated checkout.

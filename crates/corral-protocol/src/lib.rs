@@ -25,7 +25,8 @@ pub mod subscription;
 
 pub use app::{
     AGENTS_V1, ASSISTANT_V1, AUTOMATION_V1, BUILD_V1, CHANGES_V1, CLOSED_V1, PLANS_V1, PROJECTS_V1,
-    REVIEW_V1, SESSION_FLEET_V1, SESSION_STATE_V1, SETTINGS_V1, TIMELINE_V1, USAGE_V1,
+    REVIEW_V1, SESSION_FLEET_V1, SESSION_STATE_V1, SESSION_TRANSCRIPT_V1, SETTINGS_V1, TIMELINE_V1,
+    USAGE_V1,
 };
 pub use corral_types::{
     Applied, Artifact, Blocked, Check, Event, Next, Op, Refusal, Run, SessionStatus, Status, Task,

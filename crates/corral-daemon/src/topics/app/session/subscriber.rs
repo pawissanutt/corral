@@ -327,6 +327,7 @@ impl Subscriber {
                 cursor: cursor.clone(),
                 more: seq < next || source_more,
                 gap,
+                transcript: Vec::new(),
                 fleet,
                 state,
             },
