@@ -1,6 +1,7 @@
 //! A Mermaid fence in an artifact's Markdown, read into the diagram the app already draws for a
 //! lens (`model::system::lens::Diagram`): a flowchart or state diagram as boxes and arrows laid
-//! out by the layered layout, a sequence diagram as participants and numbered messages. The app
+//! out by the layered layout, a sequence diagram as participants and numbered messages, an
+//! entity-relationship diagram as entities and labelled relationships (`mermaid_er.rs`). The app
 //! reads the source itself; no script runs, nothing is fetched and no markup reaches a page, so
 //! a diagram cannot reach the app's credentials. Anything it does not read (another diagram
 //! type, a line it does not understand, a diagram past its bounds) is an error the view shows
@@ -62,6 +63,10 @@ pub fn parse(source: &str) -> Result<Diagram, String> {
             for (number, line) in lines {
                 state_line(&mut built, line, &mut in_note).map_err(|why| at(number, &why))?;
             }
+            LensKind::State
+        }
+        "erDiagram" => {
+            er::lines(&mut built, lines)?;
             LensKind::State
         }
         "sequenceDiagram" => {
@@ -622,6 +627,9 @@ fn sequence_line(built: &mut Built, line: &str) -> Result<(), String> {
     let what = format!("Message {}", built.edges.len() + 1);
     built.edge(from, to, label(words), what)
 }
+
+#[path = "mermaid_er.rs"]
+mod er;
 
 #[cfg(test)]
 #[path = "mermaid_tests.rs"]

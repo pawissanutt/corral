@@ -312,11 +312,18 @@ fn papers(feed: &Feed, record: &mut TaskDetail) {
                 18 * HOUR + 30 * MINUTE,
             ),
         ],
-        "T-10" => &[(
-            ArtifactKind::Report,
-            "usage-coverage-report.md",
-            35 * MINUTE,
-        )],
+        "T-10" => &[
+            (
+                ArtifactKind::Report,
+                "usage-coverage-report.md",
+                35 * MINUTE,
+            ),
+            (
+                ArtifactKind::Reference,
+                "How usage reaches the page",
+                30 * MINUTE,
+            ),
+        ],
         "T-11" => &[(
             ArtifactKind::Evidence,
             "sidebar-80x24.png",

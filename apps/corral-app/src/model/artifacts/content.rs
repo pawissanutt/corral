@@ -25,6 +25,8 @@ const BINARY: &str =
 const HTML: &str = "An HTML page: the app shows its facts here rather than its markup. Open in browser shows it in a sandboxed copy; View source reads the markup.";
 /// Bytes of a page's start searched for an HTML signature.
 const SIGNATURE_BYTES: usize = 1024;
+/// Bytes of a text's start searched for Markdown structure.
+const MARKDOWN_SIGNATURE_BYTES: usize = 64 * 1024;
 const IMAGE: &str = "An image: open it full size to see it.";
 const TERMINAL_IMAGE: &str =
     "A terminal cannot draw images; open this artifact in the desktop or web app to see it.";
@@ -108,7 +110,7 @@ pub(crate) fn html_signature(text: &str) -> bool {
 }
 
 /// What the text is, from corrald's media type, an HTML signature, then the artifact's kind
-/// and title.
+/// and title, and last the text's own Markdown structure.
 fn shape(artifact: &Artifact, media: Option<&str>, page: &ArtifactPage) -> Shape {
     // corrald names `text/html` from the title alone, so neither it nor a `.html` suffix makes
     // a page: only the served bytes' own start does.
@@ -129,9 +131,64 @@ fn shape(artifact: &Artifact, media: Option<&str>, page: &ArtifactPage) -> Shape
         Shape::Diff
     } else if log || ends_with(title, &[".log"]) {
         Shape::Log
+    } else if original_text(page).is_some_and(|text| markdown_signature(&text)) {
+        Shape::Markdown
     } else {
         Shape::Text
     }
+}
+
+/// Whether the text reads as a Markdown document by its own structure: its first line that says
+/// something is an ATX heading (`# Plan`), or it holds a closed code fence (```` ``` ```` or
+/// `~~~`, a Mermaid diagram's included) or a table's delimiter row (`|---|---|`). A descriptive
+/// title (`Delivery plan`) names no suffix and corrald's media type follows the title, so this
+/// is what renders a titled agent document as Markdown rather than its source.
+pub(crate) fn markdown_signature(text: &str) -> bool {
+    let text = &text[..text.floor_char_boundary(MARKDOWN_SIGNATURE_BYTES)];
+    let mut lines = text.lines().map(str::trim_end);
+    let heading = |line: &str| {
+        let marks = line.bytes().take_while(|byte| *byte == b'#').count();
+        (1..=6).contains(&marks) && line[marks..].starts_with(' ') && line.len() > marks + 1
+    };
+    if lines
+        .clone()
+        .find(|line| !line.trim().is_empty())
+        .is_some_and(|line| heading(line.trim_start_matches('\u{feff}')))
+    {
+        return true;
+    }
+    let mut fence: Option<&str> = None;
+    for line in lines.by_ref() {
+        let trimmed = line.trim_start();
+        let indent = line.len() - trimmed.len();
+        match fence {
+            Some(open) if indent <= 3 && trimmed.trim_end() == open => return true,
+            Some(_) => {}
+            None if indent <= 3 && (trimmed.starts_with("```") || trimmed.starts_with("~~~")) => {
+                let mark = trimmed.as_bytes()[0];
+                let run = trimmed.bytes().take_while(|byte| *byte == mark).count();
+                fence = Some(&trimmed[..run]);
+            }
+            None if table_delimiter(trimmed) => return true,
+            None => {}
+        }
+    }
+    false
+}
+
+/// A GitHub table's delimiter row: cells of dashes, optionally aligned with colons, between
+/// pipes (`|---|:--:|`).
+fn table_delimiter(line: &str) -> bool {
+    let line = line.trim();
+    let Some(inner) = line.strip_prefix('|') else {
+        return false;
+    };
+    let inner = inner.strip_suffix('|').unwrap_or(inner);
+    !inner.is_empty()
+        && inner.split('|').all(|cell| {
+            let cell = cell.trim().trim_start_matches(':').trim_end_matches(':');
+            !cell.is_empty() && cell.bytes().all(|byte| byte == b'-')
+        })
 }
 
 /// A gate or run log line's colour: failures, then passes; anything else is ink.

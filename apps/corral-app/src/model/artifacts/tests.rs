@@ -454,3 +454,78 @@ fn markdown_draws_its_mermaid_fence_and_keeps_ordinary_code() {
     assert!(!mermaid::is_mermaid(fences[1].language.as_deref()));
     assert!(fences[1].code.contains("println!"));
 }
+
+/// An agent's diagram report keeps a descriptive title (no `.md`), so corrald names no media
+/// type; its own structure still makes it Markdown, its flowchart, sequence and ER fences read
+/// by the one renderer. A citation and the finder reach the same full-size render. Plain prose
+/// with a `#` comment line later on stays text.
+#[test]
+fn a_titled_markdown_artifact_renders_its_diagrams_from_every_route() {
+    let mut feed = Feed::default();
+    let report = artifact(
+        "T-9",
+        1,
+        ArtifactKind::Report,
+        "Worker submits → Gate → Review → Land",
+        1,
+    );
+    let text = "## Pipeline\n\n```mermaid\nflowchart LR\n  W[Worker submits] --> G{Gate} --> R[Review] --> L[Land]\n```\n\n```mermaid\nsequenceDiagram\n  Worker->>corrald: submit\n  corrald-->>Worker: gate receipt\n```\n\n```mermaid\nerDiagram\n  TASK ||--o{ ARTIFACT : records\n```\n\n```rust\nfn main() {}\n```\n";
+    served_as(&mut feed, &report, "", text, false);
+    let full = content(&feed, &report, Form::Desktop, true);
+    let Body::Markdown(words) = &full.body else {
+        panic!(
+            "a titled Markdown report renders as Markdown: {:?}",
+            full.body
+        );
+    };
+    let fences: Vec<_> = nsh_base::text_view::Parser::new()
+        .markdown(words)
+        .blocks
+        .into_iter()
+        .filter_map(|block| match block {
+            nsh_base::text_view::Block::CodeBlock(code) => Some(code),
+            _ => None,
+        })
+        .collect();
+    let kinds: Vec<_> = fences
+        .iter()
+        .filter(|code| mermaid::is_mermaid(code.language.as_deref()))
+        .map(|code| mermaid::parse(&code.code).map(|diagram| diagram.edges.len()))
+        .collect();
+    assert_eq!(kinds, [Ok(3), Ok(2), Ok(1)]);
+    assert_eq!(fences[3].language.as_deref(), Some("rust"));
+
+    let target = Query::parse("task:T-9").request(false);
+    served(&mut feed, &target, vec![vec![report.clone()]], false);
+    let mut state = State::default();
+    state.act(
+        Action::Cite {
+            reference: "T-9:1".into(),
+            section: None,
+        },
+        &feed,
+    );
+    let cited = page(&state, &feed, Form::Desktop)
+        .full
+        .expect("the citation opens it");
+    assert_eq!(cited.content, full);
+    state.act(Action::Close, &feed);
+    state.act(Action::Open("T-9:1".into()), &feed);
+    let found = page(&state, &feed, Form::Desktop)
+        .full
+        .expect("the finder opens it");
+    assert_eq!(found.content, full);
+
+    let prose = artifact("T-9", 2, ArtifactKind::Report, "Run notes", 2);
+    served_as(
+        &mut feed,
+        &prose,
+        "",
+        "Ran the gate.\n# not a heading here\n",
+        false,
+    );
+    assert!(matches!(
+        content(&feed, &prose, Form::Desktop, true).body,
+        Body::Text(_)
+    ));
+}

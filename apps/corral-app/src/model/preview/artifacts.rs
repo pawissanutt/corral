@@ -222,6 +222,8 @@ pub(super) fn content(feed: &Feed, reference: &str) -> Result<ArtifactPage, Stri
         ),
         ArtifactKind::Evidence => text("text/plain", evidence(&record, row)),
         _ if row.title.ends_with(".md") => text("text/markdown", markdown(feed, &record, row)),
+        // An agent's diagram titled in words: corrald names no media type for it.
+        ArtifactKind::Reference if !row.title.contains('.') => text("", DIAGRAMS.to_owned()),
         // corrald names the media type from the title, so a page titled in words is plain text.
         _ => text(
             if row.title.ends_with(".html") {
@@ -238,7 +240,7 @@ pub(super) fn content(feed: &Feed, reference: &str) -> Result<ArtifactPage, Stri
     Ok(ArtifactPage {
         task: task.into(),
         key: key.unwrap_or_default().to_string(),
-        media_type: Some(media_type),
+        media_type: (!media_type.is_empty()).then_some(media_type),
         encoding,
         content,
         truncated: false,
@@ -311,6 +313,8 @@ fn evidence(record: &TaskDetail, row: &Artifact) -> String {
 }
 
 /// How a report says its work went: a Mermaid flowchart beside an ordinary code fence.
+/// A descriptively titled agent diagram: a sequence and an ER diagram beside highlighted code.
+const DIAGRAMS: &str = "# How usage reaches the page\n\n```mermaid\nsequenceDiagram\n  participant App\n  App->>corrald: usage.series\n  corrald-->>App: daily buckets\n```\n\n```mermaid\nerDiagram\n  TASK ||--o{ RUN : starts\n  RUN ||--o{ USAGE : records\n  USAGE {\n    string model\n    int tokens\n  }\n```\n\n```rust\nlet total: u64 = buckets.iter().map(|b| b.tokens).sum();\n```\n";
 const FLOW: &str = "## Flow\n\n```mermaid\nflowchart LR\n  Brief[Brief] --> Work[Work] --> Gate{Gate}\n  Gate -->|pass| Review[Review]\n  Gate -->|fail| Work\n```\n\n```sh\njust check\n```\n\n";
 
 /// A summary, report or plan, written as the agents write them.

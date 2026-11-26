@@ -114,3 +114,47 @@ fn unreadable_diagrams_are_errors_not_pictures() {
     assert!(parse(&format!("graph TD\n{many}")).is_err());
     assert!(parse(&"x".repeat(MAX_SOURCE + 1)).is_err());
 }
+
+/// An ER diagram draws on the same canvas: entities with their attributes' names, and each
+/// relationship from the entity written first, its words carrying both ends' cardinality so the
+/// arrow does not drop what the crow's feet say. What it cannot read falls back to the source.
+#[test]
+fn an_er_diagram_reads_entities_attributes_and_cardinality() {
+    let diagram = parse(
+        "erDiagram\n  CUSTOMER ||--o{ ORDER : places\n  CUSTOMER {\n    string name PK\n    string email \"contact\"\n  }\n  ORDER ||--|{ LINE-ITEM : contains\n  p[\"Delivery address\"] }o..|| CUSTOMER : \"ships to\"\n  WAREHOUSE\n",
+    )
+    .unwrap();
+    assert_eq!(diagram.kind, LensKind::State);
+    assert_eq!(
+        labels(&diagram.nodes),
+        [
+            "CUSTOMER: name, email",
+            "ORDER",
+            "LINE-ITEM",
+            "Delivery address",
+            "WAREHOUSE"
+        ]
+    );
+    let edges: Vec<_> = diagram
+        .edges
+        .iter()
+        .map(|e| (e.ends.unwrap(), e.label.as_str()))
+        .collect();
+    assert_eq!(
+        edges,
+        [
+            ((0, 1), "places (exactly one to zero or more)"),
+            ((1, 2), "contains (exactly one to one or more)"),
+            ((3, 0), "ships to (zero or more to exactly one)"),
+        ]
+    );
+    assert_eq!(diagram.edges[2].detail.as_deref(), Some("non-identifying"));
+    for source in [
+        "erDiagram\n  CUSTOMER ||--o{ ORDER\n",
+        "erDiagram\n  CUSTOMER places ORDER\n",
+        "erDiagram\n  CUSTOMER {\n    string name\n",
+        "erDiagram\n  CUSTOMER only one to zero or more ORDER : places\n",
+    ] {
+        assert!(parse(source).is_err(), "{source:?} is drawn");
+    }
+}

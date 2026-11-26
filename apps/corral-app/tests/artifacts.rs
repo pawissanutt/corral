@@ -44,6 +44,21 @@ fn a_reports_mermaid_fence_draws_as_a_diagram_beside_its_code() {
     assert_eq!(app.screen().count("id:mermaid-source").unwrap(), 0);
 }
 
+/// An agent's diagram titled in words (no `.md`, no media type) is Markdown by its own
+/// structure: its sequence and ER fences draw on the one canvas and its Rust fence stays code.
+#[test]
+fn a_descriptively_titled_diagram_draws_its_sequence_and_er_fences() {
+    let mut app = finder("How usage reaches");
+    app.wait_for("id:artifact-preview >> id:mermaid-diagram >> id:lens-node-0")
+        .unwrap();
+    app.wait_for(
+        "id:artifact-preview >> text:let total: u64 = buckets.iter().map(|b| b.tokens).sum();",
+    )
+    .unwrap();
+    assert_eq!(app.screen().count("id:mermaid-diagram").unwrap(), 2);
+    assert_eq!(app.screen().count("id:mermaid-source").unwrap(), 0);
+}
+
 /// A standalone HTML report titled in words (no suffix, served as plain text) is a page by its
 /// own doctype: it offers Open in browser beside View source and Download.
 #[test]

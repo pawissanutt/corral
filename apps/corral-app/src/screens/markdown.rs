@@ -6,8 +6,8 @@
 //! assistant's.
 
 use nsh_base::text_view::{
-    Block, CodeBlock, Document, Inline, MarkdownOptions, Parser, Table, TextViewElement,
-    TextViewLinkPressEvent, TextViewPart as Part, TextViewParts, text_view,
+    Block, CodeBlock, CustomNode, Document, Inline, MarkdownOptions, Parser, Table,
+    TextViewElement, TextViewLinkPressEvent, TextViewPart as Part, TextViewParts, text_view,
 };
 use nsh_core::prelude::*;
 
@@ -236,9 +236,12 @@ fn record_blocks(table: &Table) -> Vec<Block> {
 /// A fenced code block without its fences: the language muted on its own row, then the code in
 /// mono, scrolling sideways on a sunk fill; a terminal indents the code two Cells.
 fn code_block(app: AppState, code: &CodeBlock) -> AnyElement {
-    let language = code
-        .language
-        .as_deref()
+    plain_code(app, code.language.as_deref(), &code.code)
+}
+
+/// [`code_block`] from its language and code.
+fn plain_code(app: AppState, language: Option<&str>, code: &str) -> AnyElement {
+    let language = language
         .map(str::trim)
         .filter(|language| !language.is_empty())
         .map(str::to_owned);
@@ -247,7 +250,7 @@ fn code_block(app: AppState, code: &CodeBlock) -> AnyElement {
             .children(language.map(term::quiet))
             .child(
                 view().pl(term::cells(2.0)).child(
-                    text(code.code.clone())
+                    text(code.to_owned())
                         .select_text()
                         .text_color(color(Token::Ink)),
                 ),
@@ -272,7 +275,7 @@ fn code_block(app: AppState, code: &CodeBlock) -> AnyElement {
         .child(
             scroll().horizontal().child(
                 view().flex_shrink_0().px(px(10.0)).py(px(8.0)).child(
-                    text(code.code.clone())
+                    text(code.to_owned())
                         .select_text()
                         .flex_shrink_0()
                         .font_family(FONT_MONO)
@@ -303,7 +306,8 @@ pub(crate) fn markdown_without_images(app: AppState, markdown: &str) -> AnyEleme
 }
 
 /// A saved artifact's Markdown: laid out as `markdown` is, with each Mermaid fence drawn as
-/// its diagram where the form can draw one and read as its source otherwise.
+/// its diagram where the form can draw one and read as its source otherwise, and every other
+/// fence as the text view's own code block, syntax-highlighted by its language tag.
 pub(crate) fn artifact_markdown(app: AppState, markdown: &str) -> AnyElement {
     cited(app, markdown, false, true, false, true)
 }
@@ -382,7 +386,10 @@ fn laid_out(
     diagrams: bool,
     open: &[String],
 ) -> AnyElement {
-    let document = document(app, markdown, streaming, images, chat, open);
+    let mut document = document(app, markdown, streaming, images, chat, open);
+    if diagrams {
+        diagram_nodes(&mut document.blocks);
+    }
     shown(app, text_view().document(document), diagrams)
 }
 
@@ -422,26 +429,63 @@ fn document(
     document
 }
 
+/// The name of the node a Mermaid fence becomes in an artifact's document.
+const DIAGRAM: &str = "corral-mermaid";
+
+/// Every Mermaid fence among `blocks`, at any depth, as a [`DIAGRAM`] node holding its source,
+/// so the app draws it while every other fence keeps the text view's highlighted code block.
+pub(crate) fn diagram_nodes(blocks: &mut [Block]) {
+    for block in blocks {
+        match block {
+            Block::CodeBlock(code) if mermaid::is_mermaid(code.language.as_deref()) => {
+                *block = Block::Custom(
+                    CustomNode::new(DIAGRAM)
+                        .with_text(std::mem::take(&mut code.code))
+                        .with_attribute("language", code.language.clone().unwrap_or_default()),
+                );
+            }
+            Block::Blockquote { children, .. } | Block::Details { children, .. } => {
+                diagram_nodes(children);
+            }
+            Block::List { items, .. } => {
+                for item in items {
+                    diagram_nodes(&mut item.children);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 /// A text view of the app's: its words select and copy with the platform's own gestures and
 /// commands (a drag selects without following a link; a press on one still opens it), its
 /// links open what they cite, its code blocks are the app's (with `diagrams`, a Mermaid fence
-/// is its diagram).
+/// is its diagram and other fences keep the text view's highlighted code blocks).
 fn shown(app: AppState, words: TextViewElement, diagrams: bool) -> AnyElement {
-    let rendered = words
+    let words = words
         .selectable(true)
         .on_link_press(move |press: &TextViewLinkPressEvent| {
             if let Some(spelled) = press.url.strip_prefix(cite::SCHEME) {
                 app.open_cite(spelled);
             }
-        })
-        .render_code_block(move |code: &CodeBlock| {
-            if diagrams && mermaid::is_mermaid(code.language.as_deref()) {
-                super::mermaid::block(app, code, code_block(app, code))
-            } else {
-                code_block(app, code)
-            }
-        })
-        .into_element();
+        });
+    let rendered = if diagrams {
+        words
+            .render_custom(move |node: &CustomNode| {
+                let language = node.attributes.get("language").map(String::as_str);
+                let source = plain_code(app, language, &node.text);
+                if node.name == DIAGRAM {
+                    super::mermaid::block(app, &node.text, source)
+                } else {
+                    source
+                }
+            })
+            .into_element()
+    } else {
+        words
+            .render_code_block(move |code: &CodeBlock| code_block(app, code))
+            .into_element()
+    };
     if app.form == Form::Terminal {
         crate::ui::composer::terminal_selectable(app, view().selectable(true))
             .child(rendered)

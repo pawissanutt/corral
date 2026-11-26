@@ -6,7 +6,6 @@
 
 use std::rc::Rc;
 
-use nsh_base::text_view::CodeBlock;
 use nsh_core::prelude::*;
 
 use crate::model::Form;
@@ -17,9 +16,9 @@ use crate::ui::kit::text::dim;
 
 const ELSEWHERE: &str = "A Mermaid diagram, drawn in the desktop and web app; its source follows.";
 
-/// The fence drawn: its diagram, else a note and `source` (the fence as a code block).
-pub(crate) fn block(app: AppState, code: &CodeBlock, source: AnyElement) -> AnyElement {
-    let note = match (app.form, mermaid::parse(&code.code)) {
+/// The fence's `code` drawn: its diagram, else a note and `source` (the fence as a code block).
+pub(crate) fn block(app: AppState, code: &str, source: AnyElement) -> AnyElement {
+    let note = match (app.form, mermaid::parse(code)) {
         (Form::Desktop, Ok(diagram)) => {
             let shown = computed(move || Some(diagram.clone()));
             let picked = computed(|| None);
