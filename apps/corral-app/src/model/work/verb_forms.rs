@@ -45,6 +45,8 @@ fn text(label: &'static str, placeholder: &'static str, value: impl Into<String>
         value: value.into(),
         multiline: false,
         choices: Vec::new(),
+        follows: None,
+        base_task: None,
         suggestions: Vec::new(),
         tags: false,
     }
@@ -145,12 +147,9 @@ fn tags(task: Option<&Task>, ctx: &FormContext) -> VerbField {
     }
 }
 
-/// The project: one button per configured project and None, else free text.
+/// The project: configured ids and None, retaining an unavailable saved id.
 fn project(ctx: &FormContext, value: Option<&String>) -> VerbField {
     let value = value.cloned().unwrap_or_default();
-    if ctx.projects.is_empty() {
-        return text("Project", "Project id; empty for none", value);
-    }
     let mut ids = vec![String::new()];
     ids.extend(ctx.projects.iter().cloned());
     if !ids.contains(&value) {
@@ -158,6 +157,78 @@ fn project(ctx: &FormContext, value: Option<&String>) -> VerbField {
     }
     let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
     pick("Project", &ids, value.clone())
+}
+
+/// A task's optional profile or base, including a saved value no longer served.
+fn optional_choice(label: &'static str, options: &[String], value: String) -> VerbField {
+    let mut choices = vec![Choice {
+        value: String::new(),
+        label: "none".into(),
+    }];
+    choices.extend(
+        options
+            .iter()
+            .filter(|option| !option.is_empty())
+            .map(|option| Choice {
+                value: option.clone(),
+                label: option.clone(),
+            }),
+    );
+    if !value.is_empty() && !options.contains(&value) {
+        choices.push(Choice {
+            value: value.clone(),
+            label: format!("{value} (kept)"),
+        });
+    }
+    VerbField {
+        choices,
+        ..text(label, "", value)
+    }
+}
+
+/// Local branches for the selected project, with saved or selected values retained.
+pub fn base_choices(feed: &Feed, project: &str, task: Option<&str>, kept: &[&str]) -> Vec<Choice> {
+    let own_branch = task.and_then(|id| {
+        let effective = feed.projects.get(project)?.effective.as_ref()?;
+        Some(format!("{}{id}", effective.branch_prefix))
+    });
+    let mut choices = vec![Choice {
+        value: String::new(),
+        label: "Project's base".into(),
+    }];
+    for value in crate::model::projects::branches(feed, (!project.is_empty()).then_some(project)) {
+        if !value.is_empty()
+            && own_branch.as_ref() != Some(&value)
+            && !choices.iter().any(|choice| choice.value == value)
+        {
+            choices.push(Choice {
+                label: value.clone(),
+                value,
+            });
+        }
+    }
+    for value in kept.iter().copied().filter(|value| !value.is_empty()) {
+        if !choices.iter().any(|choice| choice.value == value) {
+            choices.push(Choice {
+                value: value.into(),
+                label: format!("{value} (kept)"),
+            });
+        }
+    }
+    choices
+}
+
+fn task_base(
+    ctx: &FormContext,
+    value: String,
+    project_index: usize,
+    task: Option<&Task>,
+) -> VerbField {
+    let mut field = optional_choice("Base", &ctx.branches, value);
+    field.choices[0].label = "Project's base".into();
+    field.follows = Some(project_index);
+    field.base_task = task.map(|task| task.id.clone());
+    field
 }
 
 /// The worker profile a dispatch runs: every configured profile, the one the engine would pick
@@ -232,16 +303,12 @@ pub(super) fn fields(verb: Verb, task: Option<&Task>, ctx: &FormContext) -> Vec<
             size(task),
             difficulty(task),
             tags(task, ctx),
-            text(
+            optional_choice(
                 "Profile",
-                "Pinned worker profile; empty clears it",
+                &ctx.profiles,
                 of(task.and_then(|task| task.profile.as_ref())),
             ),
-            text(
-                "Base",
-                "Branch to start from and land onto",
-                of(task.and_then(|task| task.base.as_ref())),
-            ),
+            task_base(ctx, of(task.and_then(|task| task.base.as_ref())), 2, task),
             text(
                 "Parent",
                 "Parent task id",
@@ -307,7 +374,7 @@ pub(super) fn fields(verb: Verb, task: Option<&Task>, ctx: &FormContext) -> Vec<
             tags(None, ctx),
             text("Parent", "Parent task id, for a plan's child", ""),
             text("Depends on", "Task ids, comma separated", ""),
-            text("Base", "Empty uses the project's base", ""),
+            task_base(ctx, String::new(), 3, None),
         ],
         Verb::Gate | Verb::Stop | Verb::Drop | Verb::Reopen => Vec::new(),
     }
@@ -442,6 +509,86 @@ impl State {
         let mut act = Act::new(&mut self.ids, op, force);
         act.confirmed = confirmed;
         vec![Effect::Act(act)]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn base_choices_follow_project_and_keep_prior_selection() {
+        let mut feed = Feed::default();
+        feed.projects.insert(
+            "site".into(),
+            corral_protocol::rows::ProjectRow {
+                id: "site".into(),
+                local_branches: Some(vec!["main".into(), "release".into()]),
+                ..Default::default()
+            },
+        );
+        let choices = base_choices(&feed, "site", None, &["old", "old", "main"]);
+        assert_eq!(
+            choices
+                .iter()
+                .map(|choice| choice.value.as_str())
+                .collect::<Vec<_>>(),
+            ["", "main", "release", "old"]
+        );
+        assert_eq!(base_choices(&feed, "", None, &["old"]).len(), 2);
+        let project = feed.projects.get_mut("site").unwrap();
+        project.effective = Some(corral_protocol::rows::EffectiveProjectSettings {
+            branch_prefix: "work/".into(),
+            ..Default::default()
+        });
+        project
+            .local_branches
+            .as_mut()
+            .unwrap()
+            .push("work/T-1".into());
+        assert!(
+            !base_choices(&feed, "site", Some("T-1"), &[])
+                .iter()
+                .any(|c| c.value == "work/T-1")
+        );
+        assert!(
+            base_choices(&feed, "site", Some("T-1"), &["work/T-1"])
+                .iter()
+                .any(|c| c.value == "work/T-1")
+        );
+    }
+
+    #[test]
+    fn task_choices_retain_unavailable_values_and_allow_clearing() {
+        let task = Task {
+            profile: Some("retired".into()),
+            base: Some("old-branch".into()),
+            project: Some("old-project".into()),
+            ..Task::default()
+        };
+        let ctx = FormContext {
+            profiles: vec!["worker".into()],
+            branches: vec!["main".into()],
+            projects: vec!["site".into()],
+            ..FormContext::default()
+        };
+        let edit_fields = fields(Verb::Edit, Some(&task), &ctx);
+        for (index, saved, available) in [
+            (2, "old-project", "site"),
+            (8, "retired", "worker"),
+            (9, "old-branch", "main"),
+        ] {
+            let field = &edit_fields[index];
+            assert_eq!(field.value, saved);
+            for value in ["", saved, available] {
+                assert!(field.choices.iter().any(|choice| choice.value == value));
+            }
+        }
+        assert!(
+            !fields(Verb::NewTask, None, &FormContext::default())[3]
+                .choices
+                .is_empty()
+        );
     }
 }
 

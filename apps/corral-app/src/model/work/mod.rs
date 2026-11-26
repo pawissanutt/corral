@@ -12,7 +12,7 @@ mod views;
 mod when;
 
 pub use verb_context::FormContext;
-pub use verb_forms::{STATUSES, VerbComposer};
+pub use verb_forms::{STATUSES, VerbComposer, base_choices};
 pub use verbs::{
     Choice, Record, Verb, VerbAction, VerbField, palette_record, record_verbs, session_task,
 };

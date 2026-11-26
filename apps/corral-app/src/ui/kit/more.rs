@@ -24,7 +24,7 @@ use crate::ui::kit::marks::hue_ink;
 use crate::ui::kit::overlay::{Modal, counted, counted_context, modal};
 use crate::ui::kit::suggest::suggestions;
 use crate::ui::kit::walk::walk;
-use crate::ui::kit::{entry, tags};
+use crate::ui::kit::{choice, entry, tags};
 use crate::ui::term;
 use crate::ui::tokens::{FONT_TEXT, Token, color};
 
@@ -77,7 +77,7 @@ pub fn more_menu(app: AppState, record: Record, trigger: AnyElement) -> AnyEleme
 
 /// The menu's surface for the form: a raised card on desktop, the sheet's top on the phone, a
 /// framed box in a terminal.
-fn popup(form: Form) -> impl Fn(StyleRefinement) -> StyleRefinement + 'static {
+pub(crate) fn popup(form: Form) -> impl Fn(StyleRefinement) -> StyleRefinement + 'static {
     move |s| {
         let s = s
             .bg(color(Token::Surface))
@@ -98,7 +98,7 @@ fn popup(form: Form) -> impl Fn(StyleRefinement) -> StyleRefinement + 'static {
 }
 
 /// The phone sheet's scrim, as the modal sheet's.
-fn backdrop(s: StyleRefinement) -> StyleRefinement {
+pub(crate) fn backdrop(s: StyleRefinement) -> StyleRefinement {
     s.bg(color(Token::Shell).opacity(0.5))
 }
 
@@ -544,7 +544,8 @@ fn composer(app: AppState) -> Modal {
         .map(|(index, field)| {
             let caption = entry::caption(form, field.label);
             if !field.choices.is_empty() {
-                return choice_row(app, field, index, values, caption);
+                let offered = choice::offered(app, field, index, values);
+                return choice::choice_field(app, field, index, values, caption, offered);
             }
             if field.tags {
                 return tags::tag_row(app, field, index, values, tag_draft, send);
@@ -672,83 +673,4 @@ fn composer(app: AppState) -> Modal {
         done: None,
         confirm: None,
     }
-}
-
-/// A closed set of values (a status, a verdict, a profile) as one button each, the chosen one
-/// filled: a press picks it, Tab walks them, and Return or Space presses the focused one. A
-/// chosen button is drawn anew in its filled look, so the keyboard focus is put back on it.
-/// test_id `seg-<field>-<value>`, the field label lower-cased with dashes, `none` for an empty
-/// value.
-fn choice_row(
-    app: AppState,
-    field: &work::VerbField,
-    index: usize,
-    values: Signal<Vec<String>>,
-    caption: Text,
-) -> AnyElement {
-    let group = field.label.to_lowercase().replace(' ', "-");
-    // Runs under the row, which outlives the buttons a choice redraws.
-    let chosen_at = stored(None::<ElementRef>);
-    let picks = signal(0u64);
-    effect(move || {
-        if picks.get() > 0
-            && let Some(handle) = chosen_at.get()
-        {
-            after_answer(move || handle.focus());
-        }
-    });
-    let buttons: Vec<AnyElement> = field
-        .choices
-        .iter()
-        .map(|choice| {
-            let shown = if choice.value.is_empty() {
-                "none"
-            } else {
-                choice.value.as_str()
-            };
-            let id = format!("seg-{group}-{shown}");
-            let work::Choice { value, label } = choice.clone();
-            let handle = element_ref();
-            dynamic(move || {
-                let chosen = values.with(|values| values.get(index) == Some(&value));
-                let value = value.clone();
-                button_with(
-                    app,
-                    label.clone(),
-                    if chosen {
-                        ButtonKind::Primary
-                    } else {
-                        ButtonKind::Ghost
-                    },
-                    ButtonOptions {
-                        focus: Some(handle),
-                        ..ButtonOptions::default()
-                    },
-                    id.clone(),
-                    move || {
-                        values.update(|values| {
-                            if let Some(slot) = values.get_mut(index) {
-                                slot.clone_from(&value);
-                            }
-                        });
-                        chosen_at.replace(Some(handle));
-                        picks.update(|picks| *picks += 1);
-                    },
-                )
-            })
-        })
-        .collect();
-    view()
-        .gap(px(if app.form == Form::Terminal { 0.0 } else { 6.0 }))
-        .child(caption)
-        .child(
-            view()
-                .flex_row()
-                .flex_wrap()
-                .gap(px(if app.form == Form::Terminal { 8.0 } else { 6.0 }))
-                .role(AccessibilityRole::Radiogroup)
-                .label(field.label)
-                .children(buttons),
-        )
-        .into_element()
 }

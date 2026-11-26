@@ -220,6 +220,42 @@ fn a_new_task_keeps_its_tags_exactly_and_the_filter_finds_it() {
         .unwrap();
 }
 
+/// A new task's Base offered branches of no project, or kept those of the project the form
+/// opened with: the dropdown lists the branches of the project chosen in the form, read again
+/// when the Project dropdown changes, and the chosen branch is what the trigger then names.
+#[test]
+fn a_new_tasks_base_offers_the_branches_of_the_project_chosen_in_the_form() {
+    // New task's fields: Project is the fourth, Base the twelfth (`model::work::verb_forms`).
+    const PROJECT: &str = "id:field-verb-3";
+    const BASE: &str = "id:field-verb-11";
+    let gone = Duration::from_secs(2);
+    let mut app = preview("tasks");
+    app.wait_for("id:btn-new-task").unwrap();
+    app.press("id:btn-new-task").unwrap();
+    app.wait_for("id:field-verb-0").unwrap();
+    app.type_text("id:field-verb-0", "Pin zoom presets")
+        .unwrap();
+    app.press(BASE).unwrap();
+    app.wait_for("id:seg-base-none").unwrap();
+    assert!(app.wait_for_gone("id:seg-base-main", gone).is_ok());
+    app.press("id:seg-base-none").unwrap();
+    app.wait_for_gone("id:seg-base-none", Duration::from_secs(5))
+        .unwrap();
+    app.press(PROJECT).unwrap();
+    app.press("id:seg-project-corral").unwrap();
+    app.wait_for_gone("id:seg-project-corral", Duration::from_secs(5))
+        .unwrap();
+    app.press(BASE).unwrap();
+    app.wait_for("id:seg-base-release/0.9").unwrap();
+    app.press("id:seg-base-release/0.9").unwrap();
+    app.wait_for_gone("id:seg-base-none", Duration::from_secs(5))
+        .unwrap();
+    app.wait_for("text:release/0.9").unwrap();
+    app.press("id:btn-verb-send").unwrap();
+    app.wait_for_gone("id:verb", Duration::from_secs(5))
+        .unwrap();
+}
+
 /// Changes › Impact draws T-11's change on the System page's map at the task's head; its
 /// touched module opens the package's level with the module selected, and Open in System opens
 /// Activity › System at that level with the module selected.

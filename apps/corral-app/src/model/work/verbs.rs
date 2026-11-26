@@ -197,8 +197,12 @@ pub struct VerbField {
     /// Markdown or prose of several lines (a body, a comment, notes): drawn as a multi-line
     /// field where Return breaks the line, and sent with its line breaks as typed.
     pub multiline: bool,
-    /// A closed set of values drawn as one button each; empty for free text.
+    /// A closed set of values; empty for free text.
     pub choices: Vec<Choice>,
+    /// A base field follows the project value at this field index.
+    pub follows: Option<usize>,
+    /// The edited task, whose own branch cannot be selected as its base.
+    pub base_task: Option<String>,
     /// Values a free-text field offers beside what is typed (a project's local branches),
     /// narrowed to the typed words by [`crate::model::projects::suggest`].
     pub suggestions: Vec<String>,

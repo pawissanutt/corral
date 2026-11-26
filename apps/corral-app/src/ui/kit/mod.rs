@@ -9,6 +9,7 @@ pub mod band;
 pub mod board_status;
 pub mod button;
 pub mod chip;
+pub mod choice;
 pub mod entry;
 pub mod filters;
 pub mod hint;
