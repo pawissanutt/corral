@@ -468,9 +468,13 @@ fn shown(app: AppState, words: TextViewElement, diagrams: bool) -> AnyElement {
     let words = words
         .selectable(true)
         .on_link_press(move |press: &TextViewLinkPressEvent| {
-            if let Some(spelled) = press.url.strip_prefix(cite::SCHEME) {
-                app.open_cite(spelled);
-            }
+            activate_link(
+                &press.url,
+                |spelled| app.open_cite(spelled),
+                |url| {
+                    drop(nsh_core::element::open_url(url.to_owned()));
+                },
+            );
         });
     let rendered = if diagrams {
         words
@@ -498,9 +502,48 @@ fn shown(app: AppState, words: TextViewElement, diagrams: bool) -> AnyElement {
     }
 }
 
+fn activate_link(url: &str, mut cite: impl FnMut(&str), mut external: impl FnMut(&str)) {
+    if let Some(spelled) = url.strip_prefix(cite::SCHEME) {
+        cite(spelled);
+    } else if url.split_once(':').is_some_and(|(scheme, rest)| {
+        (scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https"))
+            && rest.starts_with("//")
+    }) {
+        external(url);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn link_activation_routes_external_and_internal_separately() {
+        use std::cell::RefCell;
+        let actions = RefCell::new(Vec::new());
+        for url in [
+            "https://www.w3.org/TR/scxml/?a=1#x",
+            "http://example.org/",
+            "cite:T-12",
+            "javascript:alert(1)",
+            "mailto:a@example.org",
+            "//example.org",
+        ] {
+            activate_link(
+                url,
+                |s| actions.borrow_mut().push(("cite", s.to_owned())),
+                |s| actions.borrow_mut().push(("external", s.to_owned())),
+            );
+        }
+        assert_eq!(
+            *actions.borrow(),
+            vec![
+                ("external", "https://www.w3.org/TR/scxml/?a=1#x".into()),
+                ("external", "http://example.org/".into()),
+                ("cite", "T-12".into())
+            ]
+        );
+    }
 
     #[test]
     fn record_image_cells_remain_standalone() {
