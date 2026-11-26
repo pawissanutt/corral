@@ -8,6 +8,7 @@ import type { FleetRuntime } from "./runtime.ts";
 export function formatChildReport(child: ChildSnapshot): string {
   const files = child.edits.length ? child.edits.map(edit => `- ${edit.path}${edit.outside ? " [outside owns]" : ""}`).join("\n") : "- none";
   const usage = [`${child.usage.input} input`, `${child.usage.output} output`, `${child.usage.turns} turns`,
+    ...(child.usage.toolCalls === undefined ? [] : [`${child.usage.toolCalls} tool calls`]),
     ...(child.usage.cost === undefined ? [] : [`$${child.usage.cost.toFixed(6)}`]),
     ...(child.usage.contextPercent === undefined ? [] : [`${child.usage.contextPercent.toFixed(1)}% context`])].join(", ");
   return `## ${child.id}: ${child.state}\nFiles edited:\n${files}\nUsage: ${usage}${child.error ? `\nError: ${child.error}` : ""}\n\n${child.report ?? "No report."}`;
@@ -58,6 +59,7 @@ export function fleetTools(runtime: FleetRuntime, allowedKinds: readonly ChildKi
           "Use task for substantial independent implementation, not trivial edits. Give children non-overlapping owned files, the full requirements and expected checks; they inherit none of your conversation.",
           "Keep useful separate work for yourself. Use after only for real dependencies, and unique lowercase ids for the entire session. Choose a configured profile or an approved provider/model.",
         ]),
+        ...(allowedKinds.includes("explore") ? ["Explore children accept effort quick, standard (default) or deep. Check each explore report's tool-call count: a broad question answered with few calls deserves verification or a deep retry."] : []),
         "Collect and reconcile every child report and outside-ownership edit before claiming completion. Do not run shared checks while children are still editing. Children grant no review or board authority.",
       ],
       parameters: Type.Object({ ...(guidance === "build" ? { context: Type.Optional(Type.String({ maxLength: 8192 })) } : {}), agents: Type.Array(Type.Object({
@@ -66,6 +68,8 @@ export function fleetTools(runtime: FleetRuntime, allowedKinds: readonly ChildKi
         brief: Type.String({ minLength: 1, maxLength: 32768 }), owns: Type.Array(Type.String()),
         ...(guidance === "build" ? { accept: Type.Optional(Type.String({ maxLength: 2000 })) } : {}),
         profile: Type.Optional(Type.String()), after: Type.Optional(Type.Array(Type.String())),
+        ...(allowedKinds.includes("explore") ? { effort: Type.Optional(Type.Union([Type.Literal("quick"), Type.Literal("standard"), Type.Literal("deep")],
+          { description: "Explore only: research depth; a thinking floor that never lowers the profile's effort" })) } : {}),
       }, { additionalProperties: false }), { minItems: 1, maxItems: MAX_CHILDREN_PER_CALL }) }, { additionalProperties: false }),
       async execute(id, params: { agents: ChildSpec[]; context?: string }, signal) {
         const agents = params.agents.map(agent => {

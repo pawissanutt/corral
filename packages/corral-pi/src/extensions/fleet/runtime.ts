@@ -368,6 +368,9 @@ export class FleetRuntime implements FleetControl {
       const allowed = this.options.allowedKinds ?? ["slice", "explore", "review"];
       const kind = spec.kind ?? (allowed.includes("slice") ? "slice" : "explore");
       if (!allowed.includes(kind)) throw new Error(`Child kind ${kind} is disabled`);
+      if (spec.effort !== undefined && (kind !== "explore" || !["quick", "standard", "deep"].includes(spec.effort))) {
+        throw new Error(`Child ${spec.id}: effort applies only to explore children (quick, standard or deep)`);
+      }
       if (["parent", "all", "owner"].includes(spec.id)) throw new Error(`Reserved child id: ${spec.id}`);
       batch.set(spec.id, spec);
       models.set(spec.id, resolveModel(spec.profile, this.choices, this.options.approved));
@@ -405,11 +408,13 @@ export class FleetRuntime implements FleetControl {
       history.begin(spec.id, "explore", model.model, spec.brief);
       const bucket = Math.max(0, Math.floor((at - this.startedAt!) / 5000));
       const researchSettings = spec.kind === "explore" ? this.options.research?.settings : undefined;
-      const maxTurns = researchSettings ? researchBudget(execution?.research ?? {}, researchSettings.max_turns).maxTurns : this.options.maxTurns;
+      const research: ResearchOptions | undefined = researchSettings
+        ? { ...execution?.research, ...(spec.effort && !execution?.research.effort ? { effort: spec.effort } : {}) } : undefined;
+      const maxTurns = research && researchSettings ? researchBudget(research, researchSettings.max_turns).maxTurns : this.options.maxTurns;
       const timeoutSecs = researchSettings?.timeout_secs ?? this.options.timeoutSecs;
       const entry: Entry = { spec, model, controller: new AbortController(), history, settled: Promise.withResolvers<void>(), modelVersion: 0, pulseBucket: 0, historyBucket: bucket,
         request: execution?.request ?? randomUUID(),
-        research: researchSettings ? execution?.research ?? {} : undefined,
+        research,
         maxTurns, deadlineAt: timeoutSecs === undefined ? undefined : this.now() + timeoutSecs * 1000,
         serviceTier: researchSettings?.service_tier === "priority" ? "priority" : undefined, prepared: false, started: false,
         complete: false, collected: execution?.blocking ?? false, collectors: 0, delivered: false, sent: 0, inbox: [],

@@ -85,6 +85,7 @@ function fixture() {
   const messages: AgentMessage[] = [];
   const steers: string[] = [];
   const starts: string[] = [];
+  const prompts: string[] = [];
   let tools: string[] = [];
   let level: string | undefined;
   let prompt = "";
@@ -96,7 +97,7 @@ function fixture() {
     sessionId: "child-session", messages,
     agent: { streamFunction(_model: unknown, _context: unknown, options: { serviceTier?: string }) { streamTier = options.serviceTier; } },
     subscribe() { return () => {}; }, async bindExtensions() {},
-    async prompt(text: string) { prompt = text; await body(); },
+    async prompt(text: string) { prompt = text; prompts.push(text); await body(); },
     async abort() { aborted = true; }, async steer(text: string) { steers.push(text); },
     async setModel() {}, setThinkingLevel() {},
     getLastAssistantText() { return messages.filter(message => message.role === "assistant").at(-1)?.content.filter(block => block.type === "text").map(block => block.text).join("\n"); },
@@ -128,7 +129,7 @@ function fixture() {
   const options: SdkRunnerOptions = { sdk, models: { getModel: () => ({}) } as unknown as ModelRuntime,
     context: { dir, session: { worktree: dir, name: "fixture" }, settings: { maxParallel: 1, profiles: [] } },
     agentDir: dir, localTools: [] };
-  return { dir, hooks, options, session, messages, registered, active, starts, steers,
+  return { dir, hooks, options, session, messages, registered, active, starts, steers, prompts,
     get tools() { return tools; }, get level() { return level; }, get prompt() { return prompt; }, get opened() { return opened; },
     get aborted() { return aborted; }, get streamTier() { return streamTier; },
     body(run: () => Promise<void>) { body = run; },
@@ -158,6 +159,47 @@ test("a Build Explore profile sends Codex priority and keeps its configured effo
       model, { ...f.hooks, execution: undefined }, new AbortController().signal);
     expect((await run.done).failed).toBeUndefined();
   } finally { f.cleanup(); }
+});
+
+test("a research preset is a thinking floor and never lowers a stronger profile effort", async () => {
+  for (const [effort, research, spec, expected] of [
+    ["high", {}, undefined, "high"], // worker task explore: standard used to force low
+    ["low", undefined, "deep", "high"], // Build explore asking for deep depth
+    [undefined, { effort: "quick" }, undefined, "off"],
+  ] as const) {
+    const f = fixture();
+    try {
+      const hooks = research ? { ...f.hooks, execution: { ...f.hooks.execution!, research } } : { ...f.hooks, execution: undefined };
+      const run = createSdkRunner({ ...f.options, bound: research !== undefined }).run(
+        { id: "explore", title: "Explore", brief: "Read the code", owns: [], kind: "explore", ...(spec ? { effort: spec } : {}) },
+        { profile: "fixture", provider: "openai-codex", model: "fixture", ...(effort ? { effort } : {}) }, hooks, new AbortController().signal);
+      await run.done;
+      expect(f.level).toBe(expected);
+    } finally { f.cleanup(); }
+  }
+});
+
+test("a thin research answer gets one gap check with project orientation, a quick one does not", async () => {
+  for (const effort of ["standard", "quick"] as const) {
+    const f = fixture();
+    mkdirSync(join(f.dir, "src", "lib"), { recursive: true });
+    f.hooks.execution!.research = { effort };
+    f.body(async () => { f.messages.push(answer(`Answer ${f.prompts.length}`)); });
+    try {
+      const run = createSdkRunner({ ...f.options, bound: true, parentLoadout: ["read"] }).run(
+        { id: "explore", title: "Explore", brief: "Trace the path", owns: [], kind: "explore" },
+        { profile: "fixture", provider: "openai-codex", model: "fixture" }, f.hooks, new AbortController().signal);
+      const done = await run.done;
+      expect(f.prompts[0]).toContain("src/: lib/");
+      if (effort === "quick") {
+        expect(f.prompts).toHaveLength(1);
+      } else {
+        expect(f.prompts).toHaveLength(2);
+        expect(f.prompts[1]).toContain("Before you finish");
+        expect(done).toMatchObject({ report: "Answer 2", researchReport: { status: "completed", depth: { turns: 2, toolCalls: 0 } } });
+      }
+    } finally { f.cleanup(); }
+  }
 });
 
 function childImage(onRequest: () => void) {

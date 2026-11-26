@@ -81,13 +81,13 @@ test("disabled, retired and bypassed auxiliary calls create no billing records",
 });
 
 test("empty and token-limited research cannot masquerade as completed findings", () => {
-  expect(researchResult([], "completed").report).toEqual({ status: "failed", stopReason: "empty_response" });
+  expect(researchResult([], "completed").report).toMatchObject({ status: "failed", stopReason: "empty_response" });
   const cutOff: AssistantMessage = { role: "assistant", api: "openai-responses", provider: "fixture", model: "fixture", timestamp: 1,
     content: [{ type: "thinking", thinking: "PRIVATE_REASONING" }, { type: "text", text: "source.ts:3 shows a partial" }],
     stopReason: "length", usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
   const result = researchResult([cutOff], "completed");
-  expect(result.report).toEqual({ status: "partial", stopReason: "output_limit" });
+  expect(result.report).toEqual({ status: "partial", stopReason: "output_limit", depth: { turns: 1, toolCalls: 0, resultBytes: 0 } });
   expect(result.text).toContain("source.ts:3");
   expect(result.text).not.toContain("PRIVATE_REASONING");
 });

@@ -164,6 +164,8 @@ export interface ChildSpec {
   readonly profile?: string;
   /** Child ids that must finish first. */
   readonly after?: readonly string[];
+  /** Explore only: research depth. It sets a thinking floor; a stronger profile effort is kept. */
+  readonly effort?: "quick" | "standard" | "deep";
 }
 
 export interface ChildEdit {
@@ -181,6 +183,8 @@ export interface ChildUsage {
   readonly cost?: number;
   readonly contextPercent?: number;
   readonly turns: number;
+  /** Tool calls started, including calls inside Code Mode cells; absent in older records. */
+  readonly toolCalls?: number;
 }
 
 export interface ChildQuestion {

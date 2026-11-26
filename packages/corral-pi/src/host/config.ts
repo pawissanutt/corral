@@ -154,8 +154,13 @@ const ABILITIES: Readonly<Record<"worker" | "reviewer" | "assistant" | "build", 
 };
 
 const ExploreConfigSchema = z.strictObject({
-  model: z.string().max(256).refine(selector => qualifiedModel(selector) !== undefined, "expected a known <provider>/<model>"),
+  model: z.string().max(256).refine(selector => qualifiedModel(selector) !== undefined, "expected a known <provider>/<model>").optional(),
+  max_turns: z.number().int().min(1).max(64).optional(),
+  timeout_secs: z.number().int().min(1).max(600).optional(),
 }).optional();
+/** Research ceilings, not targets: most runs stop well before them. */
+export const EXPLORE_DEFAULT_MAX_TURNS = 24;
+export const EXPLORE_DEFAULT_TIMEOUT_SECS = 300;
 
 export function workspaceSettings(root: string, role: keyof typeof ABILITIES, run?: string, raw = readPiSettings(root), workspaceBound = false) {
   const hosted = workspaceBound ? parseHostedTools(raw.hosted_tools) : undefined;
@@ -183,7 +188,8 @@ export function workspaceSettings(root: string, role: keyof typeof ABILITIES, ru
       ...Object.fromEntries(["lsp", "browser", "hooks", "bash_rules"].flatMap(key =>
         raw[key] && typeof raw[key] === "object" ? [[key, raw[key] as Json]] : [])),
       ...(enabled.includes("subagents") ? {
-        subagents: { model: explore.data?.model ?? null, max_parallel: DEFAULT_MAX_PARALLEL, max_turns: 12, timeout_secs: 120 },
+        subagents: { model: explore.data?.model ?? null, max_parallel: DEFAULT_MAX_PARALLEL,
+          max_turns: explore.data?.max_turns ?? EXPLORE_DEFAULT_MAX_TURNS, timeout_secs: explore.data?.timeout_secs ?? EXPLORE_DEFAULT_TIMEOUT_SECS },
       } : {}),
       ...(enabled.includes("expert") ? { expert: raw.expert as Json } : {}),
       ...(enabled.includes("background_shell") ? { background_shell: JobSettingsSchema.parse(raw.background_shell ?? {

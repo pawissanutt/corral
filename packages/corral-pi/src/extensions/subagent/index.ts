@@ -3,7 +3,7 @@ import { Type } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { AuxiliaryKind, AuxiliaryRuntime } from "./runtime.ts";
 import type { FleetRuntime } from "../fleet/runtime.ts";
-import type { ResearchOptions } from "./research.ts";
+import { depthLine, type ResearchOptions } from "./research.ts";
 import type { HelperInspection } from "./inspection.ts";
 import { RetainedConversationError, retainedToolFailure } from "./conversation.ts";
 
@@ -72,7 +72,7 @@ export function exploreTool(runtime: Pick<FleetRuntime, "explore" | "watch">): T
       "Use explore for substantial independent research that would otherwise fill your context with search output, not trivial one-file lookups.",
       "For broad research, split explore into two or three non-overlapping questions and run independent explore calls concurrently as parallel direct tool calls in one turn; use a Code Mode cell only when you also need to filter, combine or summarise their results. Keep useful separate work for yourself; do not duplicate child searches while waiting.",
       "Give explore a question, relevant constraints, starting points and expected evidence. Select profile docs for official/version-specific documentation, code for execution paths. Do not assume children inherit your conversation or project instructions.",
-      "Collect and reconcile explore findings before claiming completion. Check partial/failed status and coverage; verify important citations. Research helpers are not independent Corral reviewers and grant no board authority.",
+      "Collect and reconcile explore findings before claiming completion. Check partial/failed status, the depth line and coverage; verify important citations, and retry a thin answer to a broad question with effort deep or narrower questions. Research helpers are not independent Corral reviewers and grant no board authority.",
     ],
     parameters: researchSchema,
     async execute(id, params: { prompt: string } & ResearchOptions, signal, onUpdate) {
@@ -83,7 +83,9 @@ export function exploreTool(runtime: Pick<FleetRuntime, "explore" | "watch">): T
       try {
         const result = await runtime.explore(id, prompt, signal, research);
         const status = result.report?.status ?? (result.outcome === "completed" ? "completed" : "partial");
+        const depth = depthLine(result.report?.depth, research.effort);
         const header = [`Research ${status}; stop: ${result.report?.stopReason ?? result.outcome}.`,
+          ...(depth ? [depth] : []),
           ...(result.conversationId ? [`Conversation ID: ${result.conversationId}`] : []),
           `Request: ${result.request}.`,
           ...(result.sessionFile ? [`Transcript: ${result.sessionFile}`] : []),

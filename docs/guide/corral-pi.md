@@ -116,6 +116,27 @@ Otherwise Explore inherits the parent's model without changing the login or
 billing route. New hosts read the setting at launch, including on resume.
 It does not change the parent model or the profiles used by `task` children.
 
+The same table sets the research ceilings for standalone Explore and worker
+`task` explore children. Both keys are optional:
+
+```toml
+[explore]
+max_turns = 24       # 1..=64 model turns, including the final answer; default 24
+timeout_secs = 300   # 1..=600; default 300
+```
+
+These are ceilings, not targets. A helper that answers after fewer than eight
+tool calls (unless `effort = "quick"`) gets one follow-up asking it to check
+unsupported claims and unexamined leads, provided at least three turns and 45
+seconds remain. Each result reports its depth (turns, tool calls and KB of tool
+output), and a thin answer is labelled so the parent can retry with `deep`.
+
+Explore `effort` (`quick`, `standard`, `deep`) is also accepted on `task`
+explore children. It sets a minimum thinking level (`off`, `low`, `high`); a
+profile with a stronger effort keeps its own. Code research children get a
+two-level map of the worktree in their prompt, because they do not load project
+guide files.
+
 ## From the app
 
 Open a Pi session in Agents to follow its transcript, send or steer messages,
