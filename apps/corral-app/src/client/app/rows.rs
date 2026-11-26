@@ -316,9 +316,22 @@ impl AppState {
         changed: &BTreeSet<String>,
     ) -> Vec<Outgoing> {
         let targets = feed.with_untracked(|feed| {
+            let quick = (topic == Topic::Assistant)
+                .then(|| crate::model::assistant::row(feed, QUICK_THREAD))
+                .flatten();
             feed.details
                 .values()
                 .filter(|cache| {
+                    // A new quick chat needs its own detail metadata. Its stream may
+                    // already contain words, but a Put does not name the resolved scope.
+                    if matches!(&cache.target, DetailRef::Session { id } if id == QUICK_THREAD)
+                        && quick.as_ref().is_some_and(|quick| {
+                            !matches!(cache.body(), Some(DetailBody::Session(page))
+                                if page.id == quick.id && !quick_host_started(quick, page))
+                        })
+                    {
+                        return true;
+                    }
                     !matches!(&cache.target, DetailRef::Session { id }
                         if feed.capable(SESSION_TRANSCRIPT_V1)
                             && self.session_scopes.contains_key(id)
@@ -345,6 +358,17 @@ impl AppState {
         }
         outgoing
     }
+}
+
+/// Quick can allocate an id before its host is started. A served cold page is not
+/// the metadata of the live chat, even though the id already agrees.
+pub(super) fn quick_host_started(row: &AssistantRow, page: &wire::detail::SessionPage) -> bool {
+    use wire::{detail::HostPresence, rows::AssistantLocation};
+    page.host == HostPresence::NotRunning
+        && matches!(
+            row.live_in,
+            AssistantLocation::Daemon | AssistantLocation::Pane
+        )
 }
 
 fn affected(target: &DetailRef, topic: Topic, changed: &BTreeSet<String>) -> bool {

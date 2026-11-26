@@ -69,6 +69,180 @@ fn pause_on_a_session_without_a_pi_host_shows_corralds_reason() {
 }
 
 #[test]
+fn a_new_quick_thread_loads_its_metadata_without_replacing_the_stream() {
+    use wire::detail::{HostPresence, SessionItem, SessionMessage, SessionPage};
+    use wire::rows::{AssistantLocation, AssistantState};
+    use wire::subscription::{TranscriptOp, TranscriptPart};
+
+    let runtime = nsh_core::element::Runtime::default();
+    let _entered = runtime.enter();
+    let sample = crate::model::preview::feed(0, String::new(), String::new(), None);
+    let old = crate::model::assistant::row(&sample, QUICK_THREAD).unwrap();
+    let quick = "A-999".to_owned();
+    let row = wire::rows::AssistantRow {
+        id: quick.clone(),
+        state: AssistantState::Ready,
+        live_in: AssistantLocation::Daemon,
+        ..old.clone()
+    };
+    let feed = signal(Feed::default());
+    let mut client = AppState::new();
+    client.ready = true;
+    client.session_scopes.insert(QUICK_THREAD.into(), 1);
+    let target = DetailRef::Session {
+        id: QUICK_THREAD.into(),
+    };
+    let key = detail_key(&target);
+    let mut prior = empty_quick_page();
+    prior.id.clone_from(&old.id);
+    let mut cache = DetailCache {
+        target: target.clone(),
+        pages: vec![],
+        merged: Some(DetailBody::Session(prior)),
+        loading: false,
+        stale: false,
+        error: None,
+        transcript_seams: Default::default(),
+    };
+    let mut message: SessionMessage = serde_json::from_value(json!({
+        "id": format!("{quick}/open/1.1.1"),
+        "author": "assistant",
+        "items": [value(SessionItem::Text { text: "streamed reply".into() })]
+    }))
+    .unwrap();
+    crate::model::session::transcript::mirror::apply(
+        &mut cache,
+        vec![
+            TranscriptOp::Reset { older: None },
+            TranscriptOp::Put {
+                message: message.clone(),
+                before: None,
+                replaces: None,
+                open: true,
+                cut: false,
+                again: false,
+            },
+        ],
+        false,
+    );
+    feed.update(|f| {
+        f.capabilities.insert(SESSION_TRANSCRIPT_V1.into());
+        f.details.insert(key.clone(), cache);
+    });
+    let delta = |row| SubDelta::Assistant {
+        delta: RowsDelta {
+            epoch: 1,
+            rows: vec![
+                wire::rows::AssistantRow {
+                    state: AssistantState::Ended,
+                    ..old.clone()
+                },
+                row,
+            ],
+            left: vec![],
+            cursor: BoardCursor::default(),
+            more: false,
+        },
+    };
+    let respond = |client: &mut AppState, reads: Vec<Outgoing>, page: SessionPage| {
+        let [(DETAIL_GET, params, tag)] = reads.as_slice() else {
+            panic!("expected a quick metadata read, got {reads:?}");
+        };
+        client
+            .event(
+                feed,
+                Event::Reply {
+                    method: DETAIL_GET,
+                    tag: tag.clone(),
+                    params: params.clone(),
+                    outcome: Ok(value(DetailReply {
+                        etag: "thread".into(),
+                        as_of: String::new(),
+                        seq: 1,
+                        next: None,
+                        body: Some(DetailBody::Session(page)),
+                    })),
+                    error_data: None,
+                },
+            )
+            .unwrap()
+    };
+    let reads = client
+        .rows(
+            feed,
+            delta(wire::rows::AssistantRow {
+                state: AssistantState::Cold,
+                live_in: AssistantLocation::None,
+                ..row.clone()
+            }),
+            true,
+        )
+        .unwrap();
+    let retry = respond(&mut client, reads, empty_quick_page());
+    let mut page = empty_quick_page();
+    page.id.clone_from(&quick);
+    assert!(respond(&mut client, retry, page.clone()).is_empty());
+
+    // The End row was late: the new open id must still accept appends.
+    feed.update(|f| {
+        crate::model::session::transcript::mirror::apply(
+            f.details.get_mut(&key).unwrap(),
+            vec![TranscriptOp::Append {
+                id: message.id.clone(),
+                part: TranscriptPart::Text,
+                offset: "streamed reply".len() as u64,
+                text: " grows".into(),
+            }],
+            false,
+        );
+    });
+    message.items = vec![SessionItem::Text {
+        text: "streamed reply grows".into(),
+    }];
+
+    let reads = client.rows(feed, delta(row.clone()), true).unwrap();
+    let retry = respond(&mut client, reads, page.clone());
+    page.host = HostPresence::Running;
+    assert!(respond(&mut client, retry, page).is_empty());
+    feed.with_untracked(|f| {
+        let Some(DetailBody::Session(page)) = f.detail(&target).and_then(DetailCache::body) else {
+            panic!("expected quick transcript");
+        };
+        assert_eq!((&page.id, page.host), (&quick, HostPresence::Running));
+        assert_eq!(page.messages, [message]);
+    });
+    assert!(
+        client
+            .rows(feed, delta(row.clone()), true)
+            .unwrap()
+            .is_empty()
+    );
+
+    // The second chat can also end before metadata catches up with the stream.
+    feed.update(|f| {
+        if let Some(DetailBody::Session(page)) = &mut f.details.get_mut(&key).unwrap().merged {
+            page.id.clone_from(&old.id);
+        }
+    });
+    client
+        .rows(
+            feed,
+            delta(wire::rows::AssistantRow {
+                state: AssistantState::Ended,
+                ..row
+            }),
+            true,
+        )
+        .unwrap();
+    feed.with_untracked(|f| {
+        assert_eq!(
+            f.detail(&target).and_then(DetailCache::body),
+            Some(&DetailBody::Session(empty_quick_page()))
+        );
+    });
+}
+
+#[test]
 fn ask_holds_its_draft_until_end_is_acknowledged_even_with_a_delayed_row() {
     use crate::model::{Effect, assistant, session};
     use wire::rows::{AssistantRow, AssistantState};

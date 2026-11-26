@@ -201,6 +201,29 @@ impl AppState {
                 "Expected the latest transcript page.".into(),
             );
         }
+        if matches!(&request.target, DetailRef::Session { id } if id == QUICK_THREAD)
+            && request.page.is_none()
+            && feed.with_untracked(|feed| {
+                let Some(row) = crate::model::assistant::row(feed, QUICK_THREAD) else {
+                    return false;
+                };
+                session(&page)
+                    .or_else(|| {
+                        feed.details
+                            .get(key)
+                            .and_then(|cache| replay::page(Some(cache)))
+                    })
+                    .is_some_and(|page| {
+                        page.id == QUICK_THREAD
+                            || (page.id == row.id
+                                && super::super::rows::quick_host_started(row, page))
+                    })
+            })
+        {
+            // The alias resolved or the host started while an earlier read was in flight.
+            // Retry the metadata read rather than publishing "not running" over its stream.
+            return self.restart_detail(feed, key, id, request.target, CHANGED.into());
+        }
         if page.body.is_none() && request.page.is_none() {
             return match self.detail_unchanged(feed, key, &id, &request.target, page) {
                 Ok(()) => vec![],

@@ -416,7 +416,21 @@ impl Feed {
             .details
             .get(&key)
             .and_then(|cache| match cache.body() {
-                Some(DetailBody::Session(page)) if page.id != quick => Some(page.id.as_str()),
+                Some(DetailBody::Session(page)) => {
+                    // The session topic can switch before the Assistant row reports End.
+                    // Check the chat the document belongs to, not its last detail read.
+                    let chat = cache
+                        .transcript_seams
+                        .mirror
+                        .active
+                        .then(|| {
+                            let (chat, _) = page.messages.last()?.id.split_once('/')?;
+                            chat.starts_with("A-").then_some(chat)
+                        })
+                        .flatten()
+                        .unwrap_or(&page.id);
+                    (chat != quick).then_some(chat)
+                }
                 _ => None,
             })
             .and_then(|chat| self.assistants.get(chat))
