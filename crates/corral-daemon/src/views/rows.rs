@@ -573,27 +573,6 @@ fn branch_preview(branches: Vec<String>, row_bytes: usize) -> Result<Vec<String>
     Ok(preview)
 }
 
-#[cfg(test)]
-mod branch_preview_tests {
-    use super::*;
-
-    #[test]
-    fn long_branch_names_cannot_overflow_project_topic_rows() {
-        let names = (0..100)
-            .map(|n| format!("{n:03}/{}", "a".repeat(700)))
-            .collect();
-        let preview = branch_preview(names, 0).unwrap();
-        assert!(preview.len() < 100);
-        assert!(serde_json::to_vec(&preview).unwrap().len() <= BRANCH_PREVIEW_BYTES);
-        let near_limit = corral_protocol::app::APP_CONTROL_MAX - 1100;
-        assert!(
-            branch_preview(vec!["x".repeat(200)], near_limit)
-                .unwrap()
-                .is_empty()
-        );
-    }
-}
-
 fn projects(engine: &Engine) -> Result<Vec<ProjectRow>> {
     let mut counts = engine.store.open_project_status_counts()?;
     engine
@@ -662,4 +641,25 @@ fn agents(engine: &Engine) -> Result<Vec<AgentRow>> {
         }
     }
     Ok(agents)
+}
+
+#[cfg(test)]
+mod branch_preview_tests {
+    use super::*;
+
+    #[test]
+    fn long_branch_names_cannot_overflow_project_topic_rows() {
+        let names = (0..100)
+            .map(|n| format!("{n:03}/{}", "a".repeat(700)))
+            .collect();
+        let preview = branch_preview(names, 0).unwrap();
+        assert!(preview.len() < 100);
+        assert!(serde_json::to_vec(&preview).unwrap().len() <= BRANCH_PREVIEW_BYTES);
+        let near_limit = corral_protocol::app::APP_CONTROL_MAX - 1100;
+        assert!(
+            branch_preview(vec!["x".repeat(200)], near_limit)
+                .unwrap()
+                .is_empty()
+        );
+    }
 }
