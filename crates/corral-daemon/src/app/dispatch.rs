@@ -72,6 +72,7 @@ pub(crate) fn welcome(shared: &Shared, hello: wire::Hello) -> wire::Welcome {
                         | settings::PI_HOSTED_TOOL_MODELS_V1
                         | wire::CLOSED_V1
                         | app::CITATIONS_V1
+                        | app::ARTIFACT_DIAGRAM_V1
                         | device::DEVICE_V1
                         | device::PUSH_V1
                 ) || system
@@ -273,6 +274,16 @@ pub(crate) fn serve(
             ) && !topics.has_system()
             {
                 return Err(Failure::new(ErrorCode::InvalidParams, "system.v1 required"));
+            }
+            if matches!(
+                query.target,
+                DetailRef::ArtifactDiagram { .. } | DetailRef::ArtifactDiagramElement { .. }
+            ) && !topics.has_artifact_diagram()
+            {
+                return Err(Failure::new(
+                    ErrorCode::InvalidParams,
+                    "artifact.diagram.v1 required",
+                ));
             }
             if matches!(
                 query.target,

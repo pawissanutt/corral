@@ -34,7 +34,7 @@ fn missing(error: anyhow::Error, what: &'static str) -> anyhow::Error {
 }
 
 /// The cited artifact and its open blob.
-fn cited(engine: &Engine, address: &str) -> Result<(Artifact, File)> {
+pub(super) fn cited(engine: &Engine, address: &str) -> Result<(Artifact, File)> {
     let artifact = engine
         .store
         .get_artifact(address)

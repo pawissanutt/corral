@@ -23,6 +23,7 @@ use serde_json::{Value, json};
 use crate::{server, state::Shared};
 
 mod attachments;
+mod diagram;
 mod fake_host;
 mod pi_build;
 mod pi_chat;

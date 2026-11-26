@@ -34,6 +34,8 @@ pub const SYSTEM_ENTRIES_V1: &str = "system.entries.v1";
 pub const SYSTEM_LENSES_V1: &str = "system.lenses.v1";
 /// Data model impact rows in `system_review`.
 pub const SYSTEM_DATA_V1: &str = "system.data.v1";
+/// Bounded artifact workflow recipes and per-element evidence through `detail.get`.
+pub const ARTIFACT_DIAGRAM_V1: &str = "artifact.diagram.v1";
 /// Resolve task-text citations without their content (`DetailRef::Citation`).
 pub const CITATIONS_V1: &str = "citations.v1";
 pub const REVIEW_V1: &str = "review.v1";

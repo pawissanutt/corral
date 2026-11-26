@@ -342,13 +342,17 @@ fn check_label(label: &str, at: &str) -> Result<(), DiagramDiagnostic> {
     }
 }
 
-fn check_path(path: &str, at: String) -> Result<(), DiagramDiagnostic> {
-    if plain_text(path, MAX_PATH)
+/// Whether a path can be served as a literal repository-relative diagram location.
+pub fn valid_path(path: &str) -> bool {
+    plain_text(path, MAX_PATH)
         && !path.contains(['\\', ':'])
         && path
             .split('/')
             .all(|part| !matches!(part, "" | "." | "..") && !part.eq_ignore_ascii_case(".git"))
-    {
+}
+
+fn check_path(path: &str, at: String) -> Result<(), DiagramDiagnostic> {
+    if valid_path(path) {
         Ok(())
     } else {
         Err(DiagnosticCode::InvalidBinding.at(

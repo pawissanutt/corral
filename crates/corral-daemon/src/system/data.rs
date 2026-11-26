@@ -1,26 +1,42 @@
 //! Immutable data-model snapshots selected by an explicit commit. The default
 //! (moving project head) uses the existing map observation instead.
-use std::time::{Duration, Instant};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use anyhow::{Context, Result, ensure};
-use corral_facts::{DataFacts, Revision};
+use corral_facts::{DataFacts, Revision, TreeFacts};
 
 use super::{Snapshot, Stage, System};
 use crate::{ops::WorkerBusy, state::Shared, views::NotFound};
 
 const DATA_SNAPSHOTS: usize = 32;
+// Diagram observations retain a whole structural snapshot, not just data shapes.
+const DIAGRAM_SNAPSHOTS: usize = 4;
 pub(super) const RETRY_DELAY: Duration = Duration::from_secs(2);
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct DataKey {
     pub project: String,
     pub commit: String,
+    pub projection: HistoricalProjection,
 }
 
-pub(crate) type DataSnapshot = Snapshot<DataFacts>;
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum HistoricalProjection {
+    Data,
+    Diagram,
+}
+
+#[derive(Clone)]
+pub(super) enum HistoricalFacts {
+    Data(Arc<DataFacts>),
+    Diagram(Arc<TreeFacts>),
+}
 
 pub(super) struct DataEntry {
-    pub snapshot: DataSnapshot,
+    pub snapshot: Snapshot<HistoricalFacts>,
     pub pending: Option<Stage>,
     pub enrich: Option<Revision>,
     pub retry_at: Option<Instant>,
@@ -28,7 +44,43 @@ pub(super) struct DataEntry {
 }
 
 impl System {
-    pub(crate) fn data_at(&self, shared: &Shared, project: &str, at: &str) -> Result<DataSnapshot> {
+    pub(crate) fn data_at(
+        &self,
+        shared: &Shared,
+        project: &str,
+        at: &str,
+    ) -> Result<Snapshot<DataFacts>> {
+        Ok(project_facts(
+            self.historical_at(shared, project, at, HistoricalProjection::Data)?,
+            |facts| match facts {
+                HistoricalFacts::Data(data) => Some(Arc::clone(data)),
+                HistoricalFacts::Diagram(_) => None,
+            },
+        ))
+    }
+
+    pub(crate) fn diagram_at(
+        &self,
+        shared: &Shared,
+        project: &str,
+        at: &str,
+    ) -> Result<Snapshot<TreeFacts>> {
+        Ok(project_facts(
+            self.historical_at(shared, project, at, HistoricalProjection::Diagram)?,
+            |facts| match facts {
+                HistoricalFacts::Diagram(tree) => Some(Arc::clone(tree)),
+                HistoricalFacts::Data(_) => None,
+            },
+        ))
+    }
+
+    fn historical_at(
+        &self,
+        shared: &Shared,
+        project: &str,
+        at: &str,
+        projection: HistoricalProjection,
+    ) -> Result<Snapshot<HistoricalFacts>> {
         ensure!(
             matches!(at.len(), 40 | 64) && at.bytes().all(|b| b.is_ascii_hexdigit()),
             "invalid: expected a full Git commit ID"
@@ -47,6 +99,7 @@ impl System {
         let key = DataKey {
             project: project.to_owned(),
             commit: at.to_ascii_lowercase(),
+            projection,
         };
         let revision = cache.stamp();
         if let Some(entry) = cache.data.get_mut(&key) {
@@ -60,11 +113,16 @@ impl System {
             }
             return Ok(entry.snapshot.clone());
         }
-        let retired = if cache.data.len() >= DATA_SNAPSHOTS {
+        let capacity = match projection {
+            HistoricalProjection::Data => DATA_SNAPSHOTS,
+            HistoricalProjection::Diagram => DIAGRAM_SNAPSHOTS,
+        };
+        let same_projection = |key: &DataKey| key.projection == projection;
+        let retired = if cache.data.keys().filter(|key| same_projection(key)).count() >= capacity {
             let oldest = cache
                 .data
                 .iter()
-                .filter(|(_, entry)| !entry.snapshot.building)
+                .filter(|(key, entry)| same_projection(key) && !entry.snapshot.building)
                 .min_by_key(|(_, entry)| entry.touched)
                 .map(|(key, _)| key.clone())
                 .ok_or(WorkerBusy)?;
@@ -87,5 +145,19 @@ impl System {
         drop(cache);
         drop(retired);
         Ok(snapshot)
+    }
+}
+
+fn project_facts<T>(
+    snapshot: Snapshot<HistoricalFacts>,
+    select: impl FnOnce(&HistoricalFacts) -> Option<Arc<T>>,
+) -> Snapshot<T> {
+    Snapshot {
+        head: snapshot.head,
+        building: snapshot.building,
+        revision: snapshot.revision,
+        facts: snapshot.facts.as_deref().and_then(select),
+        provider: snapshot.provider,
+        error: snapshot.error,
     }
 }

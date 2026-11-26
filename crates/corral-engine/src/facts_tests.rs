@@ -177,6 +177,25 @@ printf '%s\n' '{{"type":"done","provided":["types"],"skipped":{{}},"omitted":{{}
 }
 
 #[test]
+fn diagram_provider_answers_do_not_cross_commits_with_the_same_tree() {
+    let fixture = Fixture::new();
+    let reader = fixture.reader();
+    let first = reader.resolve_revision("HEAD").unwrap();
+    fixture.git(&["commit", "--allow-empty", "-m", "same tree"]);
+    let second = reader.resolve_revision("HEAD").unwrap();
+    assert_eq!(first.tree(), second.tree());
+    fixture.script(
+        r#"printf '%s\n' '{"type":"done","provided":["definitions"],"skipped":{},"omitted":{}}'"#,
+    );
+    for revision in [first, second] {
+        let mut tree = reader.builtin_tree(&revision).unwrap();
+        let report = reader.enrich_diagram_tree(&revision, &mut tree).unwrap();
+        assert!(report.coverage.provides("definitions"));
+        assert_eq!(fixture.request()["rev"], revision.commit());
+    }
+}
+
+#[test]
 fn definitions_enrich_builtin_facts_and_cache_by_tree() {
     let fixture = Fixture::new();
     let reader = fixture.reader();

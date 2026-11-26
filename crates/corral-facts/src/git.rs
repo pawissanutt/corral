@@ -10,6 +10,8 @@ use anyhow::{Context, Result, ensure};
 
 use crate::model::{Activity, ActivityCommit, ActivityEntry, FileChange, Revision};
 
+pub(crate) mod diagram;
+
 /// Only blobs up to 4 MiB are retained for syntax and manifest scans. Larger blobs
 /// are still streamed for line counts, without retaining their text.
 const MAX_SCAN_BYTES: u64 = 4 * 1024 * 1024;

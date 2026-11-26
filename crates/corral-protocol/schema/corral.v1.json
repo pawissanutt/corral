@@ -93,6 +93,21 @@
         "type": "object",
         "x-rust-type": "corral_types::Artifact"
       },
+      "ArtifactDiagramDetail": {
+        "properties": {
+          "artifact": {
+            "$ref": "#/components/schemas/Artifact"
+          },
+          "result": {
+            "$ref": "#/components/schemas/DiagramResult"
+          }
+        },
+        "required": [
+          "artifact",
+          "result"
+        ],
+        "type": "object"
+      },
       "ArtifactEncoding": {
         "enum": [
           "text",
@@ -2173,6 +2188,10 @@
         ],
         "type": "object"
       },
+      "Coverage": {
+        "type": "object",
+        "x-rust-type": "corral_types::Coverage"
+      },
       "DaemonInfo": {
         "properties": {
           "epoch": {
@@ -2810,6 +2829,38 @@
               },
               "kind": {
                 "const": "artifact",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "body": {
+                "$ref": "#/components/schemas/ArtifactDiagramDetail"
+              },
+              "kind": {
+                "const": "artifact_diagram",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "body": {
+                "$ref": "#/components/schemas/DiagramElementDetail"
+              },
+              "kind": {
+                "const": "artifact_diagram_element",
                 "type": "string"
               }
             },
@@ -3674,6 +3725,48 @@
             "type": "object"
           },
           {
+            "description": "`artifact.diagram.v1`: check the complete artifact at an exact canonical reference.",
+            "properties": {
+              "kind": {
+                "const": "artifact_diagram",
+                "type": "string"
+              },
+              "reference": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "reference"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "`artifact.diagram.v1`: resolve one recipe ID at the previously returned blob digest.",
+            "properties": {
+              "element": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "artifact_diagram_element",
+                "type": "string"
+              },
+              "reference": {
+                "type": "string"
+              },
+              "sha256": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "reference",
+              "sha256",
+              "element"
+            ],
+            "type": "object"
+          },
+          {
             "description": "Whether an artifact citation (`T-12:3`, `T-12:3#goal`) resolves, without its content\n(`citations.v1`).",
             "properties": {
               "kind": {
@@ -3997,6 +4090,249 @@
         ],
         "type": "object"
       },
+      "DiagnosticCode": {
+        "enum": [
+          "too_large",
+          "invalid_json",
+          "unsupported_schema",
+          "unsupported_version",
+          "invalid_shape",
+          "invalid_subject",
+          "invalid_id",
+          "duplicate_id",
+          "limit_exceeded",
+          "invalid_label",
+          "invalid_binding",
+          "dangling_edge",
+          "invalid_start",
+          "invalid_branch",
+          "invalid_flow",
+          "unreachable_node"
+        ],
+        "type": "string"
+      },
+      "DiagramBindings": {
+        "additionalProperties": false,
+        "properties": {
+          "entity": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EntityRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SourceRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "DiagramCandidate": {
+        "description": "Immutable Corral submission matching the subject commit, when known.\nThe project comes from `DiagramElementDetail.subject`.",
+        "properties": {
+          "base": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "head": {
+            "type": "string"
+          },
+          "run": {
+            "type": "string"
+          },
+          "task": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "task",
+          "run",
+          "head"
+        ],
+        "type": "object"
+      },
+      "DiagramDiagnostic": {
+        "properties": {
+          "at": {
+            "description": "JSON Pointer; empty for a document-level error.",
+            "type": "string"
+          },
+          "code": {
+            "$ref": "#/components/schemas/DiagnosticCode"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "at",
+          "message"
+        ],
+        "type": "object"
+      },
+      "DiagramElementDetail": {
+        "properties": {
+          "candidate": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DiagramCandidate"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "element": {
+            "$ref": "#/components/schemas/SelectedElement"
+          },
+          "entity": {
+            "$ref": "#/components/schemas/EntityResult"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SourceResult"
+          },
+          "subject": {
+            "$ref": "#/components/schemas/DiagramSubject"
+          }
+        },
+        "required": [
+          "reference",
+          "sha256",
+          "subject",
+          "element",
+          "source",
+          "entity"
+        ],
+        "type": "object"
+      },
+      "DiagramRelated": {
+        "oneOf": [
+          {
+            "description": "Inbound file-level reference from `path`; not evidence of a symbol caller.",
+            "properties": {
+              "basis": {
+                "$ref": "#/components/schemas/ReferenceBasis"
+              },
+              "count": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "kind": {
+                "const": "file_reference",
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "reference_kind": {
+                "$ref": "#/components/schemas/ReferenceKind"
+              }
+            },
+            "required": [
+              "kind",
+              "path",
+              "basis",
+              "reference_kind",
+              "count"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "DiagramResult": {
+        "oneOf": [
+          {
+            "properties": {
+              "status": {
+                "const": "not_recipe",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "diagnostic": {
+                "$ref": "#/components/schemas/DiagramDiagnostic"
+              },
+              "status": {
+                "const": "invalid",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "diagnostic"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Structural validity only; the recipe's bindings and relationships are not verified.",
+            "properties": {
+              "recipe": {
+                "$ref": "#/components/schemas/WorkflowRecipe"
+              },
+              "status": {
+                "const": "ready",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "recipe"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "DiagramSubject": {
+        "additionalProperties": false,
+        "properties": {
+          "commit": {
+            "description": "Full lowercase Git object ID. The resolver must verify that it is a local commit.",
+            "type": "string"
+          },
+          "project": {
+            "description": "Exact configured project key. Never a filesystem path or remote.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project",
+          "commit"
+        ],
+        "type": "object"
+      },
+      "EdgeKind": {
+        "enum": [
+          "next",
+          "branch"
+        ],
+        "type": "string"
+      },
       "EffectiveProjectSettings": {
         "description": "Project settings after applying workspace defaults, before task-specific overrides.",
         "properties": {
@@ -4067,6 +4403,252 @@
           "branch_prefix"
         ],
         "type": "object"
+      },
+      "EntityEvidence": {
+        "properties": {
+          "coverage": {
+            "$ref": "#/components/schemas/Coverage"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SystemProvider"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "provider_pending": {
+            "type": "boolean"
+          },
+          "read_status": {
+            "$ref": "#/components/schemas/ReadStatus"
+          }
+        },
+        "required": [
+          "coverage",
+          "read_status",
+          "provider_pending"
+        ],
+        "type": "object"
+      },
+      "EntityLocation": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "const": "file",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "One-based inclusive lines in the binding's file.",
+            "properties": {
+              "end_line": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "kind": {
+                "const": "definition",
+                "type": "string"
+              },
+              "line": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "kind",
+              "line",
+              "end_line"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "EntityRequest": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "file",
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "path"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "definition",
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "path",
+              "name"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "EntityResult": {
+        "oneOf": [
+          {
+            "properties": {
+              "status": {
+                "const": "not_provided",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "status": {
+                "const": "pending",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "evidence": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/EntityEvidence"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "reason": {
+                "type": "string"
+              },
+              "status": {
+                "const": "missing",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "reason"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "evidence": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/EntityEvidence"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "reason": {
+                "type": "string"
+              },
+              "status": {
+                "const": "unavailable",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "reason"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "evidence": {
+                "$ref": "#/components/schemas/EntityEvidence"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "status": {
+                "const": "ambiguous",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "reason",
+              "evidence"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "evidence": {
+                "$ref": "#/components/schemas/EntityEvidence"
+              },
+              "location": {
+                "$ref": "#/components/schemas/EntityLocation"
+              },
+              "omitted": {
+                "description": "Number of known related rows omitted from this bounded reply.",
+                "format": "uint",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "related": {
+                "items": {
+                  "$ref": "#/components/schemas/DiagramRelated"
+                },
+                "type": "array"
+              },
+              "status": {
+                "const": "resolved",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "location",
+              "evidence",
+              "related",
+              "omitted"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "Error": {
         "properties": {
@@ -5098,6 +5680,14 @@
           "scoped"
         ],
         "type": "object"
+      },
+      "NodeKind": {
+        "enum": [
+          "step",
+          "decision",
+          "end"
+        ],
+        "type": "string"
       },
       "Notification": {
         "properties": {
@@ -6487,6 +7077,18 @@
         ],
         "type": "object"
       },
+      "ReadStatus": {
+        "type": "string",
+        "x-rust-type": "corral_types::ReadStatus"
+      },
+      "ReferenceBasis": {
+        "type": "string",
+        "x-rust-type": "corral_types::ReferenceBasis"
+      },
+      "ReferenceKind": {
+        "type": "string",
+        "x-rust-type": "corral_types::ReferenceKind"
+      },
       "Refusal": {
         "type": "object",
         "x-rust-type": "corral_types::Refusal"
@@ -6892,6 +7494,42 @@
           "through"
         ],
         "type": "object"
+      },
+      "SelectedElement": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "const": "node",
+                "type": "string"
+              },
+              "node": {
+                "$ref": "#/components/schemas/WorkflowNode"
+              }
+            },
+            "required": [
+              "kind",
+              "node"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "edge": {
+                "$ref": "#/components/schemas/WorkflowEdge"
+              },
+              "kind": {
+                "const": "edge",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "edge"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "SendAttachment": {
         "oneOf": [
@@ -10007,6 +10645,136 @@
         ],
         "type": "object"
       },
+      "SourceExcerpt": {
+        "type": "object",
+        "x-rust-type": "corral_types::SourceExcerpt"
+      },
+      "SourceRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "span": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SourceSpan"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      },
+      "SourceResult": {
+        "oneOf": [
+          {
+            "properties": {
+              "status": {
+                "const": "not_provided",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "reason": {
+                "type": "string"
+              },
+              "status": {
+                "const": "missing",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "reason"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "reason": {
+                "type": "string"
+              },
+              "status": {
+                "const": "unavailable",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "reason"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "reason": {
+                "type": "string"
+              },
+              "status": {
+                "const": "ambiguous",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "reason"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "excerpt": {
+                "$ref": "#/components/schemas/SourceExcerpt"
+              },
+              "status": {
+                "const": "resolved",
+                "type": "string"
+              },
+              "truncated": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "status",
+              "excerpt",
+              "truncated"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "SourceSpan": {
+        "additionalProperties": false,
+        "properties": {
+          "end": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "start": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "start",
+          "end"
+        ],
+        "type": "object"
+      },
       "Status": {
         "type": "string",
         "x-rust-type": "corral_types::Status"
@@ -10727,6 +11495,10 @@
       "SystemMap": {
         "type": "object",
         "x-rust-type": "corral_types::SystemMap"
+      },
+      "SystemProvider": {
+        "type": "object",
+        "x-rust-type": "corral_types::SystemProvider"
       },
       "SystemReview": {
         "type": "object",
@@ -11519,6 +12291,116 @@
           "other"
         ],
         "type": "string"
+      },
+      "WorkflowEdge": {
+        "additionalProperties": false,
+        "properties": {
+          "bindings": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DiagramBindings"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "from": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/EdgeKind"
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "to": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "from",
+          "to"
+        ],
+        "type": "object"
+      },
+      "WorkflowNode": {
+        "additionalProperties": false,
+        "properties": {
+          "bindings": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DiagramBindings"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/NodeKind"
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "label"
+        ],
+        "type": "object"
+      },
+      "WorkflowRecipe": {
+        "additionalProperties": false,
+        "properties": {
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/WorkflowEdge"
+            },
+            "type": "array"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/WorkflowNode"
+            },
+            "type": "array"
+          },
+          "schema": {
+            "type": "string"
+          },
+          "start": {
+            "type": "string"
+          },
+          "subject": {
+            "$ref": "#/components/schemas/DiagramSubject"
+          },
+          "version": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema",
+          "version",
+          "subject",
+          "start",
+          "nodes",
+          "edges"
+        ],
+        "type": "object"
       }
     }
   },
@@ -13329,13 +14211,23 @@
           ]
         },
         {
+          "name": "element",
+          "required": false,
+          "schema": {
+            "type": "string"
+          },
+          "x-required-in": [
+            38
+          ]
+        },
+        {
           "name": "entry",
           "required": false,
           "schema": {
             "type": "string"
           },
           "x-required-in": [
-            39
+            41
           ]
         },
         {
@@ -13419,7 +14311,7 @@
             30,
             31,
             32,
-            39
+            41
           ]
         },
         {
@@ -13596,6 +14488,14 @@
                 "type": "string"
               },
               {
+                "const": "artifact_diagram",
+                "type": "string"
+              },
+              {
+                "const": "artifact_diagram_element",
+                "type": "string"
+              },
+              {
                 "const": "citation",
                 "type": "string"
               },
@@ -13675,7 +14575,7 @@
             7,
             8,
             9,
-            41
+            43
           ]
         },
         {
@@ -13686,7 +14586,9 @@
           },
           "x-required-in": [
             36,
-            37
+            37,
+            38,
+            39
           ]
         },
         {
@@ -13718,6 +14620,16 @@
           },
           "x-required-in": [
             34
+          ]
+        },
+        {
+          "name": "sha256",
+          "required": false,
+          "schema": {
+            "type": "string"
+          },
+          "x-required-in": [
+            38
           ]
         },
         {

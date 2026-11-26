@@ -67,6 +67,10 @@ impl Engine {
                     ArtifactKind::Summary,
                     "summary.md",
                 )?;
+                // The scan and Done share this transaction. Mark the start of
+                // that interval so an attachment can recover its exact submission,
+                // including when a retained worker submits the same head again.
+                let artifact_scan_after_seq = store.latest_seq()?;
                 for path in self.scan_artifacts(&run.worktree, &run.base_sha, &head)? {
                     if let Err(error) = self.add_scanned_artifact_in(store, target(), &path) {
                         let Some(refusal) = as_refusal(&error) else {
@@ -88,7 +92,7 @@ impl Engine {
                     Some(&run.id),
                     EventKind::Done,
                     self.actor,
-                    json!({"sha":run.head_sha,"base_sha":run.base_sha,"project":task.project,"summary":summary}),
+                    json!({"sha":run.head_sha,"base_sha":run.base_sha,"project":task.project,"summary":summary,"artifact_scan_after_seq":artifact_scan_after_seq}),
                 )?;
                 Ok((Some(run), true))
             })?;

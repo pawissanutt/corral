@@ -36,6 +36,7 @@ const MAX_STDOUT: usize = 64 * 1024 * 1024;
 enum ProviderMode {
     AllowStart,
     CachedOnly,
+    ExactSnapshot,
 }
 
 /// Built-in reads and provider enrichment are separate so the daemon can
@@ -111,6 +112,10 @@ impl<'a> FactsReader<'a> {
 
     pub fn resolve_revision(&self, rev: &str) -> Result<Revision> {
         resolve_revision(&self.repo, rev)
+    }
+
+    pub fn resolve_local_commit(&self, commit: &str) -> Result<Revision> {
+        corral_facts::resolve_local_commit(&self.repo, commit)
     }
 
     /// Older done events recorded only the head. A landing attempt may have
@@ -227,6 +232,19 @@ impl<'a> FactsReader<'a> {
             None,
             SNAPSHOT_WANT,
             ProviderMode::AllowStart,
+            |reply| Ok(reply.merge_snapshot(tree)),
+        )
+    }
+
+    /// Use the same snapshot extension but key its answer by the exact commit.
+    /// Diagram evidence must not attribute another commit's provider answer
+    /// to the pin, even when the two commits have identical trees.
+    pub fn enrich_diagram_tree(&self, rev: &Revision, tree: &mut TreeFacts) -> Option<FactsReport> {
+        self.ask(
+            rev,
+            None,
+            SNAPSHOT_WANT,
+            ProviderMode::ExactSnapshot,
             |reply| Ok(reply.merge_snapshot(tree)),
         )
     }
@@ -432,7 +450,7 @@ impl<'a> FactsReader<'a> {
         let result = (|| {
             // Do not share provider answers across projects or command/environment
             // changes, even for the same tree. This key is hashed by FactsCache.
-            let namespace = serde_json::to_vec(&(
+            let mut namespace = serde_json::to_vec(&(
                 &self.repo,
                 self.project,
                 name,
@@ -441,9 +459,13 @@ impl<'a> FactsReader<'a> {
                 want,
             ))
             .context("encode facts provider cache namespace")?;
+            if matches!(mode, ProviderMode::ExactSnapshot) {
+                namespace.push(0); // Disjoint from the existing JSON-only namespaces.
+                namespace.extend_from_slice(revision.commit().as_bytes());
+            }
             let reply = self.cache.provider_reply(&namespace, revision, base, || {
                 anyhow::ensure!(
-                    matches!(mode, ProviderMode::AllowStart),
+                    !matches!(mode, ProviderMode::CachedOnly),
                     "no cached facts provider answer for this revision"
                 );
                 let mut request = Map::from_iter([

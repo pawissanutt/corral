@@ -5,6 +5,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, ensure};
+use corral_types::Artifact;
 pub use corral_types::{Event, EventKind};
 use jiff::Timestamp;
 use rusqlite::params;
@@ -201,6 +202,66 @@ impl Store {
             "SELECT detail FROM events WHERE task=?1 AND run=?2 AND kind='done' ORDER BY seq DESC LIMIT 1",
             params![task, run], |row| row.get(0),
         ).optional().context("read submitted revision")?;
+        detail
+            .map(|detail| serde_json::from_str(&detail).context("decode submitted revision"))
+            .transpose()
+    }
+
+    /// The run named by the original task attachment event, not a later worker run.
+    pub fn task_artifact_run(&self, artifact: &Artifact) -> Result<Option<(String, i64)>> {
+        use rusqlite::OptionalExtension;
+        self.connection
+            .query_row(
+                "SELECT run, seq FROM events WHERE task=?1 AND kind='artifact'
+                 AND json_extract(detail, '$.reference')=?2 ORDER BY seq LIMIT 1",
+                params![artifact.task, artifact.reference()],
+                |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .optional()
+            .context("read task artifact run attribution")
+            .map(|event| event.and_then(|(run, seq)| run.map(|run| (run, seq))))
+    }
+
+    /// A submission of this exact head, relative to when the artifact was attached.
+    /// A scanned artifact belongs to the submission that recorded it atomically.
+    /// Otherwise prefer the last matching submission at attachment, or the first
+    /// match after it. A new round on the same live run does not retire old evidence.
+    pub fn submitted_revision_at(
+        &self,
+        task: &str,
+        run: &str,
+        head: &str,
+        attached_seq: i64,
+    ) -> Result<Option<SubmittedRevision>> {
+        use rusqlite::OptionalExtension;
+        let scanned: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT detail FROM (
+                SELECT detail FROM events WHERE task=?1 AND run=?2 AND kind='done' AND seq>?3
+                ORDER BY seq LIMIT 1
+             ) WHERE json_extract(detail,'$.artifact_scan_after_seq') < ?3",
+                params![task, run, attached_seq],
+                |row| row.get(0),
+            )
+            .optional()
+            .context("read submission that scanned the artifact")?;
+        if let Some(scanned) = scanned {
+            let revision: SubmittedRevision =
+                serde_json::from_str(&scanned).context("decode scanned artifact submission")?;
+            return Ok((revision.sha == head).then_some(revision));
+        }
+        let detail: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT detail FROM events WHERE task=?1 AND run=?2 AND kind='done'
+               AND json_extract(detail,'$.sha')=?3
+             ORDER BY (seq > ?4), CASE WHEN seq <= ?4 THEN -seq ELSE seq END LIMIT 1",
+                params![task, run, head, attached_seq],
+                |row| row.get(0),
+            )
+            .optional()
+            .context("read exact submitted revision at artifact attachment")?;
         detail
             .map(|detail| serde_json::from_str(&detail).context("decode submitted revision"))
             .transpose()

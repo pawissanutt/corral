@@ -85,17 +85,16 @@ fields are rejected. The top-level fields are all required:
 The shared Rust model and structural validator are in `corral_protocol::diagram`. Deserializing
 `WorkflowRecipe` alone checks the JSON shape, not the graph or resource limits; use `validate`.
 
-## Daemon and app contract for the next slice
+## Daemon detail contract
 
-The following defines the typed lookup boundary, **not RPCs shipped with the validator**.
-Reuse `detail.get` (`DetailGet` / `DetailReply`) and advertise `artifact.diagram.v1` when
-both lookups are served. The existing `artifact` detail continues to serve the unchanged raw
-bytes, and citations and catalog rows remain the source of artifact identity.
+Negotiate `artifact.diagram.v1` to use both selectors on `detail.get` (`DetailGet` / `DetailReply`).
+The existing `artifact` detail serves the unchanged raw bytes, and citations and catalog rows
+remain the source of artifact identity.
 
 | `DetailGet` selector | Typed `DetailBody` kind and body |
 |---|---|
 | `{kind: "artifact_diagram", reference}` | `artifact_diagram`: `{ artifact: Artifact, result: DiagramResult }` |
-| `{kind: "artifact_diagram_element", reference, sha256, element}` | `artifact_diagram_element`: `{ reference, sha256, subject: DiagramSubject, element: SelectedElement, source: SourceResult, entity: EntityResult }` |
+| `{kind: "artifact_diagram_element", reference, sha256, element}` | `artifact_diagram_element`: `{ reference, sha256, subject: DiagramSubject, candidate: DiagramCandidate or null, element: SelectedElement, source: SourceResult, entity: EntityResult }` |
 
 `reference` is the exact canonical task or project artifact reference, not a filename or Markdown
 section. `sha256` echoes the catalog blob digest returned in the first lookup. `element` in the
@@ -115,21 +114,38 @@ than interpreting the ID against a new artifact. Do not follow a replacement poi
   A recognized unknown version or invalid v1 shape returns `invalid`; bytes that cannot be
   identified as a bounded JSON document use the raw artifact view. Never concatenate or parse a
   preview chunk as a recipe. `ready` is structural only and can be displayed without a provider.
-- `SourceResult` and `EntityResult` are each tagged by `status`: `not_provided` (element made no
-  request), `unavailable { reason }`, `ambiguous { reason }`, or `resolved`. A resolved source
-  carries one bounded existing `SourceExcerpt` and `truncated: bool`. A resolved entity carries
-  `provider`, `coverage`, `omitted`, and `related` rows. Each row identifies its kind (e.g.
-  `reference`, `dependent`, or `test_candidate`), target repository path, and evidence basis.
-  Keep an empty result distinct from missing coverage; test candidates are suggestions, and a
-  file reference is not a symbol call. The resolver slice owns the supported fact kinds and
-  evidence-basis types. Even a resolved binding does not verify the author's edge or branch.
+- `SourceResult` and `EntityResult` are tagged by `status`. `not_provided` means the element
+  made no request; `missing` means no matching commit, regular file, line, or covered definition;
+  `unavailable` means the resolver could not inspect the binding (for example, unreadable source
+  or no definition provider). `ambiguous` means multiple matching definitions. `pending` is an
+  entity result while an immutable facts snapshot is prepared; retry the same selection.
+- A resolved source carries one bounded `SourceExcerpt` at the pinned commit and `truncated`.
+  The source reader caps blobs at 1 MiB, excerpts at 200 contiguous lines, and the JSON `lines`
+  array at 4 KiB. If no span is requested it returns leading lines. `truncated` includes a
+  clipped final line or a requested span extending past the end of the file.
+- A resolved entity carries its `location` and `evidence` (System coverage and file read
+  status, optional provider report and `provider_pending`). File bindings return at most 16
+  inbound `file_reference` rows, with repository path, `syntax` or `resolved` basis, occurrence
+  kind, and count. `omitted` counts known rows excluded by this detail; provider skips and
+  omissions are separately reported. An empty list does not establish absence beyond that
+  coverage. A resolved definition is one observed literal provider match with valid committed
+  line coordinates, not a claim of uniqueness outside provider coverage. File references are
+  not attributed to symbols, even when their occurrence kind is `call`.
+- System's existing snapshot worker supplies built-in syntax facts and may overlay a configured
+  facts extension at the pinned revision. Diagram provider answers are cached by exact commit,
+  not shared with another commit with the same tree. The Gate fixture uses built-in Rust `use`
+  facts for `crates/corral-engine/src/review.rs` (e.g. the reference from `land.rs`). None of these
+  facts verifies a recipe edge or branch.
 - For the element lookup, the daemon rechecks the authorized catalog row, recipe and selected ID.
   It verifies `subject.project` against the artifact's owning project, then resolves only the
   exact locally available commit from `subject.commit`. Never use an author-supplied project
   as authorization, or substitute a worktree, a moving head, another project, or a candidate.
-  Candidate identity, if available, comes from Corral records, not recipe fields. Missing or
-  out-of-scope source/provider data gives an explicit status; independently available Git source
-  still works when the optional provider is off.
+  Candidate identity (`task`, `run`, `head`, optional `base`) is reported only when the
+  artifact's recorded worker run submitted that exact commit. A scanned attachment is tied to
+  the submission that captured it. Otherwise Corral uses the latest matching submission at
+  attachment or the first later match from the same run. Later resubmissions do not reassign
+  the candidate. Attachments without run attribution have no candidate identity. Git source
+  still works when the provider is pending, disabled, or unavailable.
 
 Task citations and the artifact list open the same graph or raw fallback. A future viewer sends
 only a stable element ID scoped to the open artifact view; Rust owns lookup, evidence, and

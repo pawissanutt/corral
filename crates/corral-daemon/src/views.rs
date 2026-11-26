@@ -2,6 +2,7 @@
 mod chat;
 mod citation;
 mod details;
+mod diagram;
 mod review;
 pub(crate) mod rows;
 mod session_files;
@@ -62,6 +63,9 @@ pub(crate) fn detail_for_client(
         return Ok(reply);
     }
     let engine = shared.engine()?;
+    if let Some(reply) = diagram::read(shared, &engine, &query)? {
+        return Ok(reply);
+    }
     if let Some(reply) = session_files::read(shared, &engine, &query)? {
         return Ok(reply);
     }

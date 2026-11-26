@@ -7,6 +7,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 pub mod artifact;
 pub mod closed;
+pub mod diagram;
 pub mod plan;
 pub mod question;
 pub mod review;
@@ -18,6 +19,7 @@ pub mod timeline;
 pub mod usage;
 pub use artifact::*;
 pub use closed::*;
+pub use diagram::*;
 pub use plan::*;
 pub use question::*;
 pub use review::*;
@@ -216,6 +218,16 @@ pub enum DetailRef {
     Artifact {
         reference: String,
     },
+    /// `artifact.diagram.v1`: check the complete artifact at an exact canonical reference.
+    ArtifactDiagram {
+        reference: String,
+    },
+    /// `artifact.diagram.v1`: resolve one recipe ID at the previously returned blob digest.
+    ArtifactDiagramElement {
+        reference: String,
+        sha256: String,
+        element: String,
+    },
     /// Whether an artifact citation (`T-12:3`, `T-12:3#goal`) resolves, without its content
     /// (`citations.v1`).
     Citation {
@@ -307,6 +319,8 @@ pub enum DetailBody {
     Burnup(Burnup),
     UsageSeries(UsageSeries),
     Artifact(ArtifactPage),
+    ArtifactDiagram(ArtifactDiagramDetail),
+    ArtifactDiagramElement(DiagramElementDetail),
     Citation(CitationDetail),
     Artifacts(ArtifactsPage),
     Closed(ClosedPage),

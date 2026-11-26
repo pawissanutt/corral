@@ -10,7 +10,7 @@ use corral_types::{
 use super::{Job, Worker};
 use crate::system::{
     Stage, bounded_error, bounded_report,
-    data::{DataKey, RETRY_DELAY},
+    data::{DataKey, HistoricalFacts, HistoricalProjection, RETRY_DELAY},
     provider_row_fits,
 };
 
@@ -71,13 +71,20 @@ impl Worker {
     pub(super) fn data_builtin(&self, job: &Job, key: &DataKey) {
         let result = (|| -> Result<_> {
             let reader = self.reader(job, &key.project)?;
-            let rev = reader.resolve_revision(&key.commit)?;
+            let rev = match key.projection {
+                HistoricalProjection::Data => reader.resolve_revision(&key.commit)?,
+                HistoricalProjection::Diagram => reader.resolve_local_commit(&key.commit)?,
+            };
             ensure!(
                 rev.commit() == key.commit,
                 "selector is not a full Git commit ID"
             );
-            let data = reader.builtin_tree(&rev)?.data;
-            Ok((rev, data))
+            let tree = reader.builtin_tree(&rev)?;
+            let facts = match key.projection {
+                HistoricalProjection::Data => HistoricalFacts::Data(Arc::new(tree.data)),
+                HistoricalProjection::Diagram => HistoricalFacts::Diagram(Arc::new(tree)),
+            };
+            Ok((rev, facts))
         })();
         self.publish(job, move |cache| {
             let revision = cache.stamp();
@@ -86,9 +93,9 @@ impl Worker {
             entry.snapshot.revision = revision;
             entry.snapshot.building = false;
             match result {
-                Ok((rev, data)) => {
+                Ok((rev, facts)) => {
                     entry.snapshot.head = Some(rev.commit().to_owned());
-                    entry.snapshot.facts = Some(Arc::new(data));
+                    entry.snapshot.facts = Some(Arc::new(facts));
                     if job.has_provider(&key.project) {
                         entry.pending = Some(Stage::Enrich);
                         entry.enrich = Some(rev);
@@ -110,25 +117,51 @@ impl Worker {
             return;
         };
         let reader = reader.with_cancellation(&cancelled);
-        let Ok(mut tree) = reader.builtin_tree(rev) else {
-            return;
+        let (report, facts) = match key.projection {
+            HistoricalProjection::Data => {
+                let Ok(mut tree) = reader.builtin_tree(rev) else {
+                    return;
+                };
+                let Some(report) = reader.enrich_data_tree(rev, &mut tree) else {
+                    return;
+                };
+                let report = bounded_report(report, || {
+                    tree.data
+                        .types
+                        .iter()
+                        .filter(|ty| ty.source == DataSource::Extension)
+                        .try_for_each(check_type)
+                });
+                (report, HistoricalFacts::Data(Arc::new(tree.data)))
+            }
+            HistoricalProjection::Diagram => {
+                let Some(facts) = self
+                    .queue
+                    .lock()
+                    .data
+                    .get(key)
+                    .and_then(|entry| entry.snapshot.facts.clone())
+                else {
+                    return;
+                };
+                let HistoricalFacts::Diagram(tree) = facts.as_ref() else {
+                    return;
+                };
+                let mut tree = (**tree).clone();
+                // Reuse the System extension but retain exact commit provenance.
+                let Some(report) = reader.enrich_diagram_tree(rev, &mut tree) else {
+                    return;
+                };
+                let report = bounded_report(report, || Ok(()));
+                (report, HistoricalFacts::Diagram(Arc::new(tree)))
+            }
         };
-        let Some(report) = reader.enrich_data_tree(rev, &mut tree) else {
-            return;
-        };
-        let report = bounded_report(report, || {
-            tree.data
-                .types
-                .iter()
-                .filter(|ty| ty.source == DataSource::Extension)
-                .try_for_each(check_type)
-        });
         self.publish(job, move |cache| {
             let revision = cache.stamp();
             let entry = cache.data.get_mut(key)?;
             entry.snapshot.revision = revision;
             let old = if report.error.is_none() {
-                entry.snapshot.facts.replace(Arc::new(tree.data))
+                entry.snapshot.facts.replace(Arc::new(facts))
             } else {
                 None
             };

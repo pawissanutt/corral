@@ -329,7 +329,7 @@ fn status(building: bool) -> SystemStatus {
     }
 }
 
-fn provider(report: Option<&FactsReport>) -> Option<SystemProvider> {
+pub(super) fn provider(report: Option<&FactsReport>) -> Option<SystemProvider> {
     report.map(|report| SystemProvider {
         extension: report.extension.clone(),
         coverage: report.coverage.clone(),
