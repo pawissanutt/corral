@@ -389,6 +389,9 @@ fn laid_out(
     let mut document = document(app, markdown, streaming, images, chat, open);
     if diagrams {
         diagram_nodes(&mut document.blocks);
+        for note in &mut document.footnotes {
+            diagram_nodes(&mut note.children);
+        }
     }
     shown(app, text_view().document(document), diagrams)
 }

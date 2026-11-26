@@ -131,15 +131,29 @@ fn shape(artifact: &Artifact, media: Option<&str>, page: &ArtifactPage) -> Shape
         Shape::Diff
     } else if log || ends_with(title, &[".log"]) {
         Shape::Log
-    } else if original_text(page).is_some_and(|text| markdown_signature(&text)) {
+    } else if !file_name(title) && original_text(page).is_some_and(|text| markdown_signature(&text))
+    {
         Shape::Markdown
     } else {
         Shape::Text
     }
 }
 
+/// Whether the title is a file's name with an extension (`deploy.sh`, `notes.txt`): such a file
+/// says what it is, and its `#` comments or fences are not Markdown. A descriptive title
+/// (`Delivery plan`, `Plan v1.2`) names none.
+fn file_name(title: &str) -> bool {
+    title.rsplit_once('.').is_some_and(|(stem, extension)| {
+        !stem.is_empty()
+            && !stem.ends_with(char::is_whitespace)
+            && (1..=10).contains(&extension.len())
+            && extension.bytes().all(|byte| byte.is_ascii_alphanumeric())
+            && extension.bytes().any(|byte| byte.is_ascii_alphabetic())
+    })
+}
+
 /// Whether the text reads as a Markdown document by its own structure: its first line that says
-/// something is an ATX heading (`# Plan`), or it holds a closed code fence (```` ``` ```` or
+/// something is an ATX heading (`# Plan`), or, within its first 64 KiB, it holds a closed code fence (```` ``` ```` or
 /// `~~~`, a Mermaid diagram's included) or a table's delimiter row (`|---|---|`). A descriptive
 /// title (`Delivery plan`) names no suffix and corrald's media type follows the title, so this
 /// is what renders a titled agent document as Markdown rather than its source.
@@ -162,7 +176,13 @@ pub(crate) fn markdown_signature(text: &str) -> bool {
         let trimmed = line.trim_start();
         let indent = line.len() - trimmed.len();
         match fence {
-            Some(open) if indent <= 3 && trimmed.trim_end() == open => return true,
+            Some(open)
+                if indent <= 3
+                    && trimmed.len() >= open.len()
+                    && trimmed.bytes().all(|byte| byte == open.as_bytes()[0]) =>
+            {
+                return true;
+            }
             Some(_) => {}
             None if indent <= 3 && (trimmed.starts_with("```") || trimmed.starts_with("~~~")) => {
                 let mark = trimmed.as_bytes()[0];

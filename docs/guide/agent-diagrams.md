@@ -58,9 +58,10 @@ stays readable and points to its successor.
 
 ## What the app draws
 
-The app reads a Markdown artifact from its `.md`/`.markdown` title or, for any other title, from
-its own structure: a first line that is a heading, a closed code fence or a table. A titled
-report therefore renders as Markdown, not as its source.
+The app reads a Markdown artifact from its `.md`/`.markdown` title or, for a title that is not a
+file name with another extension, from its own structure: a first line that is a heading, or a
+closed code fence or table within its first 64 KiB. A descriptively titled report therefore
+renders as Markdown, not as its source, while `deploy.sh` or `notes.txt` stays text.
 
 On desktop and web each `mermaid` fence is drawn on the app's diagram canvas:
 

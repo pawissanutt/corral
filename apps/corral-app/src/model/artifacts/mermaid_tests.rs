@@ -149,11 +149,19 @@ fn an_er_diagram_reads_entities_attributes_and_cardinality() {
         ]
     );
     assert_eq!(diagram.edges[2].detail.as_deref(), Some("non-identifying"));
+    // A second block adds to the first, and a later alias keeps the attributes.
+    let merged = parse(
+        "erDiagram\n  c {\n    string a PK, FK\n  }\n  c {\n    int b\n  }\n  c[\"Customer\"]\n",
+    )
+    .unwrap();
+    assert_eq!(labels(&merged.nodes), ["Customer: a, b"]);
     for source in [
         "erDiagram\n  CUSTOMER ||--o{ ORDER\n",
         "erDiagram\n  CUSTOMER places ORDER\n",
         "erDiagram\n  CUSTOMER {\n    string name\n",
         "erDiagram\n  CUSTOMER only one to zero or more ORDER : places\n",
+        "erDiagram\n  CUSTOMER {\n    string name }\n  ORDER {\n    int id\n  }\n",
+        "erDiagram\n  CUSTOMER {\n    string a string b\n  }\n",
     ] {
         assert!(parse(source).is_err(), "{source:?} is drawn");
     }

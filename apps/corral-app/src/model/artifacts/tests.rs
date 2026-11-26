@@ -528,4 +528,11 @@ fn a_titled_markdown_artifact_renders_its_diagrams_from_every_route() {
         content(&feed, &prose, Form::Desktop, true).body,
         Body::Text(_)
     ));
+    // A file named by its extension says what it is: its `#` comment is not a heading.
+    let script = artifact("T-9", 3, ArtifactKind::Evidence, "setup.sh", 3);
+    served_as(&mut feed, &script, "", "# Install\nset -e\n```\n", false);
+    assert!(matches!(
+        content(&feed, &script, Form::Desktop, true).body,
+        Body::Text(_)
+    ));
 }

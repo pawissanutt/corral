@@ -16,41 +16,47 @@ const SKIP: &[&str] = &[
     "accdescr",
 ];
 
-/// An entity whose attribute block is open: its box and the attributes' names so far.
-type Open = Option<(usize, Vec<String>)>;
+/// What the statements read so far leave open: the entity whose attribute block is open, and
+/// every entity's attributes' names, joined onto its label once the whole diagram is read (an
+/// entity may have several blocks, and an alias may name it after them).
+#[derive(Default)]
+struct Reading {
+    open: Option<usize>,
+    attributes: Vec<(usize, Vec<String>)>,
+}
 
 /// Reads every statement after the `erDiagram` header into `built`.
 pub(super) fn lines<'a>(
     built: &mut Built,
     lines: impl Iterator<Item = (usize, &'a str)>,
 ) -> Result<(), String> {
-    let mut open: Open = None;
+    let mut reading = Reading::default();
     let mut last = 0;
     for (number, line) in lines {
         last = number;
-        line_of(built, line, &mut open).map_err(|why| at(number, &why))?;
+        line_of(built, line, &mut reading).map_err(|why| at(number, &why))?;
     }
-    if open.is_some() {
+    if reading.open.is_some() {
         return Err(at(last, "an entity's attribute block is not closed"));
+    }
+    for (node, names) in reading.attributes {
+        let shown = &mut built.nodes[node];
+        shown.label = format!("{}: {}", shown.label, names.join(", "));
+        shown.detail = Some(names.join(", "));
     }
     Ok(())
 }
 
-fn line_of(built: &mut Built, line: &str, open: &mut Open) -> Result<(), String> {
-    if open.is_some() {
+fn line_of(built: &mut Built, line: &str, reading: &mut Reading) -> Result<(), String> {
+    if let Some(node) = reading.open {
         if line == "}" {
-            if let Some((node, names)) = open.take() {
-                attributes(built, node, &names);
-            }
+            reading.open = None;
             return Ok(());
         }
-        // `type name [PK, FK] ["comment"]`: the name is what the box lists.
-        let mut words = line.split_whitespace();
-        let (Some(_), Some(name)) = (words.next(), words.next()) else {
-            return Err(format!("the attribute “{line}” is not understood"));
-        };
-        if let Some((_, names)) = open.as_mut() {
-            names.push(name.to_owned());
+        let name = attribute(line)?;
+        match reading.attributes.iter_mut().find(|(at, _)| *at == node) {
+            Some((_, names)) => names.push(name),
+            None => reading.attributes.push((node, vec![name])),
         }
         return Ok(());
     }
@@ -58,7 +64,7 @@ fn line_of(built: &mut Built, line: &str, open: &mut Open) -> Result<(), String>
         return Ok(());
     }
     if let Some(head) = line.strip_suffix('{') {
-        *open = Some((entity(built, head.trim())?, Vec::new()));
+        reading.open = Some(entity(built, head.trim())?);
         return Ok(());
     }
     if let Some(head) = line
@@ -74,14 +80,32 @@ fn line_of(built: &mut Built, line: &str, open: &mut Open) -> Result<(), String>
     entity(built, line).map(|_| ())
 }
 
-/// The box's label with its attributes' names after the entity's own.
-fn attributes(built: &mut Built, node: usize, names: &[String]) {
-    if names.is_empty() {
-        return;
+/// One attribute line, `type name [PK, FK, UK] ["comment"]`: its name. Anything else (a brace
+/// that closes or opens a block mid-line, two attributes on one line) is refused, so the
+/// drawing never says other than Mermaid's.
+fn attribute(line: &str) -> Result<String, String> {
+    let refused = || format!("the attribute “{line}” is not understood");
+    let mut rest = line.trim();
+    if let Some(open) = rest.strip_suffix('"') {
+        let start = open.rfind('"').ok_or_else(refused)?;
+        rest = open[..start].trim_end();
     }
-    let shown = &mut built.nodes[node];
-    shown.label = format!("{}: {}", shown.label, names.join(", "));
-    shown.detail = Some(names.join(", "));
+    if rest.contains(['{', '}', '"']) {
+        return Err(refused());
+    }
+    let mut words = rest.split_whitespace();
+    let (Some(_), Some(name)) = (words.next(), words.next()) else {
+        return Err(refused());
+    };
+    let keys = words.collect::<Vec<_>>().join(" ");
+    let keys_ok = keys.is_empty()
+        || keys
+            .split(',')
+            .all(|key| matches!(key.trim(), "PK" | "FK" | "UK"));
+    if !keys_ok {
+        return Err(refused());
+    }
+    Ok(name.to_owned())
 }
 
 /// `NAME`, `"Name with spaces"` or `id["Alias"]`: the entity's box.
