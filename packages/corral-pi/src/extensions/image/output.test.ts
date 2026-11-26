@@ -49,12 +49,22 @@ fsTest("publishes exact bytes exclusively with private mode and leaves no stage"
   expect(() => preparePng(root, "image.png")).toThrow("already exists");
 }));
 
-fsTest("refuses traversal, private components, symlinks and missing directories before publication", () => fixture((root, outside) => {
+fsTest("publishes to concrete absolute and parent-relative destinations after caller authorization", () => fixture((root, outside) => {
+  for (const [path, name] of [[join(outside, "absolute.png"), "absolute.png"], ["../outside/relative.png", "relative.png"]] as const) {
+    const out = preparePng(root, path);
+    try { out.publish(bytes); } finally { out.close(); }
+    expect(readFileSync(join(outside, name))).toEqual(bytes);
+  }
+  expect(readdirSync(root)).toEqual([]);
+  expect(readdirSync(outside).sort()).toEqual(["absolute.png", "relative.png"]);
+}));
+
+fsTest("refuses malformed paths, symlinks and missing directories before publication", () => fixture((root, outside) => {
   symlinkSync(outside, join(root, "redirect"));
   symlinkSync(join(outside, "missing"), join(root, "dangling.png"));
-  mkdirSync(join(root, ".git"));
-  mkdirSync(join(root, ".corral-next"));
-  for (const path of ["../escape.png", "/absolute.png", "C:\\absolute.png", "a/../escape.png", ".git/image.png", ".corral-next/image.png", ".worktrees/image.png", "redirect/image.png", "dangling.png", "missing/image.png"]) {
+  mkdirSync(join(root, ".worktrees"));
+  mkdirSync(join(root, ".corral-private"));
+  for (const path of ["C:\\absolute.png", "redirect/image.png", "dangling.png", "missing/image.png", "not-png.jpg", ".worktrees/image.png", ".corral-private/image.png"]) {
     expect(() => preparePng(root, path)).toThrow();
   }
   expect(() => preparePng(join(root, "redirect"), "image.png")).toThrow();

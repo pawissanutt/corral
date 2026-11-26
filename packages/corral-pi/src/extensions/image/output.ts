@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { accessSync, closeSync, constants, fstatSync, linkSync, lstatSync, openSync, unlinkSync, writeFileSync } from "node:fs";
-import { isAbsolute, resolve } from "node:path";
+import { isAbsolute, relative, resolve } from "node:path";
+import { within } from "../../roles/assistant/paths.ts";
 
 const MAX_BYTES = 4 * 1024 * 1024;
 const SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
@@ -97,16 +98,24 @@ function walk(start: number, parts: readonly string[]): number {
   }
 }
 
-export function preparePng(root: string, path: string): { publish(bytes: Buffer): void; close(): void } {
-  const parts = path.split("/");
-  if (isAbsolute(path) || /[\\:\x00-\x1f\x7f]/.test(path) || !path.endsWith(".png")
-      || parts.some(part => !part || part === "." || part === ".." || /^\.(?:git$|worktrees$|corral(?:$|[-.]))/i.test(part))) {
-    throw new Error("Choose a new session-relative .png path outside Git and Corral private state.");
+export function preparePng(root: string, path: string): { path: string; identity: string; revalidate(): void; publish(bytes: Buffer): void; close(): void } {
+  if (/[\\:\x00-\x1f\x7f\u00a0\u2000-\u200a\u202f\u205f\u3000]/.test(path) || !path.endsWith(".png")) {
+    throw new Error("Choose a new .png path.");
   }
   if (process.platform !== "linux" || !isAbsolute(root)) {
     throw new Error("Safe image file publication requires an absolute session root and Linux descriptor paths.");
   }
-  const name = parts.pop()!;
+  if (Buffer.from(path).toString("utf8") !== path) {
+    throw new Error("Choose a valid UTF-8 .png path.");
+  }
+  const target = resolve(root, path);
+  const checked = within(target, resolve(root)) ? relative(root, target) : target;
+  if (checked.split("/").some(part => /^\.corral(?:$|[-.])/i.test(part) || /^\.worktrees$/i.test(part))) {
+    throw new Error("Choose a .png path outside Corral state and worktrees.");
+  }
+  const parts = target.split("/").filter(Boolean);
+  const name = parts.pop();
+  if (!name || !name.endsWith(".png")) throw new Error("Choose a new .png path.");
   const rootParts = resolve(root).split("/").filter(Boolean);
   const slash = openSync("/", DIRECTORY);
   let rootFd: number | undefined;
@@ -125,7 +134,7 @@ export function preparePng(root: string, path: string): { publish(bytes: Buffer)
   };
   try {
     const boundRoot = rootFd = walk(slash, rootParts);
-    const boundParent = parentFd = walk(boundRoot, parts);
+    const boundParent = parentFd = walk(slash, parts);
     const rootIdentity = stat(boundRoot);
     const parentIdentity = stat(boundParent);
     const destination = at(boundParent, name);
@@ -137,7 +146,7 @@ export function preparePng(root: string, path: string): { publish(bytes: Buffer)
         const freshRoot = walk(slash, rootParts);
         try {
           if (!same(rootIdentity, stat(freshRoot))) throw new Error();
-          const freshParent = walk(freshRoot, parts);
+          const freshParent = walk(slash, parts);
           try { if (!same(parentIdentity, stat(freshParent))) throw new Error(); }
           finally { closeSync(freshParent); }
         } finally { closeSync(freshRoot); }
@@ -150,7 +159,11 @@ export function preparePng(root: string, path: string): { publish(bytes: Buffer)
     try { accessSync(at(boundParent, "."), constants.W_OK | constants.X_OK); }
     catch { throw new Error("Image destination directory must be writable."); }
     return {
+      path: target,
+      identity: [rootIdentity.dev, rootIdentity.ino, rootIdentity.birthtimeNs, rootIdentity.ctimeNs,
+        parentIdentity.dev, parentIdentity.ino, parentIdentity.birthtimeNs, parentIdentity.ctimeNs].join(":"),
       close,
+      revalidate() { revalidate(); rejectExisting(); },
       publish(bytes) {
         if (closed || used) throw new Error("Image output is no longer open for publication.");
         used = true;

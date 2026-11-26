@@ -5,7 +5,7 @@ import { APPROVAL_CHOICES as CHOICE, isToolApproval, type PendingQuestion, type 
 
 export const APPROVAL_TTL = 30 * 60 * 1000;
 
-export type WriteTool = "edit" | "write";
+export type WriteTool = "edit" | "write" | "image_gen";
 export type ShellTool = "bash" | "job_start";
 
 type Input = Record<string, unknown>;
@@ -22,6 +22,9 @@ function fitsPrompt(text: string): boolean {
 }
 
 function writeSummary(tool: WriteTool, input: Input): string {
+  if (tool === "image_gen" && typeof input.prompt === "string") {
+    return `Image prompt: ${quoted(input.prompt.slice(0, 160))}${input.prompt.length > 160 ? " (preview)" : ""}`;
+  }
   if (tool === "write" && typeof input.content === "string") {
     return `Content (${Buffer.byteLength(input.content)} bytes): ${quoted(input.content.slice(0, 160))}`
       + (input.content.length > 160 ? " (preview)" : "");
@@ -91,10 +94,11 @@ export class ToolApprovals {
       + `Working directory: ${quoted(this.cwd)}${runtime}${wait}\n${quoted(String(input.command))}`);
   }
 
-  write(tool: WriteTool, input: Input, decision: WriteScopeDecision): string | undefined {
+  write(tool: WriteTool, input: Input, decision: WriteScopeDecision, identity?: string): string | undefined {
     const key = this.key(tool, input);
     const previous = this.requests.get(key);
-    if (previous && (decision.action !== "ask" || previous.destination !== decision.canonical)) {
+    const scope = decision.action === "ask" ? `file:${decision.canonical}${identity === undefined ? "" : `\0${identity}`}` : undefined;
+    if (previous && (decision.action !== "ask" || previous.destination !== decision.canonical || previous.scope !== scope)) {
       this.requests.delete(key);
       this.questions.cancel(previous.id);
       return decision.action === "deny" ? decision.reason
@@ -105,10 +109,10 @@ export class ToolApprovals {
     const target = quoted(decision.canonical);
     const via = decision.path === decision.canonical ? "" : `\nRequested as: ${quoted(decision.path)}`;
     const title = `Allow ${tool} outside the session directory?\nDestination: ${target}${via}`
-      + (this.reusable ? "\nA longer grant allows future edits and writes to this file only." : "");
+      + (this.reusable ? "\nA longer grant allows future writes to this file only." : "");
     const summary = writeSummary(tool, input);
     const preview = `${title}\n${summary}`;
-    return this.confirm(key, `file:${decision.canonical}`, "file_write",
+    return this.confirm(key, scope!, "file_write",
       summary && fitsPrompt(preview) ? preview : title, decision.canonical);
   }
 

@@ -366,7 +366,7 @@ test.skipIf(process.platform !== "linux")("slice executes the hosted image bindi
     const run = createSdkRunner({ ...f.options, parentLoadout: ["image_gen"], localTools: [tool("image_gen"), tool("web_search")],
       hostedTools: ({ kind, owns }) => {
         expect(kind).toBe("slice");
-        return [image.tool({ root: f.dir, refusal: path => path && owns.includes(path) ? undefined : "not owned" }), tool("web_search")];
+        return [image.tool({ root: f.dir, refusal: path => path && owns.includes(path) ? undefined : "not owned", authorize: () => () => {} }), tool("web_search")];
       },
     }).run({ id: "slice", title: "Slice", brief: "Generate an owned fixture", owns: ["owned.png"] },
       { profile: "fixture", provider: "openai-codex", model: "fixture" }, f.hooks, signal);

@@ -144,7 +144,7 @@ function accountId(token: string): string | undefined {
   } catch { /* An invalid account claim is not usable OAuth auth. */ }
 }
 
-async function request(options: ImageProviderOptions, route: HostedRoute<ImageProvider>, prompt: string, signal: AbortSignal) {
+async function request(options: ImageProviderOptions, route: HostedRoute<ImageProvider>, prompt: string, signal: AbortSignal, preflight?: () => void) {
   const { provider, model } = route;
   if ((provider !== "openai" && provider !== "openai-codex") || !modelId(model)) throw unavailable("invalid OpenAI image route");
   if (typeof prompt !== "string" || !prompt.trim() || prompt.length > 8000) throw failed("prompt must contain 1–8000 characters");
@@ -185,6 +185,7 @@ async function request(options: ImageProviderOptions, route: HostedRoute<ImagePr
   const network = guardedFetch(send, undefined, provider, [{ method: "POST", display: endpoint,
     matches: (url, sent) => url === endpoint && sent.get("authorization") === authorization }]);
   signal.throwIfAborted();
+  preflight?.();
   const response = await network.fetch(endpoint, { method: "POST", headers, body: JSON.stringify(body), signal });
   if (signal.aborted || !response.ok || response.redirected || (response.url && response.url !== endpoint)) {
     void response.body?.cancel().catch(() => {});
@@ -198,7 +199,7 @@ async function request(options: ImageProviderOptions, route: HostedRoute<ImagePr
 }
 
 export async function generateImage(options: ImageProviderOptions, route: HostedRoute<ImageProvider>, prompt: string,
-  caller: AbortSignal): Promise<GeneratedImage> {
+  caller: AbortSignal, preflight?: () => void): Promise<GeneratedImage> {
   const deadline = AbortSignal.timeout(180_000);
   const signal = AbortSignal.any([caller, deadline]);
   const aborted = () => failed(deadline.aborted ? "request exceeded the 180-second deadline" : "request was canceled");
@@ -209,7 +210,7 @@ export async function generateImage(options: ImageProviderOptions, route: Hosted
     signal.addEventListener("abort", cancel, { once: true });
   });
   try {
-    const result = await Promise.race([cancellation, request(options, route, prompt, signal)]);
+    const result = await Promise.race([cancellation, request(options, route, prompt, signal, preflight)]);
     if (signal.aborted) throw aborted();
     return result;
   } catch (error) {

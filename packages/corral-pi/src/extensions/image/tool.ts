@@ -10,6 +10,8 @@ export interface ImageScope {
   /** No root means preview only. A child never inherits a parent's writable root implicitly. */
   readonly root?: string;
   refusal(path?: string): string | undefined;
+  /** Authorize the prepared destination; return a check to repeat before publication. */
+  authorize?(path: string, prompt: string, identity: string): () => void;
 }
 
 /** Shared by one host and its children: changing the tool binding cannot open another slot. */
@@ -27,7 +29,7 @@ export class ImageGeneration {
     const billing = provider === "openai" ? "api" : "subscription";
     return { name: "image_gen", label: "Generate image",
       description: `Generate one PNG using ${provider}/${model} (${billing === "api" ? "metered image model" : "experimental subscription carrier; backend selects image model"}). `
-        + (root ? "Requires an explicit new .png path under this session's directory; returns a preview and saves the PNG." : "Preview only. Do not pass a path."),
+        + (root ? "Requires an explicit new .png path (relative to the session or absolute); normal write authorization applies. Returns a preview and saves the PNG." : "Preview only. Do not pass a path."),
       parameters: Type.Object({ prompt: Type.String({ minLength: 1, maxLength: 8000 }), path: Type.Optional(Type.String({ minLength: 1, maxLength: 4096 })) }, { additionalProperties: false }),
       execute: async (_id, { prompt, path }: { prompt: string; path?: string }, caller) => {
         if (typeof prompt !== "string" || !prompt.trim() || prompt.length > 8000) throw new Error("image_generation_failed: provide a nonblank prompt of at most 8000 characters");
@@ -37,15 +39,27 @@ export class ImageGeneration {
           const refusal = scope.refusal(path);
           if (refusal) throw new Error(refusal);
           if (!root && path !== undefined) throw new Error("image_generation_unavailable: read-only preview cannot save a path");
-          if (root && (!path || typeof path !== "string")) throw new Error("image_generation_unavailable: select a new relative .png path");
+          if (root && (!path || typeof path !== "string")) throw new Error("image_generation_unavailable: select a new .png path");
         };
         check();
         if (this.busy) throw new Error("image_generation_unavailable: another image request is running");
         this.busy = true;
         let output: ReturnType<typeof preparePng> | undefined;
         try {
-          if (root && path) output = preparePng(root, path);
-          const generated = await generateImage(this.providers, this.route, prompt, signal);
+          let recheck: (() => void) | undefined;
+          if (root && path) {
+            output = preparePng(root, path);
+            if (!scope.authorize) throw new Error("image_generation_unavailable: write authorization is unavailable");
+            recheck = scope.authorize(path, prompt, output.identity);
+            check();
+            output.revalidate();
+            recheck?.();
+          }
+          const generated = await generateImage(this.providers, this.route, prompt, signal, () => {
+            check();
+            output?.revalidate();
+            recheck?.();
+          });
           const usage = generated.usage;
           // No image or hosted-tool fee can be inferred from a carrier's token price.
           this.report({ model: `${provider}/${model}`, billing, output: usage?.outputTokens,
@@ -59,8 +73,9 @@ export class ImageGeneration {
             : await (await import("@earendil-works/pi-coding-agent")).resizeImage(bytes, "image/png", { maxBytes: 96 * 1024, maxWidth: 512, maxHeight: 512 });
           if (!preview || preview.data.length > 128 * 1024) throw new Error("image_generation_failed: cannot prepare a bounded preview");
           check();
+          recheck?.();
           output?.publish(bytes);
-          const receipt = { provider, model, ...(generated.servedModel ? { served_model: generated.servedModel } : {}), path: path ?? null,
+          const receipt = { provider, model, ...(generated.servedModel ? { served_model: generated.servedModel } : {}), path: output?.path ?? null,
             bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") };
           return { content: [{ type: "text", text: JSON.stringify(receipt) }, { type: "image", mimeType: preview.mimeType, data: preview.data }], details: undefined };
         } finally { try { output?.close(); } finally { this.busy = false; } }
