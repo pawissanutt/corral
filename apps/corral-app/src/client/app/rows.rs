@@ -150,6 +150,8 @@ impl AppState {
                 gap,
                 fleet,
                 state,
+                transcript,
+                more,
                 ..
             } => {
                 if !self.session_scopes.contains_key(&scope) {
@@ -163,7 +165,37 @@ impl AppState {
                 let state =
                     state.filter(|_| feed.with_untracked(|feed| feed.capable(SESSION_STATE_V1)));
                 let reset = gap.is_some();
+                let target = DetailRef::Session { id: scope.clone() };
+                let mut transcript_changed = false;
                 feed.update(|feed| {
+                    if feed.capable(SESSION_TRANSCRIPT_V1) {
+                        let key = detail_key(&target);
+                        let has_ops = transcript
+                            .iter()
+                            .any(|op| !matches!(op, TranscriptOp::Other));
+                        if has_ops || feed.details.contains_key(&key) {
+                            transcript_changed = transcript.iter().any(|op| {
+                                matches!(
+                                    op,
+                                    TranscriptOp::Reset { .. }
+                                        | TranscriptOp::Put { .. }
+                                        | TranscriptOp::Drop { .. }
+                                )
+                            });
+                            let cache = feed.details.entry(key).or_insert_with(|| DetailCache {
+                                target: target.clone(),
+                                pages: Vec::new(),
+                                loading: false,
+                                stale: false,
+                                error: None,
+                                merged: None,
+                                transcript_seams: Default::default(),
+                            });
+                            crate::model::session::transcript::mirror::apply(
+                                cache, transcript, more,
+                            );
+                        }
+                    }
                     let live = feed.live.entry(Id::from(&scope)).or_default();
                     let before = live.parts.clone();
                     let generation_changed = live.generation != generation;
@@ -190,6 +222,9 @@ impl AppState {
                             .collect()
                     };
                 });
+                if transcript_changed {
+                    self.touch_detail(feed, &target);
+                }
                 self.touch_session(feed, &scope);
                 Topic::Session
             }
@@ -278,7 +313,12 @@ impl AppState {
             feed.details
                 .values()
                 .filter(|cache| {
-                    !matches!(&cache.target, DetailRef::Terminal { id }
+                    !matches!(&cache.target, DetailRef::Session { id }
+                        if feed.capable(SESSION_TRANSCRIPT_V1)
+                            && self.session_scopes.contains_key(id)
+                            && cache.transcript_seams.mirror.active
+                            && !cache.stale)
+                        && !matches!(&cache.target, DetailRef::Terminal { id }
                         if self.terminal_scopes.contains_key(id)
                             && feed.capable(STREAM_TERMINAL_V1))
                         && (affected(&cache.target, topic, changed)

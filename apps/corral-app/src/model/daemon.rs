@@ -244,7 +244,8 @@ impl Feed {
     }
 
     pub fn settle_session(&mut self, target: &DetailRef, reread: Option<u64>) {
-        if let DetailRef::Session { id } = target
+        if !self.capable(corral_protocol::app::SESSION_TRANSCRIPT_V1)
+            && let DetailRef::Session { id } = target
             && let Some(reread) = reread
             && let Some(live) = self.live.get_mut(id.as_str())
         {

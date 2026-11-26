@@ -25,6 +25,7 @@ mod items;
 mod journal;
 mod live;
 mod marks;
+pub(crate) mod mirror;
 mod overlay;
 mod pairs;
 mod replay;
@@ -59,7 +60,7 @@ pub use items::{
     Answered, AnsweredQuestion, Card, Divider, Footer, Marker, More, Picture, Prose, Section,
     Thinking,
 };
-pub use live::{ItemFetch, LiveMessage, LiveSession, LiveTool, LiveToolState, TurnEnd};
+pub use live::{ItemFetch, LiveSession, LiveTool, LiveToolState, TurnEnd};
 pub use replay::{anchor, fetches, reader_transcript, size, transcript, window_fetches};
 pub use seams::TranscriptSeams;
 pub(crate) use seams::preserve_anchors;
@@ -267,9 +268,7 @@ pub struct Transcript {
     pub fill: Fill,
     pub stale: Option<String>,
     pub disclaimer: Option<Note>,
-    /// The live turn after the recorded messages, until the recorded transcript holds it.
-    pub live: Vec<Message>,
-    /// Quiet rows after the live turn: owner input the host holds, how the turn ended.
+    /// Quiet rows after the transcript: owner input the host holds, how the turn ended.
     pub after: Vec<MessageItem>,
     /// The session scope this transcript is of (a child's conversation has its own).
     pub scope: Id,
@@ -322,11 +321,7 @@ impl Transcript {
     pub fn following(&self) -> Following {
         let resume = match &self.reading {
             Reading::At { key, offset, rows }
-                if self
-                    .messages
-                    .iter()
-                    .chain(&self.live)
-                    .any(|message| message.anchor == *key) =>
+                if self.messages.iter().any(|message| message.anchor == *key) =>
             {
                 Resume::Row {
                     key: key.clone(),
@@ -349,7 +344,7 @@ impl Transcript {
     }
 
     fn trailing_rows(&self) -> usize {
-        self.echoes.len() + self.after.len() + self.live.iter().map(message_rows).sum::<usize>()
+        self.echoes.len() + self.after.len()
     }
 
     /// Rows from messages after `anchor`, including when they share its displayed bubble.

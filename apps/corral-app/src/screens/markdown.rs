@@ -321,7 +321,11 @@ fn cited(app: AppState, markdown: &str, streaming: bool, images: bool, chat: boo
 /// the blocks a beat leaves as they were and lays out only the one being written, where
 /// drawing the words again would make every block anew on each beat. A citation is linked
 /// once it resolves, and its details are kept loaded for as long as the words name it.
-pub(crate) fn chat_markdown_streaming(app: AppState, markdown: Memo<String>) -> AnyElement {
+pub(crate) fn chat_markdown_streaming(
+    app: AppState,
+    markdown: Memo<String>,
+    streaming: Memo<bool>,
+) -> AnyElement {
     let cites = computed(move || markdown.with(|markdown| cite::cites(markdown)));
     let open = computed(move || {
         cites.with(|cites| {
@@ -343,7 +347,7 @@ pub(crate) fn chat_markdown_streaming(app: AppState, markdown: Memo<String>) -> 
         app,
         text_view().document(move || {
             let open = open.get();
-            markdown.with(|markdown| document(app, markdown, true, true, true, &open))
+            markdown.with(|markdown| document(app, markdown, streaming.get(), true, true, &open))
         }),
     );
     view()

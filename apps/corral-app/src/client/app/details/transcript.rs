@@ -127,7 +127,43 @@ impl AppState {
                 Ok(page) => page,
                 Err(message) => return self.invalid_transcript(feed, key, &id, message),
             },
-            Err((ErrorCode::Conflict, _)) if request.page.is_some() => {
+            Err((ErrorCode::Conflict, message)) if request.page.is_some() => {
+                if feed.with_untracked(|f| {
+                    f.capable(SESSION_TRANSCRIPT_V1)
+                        && f.details
+                            .get(key)
+                            .is_some_and(|cache| cache.transcript_seams.mirror.active)
+                }) {
+                    let still_at_edge = feed.with_untracked(|f| {
+                        f.details
+                            .get(key)
+                            .and_then(|cache| replay::page(Some(cache)))
+                            .is_some_and(|held| held.older == request.page)
+                    });
+                    if still_at_edge {
+                        self.detail_failed(
+                            feed,
+                            key,
+                            &id,
+                            ClientError {
+                                code: HISTORY_CHANGED.into(),
+                                message,
+                            },
+                        );
+                    } else {
+                        // A stream reset already moved the branch while this request was out.
+                        self.detail_inflight.remove(key);
+                        feed.update(|f| {
+                            if let Some(cache) = f.details.get_mut(key) {
+                                cache.loading = false;
+                            }
+                            if let Some(operation) = f.operations.get_mut(id.as_str()) {
+                                operation.loading = false;
+                            }
+                        });
+                    }
+                    return vec![];
+                }
                 return self.transcript_conflict(feed, key, id, request.target);
             }
             // The alias with no current quick chat offers the composer for a new one.
@@ -180,6 +216,69 @@ impl AppState {
             // A pre-End read can resolve the old alias. It must not restore that transcript
             // under the scope where Ask will compose its next message.
             return self.restart_detail(feed, key, id, request.target, CHANGED.into());
+        }
+        if feed.with_untracked(|f| {
+            f.capable(SESSION_TRANSCRIPT_V1)
+                && f.details
+                    .get(key)
+                    .is_some_and(|cache| cache.transcript_seams.mirror.active)
+        }) {
+            feed.update(|f| {
+                if let Some(cache) = f.details.get_mut(key) {
+                    if let Some(DetailBody::Session(held)) = &mut cache.merged {
+                        if request.page.is_some() {
+                            if request.page == held.older {
+                                let mirror = &mut cache.transcript_seams.mirror;
+                                mirror.remember_edge(held);
+                                if let Some(first) = held.messages.first() {
+                                    mirror.joined_fragment(&first.id);
+                                }
+                                prepend(held, current.clone());
+                                mirror.remember_edge(held);
+                                retain_page(&mut cache.pages, page.clone());
+                            }
+                        } else {
+                            let mut head = current.clone();
+                            let first = held.messages.first().map(|m| m.id.as_str());
+                            if let Some(at) = head
+                                .messages
+                                .iter()
+                                .position(|m| Some(m.id.as_str()) == first)
+                            {
+                                head.messages.truncate(at);
+                                if cache.pages.is_empty() && held.older.is_some() {
+                                    prepend(held, head);
+                                }
+                            }
+                            let mut metadata = current.clone();
+                            metadata.older = held.older.take();
+                            metadata.messages = std::mem::take(&mut held.messages);
+                            *held = metadata;
+                            if cache.pages.is_empty() {
+                                cache.pages.push(page.clone());
+                            }
+                        }
+                    }
+                    cache.loading = false;
+                    cache.stale = false;
+                    cache.error = None;
+                    replay::mirror::bound(cache);
+                }
+                if let Some(operation) = f.operations.get_mut(id.as_str()) {
+                    operation.loading = false;
+                    operation.value = serde_json::to_value(&page).ok();
+                    operation.error = None;
+                }
+            });
+            self.detail_inflight.remove(key);
+            self.detail_latest.remove(key);
+            self.detail_reread.remove(key);
+            self.detail_restarts.remove(key);
+            self.detail_bytes.remove(key);
+            self.detail_pages.remove(key);
+            self.touch_detail(feed, &request.target);
+            self.trim_retained(feed);
+            return vec![];
         }
         let chain = self.detail_pages.get(key).map(Vec::as_slice).unwrap_or(&[]);
         let walking = request.page.is_some() && chain.is_empty();

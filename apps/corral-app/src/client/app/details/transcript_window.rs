@@ -285,7 +285,7 @@ impl AppState {
             return vec![];
         }
         let target = target(&intent.scope);
-        let Some(held) = feed.with_untracked(|f| {
+        let Some(mut held) = feed.with_untracked(|f| {
             (if detached {
                 f.transcript_windows.get(&holder).map(|p| &p.cache)
             } else {
@@ -297,17 +297,34 @@ impl AppState {
             return vec![];
         };
         let latest = matches!(intent.step, ReaderStep::Latest);
+        if latest
+            && feed.with_untracked(|f| {
+                f.capable(SESSION_TRANSCRIPT_V1)
+                    && f.detail(&target).is_some_and(|cache| {
+                        cache.transcript_seams.mirror.active && cache.error.is_none()
+                    })
+            })
+        {
+            self.close_reader(feed, holder);
+            return vec![];
+        }
         if held.loading && !latest {
             return vec![];
         }
+        let mirrored = feed.with_untracked(|f| f.capable(SESSION_TRANSCRIPT_V1))
+            && held.transcript_seams.mirror.active;
         let cursor = match &intent.step {
             ReaderStep::Older { cursor }
                 if body(&held).and_then(|b| b.older.as_ref()) == Some(cursor) =>
             {
                 // Leave room for a complete daemon frame before using the shared path.
                 if !detached
-                    && held.pages.len() < self.reader_limit()
-                    && payload(&held.pages) < MAX_DETAIL_BYTES / 2
+                    && if mirrored {
+                        held.transcript_seams.mirror.bytes() < MAX_DETAIL_BYTES / 2
+                    } else {
+                        held.pages.len() < self.reader_limit()
+                            && payload(&held.pages) < MAX_DETAIL_BYTES / 2
+                    }
                 {
                     return self.detail_request(
                         feed,
@@ -334,11 +351,45 @@ impl AppState {
             _ => return vec![],
         };
         if !detached {
+            let mut path = vec![Bookmark::default()];
+            if mirrored
+                && let Some(cursor) = &cursor
+                && let Some(DetailBody::Session(edge)) = &mut held.merged
+            {
+                // The retained physical pages don't describe the tail after streaming puts.
+                // Seed the detached reader from its visible top; Newer rejoins the mirror.
+                let mut bytes = 0;
+                let count = edge
+                    .messages
+                    .iter()
+                    .take_while(|message| {
+                        bytes += held
+                            .transcript_seams
+                            .mirror
+                            .message_bytes(&message.id)
+                            .unwrap_or_else(|| cache::bytes(message));
+                        bytes <= MAX_DETAIL_BYTES / 2
+                    })
+                    .count()
+                    .max(1);
+                edge.messages.truncate(count);
+                held.pages = vec![DetailReply {
+                    etag: String::new(),
+                    as_of: String::new(),
+                    seq: 0,
+                    next: edge.older.clone(),
+                    body: Some(DetailBody::Session(edge.clone())),
+                }];
+                path.push(Bookmark {
+                    cursor: Some(cursor.clone()),
+                    suffix: None,
+                });
+            }
             self.reader_windows.insert(
                 holder,
                 Window {
                     scope: intent.scope.clone(),
-                    path: vec![Bookmark::default()],
+                    path,
                     ..Window::default()
                 },
             );
@@ -513,9 +564,11 @@ impl AppState {
             .seek
             .as_ref()
             .map_or(held.pages.as_slice(), |s| s.pages.as_slice());
+        let stable_cursors = feed.with_untracked(|f| f.capable(SESSION_TRANSCRIPT_V1));
         let Some(page) = page.filter(|p| {
             session(p).is_some()
-                && (latest
+                && (stable_cursors
+                    || latest
                     || read.seek.as_ref().is_some_and(|s| s.pages.is_empty())
                     || prior.first().is_some_and(|first| first.etag == p.etag))
         }) else {

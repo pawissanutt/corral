@@ -20,6 +20,16 @@ impl AppState {
         let key = detail_key(&target);
         let seq = cache.pages[0].seq;
         let shared = feed.with_untracked(|f| f.details.get(&key).cloned());
+        if feed.with_untracked(|f| f.capable(SESSION_TRANSCRIPT_V1))
+            && shared
+                .as_ref()
+                .is_some_and(|cache| cache.transcript_seams.mirror.active)
+        {
+            // Returning from a detached reader means rejoining the mirrored head, not
+            // publishing this independently fetched, possibly older snapshot over it.
+            self.close_reader(feed, holder);
+            return vec![];
+        }
         let protected = self
             .shared_holders
             .iter()

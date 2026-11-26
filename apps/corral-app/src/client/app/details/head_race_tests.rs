@@ -14,7 +14,7 @@ fn answer(
 }
 
 #[test]
-fn private_latest_keeps_later_live_output_until_shared_refresh_arrives() {
+fn legacy_private_latest_does_not_swallow_a_later_turn_end_refresh() {
     let runtime = nsh_core::element::Runtime::default();
     let _entered = runtime.enter();
     let feed = signal(Feed::default());
@@ -67,27 +67,16 @@ fn private_latest_keeps_later_live_output_until_shared_refresh_arrives() {
     feed.update(|f| {
         f.live.get_mut("B-1").unwrap().apply_page(
             Some(1),
-            vec![
-                event(
-                    2,
-                    SessionLiveKind::LiveText {
-                        turn: 1,
-                        message: 1,
-                        offset: 0,
-                        text: "later output".into(),
+            vec![event(
+                2,
+                SessionLiveKind::LiveTurn {
+                    turn: 1,
+                    state: SessionLiveTurnState::Ended {
+                        aborted: false,
+                        error: None,
                     },
-                ),
-                event(
-                    3,
-                    SessionLiveKind::LiveTurn {
-                        turn: 1,
-                        state: SessionLiveTurnState::Ended {
-                            aborted: false,
-                            error: None,
-                        },
-                    },
-                ),
-            ],
+                },
+            )],
             false,
         );
     });
@@ -96,7 +85,6 @@ fn private_latest_keeps_later_live_output_until_shared_refresh_arrives() {
     let refresh = answer(&mut app, feed, latest, page("private", &[], None));
     let assert_retained = || {
         feed.with_untracked(|f| {
-            assert_eq!(f.live.get("B-1").unwrap().messages[0].text, "later output");
             assert_eq!(f.detail(&target).unwrap().pages[0].etag, "private");
         })
     };
@@ -119,7 +107,6 @@ fn private_latest_keeps_later_live_output_until_shared_refresh_arrives() {
         .is_empty()
     );
     feed.with_untracked(|f| {
-        assert!(f.live.get("B-1").unwrap().messages.is_empty());
         assert_eq!(f.detail(&target).unwrap().pages[0].etag, "recorded");
     });
 }

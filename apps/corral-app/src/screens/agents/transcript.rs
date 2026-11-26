@@ -267,6 +267,7 @@ fn item(app: AppState, entry: &MessageItem, n: usize, spot: Option<Spot<'_>>) ->
 struct Written {
     words: Memo<String>,
     number: Memo<usize>,
+    streaming: Memo<bool>,
 }
 
 /// `live` is what changes of an item still being written without `entry` doing so.
@@ -280,7 +281,7 @@ fn item_body(
     let id = n.to_string();
     match entry {
         MessageItem::Paragraph(words) => paragraph(app, words),
-        MessageItem::Prose(words) => prose::prose(app, words, &id, live.map(|live| live.words)),
+        MessageItem::Prose(words) => prose::prose(app, words, &id, live),
         MessageItem::Thinking(thought) => prose::thinking(app, thought, &id, live),
         MessageItem::Tool(call) => tool::tool(app, call, &id),
         MessageItem::Group(folded) => group::group(app, folded, &id, spot),

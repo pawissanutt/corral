@@ -1,7 +1,7 @@
 use super::*;
 
 const MAX_PAGES: usize = 256;
-pub(super) const MAX_DETAIL_BYTES: usize = 8 * 1024 * 1024;
+pub(super) use crate::model::session::transcript::mirror::MAX_BYTES as MAX_DETAIL_BYTES;
 /// Bytes of a text artifact's pages the preview reads before it stops at the head; the rest is
 /// had through a download. Binary content reads up to the device's bound, so an image within it
 /// still draws whole.
@@ -49,9 +49,12 @@ impl AppState {
         };
         let key = detail_key(&target);
         let changed = feed.with_untracked(|f| {
-            f.details
-                .get(&key)
-                .is_some_and(|c| c.pages.len() > 1 && !c.loading && c.error.is_none())
+            f.details.get(&key).is_some_and(|c| {
+                !(f.capable(SESSION_TRANSCRIPT_V1) && c.transcript_seams.mirror.active)
+                    && c.pages.len() > 1
+                    && !c.loading
+                    && c.error.is_none()
+            })
         });
         if !changed {
             return;

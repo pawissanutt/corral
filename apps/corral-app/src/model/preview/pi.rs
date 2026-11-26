@@ -3,8 +3,8 @@
 //! tick, holds automated input while paused and delivers it on Resume or before the owner's
 //! next message, and records its turn checkpoints. Its controls (cancel, pause, resume, the
 //! rewinds) are in `pi_control.rs`; the cards it waits on, its queue and a build's exit are
-//! answered in `build_ops.rs`. A session's transcript detail is read from its host on request,
-//! as corrald reads the file, so a recorded turn shows only once the app re-reads it.
+//! answered in `build_ops.rs`. The fixture publishes recorded changes and live words through
+//! the same transcript mirror as a connected session.
 
 use std::collections::VecDeque;
 
@@ -296,6 +296,22 @@ pub(super) fn publish(feed: &mut Feed, id: &str, events: Vec<SessionLiveEvent>, 
         return;
     };
     for scope in scopes(feed, id) {
+        if gap
+            || events.iter().any(|event| {
+                matches!(
+                    &event.kind,
+                    SessionLiveKind::LiveEntry {}
+                        | SessionLiveKind::LiveTurn { .. }
+                        | SessionLiveKind::LiveTool {
+                            state: SessionLiveToolState::Started { .. },
+                            ..
+                        }
+                )
+            })
+        {
+            super::pi_rows::page(feed, &scope);
+        }
+        apply_words(feed, &scope, generation, &events);
         feed.live
             .entry(scope)
             .or_default()
@@ -303,8 +319,51 @@ pub(super) fn publish(feed: &mut Feed, id: &str, events: Vec<SessionLiveEvent>, 
     }
 }
 
-/// The host recorded a message: every watcher reads the transcript again, as corrald's
-/// `live_entry` tells it.
+fn apply_words(feed: &mut Feed, scope: &str, generation: u32, events: &[SessionLiveEvent]) {
+    use corral_protocol::detail::DetailRef;
+    use corral_protocol::subscription::{TranscriptOp, TranscriptPart};
+    let target = DetailRef::Session {
+        id: scope.to_owned(),
+    };
+    let Some(cache) = feed
+        .details
+        .get_mut(&crate::model::daemon::detail_key(&target))
+    else {
+        return;
+    };
+    for event in events {
+        let SessionLiveKind::LiveText {
+            turn,
+            message,
+            offset,
+            text,
+        } = &event.kind
+        else {
+            continue;
+        };
+        let id = format!("{scope}/open/{generation}.{turn}.{message}");
+        let mut ops = Vec::new();
+        if cache.transcript_seams.mirror.open.as_ref() != Some(&id) {
+            let mut message = assistant(&event.at, Vec::new(), None);
+            message.id = id.clone();
+            ops.push(TranscriptOp::Put {
+                message,
+                before: None,
+                replaces: None,
+                open: true,
+            });
+        }
+        ops.push(TranscriptOp::Append {
+            id,
+            part: TranscriptPart::Text,
+            offset: *offset,
+            text: text.clone(),
+        });
+        crate::model::session::transcript::mirror::apply(cache, ops, false);
+    }
+}
+
+/// Publish the host's changed records to every watcher.
 pub(super) fn recorded(feed: &mut Feed, id: &str) {
     let at = stamp(feed.now);
     let Some(host) = feed.hosts.get_mut(id) else {
@@ -341,6 +400,8 @@ pub(super) fn watch(feed: &mut Feed, scope: &str) {
         }
     }
     let generation = host.generation;
+    super::pi_rows::page(feed, scope);
+    apply_words(feed, scope, generation, &events);
     feed.live
         .entry(Id::from(scope))
         .or_default()
@@ -423,20 +484,31 @@ fn step(feed: &mut Feed, id: &str) {
                 state,
             });
             if ended {
-                // The calling message and its result are recorded once the tool ends; the
-                // stream shows both until the app re-reads them.
-                let mut items = words(&turn.text);
-                items.push(tool_item(call, tool, &args, &lines, true));
-                host.transcript.push(Recorded {
-                    entry: None,
-                    message: assistant(&at, items, Some("toolUse")),
-                });
+                // Settle the existing call record rather than inserting a second row.
+                if let Some(item) = host.transcript.iter_mut().rev().flat_map(|entry| entry.message.items.iter_mut()).find(|item| {
+                    matches!(item, SessionItem::ToolCall { call_id, .. } if *call_id == call)
+                }) {
+                    *item = tool_item(call, tool, &args, &lines, true);
+                }
                 turn.beats.pop_front();
                 turn.shown = None;
                 turn.message += 1;
                 turn.text.clear();
                 After::Recorded
             } else {
+                if turn.shown.is_none() {
+                    let mut items = words(&turn.text);
+                    let mut item = tool_item(call, tool, &args, &[], false);
+                    if let SessionItem::ToolCall { state, .. } = &mut item {
+                        *state = SessionToolState::Running;
+                    }
+                    items.push(item);
+                    host.transcript.push(Recorded {
+                        entry: None,
+                        message: assistant(&at, items, Some("toolUse")),
+                    });
+                    turn.text.clear();
+                }
                 turn.shown = Some(turn.shown.map_or(0, |shown| shown + 1));
                 After::Nothing
             }

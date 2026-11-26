@@ -6,8 +6,7 @@ use corral_protocol::subscription::{SessionAgentMessage, SessionFleet};
 use super::super::Ui;
 use super::replay::transcript;
 use super::{
-    ItemFetch, LiveMessage, LiveSession, LiveTool, LiveToolState, MessageItem, More, Reading,
-    Resume, Transcript,
+    ItemFetch, LiveSession, LiveTool, LiveToolState, MessageItem, More, Reading, Resume, Transcript,
 };
 use crate::model::Id;
 use crate::model::daemon::{self, DetailCache};
@@ -88,21 +87,23 @@ fn continued_text_shows_only_its_preview_after_the_continuation_arrives() {
 }
 
 #[test]
-fn live_tool_row_is_drawn_twice_once_the_recorded_transcript_holds_it() {
+fn live_tool_result_decorates_the_held_call_without_adding_a_row() {
     let mut feed = feed(vec![SessionItem::ToolCall {
         call_id: "c1".into(),
         name: "bash".into(),
         arguments: "{\"command\": \"ls\"}".into(),
         summary: "ls".into(),
-        state: SessionToolState::Done,
+        state: SessionToolState::Running,
         paired: true,
         call: None,
-        output: Some("a\nb".into()),
+        output: None,
         result: None,
-        elapsed_ms: Some(400),
+        elapsed_ms: None,
         diff: None,
         content: None,
     }]);
+    feed.capabilities
+        .insert(corral_protocol::app::SESSION_TRANSCRIPT_V1.into());
     feed.live.insert(
         Id::from(ID),
         LiveSession {
@@ -116,20 +117,16 @@ fn live_tool_row_is_drawn_twice_once_the_recorded_transcript_holds_it() {
                 state: LiveToolState::Done,
                 elapsed_ms: Some(400),
                 settled_at: None,
-                after: 0,
             }],
             ..Default::default()
         },
     );
     let page = shown(&feed);
-    let rows = page
-        .messages
-        .iter()
-        .chain(&page.live)
-        .flat_map(|message| &message.items)
-        .filter(|item| matches!(item, MessageItem::Tool(_)))
-        .count();
-    assert_eq!(rows, 1);
+    let [MessageItem::Tool(tool)] = page.messages[0].items.as_slice() else {
+        panic!("one tool row")
+    };
+    assert_eq!(tool.state, super::ToolState::Ok);
+    assert!(tool.time.is_some());
 }
 
 #[test]
@@ -234,130 +231,6 @@ fn recorded_tool_calls_settle_from_their_result_by_call_id() {
             "a different id must stay running"
         );
     }
-}
-
-#[test]
-fn a_recorded_reply_retires_its_live_text() {
-    // The feed's recorded assistant message was written at 10:00:00, after the turn started.
-    let mut feed = feed(vec![SessionItem::Text {
-        text: "Done: the tests pass.".into(),
-    }]);
-    feed.live.insert(
-        Id::from(ID),
-        LiveSession {
-            open: false,
-            turn: Some(3),
-            started_at: Some("2026-11-15T09:59:58Z".into()),
-            messages: vec![LiveMessage {
-                ordinal: 1,
-                text: "Done: the tests pass.".into(),
-                thinking: String::new(),
-                settled_at: None,
-            }],
-            ..Default::default()
-        },
-    );
-    let page = shown(&feed);
-    assert!(
-        page.live.is_empty(),
-        "the served reply of the turn must retire its live text, not stand beside it"
-    );
-}
-
-#[test]
-fn a_live_reply_that_follows_two_tool_calls_is_shown_after_them() {
-    // The agent edited, committed, then said so; the turn ended before the page held any of it.
-    let call = |id: &str, tool: &str, args: &str| LiveTool {
-        call: id.into(),
-        tool: tool.into(),
-        args: Some(args.into()),
-        args_truncated: false,
-        partial: None,
-        state: LiveToolState::Done,
-        elapsed_ms: Some(300),
-        settled_at: Some(1),
-        after: 0,
-    };
-    let mut feed = feed(Vec::new());
-    feed.live.insert(
-        Id::from(ID),
-        LiveSession {
-            open: false,
-            turn: Some(4),
-            tools: vec![
-                call("e1", "edit", r#"{"path":"line.txt"}"#),
-                call(
-                    "b1",
-                    "bash",
-                    r#"{"command":"git add line.txt && git commit -m label"}"#,
-                ),
-            ],
-            messages: vec![LiveMessage {
-                ordinal: 2,
-                text: "The parity label is committed.".into(),
-                thinking: String::new(),
-                settled_at: Some(2),
-            }],
-            ..Default::default()
-        },
-    );
-    let page = shown(&feed);
-    let [live] = page.live.as_slice() else {
-        panic!("the live turn is one message");
-    };
-    let kinds: Vec<&str> = live
-        .items
-        .iter()
-        .map(|item| match item {
-            MessageItem::Tool(_) => "tool",
-            MessageItem::Prose(_) => "text",
-            _ => "other",
-        })
-        .collect();
-    assert_eq!(kinds, ["tool", "tool", "text"]);
-}
-
-/// The words being written were keyed by where they stood in the live turn, so their view was
-/// made again each time a call before them was recorded.
-#[test]
-fn live_words_keep_their_key_when_a_call_before_them_is_recorded() {
-    let turn = |tools: Vec<LiveTool>| LiveSession {
-        open: true,
-        turn: Some(4),
-        tools,
-        messages: vec![LiveMessage {
-            ordinal: 2,
-            text: "Committing the label".into(),
-            thinking: String::new(),
-            settled_at: None,
-        }],
-        ..Default::default()
-    };
-    let words = |tools| {
-        let mut feed = feed(Vec::new());
-        feed.live.insert(Id::from(ID), turn(tools));
-        let page = shown(&feed);
-        let live = &page.live[0];
-        assert_eq!(live.keys.len(), live.items.len());
-        let at = live
-            .items
-            .iter()
-            .position(|item| matches!(item, MessageItem::Prose(_)))
-            .unwrap();
-        (at, live.keys[at].clone())
-    };
-    let (after_call, key) = words(vec![LiveTool {
-        call: "e1".into(),
-        tool: "edit".into(),
-        args: None,
-        args_truncated: false,
-        partial: None,
-        state: LiveToolState::Running,
-        elapsed_ms: None,
-        settled_at: None,
-        after: 0,
-    }]);
-    assert_eq!((after_call, words(Vec::new())), (1, (0, key)));
 }
 
 /// Appends a message to the served page.

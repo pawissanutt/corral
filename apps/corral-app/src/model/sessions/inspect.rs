@@ -98,12 +98,7 @@ pub fn inspect(feed: &Feed, id: &Id, env: Env) -> Option<Inspect> {
     let ui = Ui::default();
     let cx = Cx::new(feed, &ui, id, env, &facts);
     let shown = transcript::transcript(id, &ui, cx.cache, feed);
-    let messages: Vec<Message> = shown
-        .messages
-        .iter()
-        .chain(shown.live.iter())
-        .cloned()
-        .collect();
+    let messages: Vec<Message> = shown.messages.iter().cloned().collect();
     let blocked = row.line.state == SessionState::Blocked;
     let state = match &row.line.doing {
         Some(doing) if !blocked => format!("{}: {doing}", row.line.state.word()),

@@ -61,7 +61,11 @@ pub fn watch(app: AppState, id: Id) {
             scoped.feed.with(|feed| {
                 let cache = feed.detail(&target);
                 (
-                    feed.live.get(id.as_str()).map(|turn| turn.reread),
+                    if feed.capable(corral_protocol::app::SESSION_TRANSCRIPT_V1) {
+                        None
+                    } else {
+                        feed.live.get(id.as_str()).map(|turn| turn.reread)
+                    },
                     cache.is_some_and(|cache| cache.loading),
                     cache
                         .and_then(|cache| cache.error.as_ref())

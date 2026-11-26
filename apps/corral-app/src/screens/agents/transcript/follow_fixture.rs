@@ -49,7 +49,8 @@ fn FollowFixture() -> impl IntoElement {
         ];
         let words =
             "A streaming paragraph wraps across the transcript. ".repeat(96 + step.get() * 32);
-        page.live = vec![message_at("live", true, words.trim_end())];
+        page.messages
+            .push(message_at("live", true, words.trim_end()));
         Some(page)
     });
     let reader = Reader::new(app);

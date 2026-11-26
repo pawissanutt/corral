@@ -146,10 +146,7 @@ pub fn rows(feed: &Feed, scope: &str) -> usize {
             })
             .count()
     });
-    let live = feed
-        .live
-        .get(scope)
-        .map_or(0, |live| live.messages.len() + live.tools.len());
+    let live = feed.live.get(scope).map_or(0, |live| live.tools.len());
     served + live
 }
 

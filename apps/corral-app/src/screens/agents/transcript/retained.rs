@@ -6,9 +6,8 @@ use std::collections::HashMap;
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 enum Source {
-    Recorded(String),
+    Message(String),
     Echo(String),
-    Live(String),
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -35,20 +34,13 @@ fn rows(page: &Transcript) -> Vec<Row> {
     };
     for message in &page.messages {
         push(
-            Source::Recorded(message.anchor.clone()),
+            Source::Message(message.anchor.clone()),
             Body::Message(message.clone(), first),
         );
         first += message.items.len() + usize::from(message.footer.is_some());
     }
     for echo in &page.echoes {
         push(Source::Echo(echo.id.clone()), Body::Echo(echo.clone()));
-    }
-    for message in &page.live {
-        push(
-            Source::Live(message.anchor.clone()),
-            Body::Message(message.clone(), first),
-        );
-        first += message.items.len() + usize::from(message.footer.is_some());
     }
     // Older daemons can repeat a time/author anchor. Count its occurrences from
     // the tail so a matching legacy row prepended by paging keeps existing keys.
@@ -126,7 +118,6 @@ pub(super) fn render(
                 let next = p
                     .messages
                     .iter()
-                    .chain(&p.live)
                     .map(|m| m.items.len() + usize::from(m.footer.is_some()))
                     .sum::<usize>();
                 (next, p.after.clone())
@@ -334,7 +325,6 @@ fn body(
 ) -> AnyElement {
     dynamic(move || {
         let body = item.get();
-        let live = live.filter(|_| written(&body).is_some());
         let spot = place
             .as_ref()
             .map(|(scope, anchor, key)| Spot { scope, anchor, key });
@@ -359,8 +349,8 @@ fn tag(n: usize) -> AnyElement {
 /// The words of an item still being written, which each beat adds to.
 fn written(item: &MessageItem) -> Option<&str> {
     match item {
-        MessageItem::Prose(words) if words.streaming => Some(&words.markdown),
-        MessageItem::Thinking(thought) if thought.streaming && thought.open => Some(&thought.text),
+        MessageItem::Prose(words) => Some(&words.markdown),
+        MessageItem::Thinking(thought) if thought.open => Some(&thought.text),
         _ => None,
     }
 }
@@ -368,18 +358,19 @@ fn written(item: &MessageItem) -> Option<&str> {
 /// `item` without what a beat adds to it: all that its view is made from.
 fn settled(item: &MessageItem) -> MessageItem {
     match item {
-        MessageItem::Prose(words) if words.streaming => MessageItem::Prose(Prose {
+        MessageItem::Prose(words) => MessageItem::Prose(Prose {
             markdown: String::new(),
             more: words.more.clone(),
-            streaming: true,
+            streaming: false,
         }),
-        MessageItem::Thinking(thought) if thought.streaming && thought.open => {
+        MessageItem::Thinking(thought) if thought.open => {
             MessageItem::Thinking(Thinking {
                 text: String::new(),
                 // Read only while folded: it counts the lines written so far.
                 hidden: String::new(),
                 more: thought.more.clone(),
                 action: thought.action.clone(),
+                streaming: false,
                 ..*thought
             })
         }
@@ -459,10 +450,30 @@ fn item_list(
             // A beat of a reply being written changes only its words. They are drawn in a
             // view that stays; the item is made again only when something else about it
             // changes, where making it on every beat tore down and rebuilt all its blocks.
-            let item = computed(move || row.with(|row| settled(&row.body)));
+            let retained = key
+                .as_ref()
+                .is_some_and(|key| key.ends_with("|text") || key.ends_with("|thinking"));
+            let streaming = computed(move || {
+                row.with(|row| match &row.body {
+                    MessageItem::Prose(prose) => prose.streaming,
+                    MessageItem::Thinking(thought) => thought.streaming,
+                    _ => false,
+                })
+            });
+            let stays = computed(move || {
+                row.with(|row| (retained || streaming.get()) && written(&row.body).is_some())
+            });
+            let item = computed(move || {
+                row.with(|row| {
+                    if stays.get() {
+                        settled(&row.body)
+                    } else {
+                        row.body.clone()
+                    }
+                })
+            });
             let words =
                 computed(move || row.with(|row| written(&row.body).unwrap_or_default().to_owned()));
-            let stays = computed(move || row.with(|row| written(&row.body).is_some()));
             let place = key.clone().map(|key| (scope.clone(), anchor.clone(), key));
             let content = dynamic(move || {
                 let place = place.clone();
@@ -478,7 +489,11 @@ fn item_list(
                             item,
                             number.get_untracked(),
                             place,
-                            Some(Written { words, number }),
+                            Some(Written {
+                                words,
+                                number,
+                                streaming,
+                            }),
                         ))
                         .child(dynamic(move || tag(number.get())))
                         .into_element();

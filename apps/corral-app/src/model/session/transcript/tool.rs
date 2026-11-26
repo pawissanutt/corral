@@ -691,6 +691,18 @@ pub(super) fn parse(json: &str) -> Value {
     serde_json::from_str(json).unwrap_or(Value::Null)
 }
 
+fn live_progress<'a>(cx: Cx<'a>, call: &str) -> Option<&'a LiveTool> {
+    if cx.detached || !cx.feed.capable(corral_protocol::app::SESSION_TRANSCRIPT_V1) {
+        return None;
+    }
+    cx.feed
+        .live
+        .get(cx.id.as_str())?
+        .tools
+        .iter()
+        .find(|tool| tool.call == call)
+}
+
 /// A recorded tool call, or the half of one this page holds: a tool row, a Code Mode cell or a
 /// build card.
 pub(super) fn call(
@@ -727,14 +739,33 @@ pub(super) fn call(
         .map(parse)
         .and_then(|value| value.get("details").cloned())
         .unwrap_or(Value::Null);
-    let output = output.as_deref().unwrap_or_default();
+    let progress = (*state == SessionToolState::Running)
+        .then(|| live_progress(cx, call_id))
+        .flatten();
+    let output = progress
+        .and_then(|tool| tool.partial.as_deref())
+        .or(output.as_deref())
+        .unwrap_or_default();
+    let elapsed_ms = elapsed_ms.or_else(|| progress.and_then(|tool| tool.elapsed_ms));
+    let arguments = if arguments.is_empty() {
+        progress
+            .and_then(|tool| tool.args.as_deref())
+            .unwrap_or_default()
+    } else {
+        arguments.as_str()
+    };
     let shown = Call {
         name,
         args: parse(arguments),
         details,
         text: output,
         state: match state {
-            SessionToolState::Running => CallState::Running,
+            SessionToolState::Running => match progress.map(|tool| &tool.state) {
+                Some(LiveToolState::Done) => CallState::Done,
+                Some(LiveToolState::Failed) => CallState::Failed,
+                _ if progress.is_some_and(|tool| tool.args_truncated) => CallState::Writing,
+                _ => CallState::Running,
+            },
             SessionToolState::Done => CallState::Done,
             SessionToolState::Failed => CallState::Failed,
             SessionToolState::NotRun => CallState::NotRun,
@@ -746,12 +777,7 @@ pub(super) fn call(
     match name.as_str() {
         "codemode" => {
             return Some(MessageItem::Cell(code_cell::cell(
-                &shown,
-                call_id,
-                &key,
-                *elapsed_ms,
-                rest,
-                cx,
+                &shown, call_id, &key, elapsed_ms, rest, cx,
             )));
         }
         "task" | "build_finish" | "board_plan" => {
@@ -784,70 +810,10 @@ pub(super) fn call(
             result: result.as_deref(),
             diff: diff.as_deref(),
             content: content.as_deref(),
-            ms: *elapsed_ms,
+            ms: elapsed_ms,
             note,
         },
         rest,
         cx,
     )))
-}
-
-/// A call of the live turn, in its state, with the tail of its output so far.
-pub(super) fn live(tool: &LiveTool, cx: Cx<'_>) -> MessageItem {
-    // The same key as the recorded call, so an opened row stays open once it is recorded.
-    let key = format!("call:{}", tool.call);
-    let arguments = tool.args.as_deref().unwrap_or_default();
-    let partial = tool.partial.as_deref().unwrap_or_default();
-    let shown = Call {
-        name: &tool.tool,
-        args: parse(arguments),
-        details: Value::Null,
-        text: partial,
-        state: match tool.state {
-            LiveToolState::Running if tool.args_truncated => CallState::Writing,
-            LiveToolState::Running => CallState::Running,
-            LiveToolState::Done => CallState::Done,
-            LiveToolState::Failed => CallState::Failed,
-        },
-        session: cx.id,
-        journal: cx.journal,
-        lines: None,
-    };
-    match tool.tool.as_str() {
-        "codemode" => {
-            return MessageItem::Cell(code_cell::cell(
-                &shown,
-                &tool.call,
-                &key,
-                tool.elapsed_ms,
-                Rest::Whole,
-                cx,
-            ));
-        }
-        "task" | "build_finish" | "board_plan" => {
-            return MessageItem::Build(build_cards::card(&shown, &tool.call, false, cx));
-        }
-        _ => {}
-    }
-    let row = present(&shown);
-    MessageItem::Tool(finish(
-        row,
-        &key,
-        Raw {
-            tool: &tool.tool,
-            summary: "",
-            arguments,
-            output: partial,
-            call: None,
-            result: None,
-            diff: None,
-            content: None,
-            ms: tool.elapsed_ms,
-            note: tool
-                .args_truncated
-                .then_some("arguments cut at the stream's bound"),
-        },
-        Rest::Whole,
-        cx,
-    ))
 }

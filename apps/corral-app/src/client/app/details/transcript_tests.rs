@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "mirror_tests.rs"]
+mod mirror_tests;
+
 pub(in crate::client::app) fn page(
     etag: &str,
     rows: &[(&str, &[&str])],

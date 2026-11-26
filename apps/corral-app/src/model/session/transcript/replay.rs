@@ -40,7 +40,8 @@ pub(super) struct Cx<'a> {
     pub feed: &'a daemon::Feed,
     pub journal: &'a Journal,
     suffix: Option<&'a (String, usize)>,
-    detached: bool,
+    pub(super) detached: bool,
+    mirror: Option<&'a super::mirror::Mirror>,
 }
 
 impl Cx<'_> {
@@ -411,7 +412,13 @@ fn message(
     moved: &BTreeSet<&str>,
 ) -> Message {
     let at = clock(message.at.as_deref(), cx.feed);
-    let anchor = anchor(message);
+    let identity = cx
+        .mirror
+        .and_then(|mirror| mirror.identity.get(&message.id));
+    let streaming = cx.mirror.and_then(|mirror| mirror.open.as_ref()) == Some(&message.id);
+    let anchor = identity.cloned().unwrap_or_else(|| anchor(message));
+    let mut retained_text = false;
+    let mut retained_thinking = false;
     let resolved: Vec<_> = placed
         .iter()
         .map(|pair| (pair.item.as_ref(), pair.rest))
@@ -440,18 +447,30 @@ fn message(
     let mut notice = false;
     let count = resolved.len() + omitted(cx.suffix, message);
     for (n, (item, rest)) in resolved.into_iter().enumerate() {
-        let key = item_key(&anchor, count - n);
+        let key = match item {
+            SessionItem::Text { .. }
+                if identity.is_some() && !std::mem::replace(&mut retained_text, true) =>
+            {
+                format!("{anchor}|text")
+            }
+            SessionItem::Thinking { .. }
+                if identity.is_some() && !std::mem::replace(&mut retained_thinking, true) =>
+            {
+                format!("{anchor}|thinking")
+            }
+            _ => item_key(&anchor, count - n),
+        };
         match item {
             SessionItem::Text { text } => items.push(MessageItem::Prose(Prose {
                 markdown: text.clone(),
                 more: rest.more(cx),
-                streaming: false,
+                streaming,
             })),
             SessionItem::Thinking { text } => items.push(MessageItem::Thinking(thinking(
                 text,
-                key,
+                key.clone(),
                 rest.more(cx),
-                false,
+                streaming,
                 cx,
             ))),
             SessionItem::ToolCall { call_id, .. } => {
@@ -500,6 +519,7 @@ fn message(
             }
             SessionItem::Card { title, .. } if title == marks::TURN_FOOTER => {
                 facts = Some((item, key, rest));
+                continue;
             }
             SessionItem::Card { title, text, .. } if title == "Host notice" => {
                 notice = true;
@@ -525,7 +545,6 @@ fn message(
         }
         // Rows a recorded item made are keyed by it, the second and later ones by their place.
         let made = items.len() - keys.len();
-        let key = item_key(&anchor, count - n);
         keys.extend((0..made).map(|k| row_key(&key, k)));
     }
     let owner = avatar(&message.author).0 == "Y" && !notice;
@@ -649,7 +668,7 @@ fn message(
         items,
         keys,
         footer: marks::footer(message, facts, cx),
-        live: false,
+        live: streaming,
     }
 }
 
@@ -742,6 +761,7 @@ pub(super) fn recorded_layout(
         journal: &journal,
         suffix: cache.transcript_seams.suffix.as_ref(),
         detached: false,
+        mirror: Some(&cache.transcript_seams.mirror),
     };
     let (messages, ends, _) = recorded_view(&body.messages, Some(cache), cx, keep_cut);
     RecordedLayout {
@@ -781,6 +801,7 @@ fn replay(
         journal: &journal,
         suffix: cache.and_then(|cache| cache.transcript_seams.suffix.as_ref()),
         detached,
+        mirror: cache.map(|cache| &cache.transcript_seams.mirror),
     };
     let loading = cache.is_none_or(|cache| cache.loading);
     let fill = match body {
@@ -821,10 +842,9 @@ fn replay(
         }
     });
     let (messages, message_ends, first) = recorded_view(recorded, cache, cx, |_, _| true);
-    // Older pages prepend; the live turn always follows the newest recorded messages.
-    let (live, after) = match feed.live.get(id.as_str()) {
-        Some(turn) if body.is_some() && !detached => overlay::overlay(turn, recorded, cx),
-        _ => (Vec::new(), Vec::new()),
+    let after = match feed.live.get(id.as_str()) {
+        Some(turn) if body.is_some() && !detached => overlay::notices(turn, recorded),
+        _ => Vec::new(),
     };
     // Past the history cap the loaded pages no longer join the newest one: only the latest
     // messages can be read, never the page before these.
@@ -848,7 +868,6 @@ fn replay(
         fill,
         stale: stale_note,
         disclaimer: None,
-        live,
         after,
         scope: id.clone(),
         reading: ui.reading.clone(),

@@ -21,41 +21,7 @@ fn started(seq: u64, generation: u32, turn: u64) -> SessionLiveEvent {
 }
 
 #[test]
-fn replayed_text_chunk_is_not_appended_twice() {
-    let mut live = LiveSession::default();
-    let chunk = event(
-        2,
-        1,
-        SessionLiveKind::LiveText {
-            turn: 1,
-            message: 1,
-            offset: 0,
-            text: "hé".into(),
-        },
-    );
-    live.apply_page(Some(1), vec![chunk.clone(), started(1, 1, 1)], false);
-    live.apply_page(Some(1), vec![chunk.clone()], false);
-    live.apply_page(Some(1), vec![SessionLiveEvent { seq: 3, ..chunk }], false);
-    live.apply_page(
-        Some(1),
-        vec![event(
-            4,
-            1,
-            SessionLiveKind::LiveText {
-                turn: 1,
-                message: 1,
-                offset: 3,
-                text: "!".into(),
-            },
-        )],
-        false,
-    );
-    assert_eq!(live.messages[0].text, "hé!");
-    assert!(live.open);
-}
-
-#[test]
-fn ended_tool_leaves_overlay_when_recorded_transcript_arrives() {
+fn legacy_refresh_retires_only_tools_it_could_have_read() {
     let mut live = LiveSession::default();
     live.apply_page(
         Some(1),
@@ -101,28 +67,11 @@ fn ended_tool_leaves_overlay_when_recorded_transcript_arrives() {
 }
 
 #[test]
-fn generation_change_drops_old_turn_text() {
+fn generation_change_accepts_the_new_turn_sequence() {
     let mut live = LiveSession::default();
-    live.apply_page(
-        Some(1),
-        vec![
-            started(9, 1, 1),
-            event(
-                10,
-                1,
-                SessionLiveKind::LiveText {
-                    turn: 1,
-                    message: 1,
-                    offset: 0,
-                    text: "old".into(),
-                },
-            ),
-        ],
-        false,
-    );
+    live.apply_page(Some(1), vec![started(9, 1, 1)], false);
     let before_change = live.reread;
     live.apply_page(Some(2), vec![started(1, 2, 2)], false);
-    assert!(live.messages.is_empty());
     assert!(live.tools.is_empty());
     assert_eq!(live.turn, Some(2));
     assert_eq!(live.generation, Some(2));

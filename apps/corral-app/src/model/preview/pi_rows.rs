@@ -82,7 +82,61 @@ pub(super) fn page(feed: &mut Feed, scope: &str) -> bool {
     let target = DetailRef::Session {
         id: scope.to_owned(),
     };
-    put(feed, target.clone(), body);
+    let key = crate::model::daemon::detail_key(&target);
+    if let Some(cache) = feed.details.get_mut(&key)
+        && let DetailBody::Session(next) = &body
+        && let Some(DetailBody::Session(held)) = &cache.merged
+        && cache.transcript_seams.mirror.active
+    {
+        use corral_protocol::subscription::TranscriptOp;
+        let open = cache.transcript_seams.mirror.open.clone();
+        let records: Vec<_> = held
+            .messages
+            .iter()
+            .filter(|m| Some(&m.id) != open.as_ref())
+            .collect();
+        let common = next
+            .messages
+            .iter()
+            .zip(&records)
+            .take_while(|(a, b)| a == *b)
+            .count();
+        let changes_branch = !records.iter().map(|message| &message.id).eq(next
+            .messages
+            .iter()
+            .take(records.len())
+            .map(|message| &message.id));
+        let mut ops = Vec::new();
+        let mut replaces = open;
+        let start = if changes_branch {
+            ops.push(TranscriptOp::Reset { older: None });
+            replaces = None;
+            0
+        } else {
+            common
+        };
+        for (index, message) in next.messages.iter().enumerate().skip(start) {
+            if !changes_branch && records.get(index).is_some_and(|old| *old == message) {
+                continue;
+            }
+            ops.push(TranscriptOp::Put {
+                message: message.clone(),
+                before: None,
+                open: false,
+                replaces: (message.author == "assistant" && index >= records.len())
+                    .then(|| replaces.take())
+                    .flatten(),
+            });
+        }
+        crate::model::session::transcript::mirror::apply(cache, ops, false);
+        if let Some(DetailBody::Session(held)) = &mut cache.merged {
+            let mut updated = next.clone();
+            updated.messages = std::mem::take(&mut held.messages);
+            *held = updated;
+        }
+    } else {
+        put(feed, target.clone(), body);
+    }
     let reread = feed.live.get(scope).map(|live| live.reread);
     feed.settle_session(&target, reread);
     true

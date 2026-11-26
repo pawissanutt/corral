@@ -354,7 +354,6 @@ fn latest(app: AppState, id: Id, page: Memo<SessionPage>) -> AnyElement {
                 .transcript
                 .messages
                 .iter()
-                .chain(chat.transcript.live.iter())
                 .rev()
                 .find(|message| message.kind == MessageKind::Agent)?;
             reply.items.iter().find_map(|item| match item {

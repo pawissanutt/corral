@@ -15,6 +15,7 @@ use super::{
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
 pub struct TranscriptSeams {
+    pub(crate) mirror: super::mirror::Mirror,
     pub starts: BTreeSet<String>,
     /// Newer items of the last resident record that were paged out. Include these in
     /// end-relative item keys so evicting a fragment doesn't rename a visible item.
@@ -355,6 +356,7 @@ pub(crate) fn preserve_anchors(
                 .map(str::to_owned)
                 .collect();
             replacement.transcript_seams = TranscriptSeams {
+                mirror: Default::default(),
                 starts,
                 joins: BTreeSet::new(),
                 suffix: replacement.transcript_seams.suffix.take(),

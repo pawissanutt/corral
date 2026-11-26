@@ -18,8 +18,7 @@ pub enum ItemFetch {
     Failed(String),
 }
 
-/// The open turn of a watched session as its host reports it, laid over the recorded
-/// transcript. An element stays only until the recorded transcript holds it.
+/// Ephemeral state and progress reported by the host of a watched session.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct LiveSession {
     pub generation: Option<u32>,
@@ -28,8 +27,6 @@ pub struct LiveSession {
     pub open: bool,
     /// How the last turn ended, until the next one starts.
     pub ended: Option<TurnEnd>,
-    /// Assistant messages of the turn, by ordinal.
-    pub messages: Vec<LiveMessage>,
     /// Tool calls of the turn, in start order.
     pub tools: Vec<LiveTool>,
     /// Owner input the host holds for after the current step, and for after the turn.
@@ -63,17 +60,6 @@ pub struct TurnEnd {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct LiveMessage {
-    /// One-based within the turn.
-    pub ordinal: u64,
-    pub text: String,
-    pub thinking: String,
-    /// The `reread` count at which this message was complete; it is dropped once a
-    /// transcript read requested at or after that count has arrived.
-    pub settled_at: Option<u64>,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LiveTool {
     pub call: String,
@@ -85,11 +71,8 @@ pub struct LiveTool {
     pub partial: Option<String>,
     pub state: LiveToolState,
     pub elapsed_ms: Option<u64>,
-    /// As `LiveMessage::settled_at`.
+    /// Legacy refresh count at which a detail read can retire this tool.
     pub settled_at: Option<u64>,
-    /// The ordinal of the turn's latest message when the call started (0 before any): the call
-    /// stands after that message's words and before the next message's.
-    pub after: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,7 +82,6 @@ pub enum LiveToolState {
     Failed,
 }
 
-const MAX_MESSAGE_BYTES: usize = 256 * 1024;
 const MAX_TOOLS: usize = 256;
 const MAX_INPUTS: usize = 64;
 
@@ -109,7 +91,6 @@ impl LiveSession {
         self.turn = None;
         self.open = false;
         self.ended = None;
-        self.messages.clear();
         self.tools.clear();
         self.steer = 0;
         self.follow_up = 0;
@@ -152,8 +133,6 @@ impl LiveSession {
 
     /// A transcript requested at N cannot settle an element completed after N.
     pub fn settle(&mut self, reread: u64) {
-        self.messages
-            .retain(|item| item.settled_at.is_none_or(|at| at > reread));
         self.tools
             .retain(|item| item.settled_at.is_none_or(|at| at > reread));
     }
@@ -204,7 +183,6 @@ impl LiveSession {
                 state: SessionLiveTurnState::Started,
             } => {
                 if self.turn != Some(turn) {
-                    self.messages.clear();
                     self.tools.clear();
                     self.turn = Some(turn);
                 }
@@ -221,28 +199,9 @@ impl LiveSession {
                 self.ended = Some(TurnEnd { aborted, error });
                 self.ended_at = Some(at);
                 self.reread = self.reread.saturating_add(1);
-                for message in &mut self.messages {
-                    message.settled_at.get_or_insert(self.reread);
-                }
                 for tool in &mut self.tools {
                     tool.settled_at.get_or_insert(self.reread);
                 }
-            }
-            SessionLiveKind::LiveText {
-                turn,
-                message,
-                offset,
-                text,
-            } => {
-                self.chunk(turn, message, offset, &text, false);
-            }
-            SessionLiveKind::LiveThinking {
-                turn,
-                message,
-                offset,
-                text,
-            } => {
-                self.chunk(turn, message, offset, &text, true);
             }
             SessionLiveKind::LiveTool {
                 turn,
@@ -263,13 +222,6 @@ impl LiveSession {
                             self.reset();
                             return;
                         }
-                        // A tool runs once the message that called it is complete, so its words
-                        // go before the call; the transcript read after the tool ends holds both.
-                        if let Some(message) = self.messages.last_mut()
-                            && message.settled_at.is_none()
-                        {
-                            message.settled_at = Some(self.reread.saturating_add(1));
-                        }
                         self.tools.push(LiveTool {
                             call,
                             tool,
@@ -279,7 +231,6 @@ impl LiveSession {
                             state: LiveToolState::Running,
                             elapsed_ms: None,
                             settled_at: None,
-                            after: self.messages.last().map_or(0, |message| message.ordinal),
                         });
                         self.tools.len() - 1
                     }
@@ -330,55 +281,6 @@ impl LiveSession {
             // transcript is behind the host.
             SessionLiveKind::LiveEntry {} => self.reread = self.reread.saturating_add(1),
             _ => {}
-        }
-    }
-
-    fn chunk(&mut self, turn: u64, ordinal: u64, offset: u64, chunk: &str, thinking: bool) {
-        if !self.open || self.turn != Some(turn) {
-            return;
-        }
-        let index = match self
-            .messages
-            .iter()
-            .position(|message| message.ordinal == ordinal)
-        {
-            Some(index) => index,
-            None => {
-                if let Some(previous) = self.messages.last_mut()
-                    && previous.settled_at.is_none()
-                {
-                    self.reread = self.reread.saturating_add(1);
-                    previous.settled_at = Some(self.reread);
-                }
-                self.messages.push(LiveMessage {
-                    ordinal,
-                    ..LiveMessage::default()
-                });
-                self.messages.len() - 1
-            }
-        };
-        let message = &mut self.messages[index];
-        let text = if thinking {
-            &mut message.thinking
-        } else {
-            &mut message.text
-        };
-        let Ok(offset) = usize::try_from(offset) else {
-            self.reset();
-            return;
-        };
-        let end = offset.saturating_add(chunk.len());
-        if offset > text.len()
-            || end > MAX_MESSAGE_BYTES
-            || !text.is_char_boundary(offset)
-            || (end < text.len() && !text.is_char_boundary(end))
-        {
-            self.reset();
-            return;
-        }
-        let replace_end = end.min(text.len());
-        if text.get(offset..replace_end) != Some(chunk) {
-            text.replace_range(offset..replace_end, chunk);
         }
     }
 }

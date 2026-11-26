@@ -178,20 +178,15 @@ impl AppState {
         let size = feed.with_untracked(|feed| {
             scope.len()
                 + feed.live.get(scope).map_or(0, |live| {
-                    live.messages
+                    live.tools
                         .iter()
-                        .map(|message| message.text.len() + message.thinking.len())
+                        .map(|tool| {
+                            tool.call.len()
+                                + tool.tool.len()
+                                + tool.args.as_ref().map_or(0, String::len)
+                                + tool.partial.as_ref().map_or(0, String::len)
+                        })
                         .sum::<usize>()
-                        + live
-                            .tools
-                            .iter()
-                            .map(|tool| {
-                                tool.call.len()
-                                    + tool.tool.len()
-                                    + tool.args.as_ref().map_or(0, String::len)
-                                    + tool.partial.as_ref().map_or(0, String::len)
-                            })
-                            .sum::<usize>()
                         + live
                             .ended
                             .as_ref()

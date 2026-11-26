@@ -783,11 +783,9 @@ fn empty_chat(cx: &Cx<'_>) -> EmptyChat {
 
 fn chat(cx: &Cx<'_>) -> Chat {
     let transcript = transcript::transcript(cx.id, cx.ui, cx.cache, cx.feed);
-    let empty = (cx.page.is_some()
-        && transcript.messages.is_empty()
-        && transcript.echoes.is_empty()
-        && transcript.live.is_empty())
-    .then(|| empty_chat(cx));
+    let empty =
+        (cx.page.is_some() && transcript.messages.is_empty() && transcript.echoes.is_empty())
+            .then(|| empty_chat(cx));
     Chat { transcript, empty }
 }
 

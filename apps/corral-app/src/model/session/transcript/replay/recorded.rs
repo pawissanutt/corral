@@ -143,11 +143,21 @@ pub(super) fn recorded_view(
             return;
         }
         // Pairing can remove a result's row, so consider a cut where it actually lands.
-        let mut boundary = false;
+        // A block first shown while being written keeps its parent as calls above it
+        // settle or scrollback extends the preceding reply.
+        let mut boundary = cx
+            .mirror
+            .is_some_and(|mirror| mirror.identity.contains_key(id));
         for cut in cuts.drain(..) {
             boundary |= keep_cut(cut, &shown.anchor);
         }
-        first.get_or_insert_with(|| item_key(&shown.anchor, slots));
+        first.get_or_insert_with(|| {
+            shown
+                .keys
+                .first()
+                .cloned()
+                .unwrap_or_else(|| item_key(&shown.anchor, slots))
+        });
         timed.push((at, boundary, shown));
     };
     for (n, m) in recorded.iter().enumerate() {

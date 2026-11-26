@@ -73,6 +73,7 @@ pub(super) const CAPS: &[&str] = &[
     #[cfg(not(windows))]
     corral_protocol::device::PUSH_V1,
     SESSION_STATE_V1,
+    SESSION_TRANSCRIPT_V1,
     SESSION_FILES_V1,
     SESSION_HTML_V1,
     BUILD_V1,

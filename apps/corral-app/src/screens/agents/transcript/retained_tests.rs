@@ -67,7 +67,7 @@ fn StreamingFixture() -> impl IntoElement {
             page.messages
                 .insert(0, message_at("older", false, "earlier message"));
         }
-        page.live = vec![message_at(
+        page.messages.push(message_at(
             "live",
             true,
             if step == 0 {
@@ -75,7 +75,7 @@ fn StreamingFixture() -> impl IntoElement {
             } else {
                 "stream settled\n\nstream updated"
             },
-        )];
+        ));
         Some(page)
     });
     view()
@@ -88,6 +88,112 @@ fn StreamingFixture() -> impl IntoElement {
             move || step.update(|n| *n += 1),
         ))
         .child(transcript(app, &Reader::new(app), shown))
+}
+
+#[component]
+fn ReplacementFixture() -> impl IntoElement {
+    use crate::model::{
+        daemon::DetailCache,
+        session::transcript::{mirror, transcript as replay},
+    };
+    use corral_protocol::{
+        detail::{DetailRef, SessionItem, SessionMessage},
+        subscription::TranscriptOp,
+    };
+    let app = AppState::install(Form::Terminal);
+    let recorded = signal(false);
+    let shown = computed(move || {
+        let mut cache = DetailCache {
+            target: DetailRef::Session {
+                id: "fixture".into(),
+            },
+            pages: Vec::new(),
+            transcript_seams: Default::default(),
+            merged: None,
+            loading: false,
+            stale: false,
+            error: None,
+        };
+        let put = |id: &str, replaces: Option<&str>, open| TranscriptOp::Put {
+            message: SessionMessage {
+                id: id.into(),
+                author: "assistant".into(),
+                at: None,
+                items: vec![SessionItem::Text {
+                    text: "persistent words".into(),
+                }],
+                model: None,
+                stop_reason: None,
+                usage: None,
+                input: None,
+                attachments: Vec::new(),
+            },
+            before: None,
+            replaces: replaces.map(str::to_owned),
+            open,
+        };
+        mirror::apply(
+            &mut cache,
+            vec![put("fixture/open/1.1.1", None, true)],
+            false,
+        );
+        if recorded.get() {
+            mirror::apply(
+                &mut cache,
+                vec![put(
+                    "fixture/entry/record",
+                    Some("fixture/open/1.1.1"),
+                    false,
+                )],
+                false,
+            );
+        }
+        Some(replay(
+            &Id::from("fixture"),
+            &Ui::default(),
+            Some(&cache),
+            &Feed::default(),
+        ))
+    });
+    view()
+        .child(button_with(
+            app,
+            "Record",
+            ButtonKind::Quiet,
+            ButtonOptions::default(),
+            "record",
+            move || recorded.set(true),
+        ))
+        .child(transcript(app, &Reader::new(app), shown))
+}
+
+#[test]
+fn replacing_open_message_keeps_its_text_node() {
+    let mut config = EngineConfig::new(Root::of::<ReplacementFixture>());
+    config.environment.idiom = nsh_core::platform::Idiom::Terminal;
+    config.environment.cell = Some(nsh_core::Size::new(
+        nsh_core::Points(8.0),
+        nsh_core::Points(16.0),
+    ));
+    let mut app = Headless::start(config).unwrap();
+    let words = |app: &mut Headless| {
+        app.screen()
+            .layout_nodes()
+            .iter()
+            .find(|node| {
+                node.text
+                    .as_ref()
+                    .is_some_and(|text| text.text.text == "persistent words")
+            })
+            .unwrap()
+            .id
+    };
+    app.wait_for("text:▌").unwrap();
+    let before = words(&mut app);
+    app.press("id:record").unwrap();
+    app.wait_for_gone("text:▌", std::time::Duration::from_secs(2))
+        .unwrap();
+    assert_eq!(before, words(&mut app));
 }
 
 #[test]

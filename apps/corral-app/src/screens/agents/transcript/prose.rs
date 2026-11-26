@@ -45,14 +45,9 @@ pub(super) fn caret(app: AppState) -> AnyElement {
 /// Words of a message: rendered Markdown at most ~70 characters wide on the desktop, then
 /// where the rest of a continued item stands. `live` is the words while they are still being
 /// written, drawn in a view that stays as they grow.
-pub(super) fn prose(
-    app: AppState,
-    words: &Prose,
-    id: &str,
-    live: Option<Memo<String>>,
-) -> AnyElement {
+pub(super) fn prose(app: AppState, words: &Prose, id: &str, live: Option<Written>) -> AnyElement {
     let body = match live {
-        Some(live) => chat_markdown_streaming(app, live),
+        Some(live) => chat_markdown_streaming(app, live.words, live.streaming),
         None => chat_markdown(app, &words.markdown, words.streaming),
     };
     view()
@@ -63,7 +58,7 @@ pub(super) fn prose(
         .when(app.form != Form::Terminal, |block| block.mb(px(6.0)))
         .child(body)
         .children(
-            (!words.streaming)
+            (!words.streaming && live.is_none())
                 .then(|| cited(app, &words.markdown))
                 .flatten(),
         )
@@ -113,6 +108,7 @@ pub(super) fn thinking(
             .when(form == Form::Desktop, |block| block.max_w(px(PARAGRAPH)))
             .child(words)
             .when(thought.streaming, |block| block.child(caret(app)))
+            .children(live.map(|live| dynamic(move || live.streaming.get().then(|| caret(app)))))
     });
     view()
         .min_w(px(0.0))

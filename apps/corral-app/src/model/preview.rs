@@ -141,6 +141,7 @@ fn base(now: u64, date: String, clock: String, time_zone: Option<jiff::tz::TimeZ
         SESSION_FLEET_V1,
         SESSION_FILES_V1,
         SESSION_STATE_V1,
+        SESSION_TRANSCRIPT_V1,
         BUILD_V1,
         REVIEW_V1,
         TIMELINE_V1,
