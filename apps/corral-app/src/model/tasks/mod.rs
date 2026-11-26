@@ -5,6 +5,7 @@
 
 pub mod band;
 pub mod closed;
+pub mod columns;
 pub mod meta;
 pub mod page;
 
@@ -271,8 +272,11 @@ pub struct TaskLine {
     pub id: Id,
     pub status: Status,
     pub title: String,
-    /// `P0`: a priority other than the default, as a tag on the title.
+    /// `P0`: a priority other than the default, as a tag on the title while the Priority
+    /// column is hidden.
     pub priority: Option<&'static str>,
+    /// `P2`: the priority, default included, as the Priority column shows it.
+    pub rank: &'static str,
     /// The plan the task is a child of.
     pub parent: Option<String>,
     /// What is happening, as one plain phrase.
@@ -346,6 +350,7 @@ fn line_of(task: &Task, feed: &Feed) -> TaskLine {
         status,
         title: task.title().to_owned(),
         priority: priority_tag(task.task().priority),
+        rank: priority_word(task.task().priority),
         parent: task.parent().map(str::to_owned),
         now: row_phrase(task, feed),
         pipeline: pipeline(task),
@@ -452,13 +457,15 @@ pub fn facts(feed: &Feed, id: &str) -> Option<TaskFacts> {
     })
 }
 
-/// A task row's columns. Profile, project, cost and the phrase give way before the planning
-/// estimates. With one project in scope the project column is left out. The title and phrase
-/// stop growing at a readable line.
+/// A task row's columns, every optional one included ([`columns::Chosen`] says which show).
+/// Profile, project, cost and the phrase give way before the planning estimates, and Priority
+/// last. With one project in scope the project column is left out. The title and phrase stop
+/// growing at a readable line.
 pub fn columns(scope: &Scope) -> Vec<Column> {
     let mut columns = vec![
         Column::fixed("status", "", 14.0, 1.0),
         Column::fixed("id", "ID", 58.0, 6.0),
+        Column::fixed("priority", "Pri", 30.0, 3.0).gives_way(7),
         Column::flex("title", "Title", 140.0, 16.0, 1.4).most(480.0, 56.0),
         Column::flex("now", "Now", 110.0, 14.0, 1.0)
             .most(360.0, 40.0)
@@ -617,6 +624,21 @@ mod tests {
         assert!(retry.is_some_and(|button| {
             button.enabled && button.action == Some(work::Press::RetryBoard)
         }));
+    }
+
+    /// The default P2 said nothing on a row: the Priority column names every priority, while
+    /// the title's tag stays for a priority other than the default.
+    #[test]
+    fn the_priority_column_names_the_default_priority_too() {
+        let mut urgent = bare_task("T-7", "T-7", Status::Ready, jiff::Timestamp::UNIX_EPOCH);
+        urgent.priority = Priority::P0;
+        let mut feed = feed();
+        feed.board
+            .apply_batch(1, vec![Task::new(task_row(urgent))], &[]);
+        let ranks = |id: &str| line(&feed, id).map(|line| (line.rank, line.priority));
+        assert_eq!(ranks("T-3"), Some(("P2", None)));
+        assert_eq!(ranks("T-7"), Some(("P0", Some("P0"))));
+        assert!(columns(&Scope::All).iter().any(|c| c.key == "priority"));
     }
 
     /// With one project in scope a Project column would repeat it on every row.

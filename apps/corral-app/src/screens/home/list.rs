@@ -73,6 +73,7 @@ pub(super) fn screen(app: AppState, scope: Memo<Scope>) -> AnyElement {
             key: "home",
             head: page_head,
             columns: columns(),
+            chosen: None,
             sections,
             selected,
             row: Rc::new(move |id| row(app, id)),

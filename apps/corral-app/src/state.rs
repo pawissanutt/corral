@@ -22,6 +22,7 @@ mod sidebar;
 mod source;
 mod switcher;
 mod system_page;
+mod task_columns;
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -85,6 +86,8 @@ pub struct AppState {
     pub home: Signal<crate::model::home::State>,
     /// The Tasks list's open folds.
     pub tasks: Signal<crate::model::tasks::State>,
+    /// The Tasks table's optional columns shown on this device (`corral.tasks.columns`).
+    pub task_columns: Signal<crate::model::tasks::columns::Chosen>,
     pub settings: source::StateSource<settings::State>,
     pub assistant: source::StateSource<assistant::State>,
     /// The destructive or forced operation, or the session control, waiting for its one local
@@ -294,6 +297,7 @@ impl AppState {
             ),
             home: signal(Default::default()),
             tasks: signal(Default::default()),
+            task_columns: signal(task_columns::load()),
             confirm: signal(None),
             refusal: signal(None),
             ask_context: signal(None),

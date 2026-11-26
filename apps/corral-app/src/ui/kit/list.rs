@@ -66,6 +66,9 @@ pub struct ListPage {
     pub key: &'static str,
     pub head: AnyElement,
     pub columns: Vec<Column>,
+    /// Tracked: for each column, whether the owner shows it; none shows them all. A column left
+    /// out keeps its cells in the rows, hidden, so a change is drawn without building them again.
+    pub chosen: Option<Memo<Vec<bool>>>,
     /// Tracked: the sections and their rows' keys. Rows are built again only when these change.
     pub sections: Memo<Vec<Section>>,
     /// Tracked: the selected row, already settled on a row the list holds.
@@ -117,6 +120,7 @@ pub fn list_page_with_sections(
         key,
         head,
         columns,
+        chosen,
         sections,
         selected,
         row,
@@ -125,6 +129,7 @@ pub fn list_page_with_sections(
         on_fold,
         notice,
     } = page;
+    let chosen = move || chosen.map(|chosen| chosen.get()).unwrap_or_default();
     let width = signal(0.0_f32);
     let has_inspector = inspector.is_some();
     let beside =
@@ -141,8 +146,11 @@ pub fn list_page_with_sections(
         let columns = Rc::clone(&columns);
         computed(move || {
             let page = width.get();
+            let chosen = chosen();
             if page <= 0.0 {
-                return vec![true; columns.len()];
+                return (0..columns.len())
+                    .map(|at| chosen.get(at).copied().unwrap_or(true))
+                    .collect();
             }
             let panel = if beside.get() {
                 inspector_width.get()
@@ -155,7 +163,8 @@ pub fn list_page_with_sections(
             } else {
                 page - panel - PAD_LEFT - PAD_RIGHT
             };
-            list::fitted(&columns, room, if terminal { 1.0 } else { GAP }, terminal)
+            let gap = if terminal { 1.0 } else { GAP };
+            list::fitted_among(&columns, &chosen, room, gap, terminal)
         })
     };
     let rows = {
@@ -325,7 +334,10 @@ fn table_head(app: AppState, columns: &[Column], shown: Memo<Vec<bool>>) -> AnyE
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(color(Token::Ink3)),
         };
-        slot(form, column, at, shown).child(name).into_element()
+        slot(form, column, at, shown)
+            .test_id(&format!("col-{}", column.key))
+            .child(name)
+            .into_element()
     });
     let row = view()
         .test_id("list-head")

@@ -1,13 +1,15 @@
 //! Tasks: every task in scope as one list grouped by status, beside the inspector of the
 //! selected one (`model::tasks`, `ui::kit::list`). A row shows the task's status, id, title
-//! with its tags, what is happening, its pipeline, size, difficulty, project, profile, cost,
-//! age and its one next step; More holds every other operation. A plan's caret unfolds its
+//! with its tags, its priority, what is happening, its pipeline, size, difficulty, project,
+//! profile, cost, age and its one next step; More holds every other operation. The head's
+//! Columns control (`columns.rs`) chooses which of those optional columns show on this device. A plan's caret unfolds its
 //! same-status children. Done and Dropped fold at the bottom, read a page at a time with Load
 //! older under them. The head carries the filter field (words, and `size:`, `difficulty:` and `tag:`
 //! met exactly), the open count with the running slots, the inspector's switch and New task;
 //! under it the board's health (`ui::kit::board_status`), and the page fades while the board is
 //! last known.
 
+mod columns;
 mod inspector;
 
 use std::rc::Rc;
@@ -83,6 +85,10 @@ fn list(app: AppState) -> AnyElement {
             .map(str::to_owned)
     });
     let columns = untracked(|| tasks::columns(&app.project_scope()));
+    let chosen = {
+        let columns = columns.clone();
+        computed(move || app.task_columns.with(|chosen| chosen.mask(&columns)))
+    };
     // The board's health reads as a line under the head, not a band across a wide list.
     let health = view()
         .when(app.form == Form::Desktop, |health| {
@@ -100,6 +106,7 @@ fn list(app: AppState) -> AnyElement {
             key: "tasks",
             head,
             columns: columns.clone(),
+            chosen: Some(chosen),
             sections,
             selected,
             row: Rc::new(move |key| row(app, key, &columns)),
@@ -167,7 +174,7 @@ fn page_head(app: AppState) -> AnyElement {
                     app,
                     tasks::TITLE,
                     Some(summary),
-                    vec![filter(app), toggle, new()],
+                    vec![filter(app), columns::picker(app), toggle, new()],
                 )
             })
         }),
@@ -441,10 +448,13 @@ fn cell(
         "id" => cell_mono(app, shown, false),
         "title" => {
             let title = dynamic(move || {
+                // The Priority column says it; its tag on the title is the fallback.
+                let column = app.task_columns.with(|chosen| chosen.shows("priority"));
                 line.with(|line| {
                     line.as_ref().map(|line| {
                         let tags = line
                             .priority
+                            .filter(|_| !column)
                             .map(str::to_owned)
                             .into_iter()
                             .chain(
@@ -481,6 +491,12 @@ fn cell(
                 .child(title)
                 .into_element()
         }
+        "priority" => dynamic(move || {
+            line.with(|line| {
+                line.as_ref()
+                    .map(|line| cell_mono(app, line.rank, line.priority.is_none()))
+            })
+        }),
         "now" => fact(|line| Some(line.now.clone()), true),
         "pipeline" => dynamic(move || {
             line.with(|line| {

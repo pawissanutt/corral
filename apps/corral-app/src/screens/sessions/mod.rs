@@ -114,6 +114,7 @@ pub fn screen(app: AppState) -> AnyElement {
             key: "sessions",
             head: page_head,
             columns: columns.clone(),
+            chosen: None,
             sections,
             selected,
             row: Rc::new(move |id| row(app, id, &columns)),

@@ -273,3 +273,60 @@ fn escape_in_impact_clears_the_pick_and_goes_up_before_leaving_the_task_page() {
     app.press_key("escape").unwrap();
     app.wait_for_gone("id:task-page", gone).unwrap();
 }
+
+/// Whether the Tasks table shows the column of `key`: its header is laid out and visible.
+fn column_shown(screen: &nsh_testing::Screen, key: &str) -> bool {
+    let id = format!("col-{key}");
+    screen.layout_nodes().iter().any(|node| {
+        node.test_id.as_deref() == Some(id.as_str())
+            && !node.hidden
+            && node.bounds.size.width.0 > 0.0
+    })
+}
+
+/// The Columns control's choice was lost on reopening, or a column it hid kept its room: the
+/// menu stays open while columns are toggled, the table follows at once, the choice is kept on
+/// this device and read back at the next launch, and Restore brings the default back.
+#[test]
+fn the_columns_control_keeps_its_choice_on_this_device_until_restored() {
+    let storage = MemoryStorage::new([("corral.destination".to_owned(), "tasks".to_owned())]);
+    let launch = |storage: &std::sync::Arc<MemoryStorage>| {
+        let mut config = desktop();
+        config.storage = Some(storage.clone());
+        let mut app = Headless::start(config).unwrap();
+        app.wait_for("id:nav-settings").unwrap();
+        select(&mut app, "Data: fixture");
+        app.wait_for("id:col-title").unwrap();
+        app
+    };
+    let mut app = launch(&storage);
+    assert!(column_shown(app.screen(), "priority"));
+    assert!(!column_shown(app.screen(), "cost"));
+    app.press("id:btn-columns").unwrap();
+    app.wait_for("id:seg-column-priority").unwrap();
+    app.press("id:seg-column-priority").unwrap();
+    app.press("id:seg-column-age").unwrap();
+    app.wait_until("the table follows", Duration::from_secs(5), |screen| {
+        !column_shown(screen, "priority") && !column_shown(screen, "age")
+    })
+    .unwrap();
+    assert_eq!(
+        storage
+            .entries()
+            .get("corral.tasks.columns")
+            .map(String::as_str),
+        Some("now,pipeline,size,difficulty,project")
+    );
+    drop(app);
+
+    let mut app = launch(&storage);
+    assert!(!column_shown(app.screen(), "priority"));
+    assert!(!column_shown(app.screen(), "age"));
+    app.press("id:btn-columns").unwrap();
+    app.wait_for("id:btn-columns-reset").unwrap();
+    app.press("id:btn-columns-reset").unwrap();
+    app.wait_until("the default is back", Duration::from_secs(5), |screen| {
+        column_shown(screen, "priority") && column_shown(screen, "age")
+    })
+    .unwrap();
+}

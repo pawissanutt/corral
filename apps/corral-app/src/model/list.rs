@@ -241,7 +241,21 @@ impl Column {
 /// columns: all of them while their least widths fit, else the ones that give way leave in
 /// their order until the rest fits. A column that never gives way always shows.
 pub fn fitted(columns: &[Column], room: f32, gap: f32, terminal: bool) -> Vec<bool> {
-    let mut shown = vec![true; columns.len()];
+    fitted_among(columns, &vec![true; columns.len()], room, gap, terminal)
+}
+
+/// [`fitted`] over the columns the owner `chosen` to show: one left out takes no room and
+/// never shows, while one chosen still gives way in its order.
+pub fn fitted_among(
+    columns: &[Column],
+    chosen: &[bool],
+    room: f32,
+    gap: f32,
+    terminal: bool,
+) -> Vec<bool> {
+    let mut shown: Vec<bool> = (0..columns.len())
+        .map(|at| chosen.get(at).copied().unwrap_or(true))
+        .collect();
     let needs = |shown: &[bool]| {
         let widths: f32 = columns
             .iter()
@@ -255,6 +269,7 @@ pub fn fitted(columns: &[Column], room: f32, gap: f32, terminal: bool) -> Vec<bo
     let mut leaving: Vec<(u8, usize)> = columns
         .iter()
         .enumerate()
+        .filter(|(at, _)| shown[*at])
         .filter_map(|(at, column)| column.gives_way.map(|order| (order, at)))
         .collect();
     leaving.sort_unstable();
@@ -375,6 +390,31 @@ mod tests {
         assert_eq!(
             fitted(&columns, 44.0, 1.0, true),
             [true, true, false, false, true]
+        );
+    }
+
+    /// Hiding a column freed no room: a column the owner left out still counted, so the ones
+    /// shown gave way early, and one the owner chose was kept at any width.
+    #[test]
+    fn a_column_left_out_takes_no_room_and_a_chosen_one_still_gives_way() {
+        let columns = [
+            Column::fixed("id", "ID", 58.0, 7.0),
+            Column::fixed("priority", "Pri", 30.0, 3.0).gives_way(3),
+            Column::fixed("project", "Project", 104.0, 12.0).gives_way(2),
+            Column::fixed("cost", "Cost", 50.0, 5.0).gives_way(1),
+        ];
+        let chosen = [true, true, true, false];
+        assert_eq!(
+            fitted_among(&columns, &chosen, 210.0, 8.0, false),
+            [true, true, true, false]
+        );
+        assert_eq!(
+            fitted_among(&columns, &chosen, 100.0, 8.0, false),
+            [true, true, false, false]
+        );
+        assert_eq!(
+            fitted_among(&columns, &chosen, 60.0, 8.0, false),
+            [true, false, false, false]
         );
     }
 
