@@ -24,7 +24,7 @@ pub use data::DataFacts;
 pub use delta::compare_data;
 pub use entries::compare as compare_entry_points;
 pub use git::diagram::{
-    CommittedExcerpt, CommittedFile, committed_file, is_ancestor, map_span, renames,
+    CommittedExcerpt, CommittedFile, committed_file, map_span, on_first_parent, renames,
     resolve_local_commit,
 };
 pub use model::*;

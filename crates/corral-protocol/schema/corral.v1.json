@@ -2236,7 +2236,7 @@
             "type": "object"
           },
           {
-            "description": "Re-read a comparison an earlier reply resolved, at exactly that commit. A pinned head\nmust still be the observed head or one of its ancestors; a pinned candidate must still be\na recorded submission of the task's latest worker run.",
+            "description": "Re-read a comparison an earlier reply resolved, at exactly that commit. A pinned head\nmust still be the observed head or on its recent first-parent line; a pinned candidate must still be\na recorded submission of the task's latest worker run.",
             "properties": {
               "commit": {
                 "type": "string"

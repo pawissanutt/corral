@@ -5,7 +5,9 @@ use std::{collections::BTreeMap, path::Path};
 
 use anyhow::{Context, Result, ensure};
 use corral_engine::{Engine, Role};
-use corral_facts::{CommittedFile, Revision, is_ancestor, map_span, renames, resolve_local_commit};
+use corral_facts::{
+    CommittedFile, Revision, map_span, on_first_parent, renames, resolve_local_commit,
+};
 use corral_protocol::{
     detail::*,
     diagram::{DiagramSubject, EntityRequest, SourceRequest, SourceSpan, WorkflowRecipe},
@@ -18,6 +20,9 @@ use super::{
     review,
 };
 use crate::state::Shared;
+
+/// How far back a pinned head may be on the observed head's first-parent line.
+const HEAD_HISTORY: usize = 10_000;
 
 pub(super) fn compare(
     shared: &Shared,
@@ -66,6 +71,7 @@ pub(super) fn compare(
         target: &target_rev,
         renames: None,
         files: BTreeMap::new(),
+        texts: BTreeMap::new(),
     };
     // The summary is its own read; a selected element's read does only that element's work.
     if selected.is_none() {
@@ -146,8 +152,9 @@ fn resolve(
             None,
         ));
     };
-    // A pinned head is only ever one the project's head reached: the current observation or an
-    // ancestor of it, never an arbitrary commit labelled as the head.
+    // A pinned head is only ever one the project's head stood at: the current observation or a
+    // recent commit on its first-parent line, never a merged side branch or an arbitrary commit
+    // labelled as the head. A head rewritten past it no longer vouches for it.
     if let CompareTarget::Pinned {
         origin: CompareOrigin::ObservedHead,
         ..
@@ -158,7 +165,7 @@ fn resolve(
             Err(resolution) => return Ok((*resolution, None)),
         };
         let reached = resolve_local_commit(repo, &head)
-            .and_then(|head| is_ancestor(repo, &rev, &head))
+            .and_then(|head| on_first_parent(repo, &rev, &head, HEAD_HISTORY))
             .unwrap_or(false);
         if !reached {
             return Ok((
@@ -295,9 +302,20 @@ struct Sides<'a> {
     renames: Option<Result<BTreeMap<String, String>, ()>>,
     /// Tree lookups of this read, by side (`true` for the target) and path.
     files: BTreeMap<(bool, String), Result<Option<CommittedFile>, ()>>,
+    /// Blob texts of this read, by object ID.
+    texts: BTreeMap<String, Option<std::rc::Rc<str>>>,
 }
 
 impl Sides<'_> {
+    /// One blob read per object in a read, however many elements bind it.
+    fn text(&mut self, file: &CommittedFile) -> Option<std::rc::Rc<str>> {
+        let repo = self.repo;
+        self.texts
+            .entry(file.blob().to_owned())
+            .or_insert_with(|| file.text(repo).map(std::rc::Rc::from))
+            .clone()
+    }
+
     /// One tree lookup per side and path in a read, however many elements bind it.
     fn file(&mut self, target: bool, path: &str) -> Result<Option<CommittedFile>, ()> {
         let rev = if target { Some(self.target) } else { self.base };
@@ -416,7 +434,7 @@ fn source_change(
         };
         return (change, Some(at(Some(span.clone()))));
     }
-    let (Some(before), Some(after)) = (base_file.text(repo), target_file.text(repo)) else {
+    let (Some(before), Some(after)) = (sides.text(&base_file), sides.text(&target_file)) else {
         return (
             unknown("the committed source is unreadable as bounded UTF-8 text"),
             same,
@@ -464,7 +482,12 @@ fn source_change(
                 start: start as u32,
                 end: end as u32,
             };
-            if after.get(start as usize - 1..end as usize) == Some(bound) {
+            let copies = after
+                .windows(bound.len())
+                .filter(|lines| *lines == bound)
+                .count();
+            // The same text is a move only when it is the target's one copy of it.
+            if copies == 1 && after.get(start as usize - 1..end as usize) == Some(bound) {
                 let moved = SourceChange::Moved {
                     path: target_path.clone(),
                     first: Some(start),
@@ -644,13 +667,66 @@ fn insufficient(reason: impl Into<String>) -> EntityChange {
 
 /// A relationship delta is claimed only when both sides resolved, read the file completely with
 /// the same basis, and listed every row they know.
+/// The facts basis an entity was read on: the provider, whether it failed, and what it provides.
+fn basis(evidence: &EntityEvidence) -> Option<(String, bool, Vec<String>, Vec<String>)> {
+    evidence.provider.as_ref().map(|provider| {
+        let mut provided = provider.coverage.provided.clone();
+        let mut not_provided = provider.coverage.not_provided.clone();
+        provided.sort();
+        not_provided.sort();
+        (
+            provider.extension.clone(),
+            provider.error.is_some(),
+            provided,
+            not_provided,
+        )
+    })
+}
+
+/// Built-in coverage and any provider's own skips, omissions and dropped files all count: a row
+/// missing from either side must not read as a removal.
+fn complete(evidence: &EntityEvidence, omitted: usize) -> bool {
+    evidence.read_status == ReadStatus::Complete
+        && !evidence.provider_pending
+        && evidence.coverage.failed == 0
+        && evidence.coverage.skipped_non_utf8_paths == 0
+        && omitted == 0
+        && evidence.provider.as_ref().is_none_or(|provider| {
+            provider.error.is_none()
+                && provider.coverage.dropped_unknown_files == 0
+                && provider
+                    .coverage
+                    .skipped
+                    .values()
+                    .chain(provider.coverage.omitted.values())
+                    .all(|&total| total == 0)
+        })
+}
+
 pub(super) fn entity_change(base: &EntityResult, target: &EntityResult) -> EntityChange {
     use EntityResult as E;
     match (base, target) {
         (E::NotProvided, _) => EntityChange::NotProvided,
         (E::Pending, _) | (_, E::Pending) => EntityChange::Pending,
-        (E::Resolved { .. }, E::Missing { reason, .. }) => EntityChange::Removed {
-            reason: reason.clone(),
+        // Without evidence, `missing` is Git's own answer: no such committed file. A missing
+        // definition counts only when both commits were read completely on the same basis.
+        (
+            E::Resolved {
+                evidence: base_evidence,
+                ..
+            },
+            E::Missing { reason, evidence },
+        ) => match evidence {
+            Some(target_evidence)
+                if basis(base_evidence) != basis(target_evidence)
+                    || !complete(base_evidence, 0)
+                    || !complete(target_evidence, 0) =>
+            {
+                insufficient("the comparison commit was read with different or incomplete coverage")
+            }
+            _ => EntityChange::Removed {
+                reason: reason.clone(),
+            },
         },
         (
             E::Resolved {
@@ -666,34 +742,9 @@ pub(super) fn entity_change(base: &EntityResult, target: &EntityResult) -> Entit
                 omitted: target_omitted,
             },
         ) => {
-            let extension = |evidence: &EntityEvidence| {
-                evidence
-                    .provider
-                    .as_ref()
-                    .map(|provider| (provider.extension.clone(), provider.error.is_some()))
-            };
-            if extension(base_evidence) != extension(target_evidence) {
+            if basis(base_evidence) != basis(target_evidence) {
                 return insufficient("the two commits were read with different fact providers");
             }
-            // Built-in coverage and any provider's own skips, omissions and dropped files all
-            // count: a row missing from either side must not read as a removal.
-            let complete = |evidence: &EntityEvidence, omitted: usize| {
-                evidence.read_status == ReadStatus::Complete
-                    && !evidence.provider_pending
-                    && evidence.coverage.failed == 0
-                    && evidence.coverage.skipped_non_utf8_paths == 0
-                    && omitted == 0
-                    && evidence.provider.as_ref().is_none_or(|provider| {
-                        provider.error.is_none()
-                            && provider.coverage.dropped_unknown_files == 0
-                            && provider
-                                .coverage
-                                .skipped
-                                .values()
-                                .chain(provider.coverage.omitted.values())
-                                .all(|&total| total == 0)
-                    })
-            };
             if !complete(base_evidence, *base_omitted)
                 || !complete(target_evidence, *target_omitted)
             {

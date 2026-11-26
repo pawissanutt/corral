@@ -246,27 +246,27 @@ pub fn map_span(
     })
 }
 
-/// Whether `ancestor` is `descendant` or reachable from it, using local objects only.
-pub fn is_ancestor(repo: &Path, ancestor: &Revision, descendant: &Revision) -> Result<bool> {
-    if ancestor.commit() == descendant.commit() {
+/// Whether `commit` is `head` or one of the `limit` most recent commits on `head`'s
+/// first-parent line: the commits a branch head itself stood at, not a merged side branch.
+pub fn on_first_parent(
+    repo: &Path,
+    commit: &Revision,
+    head: &Revision,
+    limit: usize,
+) -> Result<bool> {
+    if commit.commit() == head.commit() {
         return Ok(true);
     }
-    let status = super::command(repo)
-        .args([
-            "merge-base",
-            "--is-ancestor",
-            ancestor.commit(),
-            descendant.commit(),
-        ])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .with_context(|| format!("running git merge-base in {}", repo.display()))?;
-    match status.code() {
-        Some(0) => Ok(true),
-        Some(1) => Ok(false),
-        _ => anyhow::bail!("git merge-base in {} failed ({status})", repo.display()),
-    }
+    let count = format!("--max-count={limit}");
+    let bytes = bounded_output(
+        repo,
+        &["rev-list", "--first-parent", &count, head.commit(), "--"],
+        None,
+        limit * (head.commit().len() + 1) + 1,
+    )?;
+    Ok(bytes
+        .split(|&byte| byte == b'\n')
+        .any(|line| line == commit.commit().as_bytes()))
 }
 
 /// Every file Git's rename detection (default similarity) finds renamed from `base` to

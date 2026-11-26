@@ -18,7 +18,7 @@ pub enum CompareTarget {
     /// Resolve the latest submission of the artifact's own task worker run.
     Candidate,
     /// Re-read a comparison an earlier reply resolved, at exactly that commit. A pinned head
-    /// must still be the observed head or one of its ancestors; a pinned candidate must still be
+    /// must still be the observed head or on its recent first-parent line; a pinned candidate must still be
     /// a recorded submission of the task's latest worker run.
     Pinned {
         origin: CompareOrigin,

@@ -186,7 +186,7 @@ CompareResolution, elements, selected }`.
   commit}`. The first two are resolved once; the reply's `resolved { origin, commit, candidate,
   current_candidate }` names the commit, and every later read of that comparison sends it back
   as `pinned`, so a head that moves mid-read does not change it. A pinned head must still be
-  the observed head or one of its ancestors, and a pinned candidate a recorded submission of
+  the observed head or a recent commit on its first-parent line, and a pinned candidate a recorded submission of
   the task's latest worker run; anything else is `unavailable`. `pending` means the head is not
   observed yet; `unavailable` says why nothing can be compared (a project library artifact has
   no candidate, a commit is not local, the subject is outside the artifact's project).
