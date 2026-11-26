@@ -214,11 +214,12 @@ impl Engine {
                 return Ok(());
             }
             match status {
-                // A confirmed pickup failure is more specific than Pi's coarse
-                // provider error. An actual wait can't produce this reason.
+                // Keep a current pending or missed pickup visible to reconciliation
+                // instead of replacing it with Pi's coarse provider error. An actual
+                // wait can't produce a pickup reason.
                 SessionStatus::Blocked { excerpt }
                     if (task.status == Status::Running || waiting_for_reply)
-                        && reason != Some(attention::Reason::PickupFailed) =>
+                        && !reason.is_some_and(attention::Reason::is_pickup) =>
                 {
                     let blocked = worker_blocked(&task.id, excerpt);
                     self.block_in(store, &mut task, Some(&run.id), blocked, Actor::Auto)?;
@@ -288,7 +289,7 @@ impl Engine {
         } else {
             None
         };
-        let message = reason.map(|reason| reason.message(run.role));
+        let message = reason.and_then(|reason| reason.message(run.role));
         if task.attention.as_deref() != message {
             task.attention = message.map(str::to_owned);
             store.update_task(task)?;

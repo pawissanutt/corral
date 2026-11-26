@@ -234,7 +234,8 @@ fn terminal_error_samples<const N: usize>(
     f: &Fixture,
     mut run: Run,
     input_id: &str,
-    samples: [(bool, &str, Option<&str>); N],
+    samples: [(bool, Value, Option<&str>); N],
+    clock: Option<[i64; N]>,
 ) -> [Task; N] {
     use std::{
         io::{BufRead, BufReader, Write},
@@ -258,7 +259,7 @@ fn terminal_error_samples<const N: usize>(
             "paused": false, "turn": {"open": false}, "owner_questions": owner_questions,
             "last_error": "Provider failed after closing the turn",
             "activity": {"settled": true, "busy": false, "waiting": waiting,
-                "turn": 1, "inputs": {input_id: {"state": input, "turn": 1}}},
+                "turn": 1, "inputs": {input_id: input}},
         })
     });
     let listener = UnixListener::bind(socket).unwrap();
@@ -279,8 +280,25 @@ fn terminal_error_samples<const N: usize>(
             .unwrap();
         }
     });
-    let tasks = std::array::from_fn(|_| {
-        f.engine.reconcile(&run).unwrap();
+    let tasks = std::array::from_fn(|index| {
+        if let Some(clock) = clock {
+            let (status, paused, activity) = f
+                .engine
+                .session_runner()
+                .observe_activity(run.session.as_ref().unwrap())
+                .unwrap();
+            f.sample(
+                &run,
+                clock[index],
+                Observation {
+                    status: Some(status),
+                    paused,
+                    activity,
+                },
+            );
+        } else {
+            f.engine.reconcile(&run).unwrap();
+        }
         f.engine.store.require_task(&run.task).unwrap()
     });
     host.join().unwrap();
@@ -301,10 +319,11 @@ fn pi_reviewer_error_does_not_mask_an_outstanding_verdict_or_failed_pickup() {
         run,
         "board-review",
         [
-            (false, "applied", None),
-            (true, "applied", None),
-            (false, "failed", None),
+            (false, json!({"state": "applied"}), None),
+            (true, json!({"state": "applied"}), None),
+            (false, json!({"state": "failed", "turn": 1}), None),
         ],
+        None,
     );
     assert!(outstanding.attention.as_deref().is_some_and(|reason| {
         reason.starts_with("Reviewer settled without a verdict") && reason.contains("follow up")
@@ -340,7 +359,14 @@ fn worker_send_back_pickup_failure_survives_a_coarse_provider_block() {
             &f,
             run,
             "board-feedback",
-            [(question.is_some(), receipt, question); 2],
+            [(); 2].map(|()| {
+                (
+                    question.is_some(),
+                    json!({"state": receipt, "turn": 1}),
+                    question,
+                )
+            }),
+            None,
         );
         if receipt == "failed" && question.is_none() {
             assert_eq!(task.status, Status::Running);
@@ -355,6 +381,42 @@ fn worker_send_back_pickup_failure_survives_a_coarse_provider_block() {
             );
         }
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn worker_pending_pickup_reaches_deadline_despite_a_coarse_provider_block() {
+    let (f, run) = Fixture::new(Role::Worker, Status::Running, true);
+    f.event(
+        &run,
+        EventKind::SentBack,
+        json!({"pickup": {"input_id": "board-feedback", "rejected": false}}),
+    );
+    let [first, early, expired] = terminal_error_samples(
+        &f,
+        run,
+        "board-feedback",
+        // Pi admitted the input before the engine's first quiet sample.
+        [2_000, 31_000, 32_000].map(|quiet_ms| {
+            (
+                false,
+                json!({"state": "pending", "quiet_ms": quiet_ms}),
+                None,
+            )
+        }),
+        Some([100, 129, 130]),
+    );
+    for pending in [first, early] {
+        assert_eq!(pending.status, Status::Running);
+        assert_eq!(pending.attention, None, "before the pickup deadline");
+    }
+    assert_eq!(expired.status, Status::Running);
+    assert!(
+        expired
+            .attention
+            .as_deref()
+            .is_some_and(|reason| reason.starts_with("Send-back feedback wasn’t picked up"))
+    );
 }
 
 #[test]

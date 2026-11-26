@@ -46,19 +46,24 @@ pub(super) fn elapsed(since: Option<Timestamp>, now: Timestamp, seconds: u64) ->
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Reason {
-    PickupFailed,
-    PickupTimedOut,
+    PickupPending,
+    PickupMissed,
     Unfinished,
     PossiblyStalled,
 }
 
 impl Reason {
-    pub(super) fn message(self, role: Role) -> &'static str {
-        match (self, role) {
-            (Self::PickupFailed | Self::PickupTimedOut, Role::Worker) => {
+    pub(super) fn is_pickup(self) -> bool {
+        matches!(self, Self::PickupPending | Self::PickupMissed)
+    }
+
+    pub(super) fn message(self, role: Role) -> Option<&'static str> {
+        Some(match (self, role) {
+            (Self::PickupPending, _) => return None,
+            (Self::PickupMissed, Role::Worker) => {
                 "Send-back feedback wasn’t picked up. Open the session to follow up."
             }
-            (Self::PickupFailed | Self::PickupTimedOut, Role::Reviewer) => {
+            (Self::PickupMissed, Role::Reviewer) => {
                 "Review request wasn’t picked up. Open the session to follow up."
             }
             (Self::Unfinished, Role::Worker) => {
@@ -68,7 +73,7 @@ impl Reason {
                 "Reviewer settled without a verdict. Open the session to follow up."
             }
             (Self::PossiblyStalled, _) => "Possibly stalled. Open the session to check progress.",
-        }
+        })
     }
 }
 
@@ -86,16 +91,22 @@ pub(super) fn pi_reason(
         match state {
             Some(InputState::Applied) => (),
             Some(InputState::Failed { turn }) if activity.turn > turn => (),
-            Some(InputState::Failed { .. }) => return Some(Reason::PickupFailed),
+            Some(InputState::Failed { .. }) => return Some(Reason::PickupMissed),
             Some(InputState::Pending { quiet_ms }) => {
-                return (quiet_ms >= 1_000 * PICKUP_WINDOW_SECS
-                    && elapsed(since, now, PICKUP_WINDOW_SECS))
-                .then_some(Reason::PickupTimedOut);
+                return Some(
+                    if quiet_ms >= 1_000 * PICKUP_WINDOW_SECS
+                        && elapsed(since, now, PICKUP_WINDOW_SECS)
+                    {
+                        Reason::PickupMissed
+                    } else {
+                        Reason::PickupPending
+                    },
+                );
             }
             // A new turn after a failed or unknown pickup can still owe work,
             // but an earlier settled turn is never evidence for this request.
             None if pickup.before_turn.is_some_and(|turn| activity.turn > turn) => (),
-            None if pickup.rejected => return Some(Reason::PickupFailed),
+            None if pickup.rejected => return Some(Reason::PickupMissed),
             None => return None,
         }
     }
