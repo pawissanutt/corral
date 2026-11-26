@@ -7,7 +7,7 @@ use std::{
 };
 
 const ROOT: &str = "CORRAL_TEST_GATE_ATTEMPT_ROOT";
-const WAIT: &str = "printf 'started-%s\\n' \"$MARKER\"; if test \"$PAUSE\" = yes; then i=0; until test -f \"$BARRIER\"; do i=$((i+1)); test \"$i\" -lt 200 || exit 1; sleep .05; done; printf 'released-%s\\n' \"$MARKER\"; fi";
+const WAIT: &str = "printf 'started-%s\\n' \"$MARKER\"; if test \"$MARKER\" = interrupted; then exec >\"$BARRIER.redirected\" 2>&1; printf 'redirected\\n'; fi; if test \"$PAUSE\" = yes; then i=0; until test -f \"$BARRIER\"; do i=$((i+1)); test \"$i\" -lt 200 || exit 1; sleep .05; done; printf 'released-%s\\n' \"$MARKER\"; fi";
 const OUTPUT: &str =
     "head -c 12000 /dev/zero | tr '\\000' x; printf '\\nfinished-%s\\n' \"$MARKER\"";
 
@@ -157,9 +157,15 @@ fn quiet_gate_retry_and_runner_exit_are_observable() {
 
     let mut runner = Runner::start(root, &task, "interrupted", true);
     let active = wait_for_start("interrupted");
+    let redirected = root.join("interrupted.redirected");
+    until(|| {
+        fs::read_to_string(&redirected)
+            .ok()
+            .filter(|log| log.contains("redirected"))
+    });
     runner.0.kill().unwrap();
     assert!(!runner.0.wait().unwrap().success());
-    // The shell may still hold inherited stdout/stderr. Only the runner owns the lease.
+    // The runner disappeared; the command is still alive after redirecting stdout/stderr.
     let interrupted = page(&active.attempt.id, None);
     let premature_retry = cx.engine.gate(&task);
     fs::write(root.join("interrupted"), "release orphaned shell").unwrap();
@@ -176,10 +182,16 @@ fn quiet_gate_retry_and_runner_exit_are_observable() {
         .join(&active.attempt.id)
         .join("output.log");
     until(|| {
-        fs::read_to_string(&raw)
+        fs::read_to_string(&redirected)
             .ok()
             .filter(|log| log.contains("released-interrupted"))
     });
+    use std::io::Write as _;
+    writeln!(
+        fs::OpenOptions::new().append(true).open(raw).unwrap(),
+        "late output"
+    )
+    .unwrap();
     assert_eq!(page(&active.attempt.id, None), interrupted);
     assert_eq!(cx.events(&task, EventKind::Gate).len(), 2);
 }

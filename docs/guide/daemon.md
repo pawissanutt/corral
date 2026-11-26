@@ -297,7 +297,7 @@ with a task and its attempt ID; older windows use byte offsets, not filesystem p
 The runner updates a heartbeat even when the log is quiet. A stale heartbeat is not
 proof of exit: when the engine observes a released runner lease with no result, it
 records the interruption and freezes the visible log boundary. It refuses a retry
-while a previous command still holds its output handles. The Tasks topic
+while a previous command still holds its inherited work lease, even after redirection. The Tasks topic
 publishes step and lifecycle changes; heartbeat and output times stay in the selected
 Gate detail, out of the board event history. After a check commits, its retained
 artifact serves subsequent reads of that attempt.

@@ -217,6 +217,7 @@ impl AppState {
             let keep_recovery = cache.error.as_ref().is_some_and(|error| {
                 error.code == transcript::HISTORY_CHANGED
                     || (latest_only && error.code == "conflict")
+                    || matches!(request.target, DetailRef::GateAttempt { .. })
             });
             if !keep_recovery {
                 cache.error = (!self.ready).then(offline);

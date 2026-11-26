@@ -111,12 +111,12 @@ impl Engine {
         let Some(log) = self.open_gate_log(&attempt)? else {
             return Ok(());
         };
-        // In Unix the command and its descendants inherit the log's locked open file
-        // description. Do not start a retry while those writers still have it open.
+        // The command holds a separate inherited descriptor for this lock: ordinary
+        // stdout/stderr redirection must not let a still-active command overlap a retry.
         match log.try_lock_shared() {
             Ok(()) => Ok(()),
             Err(TryLockError::WouldBlock) => Err(refuse(
-                "the previous gate command still holds its log; retry after it exits",
+                "the previous gate command is still active; retry after it exits",
                 vec![Next::run(Op::Gate {
                     id: task.to_owned(),
                 })],
@@ -480,15 +480,19 @@ impl GateRunner {
         log: &File,
         line: &str,
     ) -> Result<ExitStatus> {
-        let mut child = Command::new("sh")
+        let mut command = Command::new("sh");
+        command
             .args(["-c", line])
             .current_dir(&run.worktree)
             .envs(&project.env)
             .stdin(Stdio::null())
             .stdout(log.try_clone().context("clone gate stdout log")?)
-            .stderr(log.try_clone().context("clone gate stderr log")?)
+            .stderr(log.try_clone().context("clone gate stderr log")?);
+        #[cfg(unix)]
+        let _work_lease = inherit_work_lease(&mut command, log)?;
+        let mut child = command
             .spawn()
-            .with_context(|| format!("start gate command {:?}", command_title(line)))?;
+            .with_context(|| format!("run gate line {:?}", command_title(line)))?;
         loop {
             if let Some(status) = child.try_wait().context("wait for gate command")? {
                 return Ok(status);
@@ -497,6 +501,26 @@ impl GateRunner {
             thread::sleep(Duration::from_millis(100));
         }
     }
+}
+
+#[cfg(unix)]
+fn inherit_work_lease(command: &mut Command, log: &File) -> Result<std::os::fd::OwnedFd> {
+    use std::os::{fd::AsRawFd as _, unix::process::CommandExt as _};
+
+    let hold = rustix::io::fcntl_dupfd_cloexec(log, 3).context("duplicate gate command lease")?;
+    let fd = hold.as_raw_fd();
+    // SAFETY: the caller keeps `hold` open across spawn. The descriptor is never
+    // stdin/out/err, and the post-fork hook does only an async-signal-safe fcntl in
+    // the child, leaving the parent's close-on-exec flag intact for other spawns.
+    unsafe {
+        command.pre_exec(move || {
+            if libc::fcntl(fd, libc::F_SETFD, 0) == -1 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    Ok(hold)
 }
 
 fn command_title(line: &str) -> String {
