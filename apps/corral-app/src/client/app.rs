@@ -21,7 +21,9 @@ use super::{
 use crate::model::{Id, daemon::*, devices::Registry};
 use corral_protocol::attachment::*;
 use corral_protocol::build::{BUILD_REMOVE, BUILD_START};
-use corral_protocol::config::{CONFIG_GET, CONFIG_PUT, PI_HOSTED_TOOLS, PI_STARTUP};
+use corral_protocol::config::{
+    CONFIG_GET, CONFIG_PUT, PI_HOSTED_TOOL_MODELS, PI_HOSTED_TOOLS, PI_STARTUP,
+};
 use corral_protocol::device::{
     DEVICE_PAGE, DEVICE_PAGE_LIMIT_MAX, DEVICE_REVOKE, DeviceInfo, DevicePage, DevicePageQuery,
     PUSH_STATUS, PUSH_SUBSCRIBE, PUSH_UNSUBSCRIBE,
@@ -58,6 +60,7 @@ pub(super) const CAPS: &[&str] = &[
     SETTINGS_V1,
     AUTOMATION_V1,
     corral_protocol::config::PI_HOSTED_TOOLS_V1,
+    corral_protocol::config::PI_HOSTED_TOOL_MODELS_V1,
     corral_protocol::config::PI_STARTUP_V1,
     ASSISTANT_V1,
     CLOSED_V1,
@@ -79,7 +82,7 @@ pub(super) fn handles(event: &Event) -> bool {
         event,
         Event::Health(_) | Event::Rows { .. } | Event::Reset { .. } | Event::TopicError { .. }
     ) || matches!(event, Event::Reply { method, .. } if matches!(*method,
-            APP_SESSION | OP_SUBMIT | OP_RESULT | CONFIG_GET | CONFIG_PUT | PI_HOSTED_TOOLS | PI_STARTUP | SESSION_SEND | BUILD_START | wire::build::CODE_START | wire::build::CODE_RESUME |
+            APP_SESSION | OP_SUBMIT | OP_RESULT | CONFIG_GET | CONFIG_PUT | PI_HOSTED_TOOLS | PI_HOSTED_TOOL_MODELS | PI_STARTUP | SESSION_SEND | BUILD_START | wire::build::CODE_START | wire::build::CODE_RESUME |
             SESSION_CARD_ANSWER | SESSION_QUEUE_WITHDRAW | SESSION_QUEUE_MOVE | SESSION_ACTION |
             SESSION_MODEL | BUILD_REMOVE | DETAIL_GET | CHANGES_PAGE | SEEN_ADVANCE | DEVICE_REVOKE |
             wire::device::PAIR_BEGIN | wire::device::PAIR_STATUS | wire::device::PAIR_CONFIRM | wire::device::PAIR_CANCEL |

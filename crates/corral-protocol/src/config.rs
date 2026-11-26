@@ -8,6 +8,8 @@ pub const PI_STARTUP_V1: &str = "config.pi_startup.v1";
 pub const PI_STARTUP: &str = "config.pi_startup";
 pub const PI_HOSTED_TOOLS_V1: &str = "config.pi_hosted_tools.v1";
 pub const PI_HOSTED_TOOLS: &str = "config.pi_hosted_tools";
+pub const PI_HOSTED_TOOL_MODELS_V1: &str = "config.pi_hosted_tool_models.v1";
+pub const PI_HOSTED_TOOL_MODELS: &str = "config.pi_hosted_tool_models";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ConfigGet {}
@@ -67,6 +69,49 @@ pub struct PiHostedToolsConfig {
     pub revision: String,
     pub web_search: Option<String>,
     pub image_gen: Option<String>,
+}
+
+/// Read the selected provider's model metadata without changing Pi preferences.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PiHostedToolModelsRequest {
+    pub tool: PiHostedTool,
+    pub provider: PiHostedToolProvider,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PiHostedTool {
+    WebSearch,
+    ImageGen,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum PiHostedToolProvider {
+    #[serde(rename = "openai")]
+    OpenAi,
+    #[serde(rename = "openai-codex")]
+    OpenAiCodex,
+    Anthropic,
+    AnthropicApi,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PiHostedToolModels {
+    pub status: PiHostedToolModelsStatus,
+    /// Provider model IDs, not qualified selectors. Empty on failure or no matches.
+    pub models: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PiHostedToolModelsStatus {
+    Live,
+    Unsupported,
+    MissingLogin,
+    Failed,
 }
 
 #[cfg(test)]

@@ -3,7 +3,9 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type * as Sdk from "@earendil-works/pi-coding-agent";
-import { normalizeContext, type Models, type UserMessage } from "@earendil-works/pi-ai";
+import { normalizeContext, type Api, type Model, type Models, type UserMessage } from "@earendil-works/pi-ai";
+import { PROVIDERS, type ApiProviderId } from "../../auth/providers.ts";
+import { isApiSearchModel } from "../../host/hosted-settings.ts";
 import { z } from "zod";
 import type { AuxiliaryResult, Invocation } from "../subagent/runtime.ts";
 import type { WebSettings } from "./settings.ts";
@@ -27,6 +29,22 @@ export function boundedSearchResult(value: {
     encoded = JSON.stringify(result);
   }
   return encoded;
+}
+
+/** Register only the exact configured API search model, on the isolated search runtime.
+ * The published IDs are candidates, not capability metadata: the pinned provider still
+ * has to accept the request and the tool still requires verified search evidence.
+ */
+export function registerConfiguredApiSearchModel(models: Sdk.ModelRuntime, provider: ApiProviderId, id: string): void {
+  if (models.getModel(provider, id) || !isApiSearchModel(provider, id)) return;
+  const native = models.getProvider(provider);
+  if (!native) return;
+  const { api, modelApi } = PROVIDERS[provider];
+  const baseUrl = provider === "openai" ? new URL(".", api).href.slice(0, -1) : new URL(api).origin;
+  const model: Model<Api> = { id, name: id, provider, api: modelApi, baseUrl, input: ["text"],
+    reasoning: false, contextWindow: 8192, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+  const getModels = () => [...native.getModels(), model];
+  models.registerNativeProvider({ ...native, getModels, getAllModels: getModels });
 }
 
 export async function runSubscriptionSearch(options: {

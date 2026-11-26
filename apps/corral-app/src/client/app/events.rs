@@ -303,7 +303,9 @@ impl AppState {
                 });
                 Ok(vec![])
             }
-            CONFIG_GET | CONFIG_PUT | PI_HOSTED_TOOLS | PI_STARTUP => Ok(vec![]),
+            CONFIG_GET | CONFIG_PUT | PI_HOSTED_TOOLS | PI_HOSTED_TOOL_MODELS | PI_STARTUP => {
+                Ok(vec![])
+            }
             PUSH_STATUS | PUSH_SUBSCRIBE | PUSH_UNSUBSCRIBE => {
                 let status: wire::device::PushStatus = decode(result)?;
                 feed.update(|feed| feed.push = Some(status));

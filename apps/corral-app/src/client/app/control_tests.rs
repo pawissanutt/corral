@@ -6,7 +6,7 @@ use crate::model::hue::Hue;
 /// A missing route leaves an enrolled device stuck on Reading even though corrald answered.
 #[test]
 fn pi_hosted_tools_routes_preference_replies_to_the_waiting_form() {
-    for method in [PI_HOSTED_TOOLS, PI_STARTUP] {
+    for method in [PI_HOSTED_TOOLS, PI_HOSTED_TOOL_MODELS, PI_STARTUP] {
         assert!(handles(&Event::Reply {
             method,
             tag: Some("settings-read".into()),

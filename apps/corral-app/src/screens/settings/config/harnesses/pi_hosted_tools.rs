@@ -1,10 +1,12 @@
 use corral_protocol::config::{PiHostedToolsChange, PiHostedToolsRequest};
 use nsh_core::prelude::*;
 
-use super::{AppState, Token, button_row, cell, entry, panel as boxed};
+use super::pi_hosted_tool_models as models;
+use super::{AppState, Token, button_row, cell, panel as boxed};
 use crate::client::requests;
 use crate::model::{
     Id,
+    settings::pi_hosted_tool_models::listable,
     settings::pi_hosted_tools::{Editor, NOTE, Tool, unavailable},
 };
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
@@ -28,8 +30,24 @@ fn send(app: AppState, editor: Signal<Editor>, change: Option<PiHostedToolsChang
 pub(super) fn panel(app: AppState) -> AnyElement {
     let editor = signal(Editor::default());
     let reason = computed(move || app.feed.with(unavailable));
+    // Another source, store, enrolment or capability set starts over: a draft or a list read
+    // from one daemon never reaches another, and replies to the old one are dropped.
+    let source = computed(move || {
+        let data = app.data.get();
+        app.feed.with(|feed| {
+            (
+                data,
+                unavailable(feed),
+                feed.store.clone(),
+                feed.session
+                    .as_ref()
+                    .map(|session| session.device.id.clone()),
+                listable(feed),
+            )
+        })
+    });
     effect(move || {
-        let ready = reason.get().is_none();
+        let ready = source.with(|source| source.1.is_none());
         untracked(|| {
             editor.set(Editor::default());
             if ready {
@@ -48,6 +66,7 @@ pub(super) fn panel(app: AppState) -> AnyElement {
             editor.update(|editor| editor.settle(reply));
         }
     });
+    models::settle(app, editor);
     let body = dynamic(move || {
         if let Some(reason) = reason.get() {
             return cell(app, reason, Token::Ink3, false).into_element();
@@ -134,6 +153,7 @@ pub(super) fn panel(app: AppState) -> AnyElement {
 fn tool_row(app: AppState, editor: Signal<Editor>, tool: Tool) -> AnyElement {
     let index = tool as usize;
     let selected = computed(move || editor.with(|state| state.draft[index].route));
+    models::follow(app, editor, tool, selected);
     let control = dynamic(move || {
         let route = tool.routes()[selected.get()];
         untracked(|| {
@@ -188,13 +208,7 @@ fn tool_row(app: AppState, editor: Signal<Editor>, tool: Tool) -> AnyElement {
         }
         untracked(|| {
             view()
-                .child(entry(
-                    app,
-                    format!("field-pi-hosted-tools-{}-model", tool.id()),
-                    tool.model_label(route),
-                    move || editor.with(|state| state.draft[index].model.clone()),
-                    move |model| editor.update(|state| state.draft[index].model = model),
-                ))
+                .child(models::model(app, editor, tool, route))
                 .child(cell(app, route.guidance(tool), Token::Ink3, false))
                 .child(dynamic(move || {
                     match editor.with(|state| state.draft[index].value(tool).err()) {

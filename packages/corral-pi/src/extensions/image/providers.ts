@@ -1,6 +1,6 @@
 import { PROVIDERS, validApiKey } from "../../auth/providers.ts";
 import type { AuthModule, Fetch } from "../../auth/types.ts";
-import type { HostedRoute, ImageProvider } from "../../host/hosted-settings.ts";
+import { isGptImageModel, type HostedRoute, type ImageProvider } from "../../host/hosted-settings.ts";
 import { guardedFetch } from "../../host/restrict.ts";
 
 export interface ImageProviderOptions { auth: AuthModule; fetch: Fetch }
@@ -149,7 +149,7 @@ async function request(options: ImageProviderOptions, route: HostedRoute<ImagePr
   if ((provider !== "openai" && provider !== "openai-codex") || !modelId(model)) throw unavailable("invalid OpenAI image route");
   if (typeof prompt !== "string" || !prompt.trim() || prompt.length > 8000) throw failed("prompt must contain 1–8000 characters");
   const codex = provider === "openai-codex";
-  if (!codex && !/^gpt-image-[A-Za-z0-9][A-Za-z0-9._-]*$/.test(model)) throw unavailable("select a GPT Image model");
+  if (!codex && !isGptImageModel(model)) throw unavailable("select a GPT Image model");
   const context = { provider, apiEndpoint: PROVIDERS[provider].api, refreshEndpoint: PROVIDERS[provider].refresh };
   if (!(options.auth.providers ?? [options.auth.provider]).includes(provider)) throw unavailable("selected auth route is not bound");
   let credential;

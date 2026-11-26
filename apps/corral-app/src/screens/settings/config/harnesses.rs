@@ -19,6 +19,7 @@ use crate::ui::kit::text::h3_flush;
 use crate::ui::term;
 use crate::ui::tokens::{Token, color};
 
+mod pi_hosted_tool_models;
 mod pi_hosted_tools;
 mod pi_startup;
 

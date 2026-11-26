@@ -24,7 +24,7 @@ import { buildFixtureInstall, PACKAGE_ROOT } from "./support/fixture-install.ts"
 import { writeFakeEngine } from "./support/fake-engine.ts";
 import { nextEvent } from "./support/wait.ts";
 import { AuxiliaryRuntime } from "../src/extensions/subagent/runtime.ts";
-import { boundedSearchResult, runSubscriptionSearch } from "../src/extensions/web/subscription.ts";
+import { boundedSearchResult, registerConfiguredApiSearchModel, runSubscriptionSearch } from "../src/extensions/web/subscription.ts";
 import { SearchEvidence, record } from "../src/extensions/web/evidence.ts";
 import { WebSettingsSchema } from "../src/extensions/web/settings.ts";
 import fixtureAuth from "./fixtures/auth/index.ts";
@@ -63,7 +63,7 @@ function codexReply(search = true, inputDetails: Record<string, number> = { cach
   ];
   return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), { headers: { "content-type": "text/event-stream" } });
 }
-async function fixture(provider: "openai-codex" | "anthropic" | "openai" | "anthropic-api", send: Fetch) {
+async function fixture(provider: "openai-codex" | "anthropic" | "openai" | "anthropic-api", send: Fetch, selected?: string) {
   const cwd = temp();
   const credentials: CredentialStore = provider === "openai-codex" ? fixtureAuth.credentials(authContext()) : {
     read: async (id) => id !== provider ? undefined : id !== "anthropic" ? { type: "api_key", key: "sk-SYNTHETIC-ONLY" } : { type: "oauth", access: "sk-ant-oat01-SYNTHETIC", refresh: "r", expires: Date.now() + 3600000 },
@@ -73,6 +73,10 @@ async function fixture(provider: "openai-codex" | "anthropic" | "openai" | "anth
   const models = await createModelCatalog(credentials, { providers: [provider], modelsPath: null });
   const usage: ModelUsage[] = [];
   if (provider === "openai" || provider === "anthropic-api") {
+    if (selected) {
+      expect(models.getModel(provider, selected)).toBeUndefined();
+      registerConfiguredApiSearchModel(models, provider, selected);
+    }
     installApiProvider(models, provider, credentials, send, row => usage.push(row));
   } else {
     const network = guardedFetch(send, undefined, provider);
@@ -84,7 +88,7 @@ async function fixture(provider: "openai-codex" | "anthropic" | "openai" | "anth
     models.registerNativeProvider({ ...restricted, streamSimple: observeUsage(restricted.streamSimple.bind(restricted), "subscription", row => usage.push(row)) });
   }
   const refs: Record<string, unknown>[] = [];
-  let binding = { provider, model: provider === "openai-codex" ? "gpt-6.1-sol" : provider === "openai" ? "gpt-5.4" : provider === "anthropic-api" ? "claude-sonnet-4-6" : "claude-sonnet-5-5" };
+  let binding = { provider, model: selected ?? (provider === "openai-codex" ? "gpt-6.1-sol" : provider === "openai" ? "gpt-5.4" : provider === "anthropic-api" ? "claude-sonnet-4-6" : "claude-sonnet-5-5") };
   const runtime = new AuxiliaryRuntime({ provider, model: binding.model,
     settings: { web_search: { model: null, timeout_secs: 5 } }, sessionId: () => "parent",
     searchModel: () => binding,
@@ -326,15 +330,16 @@ test("bounded JSON remains valid UTF-8 and policy accepts only explicit supporte
   expect(evidence.searched).toBeFalse();
 });
 
-test("OpenAI API sends forced Responses search with only the metered credential", async () => {
+test("OpenAI API sends forced Responses search for a configured ID outside the chat catalog", async () => {
+  const model = "gpt-future-search-fixture";
   const fx = await fixture("openai", async (url, init) => {
     expect(String(url)).toBe("https://api.openai.com/v1/responses");
     expect(new Headers(init?.headers).get("authorization")).toBe("Bearer sk-SYNTHETIC-ONLY");
-    expect(body(init)).toMatchObject({ tools: [{ type: "web_search", search_context_size: "medium" }],
+    expect(body(init)).toMatchObject({ model, tools: [{ type: "web_search", search_context_size: "medium" }],
       tool_choice: { type: "web_search" }, include: ["web_search_call.action.sources"] });
     return codexReply();
-  });
-  expect(JSON.parse((await fx.run("paid-openai")).text)).toMatchObject({ provider: "openai", results: [{ url: "https://docs.example.org/guide" }] });
+  }, model);
+  expect(JSON.parse((await fx.run("paid-openai")).text)).toMatchObject({ provider: "openai", model, results: [{ url: "https://docs.example.org/guide" }] });
   expect(fx.usage).toHaveLength(1);
   expect(fx.usage[0]).toMatchObject({ billing: "api" });
 });
@@ -357,16 +362,18 @@ function anthropicApiReply(mode: "ok" | "empty" | "error" | "unpaired") {
 
 for (const mode of ["ok", "empty", "error", "unpaired"] as const) {
   test(`Claude API requires a completed, paired server result (${mode})`, async () => {
+    const model = mode === "ok" ? "claude-future-search-fixture" : "claude-sonnet-4-6";
     const fx = await fixture("anthropic-api", async (url, init) => {
       expect(String(url)).toBe("https://api.anthropic.com/v1/messages?beta=true");
       expect(new Headers(init?.headers).get("x-api-key")).toBe("sk-SYNTHETIC-ONLY");
       expect(new Headers(init?.headers).has("authorization")).toBeFalse();
-      expect(body(init)).toMatchObject({ tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 1 }],
+      expect(body(init)).toMatchObject({ model, tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 1 }],
         tool_choice: { type: "tool", name: "web_search" } });
       return anthropicApiReply(mode);
-    });
+    }, mode === "ok" ? model : undefined);
     if (mode === "ok" || mode === "empty") {
-      expect(JSON.parse((await fx.run(mode)).text).results).toEqual(mode === "empty" ? [] : [{ title: "Rust", url: "https://www.rust-lang.org/" }]);
+      expect(JSON.parse((await fx.run(mode)).text)).toMatchObject({ model,
+        results: mode === "empty" ? [] : [{ title: "Rust", url: "https://www.rust-lang.org/" }] });
     } else {
       await expect(fx.run(mode)).rejects.toThrow("verified hosted search");
       expect(JSON.stringify(fx.transcript())).not.toContain("SYNTHETIC-PROVIDER-CONTENT");

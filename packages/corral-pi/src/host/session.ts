@@ -93,7 +93,7 @@ import { ImageGeneration } from "../extensions/image/tool.ts";
 import { classifyWriteScope } from "../roles/assistant/write-scope.ts";
 import type { HostedRoute } from "./hosted-settings.ts";
 import { hostedSearchTool, webTools } from "../extensions/web/index.ts";
-import { runSubscriptionSearch } from "../extensions/web/subscription.ts";
+import { registerConfiguredApiSearchModel, runSubscriptionSearch } from "../extensions/web/subscription.ts";
 import { streamClaudeSearch } from "../claude/search.ts";
 import { configuredServers, lspToolkit, type LspToolkit } from "../extensions/lsp/index.ts";
 import { capabilityRegistry } from "../extensions/registry.ts";
@@ -1025,8 +1025,10 @@ export class HostSession {
       const send = modules.auth.transport?.(authContext(id)) ?? apiFetch ?? network.fetch;
       // Native token prices do not include hosted search charges. Keep the total unknown.
       const report = ({ usd: _tokenEstimate, ...usage }: ModelUsage) => this.reportUsage(usage);
-      if (isApiProvider(id)) this.apiNetworks.push(installApiProvider(models, id, credentials, send, report, network.refuse));
-      else {
+      if (isApiProvider(id)) {
+        registerConfiguredApiSearchModel(models, id, route.model);
+        this.apiNetworks.push(installApiProvider(models, id, credentials, send, report, network.refuse));
+      } else {
         const guard = guardedFetch(send, network.refuse, id);
         this.apiNetworks.push(guard);
         restrictProvider(models, id, guard.fetch as typeof globalThis.fetch, { configDir: join(agentDir, "claude-search"), cwd, searchOnly: true });

@@ -131,6 +131,14 @@ provider in a terminal with `corral-pi login --provider <id>`; the owner shell
 
 In **Settings → Configuration → Harnesses → Pi → Hosted tools**, choose a route and model for each tool. Changes apply when a workspace host starts or resumes. Switching the chat model does not switch either tool. Settings contain model selectors, not secrets; use `corral-pi login --provider <id>` on the host for the account you selected.
 
+On OpenAI API and Anthropic API routes, the model dropdown reads the selected account's
+model list through the Pi host. Use **Refresh models** to request it again. The image API
+list shows GPT Image IDs; a listed search model is not a guarantee of search support.
+The existing ChatGPT and Claude subscription logins do not have a supported live listing
+here: enter a model ID manually for those routes, or whenever discovery cannot supply the ID
+you want. Listing does not run a tool or change preferences, and is separate from the offline
+`corral-pi models` catalog.
+
 | Route ID | Search model | Image generation |
 |---|---|---|
 | `openai-codex` | ChatGPT subscription; recommended when the selected model supports search | Experimental: choose a **carrier** chat model; the backend selects the image model |

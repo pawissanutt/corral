@@ -19,6 +19,8 @@ pub(crate) struct Subscriptions<'a> {
     rows: Vec<app::Subscriber>,
     terminals: app::TerminalTopics,
     sessions: app::SessionTopics,
+    // Deferred read replies use this connection's regular, single-writer flush.
+    pub(crate) model_discovery: crate::config::pi_hosted_tool_models::Pending,
     session_fleet: bool,
     session_state: bool,
     build_rows: bool,
@@ -34,6 +36,7 @@ impl<'a> Subscriptions<'a> {
             rows: Vec::new(),
             terminals: app::TerminalTopics::default(),
             sessions: app::SessionTopics::default(),
+            model_discovery: Default::default(),
             session_fleet: false,
             session_state: false,
             build_rows: false,
@@ -132,6 +135,7 @@ impl<'a> Subscriptions<'a> {
     }
 
     pub fn flush(&mut self, conn: &mut dyn Conn) -> Result<()> {
+        self.model_discovery.flush(conn)?;
         let mut i = 0;
         while i < self.rows.len() {
             let sub = &mut self.rows[i];

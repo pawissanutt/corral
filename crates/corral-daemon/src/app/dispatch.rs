@@ -67,6 +67,7 @@ pub(crate) fn welcome(shared: &Shared, hello: wire::Hello) -> wire::Welcome {
                         | wire::AUTOMATION_V1
                         | settings::PI_STARTUP_V1
                         | settings::PI_HOSTED_TOOLS_V1
+                        | settings::PI_HOSTED_TOOL_MODELS_V1
                         | wire::CLOSED_V1
                         | app::CITATIONS_V1
                         | device::DEVICE_V1
@@ -226,6 +227,17 @@ pub(crate) fn serve(
             })?;
             config::pi_hosted_tools::handle(shared.root(), request).map_err(invalid)
         }),
+        settings::PI_HOSTED_TOOL_MODELS => match serde_json::from_value(params) {
+            Ok(request) => topics
+                .model_discovery
+                .start(conn, id, shared.root(), request),
+            Err(_) => conn::error(
+                conn,
+                id,
+                ErrorCode::InvalidParams,
+                "invalid Pi hosted tool models request",
+            ),
+        },
         pane::PANE_FOCUS => answer!({
             let engine = shared.engine()?;
             let session = pane_session(&engine, &decode(params)?)?;

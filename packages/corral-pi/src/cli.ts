@@ -15,6 +15,7 @@ const usage = `Usage:
   corral-pi build --prune [--session <id> [--json]] [--dry-run] [--data-dir <path>]
   corral-pi login [--provider <id>] [--auth-dir <path>]
   corral-pi models [--provider <id>]
+  corral-pi hosted-tool-models --root <root> --tool <web_search|image_gen> --provider <route>
 Model flags: --model [<provider>/]<id>, --provider <id>, --effort <level>, --aws-profile <name>, --aws-region <region>.
 New terminal chat and Build sessions use a saved startup model or ask you to choose one.\nFor new headless sessions without an available default, pass --model <provider/model>.
 Fallback: configure [fallback.providers] in .corral-next/pi.toml, repeat --fallback <provider>/<model>, or pass --no-fallback.
@@ -47,6 +48,11 @@ export async function main(argv = process.argv.slice(2), compiled = fileURLToPat
     return;
   }
   restrictEnvironment(process.env);
+  // The one-shot listing uses no SDK, installed assets, or session startup.
+  if (command === "hosted-tool-models") {
+    await (await import("./host/hosted-tool-models.ts")).runHostedToolModels(args);
+    return;
+  }
   const assets = fileURLToPath(new URL("..", import.meta.url));
   if (compiled) await (await import("./host/compiled.ts")).prepareCompiled(command === "code" ? "build" : command);
   switch (command) {

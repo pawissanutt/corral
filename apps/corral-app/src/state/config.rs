@@ -62,6 +62,24 @@ impl AppState {
         }
     }
 
+    /// Asks corrald for a hosted tool route's models: `None` when this connection cannot list
+    /// them (the sample preview never claims a live list), else whether the request left.
+    pub fn pi_hosted_tool_models(
+        &self,
+        request_id: String,
+        request: corral_protocol::config::PiHostedToolModelsRequest,
+    ) -> Option<bool> {
+        let listable = self.feed.with_untracked(|feed| {
+            feed.ready() && crate::model::settings::pi_hosted_tool_models::listable(feed)
+        });
+        (listable && !self.fixture()).then(|| {
+            requests::send(ClientRequest::PiHostedToolModels {
+                request_id,
+                request,
+            })
+        })
+    }
+
     /// Sends `config.get`, or `config.put` with `put`, under `key`; the sample preview answers
     /// it locally. One that cannot leave settles the editor with why.
     pub(super) fn send_config(&self, key: Id, put: Option<String>) {

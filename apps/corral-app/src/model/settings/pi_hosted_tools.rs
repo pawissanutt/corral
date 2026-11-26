@@ -32,6 +32,8 @@ pub struct Editor {
     waiting: Option<Waiting>,
     problem: Option<String>,
     just_saved: bool,
+    /// Each tool's model list, by `Tool` index; kept across Save and Reload.
+    pub models: [super::pi_hosted_tool_models::Discovery; 2],
 }
 
 impl Editor {

@@ -5515,6 +5515,68 @@
           }
         ]
       },
+      "PiHostedTool": {
+        "enum": [
+          "web_search",
+          "image_gen"
+        ],
+        "type": "string"
+      },
+      "PiHostedToolModels": {
+        "additionalProperties": false,
+        "properties": {
+          "models": {
+            "description": "Provider model IDs, not qualified selectors. Empty on failure or no matches.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PiHostedToolModelsStatus"
+          }
+        },
+        "required": [
+          "status",
+          "models"
+        ],
+        "type": "object"
+      },
+      "PiHostedToolModelsRequest": {
+        "additionalProperties": false,
+        "description": "Read the selected provider's model metadata without changing Pi preferences.",
+        "properties": {
+          "provider": {
+            "$ref": "#/components/schemas/PiHostedToolProvider"
+          },
+          "tool": {
+            "$ref": "#/components/schemas/PiHostedTool"
+          }
+        },
+        "required": [
+          "tool",
+          "provider"
+        ],
+        "type": "object"
+      },
+      "PiHostedToolModelsStatus": {
+        "enum": [
+          "live",
+          "unsupported",
+          "missing_login",
+          "failed"
+        ],
+        "type": "string"
+      },
+      "PiHostedToolProvider": {
+        "enum": [
+          "openai",
+          "openai-codex",
+          "anthropic",
+          "anthropic-api"
+        ],
+        "type": "string"
+      },
       "PiHostedToolsChange": {
         "additionalProperties": false,
         "properties": {
@@ -11460,6 +11522,49 @@
       "x-notification": false,
       "x-params-schema": {
         "$ref": "#/components/schemas/PiHostedToolsRequest"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "unauthenticated",
+          "message": "unauthenticated"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
+    },
+    {
+      "name": "config.pi_hosted_tool_models",
+      "params": [
+        {
+          "name": "provider",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/PiHostedToolProvider"
+          }
+        },
+        {
+          "name": "tool",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/PiHostedTool"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/PiHostedToolModels"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/PiHostedToolModelsRequest"
       },
       "x-wire-errors": [
         {

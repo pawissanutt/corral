@@ -137,6 +137,15 @@ impl AppState {
                 corral_protocol::config::PI_HOSTED_TOOLS,
                 value(request),
             ),
+            ClientRequest::PiHostedToolModels {
+                request_id,
+                request,
+            } => self.operation(
+                feed,
+                request_id,
+                corral_protocol::config::PI_HOSTED_TOOL_MODELS,
+                value(request),
+            ),
             ClientRequest::PiStartup {
                 request_id,
                 request,

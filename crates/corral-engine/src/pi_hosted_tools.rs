@@ -37,18 +37,9 @@ impl Field {
         // Keep in sync with the host-side selector grammar. Syntax alone does not
         // establish entitlement or model availability.
         selector == "off"
-            || (selector.len() <= 256
-                && selector.split_once('/').is_some_and(|(provider, id)| {
-                    self.providers.contains(&provider)
-                        && id.as_bytes().first().is_some_and(u8::is_ascii_alphanumeric)
-                        && id
-                            .bytes()
-                            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'_' | b'-'))
-                        && !["sk-", "sess-", "eyj"].iter().any(|prefix| {
-                            id.get(..prefix.len())
-                                .is_some_and(|start| start.eq_ignore_ascii_case(prefix))
-                        })
-                }))
+            || selector.split_once('/').is_some_and(|(provider, id)| {
+                self.providers.contains(&provider) && valid_model_id(provider, id)
+            })
     }
 
     fn read(&self, table: Option<&dyn TableLike>) -> Result<Option<String>> {
@@ -62,6 +53,19 @@ impl Field {
             })
             .transpose()
     }
+}
+
+/// The model ID part of a hosted-tool selector, for preferences and discovery replies.
+pub fn valid_model_id(provider: &str, id: &str) -> bool {
+    provider.len() + 1 + id.len() <= 256
+        && id.as_bytes().first().is_some_and(u8::is_ascii_alphanumeric)
+        && id
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'_' | b'-'))
+        && !["sk-", "sess-", "eyj"].iter().any(|prefix| {
+            id.get(..prefix.len())
+                .is_some_and(|start| start.eq_ignore_ascii_case(prefix))
+        })
 }
 
 fn hosted_table(doc: &DocumentMut) -> Result<Option<&dyn TableLike>> {

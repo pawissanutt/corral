@@ -151,6 +151,12 @@ fn document() -> Value {
             false,
             &common,
         ),
+        method::<config::PiHostedToolModelsRequest, config::PiHostedToolModels>(
+            &mut generator,
+            config::PI_HOSTED_TOOL_MODELS,
+            false,
+            &common,
+        ),
         method::<pane::PaneFocus, ()>(
             &mut generator,
             pane::PANE_FOCUS,
