@@ -532,8 +532,10 @@ The Pi bridge can name a journal entry with `journal: { message, entry_id }`.
 and `entry_id` is the active branch's leaf before the turn (or `null` at the root).
 When an assistant reply is appended successfully, the host emits `live_entry` with
 `journal_turn` and the new `journal` anchor, using the raw ID returned by the append. A
-`message_end` notification alone does not mean the record exists. These annotations
-are for corrald; they do not change the app's live event schema.
+`message_end` notification alone does not mean the record exists. The same append writes
+`corralReply: { turn, message }` on the reply in the journal. Other assistant messages
+appended by extensions do not get that marker. These annotations are for corrald; they
+are not reply content and do not change the app's live event schema.
 
 When corrald joins (first read, replay from the start, or a gap), it follows only
 what the host emits after the page it joined at. A `live_since` reply from `seq` 0
@@ -543,16 +545,17 @@ The seed's outer `message` is the latest assistant ordinal (0 before the first),
 `ended` says whether it has finished writing. `journal` names the last reply actually
 appended, or the turn-start leaf if none was appended. The journal is read after the
 host answers: replies may already have been appended after the named entry. corrald
-counts the assistant entries after that ID in branch order, not by their stamps, and
-opens the seed's message only if it is still being written and not already recorded.
+uses their durable turn and ordinal markers to recognize them, without treating other
+assistant rows as replies. It opens the seed's message only if it is still being
+written and not already recorded.
 The `text` and `thinking` tails start at their given byte offsets and are cut at
 character boundaries. Serialized `open` stays within 24 KiB, and shrinks when the
 reply also carries the fleet and state so that those and one event still fit the
 bridge frame. A host without `open` has its live words omitted until its next turn.
 
-corrald reads the journal before following each host page. It pairs assistant rows
-in journal order relative to the named entry, including records that arrive before
-the host page that reports them. A journal-only `reset` (e.g. a branch change, failed
+corrald reads the journal before following each host page. It pairs a recorded reply
+by its named entry ID or its durable marker if the record arrives before the host
+page that reports it. A journal-only `reset` (e.g. a branch change, failed
 read, or more appends than the bounded forward reads hold) does not itself end a
 turn. corrald retains the newest anchor even if it cannot read the journal on that
 pass. On recovery it resolves that ID in the new tail, counts the replies present,

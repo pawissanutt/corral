@@ -1673,7 +1673,7 @@ export class HostSession {
         this.deliveries.delete(arrived.input);
         delivery(true);
       }
-    });
+    }, reply => this.liveEvents.replyMarker(reply));
     if (this.planMode) {
       // Claim the selection before Pi awaits auth. Approval and model selection cannot both win.
       const selecting = async <T>(select: () => Promise<T>): Promise<T> => {

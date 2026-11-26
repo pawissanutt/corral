@@ -346,6 +346,13 @@ pub(super) fn message(
     mut value: Value,
     identity: Option<(&str, u64)>,
 ) -> Result<Option<SessionMessage>> {
+    // The follower reads this journal annotation separately. It is not reply content
+    // and must not appear in a Turn footer (or cause one on its own).
+    if let Some(body) = value.get_mut("message").and_then(Value::as_object_mut)
+        && body.get("role").and_then(Value::as_str) == Some("assistant")
+    {
+        body.remove(super::tail::REPLY_MARKER);
+    }
     let entry = field(&value, "type");
     let nested = value.get("message").is_some();
     let body = value.get("message").unwrap_or(&value);

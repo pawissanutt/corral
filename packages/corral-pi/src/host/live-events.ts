@@ -10,6 +10,7 @@ import type { LiveInput } from "./remote/input.ts";
 import { boundState, type Activity, type Counts, type HostNotice, type SessionPart,
   type BoundedSessionState, type SessionState, type StateProjection } from "./remote/state.ts";
 import { utf8Prefix } from "../roles/assistant/owner-action.ts";
+import type { ReplyMarker } from "./transcript-marks.ts";
 
 // JSON escaping can multiply a payload by six; leave room inside the 8 KiB event bound.
 const PAYLOAD_BYTES = 1024;
@@ -178,12 +179,19 @@ export class LiveEvents {
     this.stateChanged();
   }
 
-  appendedAssistant(reply: AssistantMessage, entryId: string): void {
+  /** Read the pending reply's journal identity without consuming it before persistence. */
+  replyMarker(reply: AssistantMessage): ReplyMarker | undefined {
     const ended = this.assistantEnd;
-    if (ended?.reply !== reply || this.turn === undefined) return;
+    if (ended?.reply === reply && this.turn !== undefined) return { turn: this.turn, message: ended.message };
+    return undefined;
+  }
+
+  appendedAssistant(reply: AssistantMessage, entryId: string): void {
+    const marker = this.replyMarker(reply);
+    if (!marker) return;
     this.assistantEnd = undefined;
-    this.journal = { message: ended.message, entry_id: entryId };
-    this.events.emit("live_entry", { journal_turn: this.turn, journal: this.journal });
+    this.journal = { message: marker.message, entry_id: entryId };
+    this.events.emit("live_entry", { journal_turn: marker.turn, journal: this.journal });
   }
 
   note(tone: HostNotice["tone"], text: string, at: number, id?: string): void {

@@ -172,9 +172,10 @@ impl Follower {
             self.skip_through = page.map_or(0, |page| page.host_tail);
             starts.clear();
         }
-        // Index the actual journal order before consuming the page. An append may already
-        // be in the journal even when its notification is on a later host page.
-        let first_rank = match &journal {
+        // An append may already be in the journal even when its notification is on a
+        // later host page. Index the reply markers along with the raw entry IDs.
+        let snapshot = matches!(journal, Ok(Journal::Snapshot(..)));
+        match &journal {
             Ok(Journal::Changes(changes)) => self.order.append(changes.iter().map(|c| &c.record)),
             Ok(Journal::Snapshot(_, _, records)) => {
                 self.order = Order::default();
@@ -182,10 +183,10 @@ impl Follower {
                     exact.invalidate();
                 }
                 self.order.snapshot(records.root, &records.entries);
-                0
             }
-            Err(_) => 0,
-        };
+            Err(_) => {}
+        }
+        let was_placed = self.exact.as_ref().is_some_and(|exact| !exact.missing());
         for (seq, turn, anchor) in page.into_iter().flat_map(|page| &page.journal) {
             if *seq <= self.skip_through {
                 continue;
@@ -197,28 +198,22 @@ impl Follower {
             }
         }
         if !read_failed {
-            for exact in self
-                .exact
-                .iter_mut()
-                .chain(starts.iter_mut().filter_map(|s| s.exact.as_mut()))
-            {
-                exact.resolve(&self.order);
-            }
-        }
-        if !read_failed {
-            let mut through = self.order.rank;
-            for start in starts.iter_mut().rev() {
-                if let Some(exact) = &start.exact {
-                    start.records = exact.ordinal(through).unwrap_or(0);
-                    if let Some(before) = exact.before_turn() {
-                        through = through.min(before);
-                    }
+            for start in &mut starts {
+                if let Some(exact) = &mut start.exact {
+                    exact.resolve(&self.order);
+                    start.records = exact.recorded(start.turn, &self.order).unwrap_or(0);
                 }
             }
-            if let Some(exact) = &self.exact
-                && let Some(recorded) = exact.ordinal(through)
-            {
-                self.recorded = recorded;
+            if let (Some(turn), Some(exact)) = (self.turn, &mut self.exact) {
+                exact.resolve(&self.order);
+                if let Some(recorded) = exact.recorded(turn, &self.order) {
+                    self.recorded = if snapshot || !was_placed {
+                        // An ordinal inferred by the legacy path can overcount.
+                        recorded
+                    } else {
+                        self.recorded.max(recorded)
+                    };
+                }
             }
         }
         match journal {
@@ -228,7 +223,6 @@ impl Follower {
                 }
                 self.pair(
                     changes,
-                    first_rank,
                     &mut starts,
                     page.map_or(&[], |page| &page.journal),
                     &mut ops,
@@ -295,7 +289,7 @@ impl Follower {
                 if !read_failed {
                     exact.resolve(&self.order);
                 }
-                self.recorded = exact.ordinal(self.order.rank).unwrap_or(0);
+                self.recorded = exact.recorded(seed.turn, &self.order).unwrap_or(0);
                 self.exact = Some(exact);
             } else {
                 // The journal was read after the host answered. The latest message's record may
@@ -499,7 +493,6 @@ impl Follower {
     fn pair(
         &mut self,
         changes: Vec<Change>,
-        mut rank: u64,
         starts: &mut [Start],
         anchors: &[(u64, u64, JournalAnchor)],
         ops: &mut Vec<Op>,
@@ -509,7 +502,6 @@ impl Follower {
             .iter()
             .filter(|(seq, _, anchor)| *seq > skip_through && anchor.message != 0);
         for Change { row, record } in changes {
-            rank += u64::from(record.assistant);
             let replaces = if record.assistant {
                 // When the record was written, and its message.
                 let written: Option<(jiff::Timestamp, String)> =
@@ -526,36 +518,29 @@ impl Follower {
                     anchors
                         .clone()
                         .find(|(_, _, anchor)| anchor.entry_id.as_deref() == Some(id))
+                        .map(|(_, turn, anchor)| (*turn, anchor.message))
+                        .or_else(|| Some((self.turn?, self.exact.as_ref()?.matches(id)?)))
                 });
-                if let Some((_, turn, anchor)) = named {
-                    // A name on this page binds the record directly, even if records
-                    // for multiple turns have the same stamp.
-                    if self.turn == Some(*turn) {
-                        self.open.remove(&anchor.message).map(|open| open.id)
+                let reply = named.or_else(|| {
+                    let reply = record.reply?;
+                    (self.exact.is_some()
+                        || starts
+                            .iter()
+                            .any(|start| start.turn == reply.turn && start.exact.is_some()))
+                    .then_some((reply.turn, reply.message))
+                });
+                if let Some((turn, ordinal)) = reply {
+                    // The raw ID or durable marker must identify the reply; an
+                    // unrelated assistant append is just another recorded row.
+                    if self.turn == Some(turn) && !self.exact_missing() {
+                        self.open.remove(&ordinal).map(|open| open.id)
                     } else {
                         None
                     }
-                } else if starts.iter().any(|start| {
-                    start
-                        .exact
-                        .as_ref()
-                        .is_some_and(|exact| exact.includes(rank))
-                }) {
-                    None
                 } else if let Some(start) = locate_start(starts, at, self.turn.is_some()) {
                     start.records += 1;
                     None
-                } else if let Some(exact) = &self.exact {
-                    exact
-                        .ordinal(rank)
-                        .filter(|ordinal| {
-                            *ordinal != 0
-                                && !anchors.clone().any(|(_, turn, anchor)| {
-                                    self.turn == Some(*turn) && anchor.message == *ordinal
-                                })
-                        })
-                        .and_then(|ordinal| self.open.remove(&ordinal).map(|open| open.id))
-                } else if self.turn.is_some() && !earlier {
+                } else if self.exact.is_none() && self.turn.is_some() && !earlier {
                     self.recorded += 1;
                     if let Some((since, id)) = written {
                         self.mark = Some(Mark {

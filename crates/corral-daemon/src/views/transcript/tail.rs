@@ -33,20 +33,41 @@ pub(crate) struct Change {
     pub(crate) record: Record,
 }
 
-/// The branch order includes invisible entries, which may anchor a turn or count as replies.
+/// The branch order includes invisible entries, which may anchor a turn or carry a reply marker.
+#[derive(Clone)]
 pub(crate) struct Record {
     pub(crate) entry_id: Option<String>,
     pub(crate) assistant: bool,
+    pub(crate) reply: Option<Reply>,
 }
+
+#[derive(Clone, Copy)]
+pub(crate) struct Reply {
+    pub(crate) turn: u64,
+    pub(crate) message: u64,
+}
+
+pub(super) const REPLY_MARKER: &str = "corralReply";
 
 impl From<&Value> for Record {
     fn from(value: &Value) -> Self {
+        let body = &value["message"];
+        let assistant = body["role"].as_str() == Some("assistant");
+        let reply = || {
+            let marker = &body[REPLY_MARKER];
+            let message = marker["message"].as_u64().filter(|message| *message > 0)?;
+            Some(Reply {
+                turn: marker["turn"].as_u64()?,
+                message,
+            })
+        };
         Self {
             entry_id: value["id"]
                 .as_str()
                 .filter(|id| id.len() <= 128)
                 .map(str::to_owned),
-            assistant: value.pointer("/message/role").and_then(Value::as_str) == Some("assistant"),
+            assistant,
+            reply: if assistant { reply() } else { None },
         }
     }
 }

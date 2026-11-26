@@ -20,6 +20,12 @@ fn reply(id: &str, parent: Option<&str>) -> Value {
         "message":{"role":"assistant","content":"words"}})
 }
 
+fn turn_reply(id: &str, parent: Option<&str>, message: u64) -> Value {
+    let mut reply = reply(id, parent);
+    reply["message"]["corralReply"] = json!({"turn":2,"message":message});
+    reply
+}
+
 fn seed(message: u64, recorded: u64, id: &str) -> Result<HostOpen> {
     Ok(serde_json::from_value(
         json!({"turn":2,"message":message,"ended":message == 0,
@@ -72,7 +78,7 @@ fn joining_before_the_first_reply_excludes_older_replies_at_the_same_stamp() -> 
         json!({"type":"custom", "customType":"invisible", "id":"leaf", "parentId":"old", "timestamp":STAMP}),
     )?;
     // The first reply reached the journal between the host's answer and the read.
-    append(&path, reply("first", Some("leaf")))?;
+    append(&path, turn_reply("first", Some("leaf"), 1))?;
     let mut follower = Follower::default();
     let ops = follower.visit(
         "s",
@@ -108,8 +114,8 @@ fn joining_after_a_later_reply_landed_counts_from_the_named_entry() -> Result<()
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("journal.jsonl");
     append(&path, reply("old", None))?;
-    append(&path, reply("first", Some("old")))?;
-    append(&path, reply("second", Some("first")))?;
+    append(&path, turn_reply("first", Some("old"), 1))?;
+    append(&path, turn_reply("second", Some("first"), 2))?;
     let mut follower = Follower::default();
     let ops = follower.visit(
         "s",
@@ -132,12 +138,80 @@ fn joining_after_a_later_reply_landed_counts_from_the_named_entry() -> Result<()
 }
 
 #[test]
+fn unrelated_assistant_appends_do_not_eat_the_streaming_reply() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("journal.jsonl");
+    append(&path, turn_reply("first", None, 1))?;
+    append(&path, reply("unrelated", Some("first")))?;
+    let mut follower = Follower::default();
+    let ops = follower.visit(
+        "s",
+        &path,
+        None,
+        Some(&page(vec![])),
+        Some(seed(2, 1, "first")?),
+    );
+    assert!(
+        matches!(ops.as_slice(), [Op::Reset { .. }, Op::Put { message: first, open: false, .. }, Op::Put { open: false, .. }, Op::Put { message, open: true, .. }, Op::Append { text, .. }]
+        if matches!(first.items.as_slice(), [SessionItem::Text { .. }]) && message.id == "s/open/1.2.2" && text == "tail"),
+        "{ops:?}"
+    );
+
+    append(&path, reply("another", Some("unrelated")))?;
+    let ops = follower.visit("s", &path, None, Some(&page(vec![text(2, 4)])), None);
+    assert!(
+        matches!(ops.as_slice(), [Op::Put { message, replaces: None, open: false, .. }, Op::Append { offset: 4, .. }] if message.id == "s/entry/another"),
+        "{ops:?}"
+    );
+
+    // The real reply replaces the open row even before its recording notice is read.
+    append(&path, turn_reply("second", Some("another"), 2))?;
+    let ops = follower.visit("s", &path, None, Some(&page_after(1, vec![])), None);
+    assert!(
+        matches!(ops.as_slice(), [Op::Put { message, replaces: Some(id), .. }] if message.id == "s/entry/second" && id == "s/open/1.2.2"),
+        "{ops:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn the_first_exact_notice_corrects_the_legacy_ordinal() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("journal.jsonl");
+    append(&path, reply("old", None))?;
+    let mut follower = Follower::default();
+    follower.visit("s", &path, None, Some(&page(vec![])), None);
+    // A start anchor can be omitted (e.g. the imported leaf ID exceeds the wire bound).
+    let start = anchored_page(
+        0,
+        vec![json!({"kind":"live_turn","state":"started","turn":2})],
+    )?;
+    follower.visit("s", &path, None, Some(&start), None);
+    append(&path, reply("unrelated", Some("old")))?;
+    follower.visit("s", &path, None, Some(&page_after(1, vec![])), None);
+    append(&path, turn_reply("first", Some("unrelated"), 1))?;
+    let first = anchored_page(
+        1,
+        vec![
+            json!({"kind":"live_entry","journal_turn":2,"journal":{"message":1,"entry_id":"first"}}),
+            json!(text(2, 0)),
+        ],
+    )?;
+    let ops = follower.visit("s", &path, None, Some(&first), None);
+    assert!(
+        matches!(ops.as_slice(), [Op::Put { open: false, .. }, Op::Put { message, open: true, .. }, Op::Append { .. }] if message.id == "s/open/1.2.2"),
+        "{ops:?}"
+    );
+    Ok(())
+}
+
+#[test]
 fn a_cut_root_reply_still_covers_the_turn_start_anchor() -> Result<()> {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("journal.jsonl");
     // The host answered before its first append. The only row in the journal the
     // daemon reads is big enough to need a continuation inside the root record.
-    let mut root = reply("first", None);
+    let mut root = turn_reply("first", None, 1);
     root["message"]["content"] = json!(vec![json!({"type":"text","text":"x".repeat(96)}); 512]);
     append(&path, root)?;
     let open = serde_json::from_value(json!({"turn":2,"message":0,"ended":true,

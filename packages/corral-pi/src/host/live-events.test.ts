@@ -1,4 +1,7 @@
 import { expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { EVENT_MAX_BYTES, EventLog } from "../bridge/events.ts";
@@ -149,34 +152,47 @@ test("a reader's first page says where the open turn is without a gap", () => {
   expect(page.open).toMatchObject({ turn: 7, message: 1, ended: false, text_offset: 0, text: "so far" });
 });
 
-test("only a successfully appended reply advances the anchor, using its ID rather than the branch leaf", () => {
+test("only the pending assistant reply gets a journal marker and anchors after a successful append", () => {
   const live = new LiveEvents();
-  const manager = SessionManager.inMemory();
+  const dir = mkdtempSync(join(tmpdir(), "corral-live-reply-"));
+  const manager = SessionManager.create(dir, dir);
+  const file = manager.getSessionFile()!;
+  const readJournal = () => readFileSync(file, "utf8");
+  const recorded = (id: string) => readJournal().trimEnd().split("\n").map(line => JSON.parse(line)).find(entry => entry.id === id);
   const base = manager.appendCustomEntry("fixture", {});
   const next = { ...message }, failed = { ...message };
+  let advanceLeaf = false, failAppend = false;
   const append = manager.appendMessage.bind(manager);
   manager.appendMessage = reply => {
-    if (reply === failed) throw new Error("append failed");
+    if (failAppend) throw new Error("append failed");
     const id = append(reply);
     // Simulate an append wrapper that advances the leaf again before returning the reply ID.
-    if (reply === message) manager.appendCustomEntry(MARK_ENTRY, {});
+    if (advanceLeaf) manager.appendCustomEntry(MARK_ENTRY, {});
     return id;
   };
   const unobserve = observeTranscriptEntries(manager, () => live.entry(), () => {}, (reply, id) => {
     if (reply.role === "assistant") live.appendedAssistant(reply, id);
-  });
+  }, reply => live.replyMarker(reply));
   try {
     start(live, manager.getLeafId());
     const started = { turn: 7, journal: { message: 0, entry_id: base } };
     expect(live.since(0, EVENT_PAGE_BYTES).events[0]).toMatchObject({ kind: "live_turn", state: "started", ...started });
     live.observe({ type: "message_end", message }, 7);
-    // An extension appending a different assistant message (even with identical contents) is not this reply.
-    manager.appendMessage({ ...message });
+    // A different assistant object is not this reply, even if it has the same words
+    // and carries a marker inherited from a previously persisted message.
+    const unrelated = { ...message, corralReply: { turn: 7, message: 2 } };
+    const unrelatedId = manager.appendMessage(unrelated);
+    expect(recorded(unrelatedId)?.message).toEqual(message);
+    expect(Object.hasOwn(unrelated, "corralReply")).toBeTrue();
     expect(live.since(0, EVENT_PAGE_BYTES).open).toMatchObject(started);
     expect(live.events.last).toBe(1);
 
+    advanceLeaf = true;
     const id = manager.appendMessage(message);
+    advanceLeaf = false;
     const journal = { message: 1, entry_id: id };
+    expect(recorded(id)?.message).toEqual({ ...message, corralReply: { turn: 7, message: 1 } });
+    expect(Object.hasOwn(message, "corralReply")).toBeFalse();
     expect(manager.getLeafId()).not.toBe(id);
     const entries = live.events.since(1, EVENT_PAGE_BYTES).events;
     expect(entries).toHaveLength(2);
@@ -194,13 +210,17 @@ test("only a successfully appended reply advances the anchor, using its ID rathe
     expect(live.since(0, EVENT_PAGE_BYTES).open).toMatchObject({ message: 2, ended: false, journal });
     live.observe({ type: "message_end", message: next }, 7);
     const nextId = manager.appendMessage(next);
+    expect(recorded(nextId)?.message).toEqual({ ...next, corralReply: { turn: 7, message: 2 } });
     const latest = { message: 2, entry_id: nextId };
     expect(live.events.since(3, EVENT_PAGE_BYTES).events).toMatchObject([{ kind: "live_entry", journal_turn: 7, journal: latest }]);
     live.observe({ type: "turn_end", message: next, toolResults: [] }, 7);
     live.observe({ type: "message_start", message: failed }, 7);
     live.observe({ type: "message_end", message: failed }, 7);
-    const cursor = live.events.last;
+    const cursor = live.events.last, beforeFailure = readJournal();
+    failAppend = true;
     expect(() => manager.appendMessage(failed)).toThrow("append failed");
+    expect(Object.hasOwn(failed, "corralReply")).toBeFalse();
+    expect(readJournal()).toBe(beforeFailure);
     expect(live.events.last).toBe(cursor);
     expect(live.since(0, EVENT_PAGE_BYTES).open).toMatchObject({ message: 3, ended: true, journal: latest });
 
@@ -208,7 +228,11 @@ test("only a successfully appended reply advances the anchor, using its ID rathe
     expect(live.since(0, EVENT_PAGE_BYTES).open).toMatchObject({
       turn: 8, message: 0, journal: { message: 0, entry_id: nextId },
     });
-  } finally { unobserve(); }
+  } finally {
+    unobserve();
+    live.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("a completing live event never precedes its session-file entry", () => {

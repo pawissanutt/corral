@@ -2,6 +2,7 @@
 // what the owner told a child. Each is one persisted custom entry (`pi.appendEntry(MARK_ENTRY, mark)`), so it is drawn
 // live and again on resume, and it never enters the model's context. `src/ui/mark-rows.ts` draws them.
 
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { SessionManager } from "@earendil-works/pi-coding-agent";
 
 export const MARK_ENTRY = "corral_mark";
@@ -85,12 +86,20 @@ export function recordTranscriptMark(sink: MarkSink | undefined, mark: Transcrip
 const VISIBLE_CUSTOM = new Set([MARK_ENTRY, "corral_code_cell", "corral_code_call", "corral_owner_question",
   "corral_command", "corral_command_monitor", "corral_job_control"]);
 
+/** Journal-only identity of an assistant reply observed in a live turn. */
+export interface ReplyMarker {
+  readonly turn: number;
+  readonly message: number;
+}
+
 /**
  * Publish only after an append succeeded, including appends performed inside the SDK or an extension.
- * `appended` receives the exact message and the append's returned ID, before `entry` or `changed`.
+ * `replyMarker` identifies the assistant message to clone for persistence without mutating the agent's message.
+ * `appended` receives the original message and the append's returned ID, before `entry` or `changed`.
  */
 export function observeTranscriptEntries(manager: SessionManager, entry: () => void, changed: () => void,
-  appended?: (message: Parameters<SessionManager["appendMessage"]>[0], id: string) => void): () => void {
+  appended?: (message: Parameters<SessionManager["appendMessage"]>[0], id: string) => void,
+  replyMarker?: (message: AssistantMessage) => ReplyMarker | undefined): () => void {
   const { appendMessage, appendCustomEntry, appendCustomMessageEntry, appendCompaction, branchWithSummary,
     appendLabelChange, appendModelChange, appendThinkingLevelChange, appendContextEdit, appendUsage } = manager;
   const after = <A extends unknown[], R>(method: (...args: A) => R, notify: (result: R, ...args: A) => void) =>
@@ -99,11 +108,25 @@ export function observeTranscriptEntries(manager: SessionManager, entry: () => v
       notify(result, ...args);
       return result;
     };
-  manager.appendMessage = after(appendMessage, (id, message) => {
+  manager.appendMessage = message => {
+    let persisted = message;
+    if (message.role === "assistant") {
+      const corralReply = replyMarker?.(message);
+      if (corralReply) {
+        const tagged = { ...message, corralReply };
+        persisted = tagged;
+      } else if (Object.hasOwn(message, "corralReply")) {
+        // Re-appending an object read from the branch must not inherit its old turn identity.
+        const { corralReply: _old, ...unrelated } = message as AssistantMessage & { corralReply?: unknown };
+        persisted = unrelated;
+      }
+    }
+    const id = appendMessage.call(manager, persisted);
     appended?.(message, id);
     if (message.role === "user" || message.role === "bashExecution") entry();
     else changed();
-  });
+    return id;
+  };
   manager.appendCustomEntry = after(appendCustomEntry, (_id, kind) => { if (VISIBLE_CUSTOM.has(kind)) entry(); });
   manager.appendCustomMessageEntry = after(appendCustomMessageEntry, (_id, _kind, _content, display) => {
     if (display) entry();
