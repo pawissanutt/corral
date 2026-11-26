@@ -116,6 +116,7 @@ impl Engine {
             parent: new.parent,
             depends_on: new.depends_on,
             blocked: None,
+            attention: None,
             round: 0,
             created: now,
             updated: now,
@@ -479,6 +480,7 @@ impl Engine {
 pub(crate) fn set_lifecycle(task: &mut Task, status: Status) {
     task.status = status;
     task.blocked = None;
+    task.attention = None;
     task.updated = Timestamp::now();
 }
 

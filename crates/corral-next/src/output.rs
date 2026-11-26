@@ -122,6 +122,9 @@ impl Output<'_> {
                     writeln!(out, "next: {}", next_command(program, root, next))?;
                 }
             }
+            if let Some(reason) = &task.attention {
+                writeln!(out, "\nAttention: {reason}")?;
+            }
             if !task.body.is_empty() {
                 writeln!(out, "\n{}", task.body)?;
             }

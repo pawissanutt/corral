@@ -51,6 +51,16 @@ impl Store {
             .context("event sequence must not be negative")
     }
 
+    pub(crate) fn task_event_seq(&self, id: &str) -> Result<i64> {
+        self.connection
+            .query_row(
+                "SELECT COALESCE(MAX(seq),0) FROM events WHERE task=?1",
+                [id],
+                |row| row.get(0),
+            )
+            .context("read latest task event sequence")
+    }
+
     /// Whether the pipeline announced readiness for the current submission.
     pub fn has_ready_since_done(&self, task: &str) -> Result<bool> {
         self.connection.query_row(

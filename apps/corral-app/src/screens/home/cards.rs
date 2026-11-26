@@ -21,6 +21,7 @@ use crate::ui::kit::marks::hue_ink;
 use crate::ui::kit::more::press;
 use crate::ui::kit::next::{more_button, next_button};
 use crate::ui::kit::status::{look_mark, pipeline_marks};
+use crate::ui::kit::text::dim;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
@@ -101,7 +102,7 @@ pub(super) fn needs_you(app: AppState, scope: Memo<Scope>) -> AnyElement {
 }
 
 /// What the Needs you panel says beside its name on the desktop.
-const NEEDS_NOTE: &str = "Blocked, or ready to land · j k next · Enter opens the page";
+const NEEDS_NOTE: &str = "j k next · Enter opens the page";
 
 /// One card: its head and either its two closed lines or, while open, its decision.
 fn card(app: AppState, id: Id, open: Memo<Option<Id>>) -> AnyElement {
@@ -126,6 +127,21 @@ fn card(app: AppState, id: Id, open: Memo<Option<Id>>) -> AnyElement {
             untracked(move || shown.map(|card| head(app, &card, opened, record)))
         })
     };
+    let alert = dynamic(move || {
+        facts.with(|card| {
+            let reason = card.as_ref()?.attention.clone()?;
+            Some(
+                view()
+                    .when(form == Form::Terminal, |line| line.pl(term::cells(2.0)))
+                    .child(
+                        dim(app, reason)
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(color(Token::You)),
+                    )
+                    .into_element(),
+            )
+        })
+    });
     let rest = {
         let id = id.clone();
         dynamic(move || {
@@ -149,7 +165,13 @@ fn card(app: AppState, id: Id, open: Memo<Option<Id>>) -> AnyElement {
     let select = id.clone();
     let spoken = facts.with_untracked(|card| {
         card.as_ref()
-            .map(|card| format!("{} {}, {}, {}", card.id, card.title, card.word, card.why))
+            .map(|card| {
+                let spoken = format!("{} {}, {}, {}", card.id, card.title, card.word, card.why);
+                match &card.attention {
+                    Some(reason) => format!("{spoken}, {reason}"),
+                    None => spoken,
+                }
+            })
             .unwrap_or_default()
     });
     effect(move || {
@@ -182,6 +204,7 @@ fn card(app: AppState, id: Id, open: Memo<Option<Id>>) -> AnyElement {
         })
         .min_w(px(0.0))
         .child(head)
+        .child(alert)
         .child(rest);
     let frame = match form {
         Form::Terminal => {

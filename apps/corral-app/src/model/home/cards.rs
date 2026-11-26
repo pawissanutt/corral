@@ -63,6 +63,7 @@ pub struct Card {
     pub age: String,
     /// Why it waits, as one phrase: the pipeline's, or what the session asks.
     pub why: String,
+    pub attention: Option<String>,
     /// `site · omp-sol`: the project and the profile, where known.
     pub facts: String,
     pub next: Option<NextStep>,
@@ -89,6 +90,7 @@ pub fn card(feed: &Feed, id: &Id) -> Option<Card> {
             tag: (priority != "P2").then(|| priority.to_owned()),
             age: age(task.since(), feed.now),
             why: phrase(task, feed),
+            attention: task.attention().map(str::to_owned),
             facts: join([task.project().map(str::to_owned), profile]),
             next: question_step(feed, task).or_else(|| next_step(task)),
             session: false,
@@ -108,6 +110,7 @@ pub fn card(feed: &Feed, id: &Id) -> Option<Card> {
         tag: Some(session.role.clone()),
         age: String::new(),
         why: session.doing.clone().unwrap_or_default(),
+        attention: None,
         facts: join([session.project.clone(), session.agent.clone()]),
         next: session_next_step(&session),
         session: true,

@@ -21,6 +21,7 @@ interface Input {
   readonly socketId?: string;
   readonly facts: TranscriptInput;
   readonly transcriptId?: string;
+  readonly inputId?: string;
   /** Set only by the host, for the one input it admits as an approved plan's kickoff: the review card's id. */
   readonly planKickoff?: string;
   /**
@@ -30,7 +31,7 @@ interface Input {
   readonly planAnswer?: import("./plan-mode.ts").PlanAnswer;
 }
 /** What the transcript records of an input, and who it came from: `owner` and `pane` are the owner's own words. */
-export type InputFacts = Pick<Input, "facts" | "transcriptId" | "origin" | "planKickoff" | "planAnswer">;
+export type InputFacts = Pick<Input, "facts" | "transcriptId" | "inputId" | "origin" | "planKickoff" | "planAnswer">;
 interface Queued extends Input { mode: "steer" | "follow_up"; message: AgentMessage }
 export type Withdrawal = { outcome: "withdrawn" | "already_started" | "unknown_item"; item?: string; turn?: number; text?: string };
 export interface QueuedInput {
@@ -63,6 +64,7 @@ export interface HostQueueOptions {
   readonly turn: (nextRun: boolean) => number;
   readonly emit: (kind: string, data: Record<string, unknown>) => void;
   readonly liveInput?: (event: LiveInput) => void;
+  readonly queuedInputChange?: (id: string, change: "drain" | "remove") => void;
 }
 
 export class HostQueue {
@@ -100,6 +102,7 @@ export class HostQueue {
         this.queued.delete(item.key);
         this.objects.delete(entry.message);
         this.counts[item.mode]--;
+        if (item.inputId !== undefined) this.options.queuedInputChange?.(item.inputId, change.action === "drain" ? "drain" : "remove");
         if (change.action === "drain") this.start(item, change.nextRun);
         else this.emit(item, "withdrawn", undefined,
           item.socketId === undefined ? undefined : { input: item.socketId, state: "withdrawn" });
@@ -122,7 +125,7 @@ export class HostQueue {
     const { socketId, transcriptId, pane } = source;
     const origin = pane ? "pane" : input.origin;
     return { key: source.queueKey ?? socketId ?? `q-${crypto.randomUUID()}`, text: source.text ?? input.text,
-      mode: input.busyPolicy, origin, socketId, transcriptId,
+      mode: input.busyPolicy, origin, socketId, transcriptId, inputId: input.inputId,
       ...(source.planKickoff === undefined ? {} : { planKickoff: source.planKickoff }),
       ...(source.planAnswer === undefined ? {} : { planAnswer: source.planAnswer }),
       facts: transcriptInput(input, !pane && socketId === undefined ? "auto" : origin) } satisfies Input;

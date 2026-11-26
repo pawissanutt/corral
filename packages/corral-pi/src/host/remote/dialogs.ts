@@ -59,6 +59,8 @@ export class RemoteDialogs {
 
   constructor(private readonly changed: () => void, private readonly existing?: ExistingCards) {}
 
+  get hasOpen(): boolean { return this.dialogs.size > 0; }
+
   entries(): CardEntry[] {
     if (this.closed) return [];
     const existing = this.existing?.entries() ?? [];

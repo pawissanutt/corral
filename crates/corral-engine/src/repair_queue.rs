@@ -28,16 +28,6 @@ impl Store {
             .context("check for queued repair")
     }
 
-    fn task_event_seq(&self, id: &str) -> Result<i64> {
-        self.connection
-            .query_row(
-                "SELECT COALESCE(MAX(seq),0) FROM events WHERE task=?1",
-                [id],
-                |row| row.get(0),
-            )
-            .context("read task event sequence for queued repair")
-    }
-
     fn repair(&self, id: &str) -> Result<Option<(String, Option<String>)>> {
         self.connection
             .query_row(

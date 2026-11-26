@@ -16,7 +16,7 @@ use corral_types::{Priority, Status, TaskDifficulty};
 use crate::model::daemon::{Feed, Link, Task};
 use crate::model::list::{Column, Section};
 use crate::model::next::{NextStep, next_step};
-use crate::model::pipeline::{PipelineStep, phrase, pipeline};
+use crate::model::pipeline::{PipelineStep, pipeline, row_phrase};
 use crate::model::projects::Scope;
 use crate::model::status::{OPEN, folds, status_look, status_word};
 use crate::model::{Id, TaskTab, work};
@@ -277,6 +277,7 @@ pub struct TaskLine {
     pub parent: Option<String>,
     /// What is happening, as one plain phrase.
     pub now: String,
+
     pub pipeline: [PipelineStep; 4],
     pub project: Option<String>,
     /// The run's profile, else the one dispatch would pick.
@@ -346,7 +347,7 @@ fn line_of(task: &Task, feed: &Feed) -> TaskLine {
         title: task.title().to_owned(),
         priority: priority_tag(task.task().priority),
         parent: task.parent().map(str::to_owned),
-        now: phrase(task, feed),
+        now: row_phrase(task, feed),
         pipeline: pipeline(task),
         project: task.project().map(str::to_owned),
         profile: profile_of(task),

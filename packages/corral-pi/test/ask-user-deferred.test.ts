@@ -80,11 +80,13 @@ test("deferred clarification leaves composer available, survives resume and deli
     const prompt = { question: "Which scope?", options: ["Small (recommended)", "Large"], freeText: true };
     const change = (status: string) => ({ question: id, status, prompts: [prompt] });
     expect(promptEvents()).toEqual([change("pending")]);
+    expect(live.controlState(false).activity).toMatchObject({ settled: true, waiting: true });
     await live.close();
     live = await create(file);
     expect(statuses.get("corral-owner-questions")).toContain("1 owner question");
     expect(widget?.render(100).join("\n")).toContain(id);
     expect(promptEvents()).toEqual([change("pending")]);
+    expect(live.controlState(false).activity).toMatchObject({ settled: false, waiting: true });
     transport.script([
       { toolCalls: [{ callId: "dependent", name: "read", arguments: { path: unrelated } }] },
       { text: "The owner selected the small fix; dependent work resumed." },
@@ -94,6 +96,7 @@ test("deferred clarification leaves composer available, survives resume and deli
     const text = `${answerMarker(id)}\nWhich scope?: Small (recommended)\nOnly the small fix`;
     expect(userAnswers()).toEqual([text]);
     expect(promptEvents()).toEqual([change("pending"), change("answered")]);
+    expect(live.controlState(false).activity).toMatchObject({ settled: true, waiting: false });
     expect(live.session.messages.some(m => m.role === "toolResult" && m.toolCallId.startsWith("dependent"))).toBeTrue();
     await live.session.prompt(`/questions ${id}`, { source: "interactive" });
     expect(selections).toEqual(["Which scope?"]);

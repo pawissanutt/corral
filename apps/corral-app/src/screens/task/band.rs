@@ -24,7 +24,7 @@ use crate::ui::kit::button::{ButtonKind, ButtonOptions, button, button_with};
 use crate::ui::kit::marks::hue_ink;
 use crate::ui::kit::more::press;
 use crate::ui::kit::next::next_button;
-use crate::ui::kit::text::{mono, plain};
+use crate::ui::kit::text::{dim, mono, plain};
 use crate::ui::kit::work::{model_button, pressable};
 use crate::ui::term;
 use crate::ui::tokens::{FONT_TEXT, Token, color};
@@ -130,6 +130,11 @@ fn head(app: AppState, band: &Band) -> AnyElement {
         .gap(space(app, 4.0))
         .pb(space(app, 8.0))
         .child(what)
+        .children(band.attention.clone().map(|reason| {
+            dim(app, reason)
+                .font_weight(FontWeight::BOLD)
+                .text_color(hue_ink(Hue::You))
+        }))
         .children(command)
         .children(how)
         .into_element()

@@ -151,6 +151,16 @@ pub fn phrase(task: &Task, feed: &Feed) -> String {
     }
 }
 
+/// The compact row leads with the alert, retaining the ordinary status phrase after it.
+pub fn row_phrase(task: &Task, feed: &Feed) -> String {
+    let now = phrase(task, feed);
+    match task.attention() {
+        Some(reason) if !now.is_empty() => format!("{reason} · {now}"),
+        Some(reason) => reason.to_owned(),
+        None => now,
+    }
+}
+
 /// `plan · 2 of 5 children done` for a task with children.
 fn children(task: &Task, feed: &Feed) -> String {
     let Some(plan) = feed.plans.get(task.id.as_str()) else {

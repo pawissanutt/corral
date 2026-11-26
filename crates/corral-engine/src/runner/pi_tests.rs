@@ -509,6 +509,61 @@ fn a_tagged_reply_keeps_the_owners_input_id() {
     host.join();
 }
 
+#[test]
+fn board_delivery_retains_identity_after_an_unusable_acknowledgement() {
+    for (disposition, wrong_input, rejected) in [
+        ("malformed", false, false),
+        ("rejected", true, false),
+        ("rejected", false, true),
+    ] {
+        let fixture = Fixture::new();
+        let socket = fixture.temp.path().join("board.sock");
+        let sent = Arc::new(Mutex::new(None));
+        let saved = sent.clone();
+        let host = serve(
+            &socket,
+            vec![
+                expect(
+                    "get_state",
+                    json!({}),
+                    json!({
+                        "paused": false, "turn": { "open": false }, "owner_questions": [],
+                        "activity": { "settled": true, "busy": false, "waiting": false, "turn": 7, "inputs": {} },
+                    }),
+                ),
+                Box::new(move |request| {
+                    assert_eq!(request["command"], "submit_input");
+                    let input = request["args"]["input_id"].as_str().unwrap();
+                    *saved.lock().unwrap() = Some(input.to_owned());
+                    // An invalid result, or a rejection for another input, cannot prove failure.
+                    json!({"request_id": request["id"], "disposition": disposition,
+                           "input": if wrong_input { "board-other" } else { input }})
+                }),
+            ],
+        );
+        let pickup = fixture
+            .runner()
+            .send_obligation(
+                &SessionRef::Pi {
+                    socket,
+                    dir: fixture.temp.path().to_owned(),
+                    inner: Box::new(SessionRef::Herdr {
+                        workspace: "fake".into(),
+                        pane: "fake".into(),
+                    }),
+                },
+                "feedback",
+                Origin::Auto,
+            )
+            .unwrap()
+            .unwrap();
+        host.join().unwrap();
+        assert_eq!(Some(pickup.input_id), *sent.lock().unwrap());
+        assert_eq!(pickup.before_turn, Some(7));
+        assert_eq!(pickup.rejected, rejected);
+    }
+}
+
 #[derive(Default)]
 struct BuildPlacement {
     started: Mutex<Option<(Command, JoinHandle<()>)>>,

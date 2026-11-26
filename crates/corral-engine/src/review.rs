@@ -21,6 +21,7 @@ use crate::{
     pipeline::{GATE_FAILED, OperationFailure, PIPELINE_FAILED},
     prompt::{PromptReferences, rereview_request},
     refuse,
+    runner::pi::Pickup,
     tasks::{next_changes, next_force_approve, next_reply, next_retry, set_lifecycle},
 };
 
@@ -336,10 +337,16 @@ impl Engine {
                         &prompt,
                         &references,
                     )?;
-                    match self.session_runner().send(session, &request, Origin::Auto) {
-                        Ok(()) => {
+                    match self
+                        .session_runner()
+                        .send_obligation(session, &request, Origin::Auto)
+                    {
+                        Ok(pickup) => {
+                            if reviewer.quiet_since.take().is_some() {
+                                store.update_run(&reviewer)?;
+                            }
                             self.record_review_request(
-                                store, &mut task, &reviewer, actor, recovery,
+                                store, &mut task, &reviewer, actor, recovery, pickup,
                             )?;
                             return Ok(reviewer);
                         }
@@ -373,7 +380,7 @@ impl Engine {
                     fresh: false,
                 },
             )?;
-            self.record_review_request(store, &mut task, &run, actor, recovery)?;
+            self.record_review_request(store, &mut task, &run, actor, recovery, None)?;
             Ok(run)
         })
     }
@@ -385,9 +392,12 @@ impl Engine {
         run: &Run,
         actor: Actor,
         recovery: bool,
+        pickup: Option<Pickup>,
     ) -> Result<()> {
         if recovery {
             set_lifecycle(task, Status::Review);
+            store.update_task(task)?;
+        } else if task.attention.take().is_some() {
             store.update_task(task)?;
         }
         self.event(
@@ -396,7 +406,7 @@ impl Engine {
             Some(&run.id),
             EventKind::ReviewStarted,
             actor,
-            json!({"profile":run.profile,"round":task.round}),
+            json!({"profile":run.profile,"round":task.round,"pickup":pickup}),
         )
     }
 
@@ -449,6 +459,9 @@ impl Engine {
                 self.actor,
                 json!({"approve":approve,"notes":notes,"round":task.round}),
             )?;
+            if approve && task.attention.take().is_some() {
+                store.update_task(&task)?;
+            }
             if !approve {
                 self.send_back_in(
                     store,
@@ -540,19 +553,23 @@ impl Engine {
             Origin::Auto
         };
         let live_session = self.live_session(&worker)?;
-        let delivered = if let Some(session) = live_session {
-            match self.session_runner().send(session, notes, origin) {
-                Ok(()) => true,
-                Err(error) if as_refusal(&error).is_some() => false,
+        let accepted = if let Some(session) = live_session {
+            match self
+                .session_runner()
+                .send_obligation(session, notes, origin)
+            {
+                Ok(pickup) => Some(pickup),
+                Err(error) if as_refusal(&error).is_some() => None,
                 Err(error) => return Err(error).context("send work back to worker"),
             }
         } else {
-            false
+            None
         };
-        if delivered {
+        let pickup = if let Some(pickup) = accepted {
             if worker.quiet_since.take().is_some() {
                 store.update_run(&worker)?;
             }
+            pickup
         } else {
             self.require_worktree(&worker)?;
             let mut checkout = Checkout::from_run(&worker)?;
@@ -574,7 +591,8 @@ impl Engine {
                     fresh: false,
                 },
             )?;
-        }
+            None
+        };
         task.round = if reset { 0 } else { task.round + 1 };
         set_lifecycle(task, Status::Running);
         store.update_task(task)?;
@@ -584,7 +602,7 @@ impl Engine {
             Some(&worker.id),
             EventKind::SentBack,
             actor,
-            json!({"notes":notes,"round":task.round}),
+            json!({"notes":notes,"round":task.round,"pickup":pickup}),
         )?;
         Ok(Some(worker))
     }

@@ -134,6 +134,9 @@ pub struct Task {
     pub parent: Option<String>,
     pub depends_on: Vec<String>,
     pub blocked: Option<Blocked>,
+    /// Advisory run-attention reason, independent of lifecycle and scheduling.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attention: Option<String>,
     pub round: u32,
     pub created: Timestamp,
     pub updated: Timestamp,

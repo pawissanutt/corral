@@ -1,6 +1,7 @@
 import type { ImageContent } from "@earendil-works/pi-ai";
 import type { EventLog } from "../bridge/events.ts";
 import { BridgeRefusal, type AnswerInput, type RewindInput, type SessionInput, type SubmitResult } from "../bridge/protocol.ts";
+import { isBoardInputId } from "./activity-inputs.ts";
 import { loadOwnerAttachments } from "./owner-attachments.ts";
 import type { PlanAnswer } from "./plan-mode.ts";
 import type { HeldInput, SessionRecord } from "./session-record.ts";
@@ -15,7 +16,9 @@ export class RemoteOwner {
   private flushing: HeldInput | undefined;
 
   constructor(private readonly host: HostSession, private readonly events: EventLog, private readonly record: SessionRecord,
-    private readonly sessionFile: string, private readonly runtimeDir: string) {}
+    private readonly sessionFile: string, private readonly runtimeDir: string) {
+    for (const input of record.held) if (isBoardInputId(input.inputId)) host.activityInputs.admit(input.inputId);
+  }
 
   private order<T>(operation: () => Promise<T>): Promise<T> {
     const result = this.transitions.then(operation);
@@ -53,7 +56,7 @@ export class RemoteOwner {
 
   submit(input: SessionInput, images?: ImageContent[], requestId?: string, pane = false): Promise<SubmitResult> {
     const inputId = input.inputId ?? requestId;
-    return this.order(async () => {
+    return this.order(() => this.track(input, async () => {
       if (this.automationRetired) return { disposition: "rejected", reason: "retired" };
       if (inputId !== undefined && (this.host.queue.has(inputId) || this.record.held.some(item => item.queueKey === inputId))) {
         return { disposition: "rejected", reason: "input_already_queued" };
@@ -70,7 +73,33 @@ export class RemoteOwner {
           error instanceof BridgeRefusal ? error.reason : error instanceof Error ? error.message : undefined));
         throw error;
       }
-    });
+    }));
+  }
+
+  private async track(input: SessionInput, submit: () => Promise<SubmitResult>): Promise<SubmitResult> {
+    const id = input.inputId;
+    if (!isBoardInputId(id)) return submit();
+    const receipts = this.host.activityInputs;
+    // The explicit ID names one submission, even across requests on different connections.
+    switch (receipts.get(id)) {
+      case "applied": return { disposition: "handled", reason: "input_already_applied" };
+      case "pending": return { disposition: "pending", reason: "input_already_pending" };
+      case "failed": return { disposition: "rejected", reason: "input_already_failed" };
+    }
+    // A legacy held queue or a frame ID can also occupy this key (neither proves application).
+    if (this.host.queue.has(id) || this.record.held.some(item => item.queueKey === id)) {
+      return { disposition: "rejected", reason: "input_already_queued" };
+    }
+    if (!receipts.admit(id)) return { disposition: "rejected", reason: "input_tracking_limit" };
+    try {
+      const result = await submit();
+      // A command/answer/child send can be handled without entering this agent's transcript.
+      if (result.disposition === "rejected" || result.disposition === "handled") receipts.finish(id, "failed");
+      return result;
+    } catch (error) {
+      receipts.finish(id, "failed");
+      throw error;
+    }
   }
 
   private async admit(input: SessionInput, images?: ImageContent[], requestId?: string, pane = false): Promise<SubmitResult> {
@@ -114,6 +143,7 @@ export class RemoteOwner {
     const held = this.record.held.slice();
     const [item] = held.splice(index, 1);
     this.record.save(this.sessionFile, this.paused, held);
+    if (item!.inputId !== undefined) this.host.activityInputs.finish(item!.inputId, "failed");
     if (item!.inputId !== undefined || item!.requestId !== undefined) this.host.liveEvents.input({ input: key, state: "withdrawn" });
     else this.host.liveEvents.stateChanged();
     return { outcome: "withdrawn", item: key, text: item!.text };
@@ -159,12 +189,16 @@ export class RemoteOwner {
     while (this.record.held.length) {
       const input = this.flushing = this.record.held[0]!;
       try {
-        const loaded = loadOwnerAttachments(this.runtimeDir, input.attachments, this.host.session.model);
-        const result = await this.host.submitLocal({ ...input, text: input.text + loaded.text,
-          busyPolicy: input.inputId === undefined ? "steer" : input.busyPolicy },
-          loaded.images.length ? loaded.images : undefined, { requestId: input.requestId, queueKey: input.queueKey, text: input.text });
-        if (result.disposition === "rejected") {
-          throw new BridgeRefusal("held_input_rejected", `${result.reason ?? "input rejected"}; fix the error and run corral reply or resume the session`);
+        // A stopped host can have persisted the input but not yet removed it from the held queue.
+        if (input.inputId === undefined || this.host.activityInputs.get(input.inputId) !== "applied") {
+          const loaded = loadOwnerAttachments(this.runtimeDir, input.attachments, this.host.session.model);
+          const result = await this.host.submitLocal({ ...input, text: input.text + loaded.text,
+            busyPolicy: input.inputId === undefined ? "steer" : input.busyPolicy },
+            loaded.images.length ? loaded.images : undefined, { requestId: input.requestId, queueKey: input.queueKey, text: input.text });
+          if (result.disposition === "rejected") {
+            throw new BridgeRefusal("held_input_rejected", `${result.reason ?? "input rejected"}; fix the error and run corral reply or resume the session`);
+          }
+          if (input.inputId !== undefined && result.disposition === "handled") this.host.activityInputs.finish(input.inputId, "failed");
         }
         this.record.save(this.sessionFile, true, this.record.held.slice(1));
         this.host.liveEvents.stateChanged();

@@ -11,6 +11,10 @@ export interface InputTag {
 const INPUT_ID = /^[A-Za-z0-9._:-]{1,80}$/;
 const CHILD_ID = /^[A-Za-z0-9._:-]{1,128}$/;
 
+export function isInputId(value: unknown): value is string {
+  return typeof value === "string" && INPUT_ID.test(value);
+}
+
 export function parseChildId(value: unknown): string {
   if (typeof value !== "string" || !CHILD_ID.test(value) || value === "." || value === "..") {
     throw new BridgeRefusal("bad_input", "invalid child id");
@@ -20,7 +24,7 @@ export function parseChildId(value: unknown): string {
 
 export function parseInputTag(args: Record<string, unknown>): InputTag {
   const { input_id: inputId, to, typed_at: typedAt, device } = args;
-  if (inputId !== undefined && (typeof inputId !== "string" || !INPUT_ID.test(inputId))) {
+  if (inputId !== undefined && !isInputId(inputId)) {
     throw new BridgeRefusal("bad_input", "invalid input_id");
   }
   const bounded = (value: unknown, field: string): string | undefined => {

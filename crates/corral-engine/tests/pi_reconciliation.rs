@@ -162,7 +162,7 @@ fn sync_observes_idle_pi_with_oversized_diagnostics() {
         base: "main".into(),
         base_sha: "unused".into(),
         session: Some(SessionRef::Pi {
-            socket,
+            socket: socket.clone(),
             inner: Box::new(SessionRef::Process {
                 pid: hello.pid,
                 dir: dir.clone(),
@@ -224,6 +224,15 @@ fn sync_observes_idle_pi_with_oversized_diagnostics() {
     let runs = engine.store.list_runs(&task.id).unwrap();
     assert_eq!(runs.len(), 1, "should reuse the live worker");
     assert_eq!(runs[0].session, run.session);
+    let sent_back = engine
+        .store
+        .list_events(&task.id)
+        .unwrap()
+        .into_iter()
+        .find(|event| event.kind == EventKind::SentBack)
+        .unwrap();
+    let input_id = sent_back.detail["pickup"]["input_id"].as_str().unwrap();
+    assert_eq!(sent_back.detail["pickup"]["rejected"], false);
 
     let deadline = Instant::now() + Duration::from_secs(5);
     while !fs::read_to_string(&hello.session_file)
@@ -237,4 +246,6 @@ fn sync_observes_idle_pi_with_oversized_diagnostics() {
         );
         thread::sleep(Duration::from_millis(20));
     }
+    let state: Value = client.request("get_state", json!({})).unwrap();
+    assert_eq!(state["activity"]["inputs"][input_id]["state"], "applied");
 }

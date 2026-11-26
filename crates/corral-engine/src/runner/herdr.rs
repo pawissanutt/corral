@@ -57,15 +57,21 @@ impl Runner for HerdrRunner {
     }
 
     fn status(&self, session: &SessionRef) -> Result<SessionStatus> {
+        Ok(self
+            .reconciliation_status(session)?
+            .unwrap_or(SessionStatus::Idle))
+    }
+
+    fn reconciliation_status(&self, session: &SessionRef) -> Result<Option<SessionStatus>> {
         let pane = herdr_pane(session)?;
         let Some(info) = self
             .herdr
             .pane_get(pane)
             .with_context(|| format!("inspect herdr pane {pane}"))?
         else {
-            return Ok(SessionStatus::Gone);
+            return Ok(Some(SessionStatus::Gone));
         };
-        Ok(match info.status {
+        let status = match info.status {
             AgentStatus::Working => SessionStatus::Working,
             AgentStatus::Blocked => {
                 let Some(text) = self
@@ -73,7 +79,7 @@ impl Runner for HerdrRunner {
                     .pane_read_if_present(pane, 12)
                     .with_context(|| format!("read blocked herdr pane {pane}"))?
                 else {
-                    return Ok(SessionStatus::Gone);
+                    return Ok(Some(SessionStatus::Gone));
                 };
                 let excerpt = text.trim();
                 SessionStatus::Blocked {
@@ -85,8 +91,10 @@ impl Runner for HerdrRunner {
                     },
                 }
             }
-            AgentStatus::Idle | AgentStatus::Done | AgentStatus::Unknown => SessionStatus::Idle,
-        })
+            AgentStatus::Idle | AgentStatus::Done => SessionStatus::Idle,
+            AgentStatus::Unknown => return Ok(None),
+        };
+        Ok(Some(status))
     }
 
     fn send(&self, session: &SessionRef, text: &str, _origin: Origin) -> Result<()> {

@@ -1,14 +1,28 @@
+use std::fs::OpenOptions;
+
 use anyhow::{Context, Result};
 use jiff::Timestamp;
 use serde_json::json;
 
 use crate::{
-    Actor, Blocked, Engine, Op, Outcome, Role, Run, Runner, SessionStatus, Status, as_refusal,
+    Actor, Blocked, Engine, Op, Outcome, Role, Run, SessionRef, SessionStatus, Status, Store, Task,
+    as_refusal,
     events::EventKind,
     review::worker_blocked,
+    runner::pi::Activity,
     store::TaskFilter,
     tasks::{next_force_approve, next_retry, set_lifecycle},
 };
+
+mod attention;
+#[cfg(test)]
+mod tests;
+
+struct Observation {
+    status: Option<SessionStatus>,
+    paused: Option<bool>,
+    activity: Option<Activity>,
+}
 
 impl Engine {
     pub fn sync(&self) -> Result<()> {
@@ -54,26 +68,87 @@ impl Engine {
     }
 
     pub(crate) fn reconcile(&self, observed: &Run) -> Result<()> {
-        let status = if let Some(session) = &observed.session {
-            self.session_runner()
-                .status(session)
-                .with_context(|| format!("read session {}:{}", observed.task, observed.id))?
-        } else {
-            SessionStatus::Gone
+        // Serialize sampling through commit across CLI sync, daemon sync and
+        // relaunch. An older observation must not win by committing last.
+        let lock = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(self.state_dir.join("locks/reconcile"))
+            .context("open reconciliation lock")?;
+        lock.lock().context("lock session reconciliation")?;
+        // A send-back, re-review request or verdict may commit while we're
+        // outside the store reading the socket. Don't use that snapshot for
+        // the new obligation, even if the run/session/round were reused.
+        let seq = self.store.task_event_seq(&observed.task)?;
+        let state = match &observed.session {
+            Some(session @ SessionRef::Pi { .. }) => self
+                .session_runner()
+                .observe_activity(session)
+                .map(|(status, paused, activity)| (Some(status), paused, activity)),
+            Some(session) => self
+                .runner
+                .reconciliation_status(session)
+                .map(|status| (status, None, None)),
+            None => Ok((Some(SessionStatus::Gone), None, None)),
         };
+        let (sample, error) = match state {
+            Ok((status, paused, activity)) => (
+                Observation {
+                    status,
+                    paused,
+                    activity,
+                },
+                None,
+            ),
+            Err(error) => (
+                Observation {
+                    status: None,
+                    paused: None,
+                    activity: None,
+                },
+                Some(error),
+            ),
+        };
+        self.reconcile_sample(observed, seq, sample, Timestamp::now())?;
+        error
+            .map_or(Ok(()), Err)
+            .with_context(|| format!("read session {}:{}", observed.task, observed.id))
+    }
+
+    fn reconcile_sample(
+        &self,
+        observed: &Run,
+        seq: i64,
+        sample: Observation,
+        now: Timestamp,
+    ) -> Result<()> {
         self.store.transaction(|store| {
             let Some(mut run) = store.get_run(&observed.task, &observed.id)? else {
                 return Ok(());
             };
-            if run.ended.is_some() || run.session != observed.session {
+            if run.ended.is_some()
+                || run.session != observed.session
+                || store.task_event_seq(&run.task)? != seq
+                || store
+                    .latest_run(&run.task, run.role)?
+                    .is_none_or(|latest| latest.id != run.id)
+            {
                 return Ok(());
             }
             let mut task = store.require_task(&run.task)?;
+            let review_requested = run.role == Role::Reviewer
+                && task.status == Status::Review
+                && store.has_review_request_since_done(&task.id, &run.id, task.round)?
+                && !store.has_verdict_since_done(&task.id, task.round)?;
+            self.reconcile_attention(store, &mut run, &mut task, review_requested, &sample, now)?;
+            let Some(status) = sample.status else {
+                return Ok(());
+            };
             if run.role == Role::Reviewer {
                 if status == SessionStatus::Gone {
-                    let waiting = task.status == Status::Review
-                        && store.has_review_request_since_done(&task.id, &run.id, task.round)?
-                        && !store.has_verdict_since_done(&task.id, task.round)?;
+                    let waiting = review_requested;
                     let outcome = if !waiting && run.head_sha.is_some() {
                         Outcome::Done
                     } else {
@@ -131,15 +206,6 @@ impl Engine {
                 }
                 return Ok(());
             }
-            let quiet_since = if status == SessionStatus::Idle {
-                Some(run.quiet_since.unwrap_or_else(Timestamp::now))
-            } else {
-                None
-            };
-            if run.quiet_since != quiet_since {
-                run.quiet_since = quiet_since;
-                store.update_run(&run)?;
-            }
             match status {
                 SessionStatus::Blocked { excerpt }
                     if task.status == Status::Running || waiting_for_reply =>
@@ -163,6 +229,56 @@ impl Engine {
             }
             Ok(())
         })
+    }
+
+    fn reconcile_attention(
+        &self,
+        store: &Store,
+        run: &mut Run,
+        task: &mut Task,
+        review_requested: bool,
+        sample: &Observation,
+        now: Timestamp,
+    ) -> Result<()> {
+        let pi = matches!(run.session, Some(SessionRef::Pi { .. }));
+        let idle = sample.status == Some(SessionStatus::Idle)
+            && (!pi
+                || sample.paused == Some(false)
+                    && sample
+                        .activity
+                        .as_ref()
+                        .is_some_and(|a| !a.waiting && !a.busy));
+        let since = run.quiet_since;
+        let quiet_since = idle.then_some(since.unwrap_or(now));
+        if quiet_since != since {
+            run.quiet_since = quiet_since;
+            store.update_run(run)?;
+        }
+
+        // Running workers owe a new submission even when head_sha still names
+        // an earlier submission. In Review only the asked reviewer owes work.
+        if !matches!(
+            (run.role, task.status),
+            (Role::Worker, Status::Running) | (Role::Reviewer, Status::Review)
+        ) {
+            return Ok(());
+        }
+        let owed = run.role == Role::Worker || review_requested;
+        let reason = if !idle || !owed {
+            None
+        } else if let Some(activity) = &sample.activity {
+            let pickup = store.obligation_pickup(run)?;
+            attention::pi_reason(run.role, activity, pickup.as_ref(), since, now)
+        } else if attention::elapsed(since, now, self.config.sync.quiet_after_secs) {
+            Some("Possibly stalled. Open the session to check progress.")
+        } else {
+            None
+        };
+        if task.attention.as_deref() != reason {
+            task.attention = reason.map(str::to_owned);
+            store.update_task(task)?;
+        }
+        Ok(())
     }
 
     fn sync_error(

@@ -353,6 +353,10 @@ export class CodeRuntime {
     this.deferred = undefined;
   }
 
+  get delivering(): boolean {
+    return this.notices.size > 0 || (this.deferred?.length ?? 0) > 0;
+  }
+
   async notified(): Promise<void> {
     while (this.notices.size > 0) await Promise.allSettled([...this.notices]);
   }

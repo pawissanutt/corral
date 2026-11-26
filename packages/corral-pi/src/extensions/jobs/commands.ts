@@ -274,6 +274,10 @@ export class Commands {
     for (const release of command.release) release();
     return { job, state: "running", background: true };
   }
+  get delivering(): boolean {
+    return this.noticeScheduled || this.monitors.delivering || [...this.commands.values()].some(command => command.notifying);
+  }
+
   inspection(): readonly JobInspection[] {
     return this.options.jobs.inspection().map(job => {
       const watches = this.monitors.inspection(job.job);

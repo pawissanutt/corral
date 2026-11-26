@@ -28,6 +28,8 @@ use sha2::{Digest, Sha256};
 use super::{InputTag, LaunchSpec, Origin, Runner, SessionRef, SessionStatus};
 use crate::{config::shell_quote, refuse};
 
+mod activity;
+pub(crate) use activity::{Activity, InputState, Pickup};
 mod build;
 pub use build::{BuildLaunch, build_session, build_socket, is_build_id, pi_data_root};
 
@@ -296,13 +298,13 @@ impl<'a> Client<'a> {
         frame: &[u8],
         timeout: Duration,
     ) -> Result<R> {
-        Self::exchange_on(
-            self.connect()?,
-            command,
-            id,
-            frame,
-            Instant::now() + timeout,
-        )
+        let stream = self.connect()?;
+        let result = Self::exchange_on(stream, command, id, frame, Instant::now() + timeout);
+        if command == "submit_input" {
+            result.context(UncertainSubmit)
+        } else {
+            result
+        }
     }
 
     #[cfg(unix)]
@@ -411,6 +413,17 @@ struct ReplyError {
     reason: String,
 }
 
+// Once connected we may have written a complete frame, even if no usable
+// response arrives. Keep the transport error in the chain for other callers.
+#[derive(Debug)]
+struct UncertainSubmit;
+
+impl std::fmt::Display for UncertainSubmit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Pi input acknowledgement")
+    }
+}
+
 #[derive(Debug)]
 pub struct PiRefusal {
     pub command: String,
@@ -508,24 +521,6 @@ fn unavailable(error: &anyhow::Error) -> bool {
     })
 }
 
-#[derive(Deserialize)]
-struct State {
-    paused: bool,
-    turn: Turn,
-    owner_questions: Vec<Question>,
-    last_error: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct Turn {
-    open: bool,
-}
-
-#[derive(Deserialize)]
-struct Question {
-    question: String,
-}
-
 /// Launches Pi through the selected pane or process runner. Existing non-Pi
 /// session references are passed straight to that runner unchanged.
 pub struct PiRunner<'a> {
@@ -547,65 +542,6 @@ impl<'a> PiRunner<'a> {
     pub(super) fn in_test_socket_dir(mut self, dir: &'a Path) -> Self {
         self.socket_dir = Some(dir);
         self
-    }
-
-    /// Read status and the pause flag from the same observation of the Pi host.
-    pub fn observe(&self, session: &SessionRef) -> Result<(SessionStatus, Option<bool>)> {
-        let SessionRef::Pi {
-            socket,
-            inner,
-            dir: _dir,
-        } = session
-        else {
-            return Ok((self.inner.status(session)?, None));
-        };
-        let state: State = match Client::new(socket).request("get_state", json!({})) {
-            Ok(state) => state,
-            #[cfg(target_os = "linux")]
-            Err(error)
-                if error.downcast_ref::<io::Error>().is_some_and(|e| {
-                    matches!(
-                        e.kind(),
-                        io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
-                    )
-                }) && task_host::confirmed_absent(_dir, socket) =>
-            {
-                return Ok((SessionStatus::Gone, None));
-            }
-            Err(error) if unavailable(&error) => return Ok((self.inner.status(inner)?, None)),
-            Err(error) => return Err(error),
-        };
-        let status = if let Some(question) = state.owner_questions.into_iter().next() {
-            SessionStatus::Blocked {
-                excerpt: question.question,
-            }
-        } else if state.turn.open {
-            SessionStatus::Working
-        } else if !state.paused
-            && let Some(excerpt) = state.last_error
-        {
-            SessionStatus::Blocked { excerpt }
-        } else {
-            SessionStatus::Idle
-        };
-        Ok((status, Some(state.paused)))
-    }
-
-    /// An older Pi host can answer but fail to fit its diagnostic state in a frame.
-    /// Its refusal proves liveness, not a lifecycle status. Never use this in reconciliation.
-    pub(crate) fn is_live(&self, session: &SessionRef) -> Result<bool> {
-        match self.status(session) {
-            Ok(status) => Ok(status != SessionStatus::Gone),
-            Err(error)
-                if matches!(session, SessionRef::Pi { .. })
-                    && error.downcast_ref::<PiRefusal>().is_some_and(|refusal| {
-                        refusal.command == "get_state" && refusal.code == "response_too_large"
-                    }) =>
-            {
-                Ok(true)
-            }
-            Err(error) => Err(error),
-        }
     }
 
     fn wait_for_hello(&self, client: &Client<'_>, inner: &SessionRef) -> Result<Hello> {

@@ -47,6 +47,7 @@ pub struct Band {
     pub what: String,
     /// The plain phrase under it; empty where `what` says it all.
     pub how: String,
+    pub attention: Option<String>,
     pub hold: Hold,
 }
 
@@ -81,6 +82,8 @@ fn review(task: &Task) -> (String, String, Hold) {
         }
     } else if gate.stage == Stage::Fail {
         format!("Gate {}", gate.sentence)
+    } else if task.attention().is_some() {
+        "In review".to_owned()
     } else {
         "In review: nothing for you yet".to_owned()
     };
@@ -181,6 +184,7 @@ fn of(feed: &Feed, task: &Task) -> Band {
         status,
         what,
         how,
+        attention: task.attention().map(str::to_owned),
         hold,
     }
 }

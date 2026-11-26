@@ -18,6 +18,7 @@ fn task() -> Task {
         parent: None,
         depends_on: Vec::new(),
         blocked: None,
+        attention: None,
         round: 0,
         created: jiff::Timestamp::UNIX_EPOCH,
         updated: jiff::Timestamp::UNIX_EPOCH,

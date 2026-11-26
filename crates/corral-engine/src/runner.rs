@@ -48,6 +48,10 @@ pub trait Runner: Send + Sync {
         anyhow::bail!("runner does not support direct process placement")
     }
     fn status(&self, session: &SessionRef) -> Result<SessionStatus>;
+    /// Unlike the presentation status, an unknown sample is not idle evidence.
+    fn reconciliation_status(&self, session: &SessionRef) -> Result<Option<SessionStatus>> {
+        self.status(session).map(Some)
+    }
     /// Owner replies and automatic input share the transport. Runners that can
     /// pause a session may defer automatic input.
     fn send(&self, session: &SessionRef, text: &str, origin: Origin) -> Result<()>;

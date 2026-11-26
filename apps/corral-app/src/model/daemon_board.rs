@@ -92,6 +92,15 @@ impl Task {
         self.row.task.blocked.as_ref()
     }
 
+    /// The daemon's advisory reason, separate from the task's status and Blocked prompt.
+    pub fn attention(&self) -> Option<&str> {
+        self.row
+            .task
+            .attention
+            .as_deref()
+            .filter(|reason| !reason.trim().is_empty())
+    }
+
     /// One line about where the task stands: a Blocked card's reason, else its status.
     pub fn now(&self) -> String {
         if let Some(blocked) = self.blocked() {
@@ -287,6 +296,7 @@ pub fn bare_task(id: &str, title: &str, status: Status, at: jiff::Timestamp) -> 
         parent: None,
         depends_on: Vec::new(),
         blocked: None,
+        attention: None,
         round: 0,
         created: at,
         updated: at,

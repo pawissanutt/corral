@@ -50,6 +50,9 @@ impl Store {
         connection
             .execute_batch(crate::usage::SCHEMA)
             .context("initialize usage table")?;
+        connection
+            .execute_batch("CREATE INDEX IF NOT EXISTS events_task_kind ON events(task,kind,seq)")
+            .context("index task events by kind")?;
         let store = Self { connection };
         crate::artifacts::prepare_catalog(&store)?;
         Ok(store)

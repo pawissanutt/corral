@@ -291,6 +291,28 @@ prompts also list evidence. Use `corral-next artifact --help` for CLI operations
 Workspace memory is ordinary Markdown under `.corral-next/memory/`. The roles are
 told where it lives; an assistant can edit the files with normal file tools.
 
+### When a board run needs attention
+
+Home and the task show an advisory reason if a Pi worker settles without submitting,
+or an asked reviewer settles without a verdict. An intermediate agent end during retry
+or continuation is not a settlement. Pauses, explicit waits, and a worker's normal
+post-submission pipeline wait do not raise this alert. An unreachable Pi host (or one
+that does not report native activity) is not evidence of idle.
+
+On a reused Pi session, Corral tracks send-back and re-review prompts by input ID.
+A queue acknowledgement is not pickup: Pi must record that exact input. A reported
+failure raises its own reason. Pending input raises the same reason only after 30 seconds
+of observed quiet, and only if Pi reports that much time since both input admission and
+its latest settled turn. Busy/waiting observations reset the engine's window. An unknown
+input ID is not counted as failed. Once applied, or after a new turn supersedes a failed
+pickup, a settled turn that still owes work shows the unfinished-work reason instead.
+Repeated observations do not
+add duplicate alerts. These reasons do not restart runs or change slot usage.
+
+Other harnesses show **Possibly stalled** only after repeated idle observations
+spanning `[sync].quiet_after_secs` (default 120), while work is owed and no intentional
+wait is known.
+
 ## Control and rewind
 
 Each running host has a private local Unix socket. Its version-2 protocol sends one

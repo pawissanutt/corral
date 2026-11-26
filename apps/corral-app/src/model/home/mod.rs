@@ -1,6 +1,6 @@
 //! Home: what waits on the owner, then what is working, then what finished since the last
-//! visit, tasks and sessions mixed. Needs you is exactly the Blocked tasks, the Review tasks
-//! the engine marked `ready`, and the Blocked sessions that are not the run of a task already
+//! visit, tasks and sessions mixed. Needs you lists tasks with an attention reason, Blocked
+//! tasks, ready reviews, and Blocked sessions that are not the run of a task already
 //! listed. A task and a session share one row anatomy; the id's prefix and the role word tell
 //! them apart.
 //!
@@ -28,7 +28,7 @@ use crate::model::agents::{SessionLine, session_line, session_lines};
 use crate::model::daemon::{Feed, Task};
 use crate::model::list::{self, Section};
 use crate::model::next::{NextStep, next_step, session_next_step};
-use crate::model::pipeline::phrase;
+use crate::model::pipeline::row_phrase;
 use crate::model::projects::Scope;
 use crate::model::status::{Look, SessionState, session_look, status_look, status_word};
 use crate::model::tasks::{self, Board};
@@ -75,23 +75,16 @@ pub fn record_of(feed: &Feed, id: &Id) -> crate::model::work::Record {
     }
 }
 
-/// Whether the task waits on the owner: Blocked, or in Review and ready to land.
+/// Whether the task needs the owner: an advisory alert, Blocked, or ready to land.
 pub fn task_needs_you(task: &Task) -> bool {
-    match task.status() {
-        Status::Blocked => true,
-        Status::Review => task.row.ready,
-        _ => false,
-    }
+    task.attention().is_some()
+        || task.status() == Status::Blocked
+        || (task.status() == Status::Review && task.row.ready)
 }
 
-/// Whether Corral or a worker is at the task: Running, or in Review while the gate or the
-/// reviewer runs.
+/// Whether Corral or a worker is at the task without needing the owner.
 pub fn task_working(task: &Task) -> bool {
-    match task.status() {
-        Status::Running => true,
-        Status::Review => !task.row.ready,
-        _ => false,
-    }
+    !task_needs_you(task) && matches!(task.status(), Status::Running | Status::Review)
 }
 
 fn tasks<'a>(feed: &'a Feed, scope: &'a Scope) -> impl Iterator<Item = &'a Task> {
@@ -283,7 +276,7 @@ pub fn row(feed: &Feed, id: &Id) -> Option<HomeRow> {
             look: status_look(task.status()),
             word: status_word(task.status()),
             title: task.title().to_owned(),
-            now: phrase(task, feed),
+            now: row_phrase(task, feed),
             in_place: question.is_none() && crate::model::work::reply_box(task).is_some(),
             next: question.or_else(|| next_step(task)),
         });
@@ -362,6 +355,38 @@ mod tests {
         // A build's choice is a big thing: it opens its page rather than being answered in
         // the phone's list.
         assert!(!build.in_place);
+    }
+
+    #[test]
+    fn attention_follows_the_latest_row_without_changing_status_or_next_step() {
+        let mut feed = Feed::default();
+        let id = Id::from("T-1");
+        let mut current = task(id.as_str(), Status::Running, false).row;
+        current.run = Some(
+            crate::model::agents::source_tests::agent("T-1", "R1", corral_types::Role::Worker).run,
+        );
+        let next = next_step(&Task::new(current.clone()));
+        let reason = "Check the worker session";
+        for (rev, alert) in [(1, Some(reason)), (2, None)] {
+            current.task.attention = alert.map(str::to_owned);
+            feed.board
+                .apply_batch(rev, vec![Task::new(current.clone())], &[]);
+            assert_eq!(needs_you(&feed, &Scope::All).contains(&id), alert.is_some());
+            assert_eq!(working(&feed, &Scope::All).contains(&id), alert.is_none());
+            let home = row(&feed, &id).expect("Home row");
+            assert_eq!(home.now.contains(reason), alert.is_some());
+            assert_eq!(home.next, next);
+            assert_eq!(
+                card(&feed, &id).expect("Home card").attention.as_deref(),
+                alert
+            );
+            let line = tasks::line(&feed, id.as_str()).expect("Tasks row");
+            assert_eq!(line.status, Status::Running);
+            assert_eq!(line.now.contains(reason), alert.is_some());
+            let band = tasks::band::band(&feed, id.as_str()).expect("task band");
+            assert_eq!(band.status, Status::Running);
+            assert_eq!(band.attention.as_deref(), alert);
+        }
     }
 
     /// A cold start or a failed tasks topic left Home saying nothing waits and its tiles

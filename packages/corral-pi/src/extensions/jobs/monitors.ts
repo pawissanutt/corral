@@ -60,6 +60,8 @@ export class SessionMonitors {
       }
     }).catch(() => {}).finally(() => { watch.sending = false; });
   }
+  get delivering(): boolean { return [...this.watches.values()].some(watch => watch.sending); }
+
   inspection(job: string) {
     return [...this.watches.values()].filter(watch => watch.fact.job === job).map(({ fact }) => ({
       wait: fact.key, pattern: fact.pattern, armed: fact.result === undefined, reportQueued: fact.result !== undefined,

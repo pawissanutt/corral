@@ -92,6 +92,7 @@ test("a worker starts, peeks and kills managed jobs; a nested monitor wakes it o
       expect((await host.submitLocal({ text: "go", busyPolicy: "prompt", origin: "owner" })).disposition).toBe("started");
       await ended;
       await host.drained();
+      expect(host.controlState(false).activity).toMatchObject({ settled: true, waiting: true });
       const result = (id: string) => host.session.messages.find(message => message.role === "toolResult" &&
         message.toolCallId.startsWith(`${id}|`));
       const ids = ["start", "start-b"].map(id => {
@@ -142,6 +143,8 @@ test("a worker starts, peeks and kills managed jobs; a nested monitor wakes it o
       await writeFile(gate, "go\n");
       await exited;
       await woken;
+      await host.drained();
+      expect(host.controlState(false).activity).toMatchObject({ settled: true, waiting: false });
       expect(readFileSync(join(cwd, "runtime", "jobs", `${job}.log`), "utf8")).toBe("BUILT\n");
       const notices = host.session.messages.flatMap(message => message.role === "user"
         ? (typeof message.content === "string" ? [message.content] : message.content.flatMap(part => part.type === "text" ? [part.text] : []))

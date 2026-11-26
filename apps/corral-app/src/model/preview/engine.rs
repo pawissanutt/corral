@@ -215,6 +215,7 @@ fn new(feed: &mut Feed, task: &NewTask) -> Applied {
             parent: task.parent.clone(),
             depends_on: task.depends_on.clone(),
             blocked: None,
+            attention: None,
             round: 0,
             created: now,
             updated: now,

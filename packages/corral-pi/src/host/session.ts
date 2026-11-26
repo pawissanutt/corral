@@ -87,6 +87,7 @@ import { createModelCatalog } from "./catalog.ts";
 import { installModelSelection } from "./model-selection.ts";
 import { childModels, childProfileProviders, interactiveModels, providerCapabilities, sessionRoutes, type SessionRoutes } from "./capabilities.ts";
 import { observeTerminalInput, type InputObservation } from "./input-observation.ts";
+import { ACTIVITY_INPUT_ID, ActivityInputs, isBoardInputId } from "./activity-inputs.ts";
 import { browserSettings, browserTools } from "../extensions/browser/index.ts";
 import { installLocalProvider, LocalModelUnavailable } from "./local-models.ts";
 import { ImageGeneration } from "../extensions/image/tool.ts";
@@ -412,6 +413,11 @@ export class HostSession {
   private readonly code: CodeRuntime | undefined;
   private turn = 0;
   private open = false;
+  private settledTurn: number | undefined;
+  // Unlike the transcript turn, this never moves backwards on a rewind.
+  private activityTurn = 0;
+  private extensionsReady = false;
+  readonly activityInputs = new ActivityInputs(() => this.activityTurn);
   private cancelRequested: number | undefined;
   private stopCause: TurnStopCause | undefined;
   private turnError: string | null = null;
@@ -582,6 +588,8 @@ export class HostSession {
       turn: next => next || !this.open ? this.turn + 1 : this.turn,
       emit: (kind, data) => options.events.emit(kind, data),
       liveInput: event => this.liveEvents.input(event),
+      queuedInputChange: (id, change) => change === "drain"
+        ? this.activityInputs.claim(id) : this.activityInputs.finish(id, "failed"),
     });
     const childPolicy = childFallbackPolicy(options.fallbackPolicy, options.noFallback);
     const childHosted = (child: { kind: "slice" | "review" | "explore"; owns: readonly string[] }) => this.hostedTools(child);
@@ -1066,6 +1074,8 @@ export class HostSession {
   static async create(options: HostSessionOptions): Promise<HostSession> {
     const host = new HostSession(options);
     host.restoreTurn(options.sessionManager);
+    host.activityTurn = host.turn;
+    host.activityInputs.restore(options.sessionManager.getEntries());
     const { sdk } = options;
     const route = PROVIDERS[host.provider];
     const local = host.provider === "llama.cpp" && options.capabilities?.enabled.includes("llama_cpp.enabled") === true
@@ -1615,6 +1625,7 @@ export class HostSession {
       const arrived = this.arriving;
       if (arrived?.message !== message) return;
       this.arriving = undefined;
+      if (arrived.input.inputId !== undefined) this.activityInputs.finish(arrived.input.inputId, "applied");
       const delivery = this.deliveries.get(arrived.input);
       if (delivery) {
         this.deliveries.delete(arrived.input);
@@ -1634,6 +1645,14 @@ export class HostSession {
       session.setModel = (...args) => selecting(() => set(...args));
       session.cycleModel = (...args) => selecting(() => cycle(...args));
     }
+    // Headless publishes the socket before extension startup (which may itself await owner input).
+    this.extensionsReady = false;
+    const bind = session.bindExtensions.bind(session);
+    session.bindExtensions = async (...args) => {
+      this.extensionsReady = false;
+      await bind(...args);
+      this.extensionsReady = true;
+    };
     this.startedInputFacts = undefined;
     this.inAutomation = false;
     this.remoteUsage = undefined;
@@ -1645,11 +1664,13 @@ export class HostSession {
         // Pi reports "started" just before prompting with the prepared user message, which it emits before
         // draining any queued inputs. Only the prompt that owns the run reports it: the patched Pi refuses a
         // second prompt whose preflight overlapped before it starts, so one slot is enough.
-        if (event.event === "started") this.startedInputFacts = facts;
-        else if (event.event === "rejected" && this.startedInputFacts === facts) {
-          this.startedInputFacts = undefined;
+        if (event.event === "started") {
+          this.startedInputFacts = facts;
+          if (facts?.inputId !== undefined) this.activityInputs.claim(facts.inputId);
+        } else if (event.event === "rejected") {
+          if (this.startedInputFacts === facts) this.startedInputFacts = undefined;
+          this.admissions.get(event.tag)?.(event.reason ?? "rejected");
         }
-        if (event.event === "rejected") this.admissions.get(event.tag)?.(event.reason ?? "rejected");
       },
       // Pi asks in the tick the run starts. What an answer to a plan review was given for was checked before
       // Pi's preflight, and a whole other run can have come and gone since.
@@ -1714,6 +1735,7 @@ export class HostSession {
           const feedback = tagged?.origin === "owner" || tagged?.origin === "pane" ? this.planMode?.review : undefined;
           Object.assign(event.message, { corralInput: tagged?.facts ?? { origin: "auto" },
             ...(tagged?.transcriptId === undefined ? {} : { corralRequestId: tagged.transcriptId }),
+            ...(isBoardInputId(tagged?.inputId) ? { [ACTIVITY_INPUT_ID]: tagged.inputId } : {}),
             // Only the message the host itself admitted as an approved plan's kickoff carries this; its text proves nothing.
             ...(tagged?.planKickoff === undefined ? {} : { [PLAN_KICKOFF]: tagged.planKickoff }),
             ...(feedback === undefined ? {} : { [PLAN_FEEDBACK]: feedback }) });
@@ -1735,6 +1757,8 @@ export class HostSession {
       } else if (event.type === "tool_execution_start") {
         this.turnFacts.toolStarted(this.turn, event.toolCallId);
       } else if (event.type === "agent_settled") {
+        if (this.open) this.settledTurn = this.turn;
+        this.activityInputs.settle();
         this.inAutomation = false;
         this.turnEnded(event.aborted);
         this.planMode?.turnEnded();
@@ -1766,6 +1790,7 @@ export class HostSession {
 
   private turnStarted(): void {
     this.turn++;
+    this.activityTurn++;
     this.session.sessionManager.appendCustomEntry("corral_turn", this.turn, { immediate: true });
     this.open = true;
     this.turnError = null;
@@ -2357,6 +2382,7 @@ export class HostSession {
       else await session.abort();
       const result = restoreRewind(session, snapshots, point);
       this.turn = 0;
+      this.settledTurn = undefined;
       this.restoreTurn(manager);
       this.turnError = null;
       this.stopCause = undefined;
@@ -2552,11 +2578,18 @@ export class HostSession {
     return page;
   }
 
-  /** Protocol v2 status: at most 8 KiB of JSON, independent of diagnostic state. */
+  /** Protocol v2 status: bounded independently of transcript and diagnostic history. */
   controlState(paused: boolean) {
     const session = this.session;
     const identity = { bound_id: this.boundSessionId ?? null, current_id: session.sessionId, created: this.sessionsCreated };
     const questions = this.ownerQuestions?.pending() ?? [];
+    const busy = !this.bound || !this.extensionsReady || this.closing || this.rewinding || this.switchingCode
+      || this.open || this.admissions.size > 0 || !session.isReadyForHandoff;
+    // An unrelated dormant queue is not progress; the board checks its own input receipt.
+    const settled = !busy && this.settledTurn === this.turn;
+    const waiting = paused || this.dialogs.hasOpen || this.planMode?.review !== undefined
+      || this.remoteBuild.exitState()?.phase === "pending" || (this.ledger?.current?.waits?.length ?? 0) > 0
+      || this.commands?.delivering === true || this.code?.delivering === true || this.currentWaits().length > 0;
     return {
       role: this.options.identity.role,
       bound: this.bound,
@@ -2567,6 +2600,7 @@ export class HostSession {
         ? { session: identity } : {}),
       streaming: session.isStreaming,
       turn: { current: this.turn, open: this.open },
+      activity: { settled, busy, waiting, turn: this.activityTurn, inputs: this.activityInputs.snapshot() },
       paused,
       last_error: this.turnError === null ? null : clipText(this.turnError.toWellFormed(), 512),
       last_seq: this.options.events.last,
