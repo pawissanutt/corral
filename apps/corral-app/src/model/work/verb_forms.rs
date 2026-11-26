@@ -196,7 +196,21 @@ pub fn base_choices(feed: &Feed, project: &str, task: Option<&str>, kept: &[&str
         value: String::new(),
         label: "Project's base".into(),
     }];
-    for value in crate::model::projects::branches(feed, (!project.is_empty()).then_some(project)) {
+    let target = corral_protocol::detail::DetailRef::ProjectBranches {
+        project: project.into(),
+    };
+    let listed = feed
+        .detail(&target)
+        .and_then(|cache| match cache.body() {
+            Some(corral_protocol::detail::DetailBody::ProjectBranches(page)) => {
+                Some(page.branches.clone())
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| {
+            crate::model::projects::branches(feed, (!project.is_empty()).then_some(project))
+        });
+    for value in listed {
         if !value.is_empty()
             && own_branch.as_ref() != Some(&value)
             && !choices.iter().any(|choice| choice.value == value)

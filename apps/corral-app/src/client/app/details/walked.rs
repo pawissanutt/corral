@@ -8,7 +8,9 @@ use super::*;
 pub(super) fn walked(target: &DetailRef) -> bool {
     matches!(
         target,
-        DetailRef::Artifacts { .. } | DetailRef::SessionJobOutput { .. }
+        DetailRef::Artifacts { .. }
+            | DetailRef::SessionJobOutput { .. }
+            | DetailRef::ProjectBranches { .. }
     )
 }
 
@@ -92,6 +94,18 @@ impl AppState {
 }
 
 pub(super) fn merge_pages(pages: &[DetailReply]) -> Result<Option<DetailBody>, String> {
+    if let Some(DetailBody::ProjectBranches(first)) =
+        pages.first().and_then(|page| page.body.as_ref())
+    {
+        let mut merged = first.clone();
+        for page in &pages[1..] {
+            let Some(DetailBody::ProjectBranches(part)) = &page.body else {
+                return Err("Branch page kind changed.".into());
+            };
+            merged.branches.extend(part.branches.iter().cloned());
+        }
+        return Ok(Some(DetailBody::ProjectBranches(merged)));
+    }
     if let Some(DetailBody::Artifact(first)) = pages.first().and_then(|page| page.body.as_ref()) {
         use base64::{Engine, engine::general_purpose::STANDARD};
         let mut artifact = first.clone();

@@ -2861,6 +2861,22 @@
           },
           {
             "properties": {
+              "body": {
+                "$ref": "#/components/schemas/ProjectBranchesPage"
+              },
+              "kind": {
+                "const": "project_branches",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
               "kind": {
                 "const": "other",
                 "type": "string"
@@ -3736,6 +3752,23 @@
             "type": "object"
           },
           {
+            "description": "Local branches for a configured project ID, ordered by tip commit recency\nwith a refname tie-break. A changed list requires restarting the walk.",
+            "properties": {
+              "kind": {
+                "const": "project_branches",
+                "type": "string"
+              },
+              "project": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "project"
+            ],
+            "type": "object"
+          },
+          {
             "properties": {
               "kind": {
                 "const": "other",
@@ -3756,7 +3789,7 @@
             ]
           },
           "page": {
-            "description": "For session parts, an opaque `after` token of at most 128 bytes.",
+            "description": "An opaque continuation token from `DetailReply.next`. For session parts,\nthe `after` token is at most 128 bytes.",
             "type": [
               "string",
               "null"
@@ -6085,6 +6118,21 @@
         "type": "object"
       },
       "Pong": {
+        "type": "object"
+      },
+      "ProjectBranchesPage": {
+        "properties": {
+          "branches": {
+            "description": "At most 100 UTF-8 local branch names; use `DetailReply.next` to continue.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "branches"
+        ],
         "type": "object"
       },
       "ProjectRow": {
@@ -13503,6 +13551,10 @@
                 "type": "string"
               },
               {
+                "const": "project_branches",
+                "type": "string"
+              },
+              {
                 "const": "other",
                 "type": "string"
               }
@@ -13561,7 +13613,8 @@
             6,
             7,
             8,
-            9
+            9,
+            41
           ]
         },
         {

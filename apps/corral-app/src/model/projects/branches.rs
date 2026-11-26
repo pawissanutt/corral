@@ -3,6 +3,42 @@
 //! engine decides whether it exists.
 
 use crate::model::daemon::Feed;
+use corral_protocol::detail::{DetailBody, DetailRef};
+
+pub fn branches_ref(project: &str) -> DetailRef {
+    DetailRef::ProjectBranches {
+        project: project.into(),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct BranchPage {
+    pub branches: Vec<String>,
+    pub next: Option<String>,
+    pub loading: bool,
+    pub error: Option<String>,
+}
+
+pub fn branch_page(feed: &Feed, project: &str) -> BranchPage {
+    let Some(cache) = feed.detail(&branches_ref(project)) else {
+        return BranchPage {
+            loading: true,
+            ..BranchPage::default()
+        };
+    };
+    let branches = match cache.body() {
+        Some(DetailBody::ProjectBranches(page)) => page.branches.clone(),
+        _ => Vec::new(),
+    };
+    BranchPage {
+        branches,
+        next: (!cache.loading && cache.error.is_none())
+            .then(|| cache.pages.last().and_then(|page| page.next.clone()))
+            .flatten(),
+        loading: cache.loading,
+        error: cache.error.as_ref().map(|error| error.message.clone()),
+    }
+}
 
 /// How many branches a field offers at once.
 const SHOWN: usize = 6;

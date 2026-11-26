@@ -256,6 +256,53 @@ fn a_new_tasks_base_offers_the_branches_of_the_project_chosen_in_the_form() {
         .unwrap();
 }
 
+/// Base offered only the branches corrald listed with the project, so a project with more than
+/// a page of them hid every older branch: the dropdown reads the project's branches a page at a
+/// time, More branches adds the next page with the menu still open, and a branch only a later
+/// page holds can be chosen. Choosing another project keeps that choice, named as kept.
+#[test]
+fn a_new_tasks_base_reaches_a_branch_past_the_first_page_and_keeps_it() {
+    // New task's fields: Project is the fourth, Base the twelfth (`model::work::verb_forms`).
+    const PROJECT: &str = "id:field-verb-3";
+    const BASE: &str = "id:field-verb-11";
+    // The sample serves `corral`'s branches two to a page: `main` and `release/0.9` first,
+    // `archive/older` on the second.
+    const OLDER: &str = "id:seg-base-archive/older";
+    let wait = Duration::from_secs(5);
+    let mut app = preview("tasks");
+    app.wait_for("id:btn-new-task").unwrap();
+    app.press("id:btn-new-task").unwrap();
+    app.wait_for("id:field-verb-0").unwrap();
+    app.type_text("id:field-verb-0", "Branch from an older line")
+        .unwrap();
+    app.press(PROJECT).unwrap();
+    app.press("id:seg-project-corral").unwrap();
+    app.wait_for_gone("id:seg-project-corral", wait).unwrap();
+
+    app.press(BASE).unwrap();
+    app.wait_for("id:seg-base-release/0.9").unwrap();
+    assert!(app.wait_for_gone(OLDER, Duration::from_secs(1)).is_ok());
+    app.press("id:btn-base-more").unwrap();
+    // The menu stays open, the first page's branches still in it.
+    app.wait_for(OLDER).unwrap();
+    app.wait_for("id:seg-base-release/0.9").unwrap();
+    app.press(OLDER).unwrap();
+    app.wait_for_gone("id:seg-base-release/0.9", wait).unwrap();
+    app.wait_for("text:archive/older").unwrap();
+
+    // Another project's branches do not hold it; the choice stays, named as kept.
+    app.press(PROJECT).unwrap();
+    app.press("id:seg-project-site").unwrap();
+    app.wait_for_gone("id:seg-project-site", wait).unwrap();
+    app.wait_for("text:archive/older (kept)").unwrap();
+    app.press(BASE).unwrap();
+    app.wait_for(OLDER).unwrap();
+    app.press(OLDER).unwrap();
+    app.wait_for_gone("id:seg-base-none", wait).unwrap();
+    app.press("id:btn-verb-send").unwrap();
+    app.wait_for_gone("id:verb", wait).unwrap();
+}
+
 /// Changes › Impact draws T-11's change on the System page's map at the task's head; its
 /// touched module opens the package's level with the module selected, and Open in System opens
 /// Activity › System at that level with the module selected.

@@ -479,7 +479,7 @@ profile = "omo"
 }
 
 #[test]
-fn served_project_branches_are_local_recency_ordered_and_bounded() {
+fn served_project_branches_are_local_recency_ordered_and_paged_beyond_the_feed() {
     use std::{
         io::Write,
         process::{Command, Stdio},
@@ -523,9 +523,80 @@ fn served_project_branches_are_local_recency_ordered_and_bounded() {
     let SubDelta::Projects { delta } = subscribe(&fixture.shared, Topic::Projects) else {
         panic!("expected projects");
     };
-    let branches = delta.rows[0].local_branches.as_ref().unwrap();
-    assert_eq!(branches.len(), 100);
-    assert_eq!(branches[0], "main");
-    assert_eq!(branches[1], "archive/000");
-    assert_eq!(branches[99], "archive/098");
+    let preview = delta.rows[0].local_branches.as_ref().unwrap();
+    assert_eq!(preview.len(), 100);
+    assert_eq!(preview[0], "main");
+    assert_eq!(preview[1], "archive/000");
+    assert_eq!(preview[99], "archive/098");
+
+    let get = |project: &str, page, etag| {
+        detail(
+            &fixture.shared,
+            DetailGet {
+                target: DetailRef::ProjectBranches {
+                    project: project.into(),
+                },
+                page,
+                etag,
+            },
+        )
+    };
+    let first = get("demo", None, None).unwrap();
+    let Some(DetailBody::ProjectBranches(first_page)) = first.body else {
+        panic!("expected project branches");
+    };
+    assert_eq!(&first_page.branches, preview);
+    let after = first.next.expect("one branch was outside the preview");
+    let second = get("demo", Some(after.clone()), None).unwrap();
+    let Some(DetailBody::ProjectBranches(second_page)) = second.body else {
+        panic!("expected project branches");
+    };
+    assert_eq!(second_page.branches, ["archive/099"]);
+    assert!(second.next.is_none());
+    assert!(
+        get("demo", Some(after.clone()), Some(second.etag))
+            .unwrap()
+            .body
+            .is_none()
+    );
+
+    // A repository path is not a configured project selector.
+    assert!(get("repo", None, None).is_err());
+    git(&repo, &["branch", "new-branch"]);
+    // Ref changes are not store events, but still invalidate the old offset.
+    assert!(get("demo", Some(after), None).is_err());
+}
+
+#[test]
+fn project_branch_detail_distinguishes_empty_and_unavailable_repositories() {
+    let fixture = Fixture::new();
+    let outside = tempfile::tempdir().unwrap();
+    let path = outside.path();
+    let missing = path.join("missing");
+    fs::write(
+        fixture.shared.root().join(".corral-next/corral.toml"),
+        format!("[projects.demo]\npath = {path:?}\n[projects.missing]\npath = {missing:?}\n"),
+    )
+    .unwrap();
+    let get = |project: &str| {
+        detail(
+            &fixture.shared,
+            DetailGet {
+                target: DetailRef::ProjectBranches {
+                    project: project.into(),
+                },
+                page: None,
+                etag: None,
+            },
+        )
+    };
+    assert!(get("demo").is_err());
+    assert!(get("missing").is_err());
+    git(path, &["init", "-q", "-b", "main"]);
+    let empty = get("demo").unwrap();
+    let Some(DetailBody::ProjectBranches(page)) = empty.body else {
+        panic!("expected project branches");
+    };
+    assert!(page.branches.is_empty());
+    assert!(empty.next.is_none());
 }

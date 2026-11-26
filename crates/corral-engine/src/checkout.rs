@@ -1,4 +1,6 @@
 use std::{
+    hash::{DefaultHasher, Hash, Hasher},
+    io::{BufRead, BufReader},
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
 };
@@ -6,6 +8,15 @@ use std::{
 use anyhow::{Context, Result, ensure};
 
 use crate::Run;
+
+const BRANCH_ARGS: &[&str] = &[
+    "for-each-ref",
+    "--sort=refname",
+    "--sort=-committerdate",
+    "--format=%(refname:strip=2)",
+];
+const LOCAL_HEADS: &str = "refs/heads/";
+const PROJECT_BRANCH_LIMIT: usize = 100;
 
 pub(crate) struct Checkout {
     pub repo: PathBuf,
@@ -122,22 +133,72 @@ impl crate::Engine {
     /// Read up to 100 local branches ordered by the tip's committer date.
     pub fn project_local_branches(&self, path: &Path) -> Result<Vec<String>> {
         let repo = self.root.join(path);
-        let out = output(
-            &repo,
-            &[
-                "for-each-ref",
-                "--sort=refname",
-                "--sort=-committerdate",
-                "--count=100",
-                "--format=%(refname:strip=2)",
-                "refs/heads/",
-            ],
-        )?;
+        let count = format!("--count={PROJECT_BRANCH_LIMIT}");
+        let mut args = BRANCH_ARGS.to_vec();
+        args.extend([count.as_str(), LOCAL_HEADS]);
+        let out = output(&repo, &args)?;
         if !out.status.success() {
             return Err(git_failure(&repo, "for-each-ref", &out));
         }
         let branches = std::str::from_utf8(&out.stdout).context("decode local branch names")?;
         Ok(branches.lines().map(str::to_owned).collect())
+    }
+
+    /// Read up to 100 branch names and one lookahead for a configured project.
+    /// The revision covers the complete ordered, UTF-8 branch list; callers
+    /// can reject stale continuation offsets. Retain only the requested window.
+    pub fn project_local_branch_page(
+        &self,
+        project: &str,
+        offset: usize,
+    ) -> Result<(u64, Vec<String>)> {
+        let settings = self.config.effective_project(project)?;
+        let repo = self.root.join(settings.path);
+        let mut args = BRANCH_ARGS.to_vec();
+        args.push(LOCAL_HEADS);
+        let mut child = git_command(&repo, &args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .with_context(|| format!("run git for-each-ref in {}", repo.display()))?;
+        let page = (|| {
+            let stdout = child
+                .stdout
+                .take()
+                .context("read git for-each-ref stdout")?;
+            let mut stdout = BufReader::new(stdout);
+            let mut line = Vec::new();
+            let mut revision = DefaultHasher::new();
+            let mut branches = Vec::new();
+            let mut skip = offset;
+            while stdout
+                .read_until(b'\n', &mut line)
+                .context("read local branches")?
+                != 0
+            {
+                let name = line
+                    .strip_suffix(b"\n")
+                    .context("incomplete local branch name")?;
+                // Non-UTF-8 names cannot be selected via the string-based Base field.
+                if let Ok(name) = std::str::from_utf8(name) {
+                    name.hash(&mut revision);
+                    if skip != 0 {
+                        skip -= 1;
+                    } else if branches.len() <= PROJECT_BRANCH_LIMIT {
+                        branches.push(name.to_owned());
+                    }
+                }
+                line.clear();
+            }
+            Ok((revision.finish(), branches))
+        })();
+        let status = child.wait().context("wait for git for-each-ref")?;
+        ensure!(
+            status.success(),
+            "git for-each-ref in {} failed ({status})",
+            repo.display()
+        );
+        page
     }
 }
 
@@ -150,6 +211,12 @@ fn git(dir: &Path, args: &[&str]) -> Result<()> {
 }
 
 fn output(dir: &Path, args: &[&str]) -> Result<Output> {
+    git_command(dir, args)
+        .output()
+        .with_context(|| format!("run git {} in {}", args[0], dir.display()))
+}
+
+fn git_command(dir: &Path, args: &[&str]) -> Command {
     let mut command = Command::new("git");
     for key in [
         "GIT_DIR",
@@ -163,13 +230,8 @@ fn output(dir: &Path, args: &[&str]) -> Result<Output> {
     ] {
         command.env_remove(key);
     }
+    command.arg("-C").arg(dir).args(args).stdin(Stdio::null());
     command
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .stdin(Stdio::null())
-        .output()
-        .with_context(|| format!("run git {} in {}", args[0], dir.display()))
 }
 
 fn git_failure(dir: &Path, verb: &str, out: &Output) -> anyhow::Error {

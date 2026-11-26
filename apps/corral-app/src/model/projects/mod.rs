@@ -4,7 +4,7 @@ mod scope;
 #[cfg(test)]
 mod tests;
 
-pub use branches::{BRANCHES_CAPTION, branches, suggest};
+pub use branches::{BRANCHES_CAPTION, BranchPage, branch_page, branches, branches_ref, suggest};
 pub use scope::{ALL_PROJECTS, SCOPE_HEADING, Scope, ScopeEntry, Scopes, scope_menu, scope_note};
 
 use crate::model::{

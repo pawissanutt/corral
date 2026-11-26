@@ -16,6 +16,7 @@ pub fn detail(feed: &mut Feed, target: &DetailRef, page: Option<&str>) -> Result
     }
     match target {
         DetailRef::Artifacts { .. } => super::artifacts::list(feed, target, page),
+        DetailRef::ProjectBranches { project } => project_branches(feed, target, project, page),
         DetailRef::Citation { reference } => {
             let found = super::artifacts::citation(feed, reference)?;
             put(feed, target.clone(), DetailBody::Citation(found));
@@ -75,6 +76,90 @@ pub fn detail(feed: &mut Feed, target: &DetailRef, page: Option<&str>) -> Result
             Ok(())
         }
     }
+}
+
+/// The sample pages branch choices in small pages so the picker can exercise its More action.
+fn project_branches(
+    feed: &mut Feed,
+    target: &DetailRef,
+    project: &str,
+    page: Option<&str>,
+) -> Result<(), String> {
+    use crate::model::daemon::{DetailCache, detail_key};
+    let row = feed
+        .projects
+        .get(project)
+        .ok_or_else(|| format!("not_found: project {project}"))?;
+    let mut branches = if project == "corral" {
+        vec!["main".to_string(), "release/0.9".to_string()]
+    } else {
+        Vec::new()
+    };
+    if project == "corral" {
+        branches.push("archive/older".into());
+    }
+    for branch in row.local_branches.iter().flatten() {
+        if !branches.contains(branch) {
+            branches.push(branch.clone());
+        }
+    }
+    let count = match page {
+        None => 1,
+        Some(token) => {
+            token
+                .parse::<usize>()
+                .map_err(|_| "invalid branch cursor".to_string())?
+                + 1
+        }
+    };
+    let chunks: Vec<&[String]> = if branches.is_empty() {
+        vec![&[]]
+    } else {
+        branches.chunks(2).collect()
+    };
+    let shown = count.min(chunks.len());
+    let pages = chunks
+        .iter()
+        .take(shown)
+        .enumerate()
+        .map(|(i, chunk)| DetailReply {
+            etag: "preview-branches".into(),
+            as_of: stamp(feed.now),
+            seq: feed.changes_head,
+            next: (i + 1 < chunks.len()).then(|| (i + 1).to_string()),
+            body: Some(DetailBody::ProjectBranches(ProjectBranchesPage {
+                branches: chunk.to_vec(),
+            })),
+        })
+        .collect();
+    branches.truncate(shown * 2);
+    feed.details.insert(
+        detail_key(target),
+        DetailCache {
+            transcript_seams: Default::default(),
+            target: target.clone(),
+            pages,
+            loading: false,
+            stale: false,
+            error: None,
+            merged: Some(DetailBody::ProjectBranches(ProjectBranchesPage {
+                branches,
+            })),
+        },
+    );
+    Ok(())
+}
+
+pub(super) fn branches_again(
+    feed: &mut Feed,
+    target: &DetailRef,
+    project: &str,
+) -> Result<(), String> {
+    let count = feed
+        .detail(target)
+        .map_or(1, |cache| cache.pages.len().max(1));
+    let token = (count > 1).then(|| (count - 1).to_string());
+    project_branches(feed, target, project, token.as_deref())
 }
 
 /// How a failed sample read reads on the wire: `not_found: why` is corrald's `not_found` with its

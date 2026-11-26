@@ -511,6 +511,10 @@ fn refresh_details(feed: &mut Feed) {
             super::artifacts::again(feed, &target);
             continue;
         }
+        if let DetailRef::ProjectBranches { project } = &target {
+            let _ = details::branches_again(feed, &target, project);
+            continue;
+        }
         match details::build(feed, &target) {
             Ok(body) => put(feed, target, body),
             Err(message) => {

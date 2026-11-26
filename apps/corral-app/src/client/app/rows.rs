@@ -351,6 +351,9 @@ fn affected(target: &DetailRef, topic: Topic, changed: &BTreeSet<String>) -> boo
     match target {
         DetailRef::Closed { .. } | DetailRef::Artifacts { .. } => topic == Topic::Tasks,
         DetailRef::Task { id } => topic == Topic::Tasks && changed.contains(id),
+        DetailRef::ProjectBranches { project } => {
+            topic == Topic::Projects && changed.contains(project)
+        }
         DetailRef::Plan { id } => {
             matches!(topic, Topic::Plans | Topic::Tasks) && changed.contains(id)
         }
@@ -383,6 +386,7 @@ fn affected(target: &DetailRef, topic: Topic, changed: &BTreeSet<String>) -> boo
 pub(super) fn topic_affects(target: &DetailRef, topic: Topic) -> bool {
     match target {
         DetailRef::Closed { .. } | DetailRef::Artifacts { .. } => topic == Topic::Tasks,
+        DetailRef::ProjectBranches { .. } => topic == Topic::Projects,
         DetailRef::Task { .. } | DetailRef::Review { .. } | DetailRef::ReviewFile { .. } => {
             topic == Topic::Tasks
         }

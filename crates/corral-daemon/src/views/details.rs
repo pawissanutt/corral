@@ -98,6 +98,9 @@ pub(super) fn read(engine: &Engine, query: DetailGet) -> Result<DetailReply> {
         let etag = fingerprint(&(stable, lifecycle))?;
         return paginate_reply(&query, seq, etag, model);
     }
+    if let DetailRef::ProjectBranches { project } = &query.target {
+        return project_branches(engine, &query, project);
+    }
     engine.store.read_snapshot(|| {
         let seq = engine.store.latest_seq()?;
         match &query.target {
@@ -211,6 +214,52 @@ fn body(engine: &Engine, target: &DetailRef) -> Result<DetailBody> {
         }
         _ => bail!("invalid: unsupported detail"),
     })
+}
+
+fn project_branches(engine: &Engine, query: &DetailGet, project: &str) -> Result<DetailReply> {
+    let cursor = query
+        .page
+        .as_deref()
+        .map(|token| {
+            ensure!(
+                token.len() <= 64,
+                "invalid: project branch page token is too long"
+            );
+            let (selector, start) = parse_page_offset(token)?;
+            ensure!(
+                selector.len() == 16 && selector.bytes().all(|byte| byte.is_ascii_hexdigit()),
+                "invalid: malformed project branch page selector"
+            );
+            Ok::<_, anyhow::Error>((selector, start))
+        })
+        .transpose()?;
+    let start = cursor.map_or(0, |(_, start)| start);
+    // Observe Git outside the store's read snapshot. The cursor is tied to the
+    // branch inventory (which may change independently of any store event).
+    let (revision, branches) = engine.project_local_branch_page(project, start)?;
+    let selector = fingerprint(&(&query.target, revision))?;
+    ensure!(
+        cursor.is_none_or(|(key, _)| key == selector),
+        "invalid: detail page changed or belongs to a different selection"
+    );
+    let mut page = RowPage::new(0);
+    let branches = page.take(branches)?;
+    ensure!(
+        start == 0 || !branches.is_empty(),
+        "invalid: detail page is past the end"
+    );
+    let next = page
+        .more
+        .then(|| format!("{selector}:{}", start + branches.len()));
+    let etag = fingerprint(&(&selector, start))?;
+    let unchanged = query.etag.as_ref() == Some(&etag);
+    reply_page(
+        engine.store.latest_seq()?,
+        etag,
+        DetailBody::ProjectBranches(ProjectBranchesPage { branches }),
+        next,
+        unchanged,
+    )
 }
 
 fn artifacts(
@@ -353,18 +402,23 @@ fn closed(
 
 pub(super) fn offset(token: Option<&str>, etag: &str) -> Result<usize> {
     let Some(token) = token else { return Ok(0) };
-    let (key, offset) = token
-        .split_once(':')
-        .context("invalid: malformed detail page token")?;
+    let (key, offset) = parse_page_offset(token)?;
     ensure!(
         key == etag,
         "invalid: detail page changed or belongs to a different selection"
     );
+    Ok(offset)
+}
+
+fn parse_page_offset(token: &str) -> Result<(&str, usize)> {
+    let (key, offset) = token
+        .split_once(':')
+        .context("invalid: malformed detail page token")?;
     let offset = offset
         .parse()
         .context("invalid: malformed detail page offset")?;
     ensure!(offset != 0, "invalid: detail page offset must advance");
-    Ok(offset)
+    Ok((key, offset))
 }
 
 pub(super) fn reply(

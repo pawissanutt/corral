@@ -237,6 +237,11 @@ pub enum DetailRef {
     Closed {
         before: Option<String>,
     },
+    /// Local branches for a configured project ID, ordered by tip commit recency
+    /// with a refname tie-break. A changed list requires restarting the walk.
+    ProjectBranches {
+        project: String,
+    },
     #[serde(other)]
     Other,
 }
@@ -246,7 +251,8 @@ pub struct DetailGet {
     #[serde(flatten)]
     pub target: DetailRef,
     pub etag: Option<String>,
-    /// For session parts, an opaque `after` token of at most 128 bytes.
+    /// An opaque continuation token from `DetailReply.next`. For session parts,
+    /// the `after` token is at most 128 bytes.
     pub page: Option<String>,
 }
 
@@ -304,12 +310,19 @@ pub enum DetailBody {
     Citation(CitationDetail),
     Artifacts(ArtifactsPage),
     Closed(ClosedPage),
+    ProjectBranches(ProjectBranchesPage),
     #[serde(other, deserialize_with = "skip_body")]
     Other,
 }
 
 fn skip_body<'de, D: serde::Deserializer<'de>>(body: D) -> Result<(), D::Error> {
     serde::de::IgnoredAny::deserialize(body).map(|_| ())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectBranchesPage {
+    /// At most 100 UTF-8 local branch names; use `DetailReply.next` to continue.
+    pub branches: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
