@@ -73,9 +73,13 @@ mod tests {
             assert_eq!(Command::new(bin).output().unwrap().stdout, b"replacement\n");
             return;
         }
-        let dir = tempfile::tempdir().unwrap();
+        let executable = env::current_exe().unwrap();
+        // A parallel test's fork can inherit a writable copy's fd until exec,
+        // making this spawn fail with ETXTBSY. Link the immutable test binary
+        // on the same filesystem, then let the isolated child replace that name.
+        let dir = tempfile::tempdir_in(executable.parent().unwrap()).unwrap();
         let install = dir.path().join("corral-next");
-        fs::copy(env::current_exe().unwrap(), &install).unwrap();
+        fs::hard_link(executable, &install).unwrap();
         let child = Command::new(install)
             .args(["--exact", TEST])
             .env(CHILD, "1")
