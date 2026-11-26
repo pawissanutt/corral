@@ -15,18 +15,18 @@ use super::{
     reader::LivePage,
 };
 
-fn append(path: &Path, entry: Value) -> Result<()> {
+pub(super) fn append(path: &Path, entry: Value) -> Result<()> {
     let mut file = OpenOptions::new().create(true).append(true).open(path)?;
     writeln!(file, "{entry}")?;
     Ok(())
 }
 
-fn page(events: Vec<Kind>) -> LivePage {
+pub(super) fn page(events: Vec<Kind>) -> LivePage {
     page_after(0, events)
 }
 
 /// The host's events after `seq`, to the end of its ring.
-fn page_after(seq: u64, events: Vec<Kind>) -> LivePage {
+pub(super) fn page_after(seq: u64, events: Vec<Kind>) -> LivePage {
     LivePage {
         generation: Some(1),
         next: seq + events.len() as u64,

@@ -12,6 +12,16 @@ use crate::views::json_len;
 /// stream carried, so a reset and the appends after it agree.
 const OPEN_BYTES: usize = 2 * super::follower::OPEN_PART_BYTES as usize;
 const TAIL_BYTES: usize = 28 * 1024;
+/// The records kept as their own messages beside the calls they were folded into.
+const FOLDED_BYTES: usize = 256 * 1024;
+
+/// A result folded into the held message `call`: its record as its own message, and the
+/// last record put before it.
+struct Folded {
+    call: String,
+    own: SizedOp,
+    after: Option<String>,
+}
 
 pub(super) type SizedOp = (Op, usize);
 
@@ -23,6 +33,7 @@ pub(super) struct TranscriptBuffer {
     bytes: usize,
     older: Option<String>,
     rows: Vec<SizedOp>,
+    folded: Vec<Folded>,
 }
 
 fn sized(op: Op) -> SizedOp {
@@ -45,16 +56,19 @@ impl TranscriptBuffer {
                     // not among them, a subscriber that joined since would ignore it put
                     // again, and no page before its messages reads the result: the result
                     // goes as its own message, as on a history page that parts them.
-                    if !self.holds(&message.id)
-                        && let Some(own) = own
-                    {
-                        op = own;
-                        if let Op::Put { message, .. } = &op {
-                            if whole.contains(&message.id) {
-                                continue;
+                    match (own, self.holds(&message.id)) {
+                        (Some(own), false) => {
+                            op = own;
+                            if let Op::Put { message, .. } = &op {
+                                if whole.contains(&message.id) {
+                                    continue;
+                                }
+                                whole.push(message.id.clone());
                             }
-                            whole.push(message.id.clone());
                         }
+                        // Held now, but the rows may begin after it later.
+                        (Some(own), true) => self.fold(message.id.clone(), own),
+                        (None, _) => {}
                     }
                 } else if whole.contains(&message.id) {
                     // What the fold left of a record that was put whole.
@@ -66,6 +80,7 @@ impl TranscriptBuffer {
                     self.revision += 1;
                     self.older.clone_from(older);
                     self.rows.clear();
+                    self.folded.clear();
                     self.operations.clear();
                     self.bytes = 0;
                 }
@@ -88,6 +103,7 @@ impl TranscriptBuffer {
                         self.older.clone_from(before);
                     }
                     self.trim();
+                    self.unfold();
                 }
                 Op::Append {id, part, offset, text} => {
                     if let Some((Op::Put {message, ..}, _)) = self.rows.iter_mut().find(|(row, _)| matches!(row, Op::Put { message, open: true, .. } if &message.id == id)) {
@@ -112,9 +128,68 @@ impl TranscriptBuffer {
     }
 
     fn holds(&self, id: &str) -> bool {
+        self.at(id).is_some()
+    }
+
+    fn at(&self, id: &str) -> Option<usize> {
         self.rows
             .iter()
-            .any(|(row, _)| matches!(row, Op::Put { message, .. } if message.id == id))
+            .position(|(row, _)| matches!(row, Op::Put { message, .. } if message.id == id))
+    }
+
+    /// A result was folded into the held message `call`. `own` is the result's record as
+    /// its own message: it is kept for when the rows begin after `call`.
+    fn fold(&mut self, call: String, own: Op) {
+        let Op::Put { message, .. } = &own else {
+            return;
+        };
+        let cost = json_len(message).map_or(usize::MAX, |size| size.saturating_add(1));
+        // The record follows every record put so far.
+        let after = self.rows.iter().rev().find_map(|(row, _)| match row {
+            Op::Put {
+                message,
+                open: false,
+                ..
+            } => Some(message.id.clone()),
+            _ => None,
+        });
+        self.folded.push(Folded {
+            call,
+            own: (own, cost),
+            after,
+        });
+        let mut bytes = self
+            .folded
+            .iter()
+            .fold(0usize, |bytes, fold| bytes.saturating_add(fold.own.1));
+        while bytes > FOLDED_BYTES && !self.folded.is_empty() {
+            bytes = bytes.saturating_sub(self.folded.remove(0).own.1);
+        }
+    }
+
+    /// The rows are what a subscriber that joins is given, and the pages before them are
+    /// read from where the first begins. When a call's message leaves the rows, a result
+    /// folded into it from a record after that point would be in neither: it takes its
+    /// place among the rows as its own message, as a history page that parts them has it.
+    fn unfold(&mut self) {
+        // Newest first, so that results after the same row stay in the journal's order.
+        for fold in std::mem::take(&mut self.folded).into_iter().rev() {
+            if self.holds(&fold.call) {
+                self.folded.insert(0, fold);
+                continue;
+            }
+            let Op::Put { message, .. } = &fold.own.0 else {
+                continue;
+            };
+            let after = fold.after.as_deref().filter(|after| *after != fold.call);
+            if let Some(own) = self.at(&message.id) {
+                // What the fold left of the record is among the rows: the record whole.
+                self.rows[own] = fold.own;
+            } else if let Some(after) = after.and_then(|after| self.at(after)) {
+                self.rows.insert(after + 1, fold.own);
+            }
+            // Else the record is before the first row, where a page before them reads it.
+        }
     }
 
     fn trim(&mut self) {

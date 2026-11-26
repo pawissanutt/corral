@@ -111,6 +111,8 @@ pub(super) struct LiveReader {
     /// For the records put again among them: see `Follower::take_alone`.
     alone: Vec<(String, TranscriptOp)>,
     open: Option<HostOpen>,
+    /// A journal was followed: its messages are what subscribers were last given.
+    shown: bool,
     pub(super) cursors: Cursors,
     // On loss, keep the observed cursors for restart detection, but ask for
     // retained events and the current fleet when the host comes back.
@@ -129,6 +131,7 @@ impl Default for LiveReader {
             operations: Vec::new(),
             alone: Vec::new(),
             open: None,
+            shown: false,
             cursors: Cursors::default(),
             replay: false,
             generation: 1,
@@ -186,17 +189,34 @@ impl LiveReader {
         } else {
             resolved.transcript.as_ref().or(self.journal.as_ref())
         };
-        if let Some(path) = path {
-            let ops = self.follower.visit(
-                &resolved.id,
-                path,
-                resolved.transcript_scope(),
-                page.as_ref().ok(),
-                self.open.take(),
-            );
-            self.followed(ops);
-        }
+        let path = path.cloned();
+        self.follow(
+            &resolved.id,
+            path.as_deref(),
+            resolved.transcript_scope(),
+            page.as_ref().ok(),
+        );
         page
+    }
+
+    /// Follows the journal at `path`. A scope that names none any more (the quick chat it
+    /// was an alias of ended) shows no messages: the last transcript followed is reset
+    /// away, or a subscriber would be given the ended chat again.
+    pub(super) fn follow(
+        &mut self,
+        id: &str,
+        path: Option<&Path>,
+        scope: Option<&Path>,
+        page: Option<&LivePage>,
+    ) {
+        if let Some(path) = path {
+            let ops = self.follower.visit(id, path, scope, page, self.open.take());
+            self.followed(ops);
+            self.shown = true;
+        } else if std::mem::take(&mut self.shown) {
+            self.follower = Follower::default();
+            self.followed(vec![TranscriptOp::Reset { older: None }]);
+        }
     }
 
     fn read_resolved(&mut self, resolved: &crate::sessions::Session) -> Result<LivePage> {

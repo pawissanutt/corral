@@ -206,9 +206,7 @@ impl Follower {
                     // reset takes the messages being written from a reader, so those the
                     // journal does not hold yet are put again, from the words the host
                     // writes next.
-                    if let Some(mark) = &self.mark
-                        && !reaches(self.held, mark.since)
-                    {
+                    if !self.covered() {
                         self.lose_turn();
                     }
                     self.count();
@@ -509,6 +507,20 @@ impl Follower {
                 since: *since,
                 after: Some(id.clone()),
             });
+        }
+    }
+
+    /// Whether the tail that was read again holds every record after the turn's mark. The
+    /// record the mark was paired with says so by being among them. Its stamp alone does
+    /// not: the tail may begin at a later record stamped the same instant.
+    fn covered(&self) -> bool {
+        let Some(mark) = &self.mark else {
+            return true;
+        };
+        match &mark.after {
+            _ if self.held.is_none() => true,
+            Some(id) => self.seen.iter().any(|(_, seen)| seen == id),
+            None => reaches(self.held, mark.since),
         }
     }
 

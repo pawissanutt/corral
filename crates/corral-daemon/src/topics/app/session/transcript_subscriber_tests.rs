@@ -81,6 +81,41 @@ fn a_fleet_left_off_a_page_of_operations_follows_it() {
     assert!(subscriber.next(7, true, false, true).unwrap().is_none());
 }
 
+/// The `quick` scope names no chat once its chat ends, so no journal was followed and
+/// nothing reset the transcript: a subscriber was given the ended chat's messages again.
+#[test]
+fn a_scope_that_names_no_transcript_any_more_shows_none() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("journal.jsonl");
+    std::fs::write(
+        &path,
+        "{\"type\":\"message\",\"id\":\"u\",\"parentId\":null,\"message\":{\"role\":\"user\",\"content\":\"hi\"}}\n",
+    )
+    .unwrap();
+    let service = service();
+    let mut sources = Sources::default();
+    let mut subscriber = subscribe(Arc::clone(&service), "quick".into(), 7, None).unwrap();
+    let mut read = |journal: Option<&std::path::Path>, seq| {
+        poll(
+            &service,
+            &mut sources,
+            |_, reader| {
+                reader.follow("A-1", journal, None, None);
+                Ok(page(1, seq, seq, false))
+            },
+            || false,
+        );
+    };
+    read(Some(&path), 1);
+    let shown = next(&mut subscriber);
+    assert_eq!(shown["transcript"][1]["message"]["id"], "A-1/entry/u");
+    read(None, 2);
+    let ended = next(&mut subscriber);
+    assert_eq!(ended["transcript"], serde_json::json!([{"op": "reset"}]));
+    read(None, 3);
+    assert!(next(&mut subscriber).get("transcript").is_none());
+}
+
 /// A gap found while a large message waited its turn went out on the page of that message
 /// alone, without the fleet: across a gap a client trusts no fleet it holds, and cleared it.
 #[test]

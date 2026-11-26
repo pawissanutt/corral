@@ -487,7 +487,9 @@ itself. No client stitches the two.
   subscriber was given. Once it is not, a subscriber that joined since does not hold it,
   and no page before its messages reads the result, so the result is put as its own
   message instead, as on a history page that parts a call from its result; the client
-  shows the two as one tool by their call id.
+  shows the two as one tool by their call id. The same holds for the tail a later
+  subscriber is given: when it comes to begin after a call's message but before the
+  record of a result folded into it, that record is in the tail as its own message.
 - An open message (`open: true`) is the assistant message being written. Its id is
   `<session>/open/<generation>.<turn>.<ordinal>` and names no record; it has at most one
   `thinking` item followed by at most one `text` item. `append { id, part, offset, text }`
@@ -571,11 +573,14 @@ end the turn the host is in. While the journal cannot be read corrald still foll
 host's pages, which it does not ask for again, and the reply goes on growing. When the
 journal is read again corrald counts the records that reached it meanwhile and puts
 the messages still being written after the tail, from the words the host writes next.
-The tail it reads again is one page. When more than that was written since the last
-record it paired, or since the start of a turn whose `live_turn started` it follows only
-afterwards, it cannot tell which of the turn's messages are recorded: it leaves the rest
-of that turn's words out rather than guess, the records still arrive, and the next turn
-is followed from its start.
+The tail it reads again is one page. When that page does not hold the last record it
+paired (more was written since, whatever the stamps), or begins after the start of a
+turn whose `live_turn started` it follows only afterwards, it cannot tell which of the
+turn's messages are recorded: it leaves the rest of that turn's words out rather than
+guess, the records still arrive, and the next turn is followed from its start.
+
+A scope that names no transcript any more (`quick`, once its chat has ended) is sent
+`reset` with nothing after it: the client holds no messages for it.
 
 Operations share the page's byte budget with its events. A subscriber's operations are a
 bounded backlog beside the buffered events; one that falls behind it is sent `reset` and

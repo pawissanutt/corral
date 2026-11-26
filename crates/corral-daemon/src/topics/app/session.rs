@@ -13,6 +13,8 @@ use crate::state::Shared;
 mod buffer;
 mod follower;
 #[cfg(test)]
+mod follower_recovery_tests;
+#[cfg(test)]
 mod follower_tests;
 mod reader;
 mod subscriber;
