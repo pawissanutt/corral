@@ -9,6 +9,7 @@
 pub mod browser;
 mod content;
 pub mod diagram;
+pub mod diagram_compare;
 #[cfg(test)]
 mod diagram_tests;
 pub mod download;
@@ -76,6 +77,8 @@ pub struct State {
     /// The selected element of a workflow recipe: the artifact's reference and the element's
     /// ID, accepted only while that artifact shows and its served recipe holds the ID.
     pub pick: Option<(String, String)>,
+    /// The chosen comparison of a recipe with a later commit, pinned once corrald resolves it.
+    pub compare: Option<diagram_compare::Compare>,
 }
 
 /// A move of the selection through the results.
@@ -114,6 +117,16 @@ pub enum Action {
     Pick {
         reference: String,
         element: String,
+    },
+    /// Compare the recipe with the project head or the task candidate, or stop comparing.
+    Compare {
+        reference: String,
+        origin: Option<corral_protocol::detail::CompareOrigin>,
+    },
+    /// Pin the commit corrald resolved for the chosen comparison; a pinned one stays.
+    Pin {
+        reference: String,
+        commit: String,
     },
 }
 
@@ -370,10 +383,28 @@ pub fn more(state: &State, feed: &Feed) -> Option<DetailGet> {
 
 impl State {
     pub fn act(&mut self, action: Action, feed: &Feed) -> Vec<Effect> {
-        if !matches!(action, Action::Cite { .. } | Action::Pick { .. }) {
+        if !matches!(
+            action,
+            Action::Cite { .. } | Action::Pick { .. } | Action::Compare { .. } | Action::Pin { .. }
+        ) {
             self.section = None;
         }
         match action {
+            Action::Compare { reference, origin } => {
+                self.compare = origin.map(|origin| diagram_compare::Compare {
+                    reference,
+                    origin,
+                    commit: None,
+                });
+            }
+            Action::Pin { reference, commit } => {
+                if let Some(compare) = &mut self.compare
+                    && compare.reference == reference
+                    && compare.commit.is_none()
+                {
+                    compare.commit = Some(commit);
+                }
+            }
             Action::Pick { reference, element } => {
                 let shown = match &self.full {
                     Some(full) => Some(full.clone()),
@@ -642,13 +673,7 @@ fn row(feed: &Feed, artifact: &Artifact) -> Row {
     }
 }
 
-fn preview(
-    feed: &Feed,
-    artifact: &Artifact,
-    form: Form,
-    full: bool,
-    pick: Option<&(String, String)>,
-) -> Preview {
+fn preview(feed: &Feed, artifact: &Artifact, form: Form, full: bool, state: &State) -> Preview {
     let task = Id::from(artifact.task.as_str());
     let hash = if full {
         artifact.sha256.clone()
@@ -699,7 +724,13 @@ fn preview(
         facts.push(("Replaced by", by.clone()));
     }
     let mut content = content(feed, artifact, form, full);
-    let (diagram_read, diagram) = diagram::of(feed, artifact, &mut content, pick);
+    let (diagram_read, diagram) = diagram::of(
+        feed,
+        artifact,
+        &mut content,
+        state.pick.as_ref(),
+        state.compare.as_ref(),
+    );
     Preview {
         diagram_read,
         diagram,
@@ -750,7 +781,7 @@ pub fn page(state: &State, feed: &Feed, form: Form) -> Page {
             Some(artifact) => (*artifact).clone(),
             None => crate::model::cite::held(feed, full, Reference::parse(full)?.task())?,
         };
-        let mut shown = preview(feed, &artifact, form, true, state.pick.as_ref());
+        let mut shown = preview(feed, &artifact, form, true, state);
         // corrald cuts a cited section by the engine's rules; the app shows what it serves.
         if let Some(section) = &state.section {
             // A section is Markdown, never a whole recipe.
@@ -796,7 +827,7 @@ pub fn page(state: &State, feed: &Feed, form: Form) -> Page {
             count,
             more,
         },
-        preview: shown.map(|artifact| preview(feed, artifact, form, false, state.pick.as_ref())),
+        preview: shown.map(|artifact| preview(feed, artifact, form, false, state)),
         full,
         all: state.all,
     }

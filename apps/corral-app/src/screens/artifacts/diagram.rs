@@ -45,12 +45,19 @@ pub(super) fn diagram(app: AppState, graph: Memo<Option<Graph>>) -> AnyElement {
         })
     });
     let selected = computed(move || graph.with(|g| g.as_ref().and_then(|g| g.selected.clone())));
+    let marks = computed(move || {
+        graph.with(|g| {
+            crate::model::artifacts::diagram_compare::marks_message(
+                g.as_ref().and_then(|g| g.compare.as_ref()),
+            )
+        })
+    });
     retry_pending(app, graph);
     let picture = dynamic(move || {
         let (reference, payload, ids) = structure.get()?;
         Some(untracked(|| {
             if app.form == Form::Desktop {
-                viewer(app, reference, payload, ids, selected)
+                viewer(app, reference, payload, ids, selected, marks)
             } else {
                 dim(app, NO_VIEWER).into_element()
             }
@@ -67,6 +74,7 @@ pub(super) fn diagram(app: AppState, graph: Memo<Option<Graph>>) -> AnyElement {
             12.0
         }))
         .child(picture)
+        .child(super::diagram_compare::bar(app, graph))
         .child(
             view()
                 .when(wide, |row| row.flex_row().flex_wrap())
@@ -125,6 +133,7 @@ fn viewer(
     payload: String,
     ids: Vec<String>,
     selected: Memo<Option<String>>,
+    marks: Memo<String>,
 ) -> AnyElement {
     // The data's marker comes before the bundle's in the page, and each is replaced once, so a
     // label can name neither.
@@ -139,6 +148,13 @@ fn viewer(
         let selection = selected.get();
         if ready.get() {
             to_viewer.post_message(diagram::selection_message(selection.as_deref()));
+        }
+    });
+    // How each element's source changed in the chosen comparison; an empty set clears them.
+    effect(move || {
+        let marks = marks.get();
+        if ready.get() {
+            to_viewer.post_message(marks);
         }
     });
     view()
@@ -247,17 +263,33 @@ fn row(app: AppState, graph: Memo<Option<Graph>>, reference: String, entry: Entr
 /// Corral found, each said apart from what the recipe authored.
 fn inspector(app: AppState, graph: Memo<Option<Graph>>) -> AnyElement {
     let shown = computed(move || {
-        graph.with(|g| g.as_ref().map(|g| (g.pinned.clone(), g.inspector.clone())))
+        graph.with(|g| {
+            g.as_ref().map(|g| {
+                (
+                    g.pinned.clone(),
+                    g.inspector.clone(),
+                    g.compare.as_ref().and_then(|c| c.side.clone()),
+                )
+            })
+        })
     });
     dynamic(move || {
-        let (pinned, inspector) = shown.get()?;
+        let (pinned, inspector, side) = shown.get()?;
         Some(untracked(|| match inspector {
             None => view()
                 .gap(px(6.0))
                 .child(dim(app, format!("Pinned at {pinned}.")))
                 .child(dim(app, LIST_HINT))
                 .into_element(),
-            Some(i) => inspected(app, i),
+            Some(i) => view()
+                .gap(px(if app.form == Form::Terminal {
+                    0.0
+                } else {
+                    12.0
+                }))
+                .child(inspected(app, i))
+                .children(side.map(|side| super::diagram_compare::side(app, side)))
+                .into_element(),
         }))
     })
     .into_element()
@@ -279,7 +311,7 @@ fn inspected(app: AppState, i: Inspector) -> AnyElement {
         Evidence::Failed(why) => vec![dim(app, why).text_color(hue_ink(Hue::Fail)).into_element()],
         Evidence::Pending { source, note } => vec![
             h3(app, "Source", None),
-            source_block(app, source.ok_or_else(|| note.clone())),
+            source_block(app, source.ok_or_else(|| note.clone()), "diagram-source"),
             h3(app, DERIVED_HEAD, None),
             dim(app, note).test_id("diagram-derived").into_element(),
         ],
@@ -289,7 +321,7 @@ fn inspected(app: AppState, i: Inspector) -> AnyElement {
             basis,
         } => vec![
             h3(app, "Source", None),
-            source_block(app, source),
+            source_block(app, source, "diagram-source"),
             h3(app, DERIVED_HEAD, None),
             view()
                 .test_id("diagram-derived")
@@ -313,15 +345,13 @@ fn inspected(app: AppState, i: Inspector) -> AnyElement {
         .into_element()
 }
 
-fn source_block(
+pub(super) fn source_block(
     app: AppState,
     source: Result<crate::model::system::lens::Source, String>,
+    id: &'static str,
 ) -> AnyElement {
     match source {
-        Ok(source) => source_lines(app, Some(source), "diagram-source", ""),
-        Err(why) => view()
-            .test_id("diagram-source")
-            .child(dim(app, why))
-            .into_element(),
+        Ok(source) => source_lines(app, Some(source), id, ""),
+        Err(why) => view().test_id(id).child(dim(app, why)).into_element(),
     }
 }

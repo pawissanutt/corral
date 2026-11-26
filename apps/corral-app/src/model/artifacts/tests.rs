@@ -404,7 +404,7 @@ fn a_descriptively_titled_html_report_opens_in_the_browser() {
         "\u{feff}\n<!-- generated -->\n<!DOCTYPE html>\n<html><body><h1>Coverage</h1></body></html>\n",
         false,
     );
-    let shown = preview(&feed, &report, Form::Desktop, false, None);
+    let shown = preview(&feed, &report, Form::Desktop, false, &State::default());
     assert!(shown.html, "its doctype makes it a page");
     assert!(matches!(shown.content.body, Body::Facts(_)));
     assert_eq!(
@@ -416,7 +416,7 @@ fn a_descriptively_titled_html_report_opens_in_the_browser() {
 
     let notes = artifact("T-7", 2, ArtifactKind::Report, "Notes on html", 2);
     content_served(&mut feed, &notes, "We should emit <html> later.\n", false);
-    assert!(!preview(&feed, &notes, Form::Desktop, false, None).html);
+    assert!(!preview(&feed, &notes, Form::Desktop, false, &State::default()).html);
 
     // A `.html` title, and the `text/html` corrald names from it, are not evidence of a page.
     let named = artifact("T-7", 3, ArtifactKind::Report, "notes.html", 3);
@@ -427,13 +427,16 @@ fn a_descriptively_titled_html_report_opens_in_the_browser() {
         "Plain notes, no markup.\n",
         false,
     );
-    let shown = preview(&feed, &named, Form::Desktop, false, None);
+    let shown = preview(&feed, &named, Form::Desktop, false, &State::default());
     assert!(!shown.html, "a suffix alone offers no browser");
     assert!(matches!(shown.content.body, Body::Text(_)));
 
     let mut huge = report.clone();
     huge.bytes = browser::MAX_BYTES + 1;
-    assert!(browser::refusal(&preview(&feed, &huge, Form::Desktop, false, None).save).is_some());
+    assert!(
+        browser::refusal(&preview(&feed, &huge, Form::Desktop, false, &State::default()).save)
+            .is_some()
+    );
 }
 
 /// A Markdown artifact with a Mermaid fence and ordinary code stays rendered Markdown: its

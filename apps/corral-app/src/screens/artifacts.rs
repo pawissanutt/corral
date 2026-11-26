@@ -11,6 +11,7 @@
 
 mod browser;
 mod diagram;
+mod diagram_compare;
 mod save;
 mod shown;
 
@@ -128,6 +129,23 @@ fn keep_loaded(app: AppState, page: Memo<Page>) {
         app,
         diagram_reads,
         Some(corral_protocol::app::ARTIFACT_DIAGRAM_V1),
+    );
+    // A chosen comparison's summary and the selected element's comparison.
+    let compare_reads = computed(move || {
+        page.with(|page| {
+            page.full
+                .as_ref()
+                .or(page.preview.as_ref())
+                .and_then(|shown| shown.diagram.as_ref())
+                .and_then(|graph| graph.compare.as_ref())
+                .map(|compare| compare.reads.clone())
+                .unwrap_or_default()
+        })
+    });
+    crate::screens::task::keep::keep_details(
+        app,
+        compare_reads,
+        Some(corral_protocol::app::ARTIFACT_DIAGRAM_COMPARE_V1),
     );
     let shown = computed(move || {
         page.with(|page| {

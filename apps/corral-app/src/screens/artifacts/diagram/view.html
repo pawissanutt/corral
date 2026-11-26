@@ -27,6 +27,15 @@ const quiet = dark ? '#8398ad' : '#7a8896';
 const pick = dark ? '#83e2d6' : '#0f8a7e';
 const pickGround = dark ? '#23474a' : '#dcf3ef';
 const stroke = {step: quiet, decision: dark ? '#eac982' : '#b7862a', end: dark ? '#83e2d6' : '#2a8d84'};
+// A comparison's marks: how an element's bound source changed. The list beside the graph says
+// the same in words, so colour and dash are never the only signal.
+const MARKS = ['changed', 'moved', 'removed', 'added', 'unknown'];
+const markInk = {
+  changed: dark ? '#f0b35e' : '#b8650a', moved: dark ? '#8fb8ff' : '#2f62c4',
+  removed: dark ? '#ff8a80' : '#c23a2f', added: dark ? '#9be28a' : '#2f8a2a', unknown: quiet,
+};
+const markNode = m => ({stroke: markInk[m], lineWidth: 2.6, lineDash: m === 'removed' || m === 'unknown' ? [4, 3] : 0, halo: true, haloStroke: markInk[m], haloLineWidth: 6, haloStrokeOpacity: 0.25});
+const markEdge = m => ({stroke: markInk[m], lineWidth: 2.6, lineDash: m === 'removed' || m === 'unknown' ? [4, 3] : 0});
 const host = document.getElementById('graph');
 const measure = document.createElement('canvas').getContext('2d');
 measure.font = '600 13px system-ui, sans-serif';
@@ -65,7 +74,7 @@ async function start() {
         labelMaxWidth: d => d.data.w - 16, labelMaxLines: 2, labelTextOverflow: 'ellipsis',
         cursor: 'pointer',
       },
-      state: {selected: {fill: pickGround, stroke: pick, lineWidth: 3}},
+      state: {selected: {fill: pickGround, stroke: pick, lineWidth: 3}, ...Object.fromEntries(MARKS.map(m => [m, markNode(m)]))},
     },
     edge: {
       type: 'quadratic',
@@ -78,7 +87,7 @@ async function start() {
         labelBackgroundRadius: 4, labelPadding: [2, 6], labelFill: ink, labelFontSize: 12,
         labelMaxWidth: 160, labelTextOverflow: 'ellipsis', cursor: 'pointer',
       },
-      state: {selected: {stroke: pick, lineWidth: 3, labelBackgroundFill: pickGround, labelBackgroundStroke: pick}},
+      state: {selected: {stroke: pick, lineWidth: 3, labelBackgroundFill: pickGround, labelBackgroundStroke: pick}, ...Object.fromEntries(MARKS.map(m => [m, markEdge(m)]))},
     },
     behaviors: ['drag-canvas', 'zoom-canvas'],
   });
@@ -109,16 +118,30 @@ async function start() {
   await fit();
   document.getElementById('fit').onclick = () => { reach(); graph.fitView(); };
   let selected = null;
+  let marks = {};
+  // Every element's states: its comparison mark under the selection, which draws over it.
+  const statesOf = id => [...(marks[id] ? [marks[id]] : []), ...(id === selected ? ['selected'] : [])];
   addEventListener('message', event => {
     let message;
     try { message = JSON.parse(event.data); } catch { return; }
     if (message?.v !== VERSION) return;
-    const next = message.selection;
-    if (next !== null && !(typeof next === 'string' && ids.has(next))) return;
+    const touched = new Set();
+    if ('marks' in message) {
+      const next = {};
+      for (const [id, mark] of Object.entries(message.marks ?? {})) {
+        if (ids.has(id) && MARKS.includes(mark)) next[id] = mark;
+      }
+      for (const id of [...Object.keys(marks), ...Object.keys(next)]) touched.add(id);
+      marks = next;
+    } else {
+      const next = message.selection;
+      if (next !== null && !(typeof next === 'string' && ids.has(next))) return;
+      if (selected) touched.add(selected);
+      if (next) touched.add(next);
+      selected = next;
+    }
     const states = {};
-    if (selected) states[own(selected)] = [];
-    if (next) states[own(next)] = ['selected'];
-    selected = next;
+    for (const id of touched) states[own(id)] = statesOf(id);
     graph.setElementState(states, false).catch(console.error);
   });
   new ResizeObserver(() => { graph.resize(host.clientWidth, host.clientHeight); fit().catch(console.error); }).observe(host);

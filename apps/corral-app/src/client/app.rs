@@ -58,6 +58,7 @@ pub(super) const CAPS: &[&str] = &[
     SYSTEM_LENSES_V1,
     SYSTEM_DATA_V1,
     corral_protocol::app::ARTIFACT_DIAGRAM_V1,
+    corral_protocol::app::ARTIFACT_DIAGRAM_COMPARE_V1,
     corral_protocol::host::HOST_V1,
     USAGE_V1,
     SETTINGS_V1,

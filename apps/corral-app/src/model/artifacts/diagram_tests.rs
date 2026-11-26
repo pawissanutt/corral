@@ -261,3 +261,79 @@ fn escape_backs_out_of_another_artifact_left_after_a_recipe_selection() {
         "the first Escape leaves another artifact too"
     );
 }
+
+#[test]
+fn a_comparison_reads_elements_only_at_the_commit_it_pinned() {
+    use super::diagram_compare as cmp;
+    use corral_protocol::detail::{
+        CompareOrigin, CompareResolution, CompareTarget, DetailRef, DiagramCompareDetail,
+    };
+    let mut feed = Feed::default();
+    let r = recipe(&[("go", "a", "b"), ("pass", "b", "c"), ("retry", "b", "a")]);
+    served(&mut feed, "T-1:1", r.clone());
+    let sha = "ab".repeat(32);
+    let mut state = State {
+        full: Some("T-1:1".into()),
+        ..State::default()
+    };
+    state.act(
+        Action::Compare {
+            reference: "T-1:1".into(),
+            origin: Some(CompareOrigin::ObservedHead),
+        },
+        &feed,
+    );
+    let head = "c".repeat(40);
+    let summary = cmp::target("T-1:1", &sha, state.compare.as_ref().unwrap(), None);
+    feed.details.insert(
+        detail_key(&summary),
+        DetailCache {
+            transcript_seams: Default::default(),
+            target: summary,
+            pages: Vec::new(),
+            loading: false,
+            stale: false,
+            error: None,
+            merged: Some(DetailBody::ArtifactDiagramCompare(DiagramCompareDetail {
+                reference: "T-1:1".into(),
+                sha256: sha.clone(),
+                subject: r.subject.clone(),
+                target: CompareResolution::Resolved {
+                    origin: CompareOrigin::ObservedHead,
+                    commit: head.clone(),
+                    candidate: None,
+                    current_candidate: false,
+                },
+                elements: Vec::new(),
+                selected: None,
+            })),
+        },
+    );
+    let Some(diagram::Shown::Graph(mut graph)) = diagram::shown(&feed, "T-1:1", Some("go")) else {
+        panic!("the recipe is served ready");
+    };
+    let unpinned = cmp::view(&feed, &graph, state.compare.as_ref().unwrap());
+    assert_eq!(unpinned.pin.as_deref(), Some(head.as_str()));
+    assert_eq!(
+        unpinned.reads.len(),
+        1,
+        "no element is read before the commit is pinned"
+    );
+    let pin = |commit: &str| Action::Pin {
+        reference: "T-1:1".into(),
+        commit: commit.into(),
+    };
+    state.act(pin(&head), &feed);
+    state.act(pin(&"d".repeat(40)), &feed);
+    graph.selected = Some("go".into());
+    let pinned = cmp::view(&feed, &graph, state.compare.as_ref().unwrap());
+    assert!(
+        matches!(
+            pinned.reads.as_slice(),
+            [_, DetailRef::ArtifactDiagramCompare { target: CompareTarget::Pinned { commit, .. }, element: Some(id), .. }]
+                if *commit == head && id == "go"
+        ),
+        "a moved head never replaces the pinned commit: {:?}",
+        pinned.reads
+    );
+}

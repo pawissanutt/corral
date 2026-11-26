@@ -173,4 +173,39 @@ diagnostic over the raw text, and `not_recipe` keeps the ordinary text view.
   recorded submission, the committed source lines, and what Corral found at that commit, with
   its basis and coverage. A `pending` entity is asked again until it settles.
 
-Comparison with a different revision is separate work.
+## Comparing with a later commit
+
+A recipe stays pinned at its `subject.commit`; comparing reads a second commit beside it and never
+rewrites, repoints or re-attaches the artifact. Negotiate `artifact.diagram.compare.v1` (with
+`artifact.diagram.v1`) to use `{kind: "artifact_diagram_compare", reference, sha256, target,
+element?}`, answered as `artifact_diagram_compare`: `{ reference, sha256, subject, target:
+CompareResolution, elements, selected }`.
+
+- `target` is `{kind: "observed_head"}` (System's observed project head), `{kind: "candidate"}`
+  (the latest submission of the artifact's own task's worker run), or `{kind: "pinned", origin,
+  commit}`. The first two are resolved once; the reply's `resolved { origin, commit, candidate,
+  current_candidate }` names the commit, and every later read of that comparison sends it back
+  as `pinned`, so a head that moves mid-read does not change it. A pinned candidate must still
+  be a recorded submission of the task's latest worker run. `pending` means the head is not
+  observed yet; `unavailable` says why nothing can be compared (a project library artifact has
+  no candidate, a commit is not local, the subject is outside the artifact's project).
+- `elements` lists, in recipe order, every element with a `source` binding and its
+  `SourceChange`: `unchanged`, `changed { path }`, `moved { path, first? }` (identical lines or
+  file elsewhere: the nearest exact copy of the bound lines, or Git's rename detection),
+  `removed` (absent at the target and not renamed), `added`, or `unknown { reason }` when a side
+  cannot be read. Only Git objects at the two commits are compared.
+- With `element`, `selected` carries that element at both commits: the base source and entity
+  exactly as the element detail resolves them (a removed file stays readable at the base), the
+  target source at its moved or renamed place, and an `EntityChange`. A relationship delta
+  (`changed { location?, added, removed }` of file references, or `removed`) is reported only
+  when both sides resolved with complete file reads, no failed or skipped coverage, no omitted
+  rows and the same facts provider; otherwise it is `insufficient { reason }`, never a change.
+  `pending` asks again while a facts snapshot is prepared.
+- `links` names the candidate's own `diff { task, path }` (a path its stored patch holds) and
+  `impact { task }`, only while the compared commit is the task's latest submission; an observed
+  head has no task diff.
+
+In the app, a recipe diagram offers **Compare: Off / Project head / Task candidate** under the
+graph. The status line names the pinned commit; changed, moved, removed, added and not-compared
+elements are marked on the graph and in words in the list; the inspector adds the selected
+element at the comparison commit with its links to the task's Changes diff or Impact.

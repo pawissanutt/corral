@@ -96,6 +96,10 @@ pub struct Graph {
     /// The selected element, only when this recipe holds it.
     pub selected: Option<String>,
     pub inspector: Option<Inspector>,
+    /// The comparison with a later commit, while one is chosen.
+    pub compare: Option<super::diagram_compare::View>,
+    /// corrald can compare this recipe with a later commit.
+    pub can_compare: bool,
 }
 
 /// What a recipe artifact shows in its content's place.
@@ -188,6 +192,8 @@ pub fn shown(feed: &Feed, reference: &str, selected: Option<&str>) -> Option<Sho
         sha256,
         selected,
         inspector,
+        compare: None,
+        can_compare: false,
     })))
 }
 
@@ -198,13 +204,14 @@ pub fn of(
     artifact: &Artifact,
     content: &mut super::Content,
     pick: Option<&(String, String)>,
+    compare: Option<&super::diagram_compare::Compare>,
 ) -> (Option<DetailRef>, Option<Graph>) {
     let reference = artifact.reference();
     let picked = pick
         .filter(|(at, _)| *at == reference)
         .map(|(_, element)| element.as_str());
     let graph = match shown(feed, &reference, picked) {
-        Some(Shown::Graph(graph)) => Some(*graph),
+        Some(Shown::Graph(graph)) => Some(compared(feed, *graph, compare)),
         Some(Shown::Refused(why)) => {
             content.cut = Some(match content.cut.take() {
                 Some(cut) => format!("{why} {cut}"),
@@ -217,7 +224,30 @@ pub fn of(
     (wanted(feed, artifact).then(|| target(&reference)), graph)
 }
 
-fn short(commit: &str) -> &str {
+/// The graph with its comparison, when one is chosen for it and corrald can compare: each
+/// compared element's row says how its source changed.
+fn compared(
+    feed: &Feed,
+    mut graph: Graph,
+    compare: Option<&super::diagram_compare::Compare>,
+) -> Graph {
+    use super::diagram_compare as cmp;
+    graph.can_compare = cmp::capable(feed);
+    let Some(compare) = compare.filter(|c| c.reference == graph.reference && cmp::capable(feed))
+    else {
+        return graph;
+    };
+    let view = cmp::view(feed, &graph, compare);
+    for entry in graph.nodes.iter_mut().chain(graph.edges.iter_mut()) {
+        if let Some(mark) = cmp::mark_of(&view, &entry.id) {
+            entry.sub = format!("{} · {}", entry.sub, mark.word());
+        }
+    }
+    graph.compare = Some(view);
+    graph
+}
+
+pub(super) fn short(commit: &str) -> &str {
     &commit[..commit.len().min(12)]
 }
 
@@ -522,7 +552,7 @@ fn candidate(candidate: Option<&DiagramCandidate>) -> String {
     }
 }
 
-fn source(result: &SourceResult) -> Result<Source, String> {
+pub(super) fn source(result: &SourceResult) -> Result<Source, String> {
     match result {
         SourceResult::NotProvided => Err("The recipe binds no source to this element.".into()),
         SourceResult::Missing { reason } => Err(format!("Missing: {reason}")),
@@ -580,7 +610,7 @@ fn basis_words(evidence: &EntityEvidence) -> String {
     )
 }
 
-fn related(row: &DiagramRelated) -> String {
+pub(super) fn related(row: &DiagramRelated) -> String {
     match row {
         DiagramRelated::FileReference {
             path,
