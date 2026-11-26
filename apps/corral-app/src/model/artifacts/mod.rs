@@ -382,7 +382,9 @@ impl State {
                         selected_at(self, &rows).map(|at| rows[at].reference())
                     }
                 };
-                if shown.as_deref() == Some(reference.as_str())
+                // A cited section shows Markdown, never the recipe's diagram.
+                if self.section.is_none()
+                    && shown.as_deref() == Some(reference.as_str())
                     && diagram::holds(feed, &reference, &element)
                 {
                     self.pick = Some((reference, element));
@@ -467,7 +469,11 @@ impl State {
 
     /// Escape: back from full size, else clear a typed filter; whether it did either.
     pub fn escape(&mut self) -> bool {
-        if self.full.is_some() && self.pick.take().is_some() {
+        // Only a selection in the recipe shown full size is cleared first; any other leaves it.
+        let shown_pick = self.section.is_none()
+            && matches!((&self.full, &self.pick), (Some(full), Some((at, _))) if full == at);
+        if shown_pick {
+            self.pick = None;
             true
         } else if self.full.take().is_some() {
             self.section = None;

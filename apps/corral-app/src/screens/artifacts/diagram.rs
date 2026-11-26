@@ -99,13 +99,18 @@ fn retry_pending(app: AppState, graph: Memo<Option<Graph>>) {
                 .and_then(diagram::selected_target)
         })
     });
+    // corrald may answer pending again, which leaves `wanted` unchanged; each ask bumps `asked`
+    // so the effect runs again and waits for the next one, for as long as it stays pending.
+    let asked = signal(0u32);
     effect(move || {
+        asked.get();
         if let Some(target) = wanted.get() {
             // The timer ends with this run of the effect, so a selection that moved on or a
             // view that closed never asks again.
             set_timeout(RETRY, move || {
                 if wanted.get_untracked().as_ref() == Some(&target) {
                     app.refresh(target.clone());
+                    asked.update(|n| *n = n.wrapping_add(1));
                 }
             });
         }
@@ -182,11 +187,16 @@ fn viewer(
 
 /// Every element, steps then links, each a row the keyboard reaches; a press selects it.
 fn list(app: AppState, graph: Memo<Option<Graph>>) -> AnyElement {
-    dynamic(move || {
-        let (reference, nodes, edges) = graph.with(|g| {
+    // The rows are made again only when the recipe changes, not as the selection or its
+    // evidence moves, so a row keeps the keyboard focus after it is pressed.
+    let entries = computed(move || {
+        graph.with(|g| {
             g.as_ref()
                 .map(|g| (g.reference.clone(), g.nodes.clone(), g.edges.clone()))
-        })?;
+        })
+    });
+    dynamic(move || {
+        let (reference, nodes, edges) = entries.get()?;
         Some(untracked(|| {
             let rows = |entries: Vec<Entry>| -> Vec<AnyElement> {
                 entries

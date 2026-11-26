@@ -32,15 +32,23 @@ const measure = document.createElement('canvas').getContext('2d');
 measure.font = '600 13px system-ui, sans-serif';
 // A card fits its label up to two lines; past that the label wraps within the widest card.
 const widthOf = label => Math.min(220, Math.max(92, Math.ceil(measure.measureText(label).width) + 30));
+// G6 keys its elements in a plain object, so a recipe ID such as `constructor` would meet a
+// built-in property; every ID it sees carries this prefix, and events give the recipe's back.
+const PREFIX = 'el:';
+const own = id => PREFIX + id;
+const recipeId = id => typeof id === 'string' && id.startsWith(PREFIX) ? id.slice(PREFIX.length) : null;
 const data = {
-  nodes: input.nodes.map(n => ({id: n.id, data: {label: n.label, kind: n.kind, start: n.start, w: widthOf(n.label)}})),
+  nodes: input.nodes.map(n => ({id: own(n.id), data: {label: n.label, kind: n.kind, start: n.start, w: widthOf(n.label)}})),
   // A back edge is laid out from its target, so the layout's ranks follow the flow from its
   // start; its arrow stays on its own target and its bow on its own side.
   edges: input.edges.map(e => ({
-    id: e.id, source: e.back ? e.target : e.source, target: e.back ? e.source : e.target,
-    data: {label: e.label ?? '', kind: e.kind, bow: e.back ? -e.bow : e.bow, back: e.back},
+    id: own(e.id), source: own(e.back ? e.target : e.source), target: own(e.back ? e.source : e.target),
+    data: {label: e.label ?? '', kind: e.kind, bow: e.back ? -e.bow : e.bow, back: e.back, loop: e.loop},
   })),
 };
+// A node's self links alternate above and below it, each pair further out than the last.
+const loopPlacement = d => d.data.loop % 2 === 0 ? 'top' : 'bottom';
+const loopDist = d => 36 + 40 * Math.floor((d.data.loop ?? 0) / 2);
 async function start() {
   const graph = new G6.Graph({
     container: host, width: host.clientWidth, height: host.clientHeight,
@@ -64,7 +72,7 @@ async function start() {
       style: {
         stroke: quiet, lineWidth: 1.5, increasedLineWidthForHitTesting: 10,
         endArrow: d => !d.data.back, startArrow: d => d.data.back, endArrowSize: 8,
-        startArrowSize: 8, curveOffset: d => d.data.bow,
+        startArrowSize: 8, curveOffset: d => d.data.bow, loopPlacement, loopDist,
         labelText: d => d.data.label, labelAutoRotate: false, labelBackground: true,
         labelBackgroundFill: card, labelBackgroundStroke: quiet, labelBackgroundLineWidth: 1,
         labelBackgroundRadius: 4, labelPadding: [2, 6], labelFill: ink, labelFontSize: 12,
@@ -74,7 +82,10 @@ async function start() {
     },
     behaviors: ['drag-canvas', 'zoom-canvas'],
   });
-  const report = e => { if (ids.has(e.target.id)) notify(JSON.stringify({v: VERSION, pick: e.target.id})); };
+  const report = e => {
+    const id = recipeId(e.target.id);
+    if (id !== null && ids.has(id)) notify(JSON.stringify({v: VERSION, pick: id}));
+  };
   graph.on('node:click', report);
   graph.on('edge:click', report);
   // Fit the graph to the view, never enlarging a small one past its own size; centred.
@@ -94,8 +105,8 @@ async function start() {
     const next = message.selection;
     if (next !== null && !(typeof next === 'string' && ids.has(next))) return;
     const states = {};
-    if (selected) states[selected] = [];
-    if (next) states[next] = ['selected'];
+    if (selected) states[own(selected)] = [];
+    if (next) states[own(next)] = ['selected'];
     selected = next;
     graph.setElementState(states, false).catch(console.error);
   });

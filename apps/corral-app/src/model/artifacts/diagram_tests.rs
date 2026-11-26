@@ -63,6 +63,21 @@ fn reciprocal_and_parallel_edges_never_share_a_path() {
 }
 
 #[test]
+fn self_loops_of_one_node_are_placed_apart_and_never_reversed() {
+    let r = recipe(&[
+        ("go", "a", "b"),
+        ("wait", "b", "b"),
+        ("pass", "b", "c"),
+        ("hold", "b", "b"),
+    ]);
+    assert_eq!(diagram::loops(&r), [None, Some(0), None, Some(1)]);
+    assert!(
+        !diagram::back_edges(&r)[1] && !diagram::back_edges(&r)[3],
+        "a self link has no ends to swap"
+    );
+}
+
+#[test]
 fn only_retries_run_back_so_the_flow_reads_from_its_start() {
     let fixture = validate(include_bytes!(
         "../../../../../docs/examples/submit-to-land.diagram.json"
@@ -141,4 +156,47 @@ fn only_an_id_of_the_open_recipe_selects() {
     );
     state.act(pick("T-1:1", "go"), &feed);
     assert_eq!(state.pick, Some(("T-1:1".into(), "go".into())));
+}
+
+#[test]
+fn escape_backs_out_of_another_artifact_left_after_a_recipe_selection() {
+    let mut feed = Feed::default();
+    served(
+        &mut feed,
+        "T-1:1",
+        recipe(&[("go", "a", "b"), ("pass", "b", "c"), ("retry", "b", "a")]),
+    );
+    let mut state = State {
+        full: Some("T-1:1".into()),
+        ..State::default()
+    };
+    state.act(
+        Action::Pick {
+            reference: "T-1:1".into(),
+            element: "go".into(),
+        },
+        &feed,
+    );
+    state.act(Action::Close, &feed);
+    state.act(
+        Action::Cite {
+            reference: "T-1:1".into(),
+            section: Some("goal".into()),
+        },
+        &feed,
+    );
+    state.act(
+        Action::Pick {
+            reference: "T-1:1".into(),
+            element: "pass".into(),
+        },
+        &feed,
+    );
+    assert_eq!(
+        state.pick,
+        Some(("T-1:1".into(), "go".into())),
+        "a cited section draws no diagram to select in"
+    );
+    assert!(state.escape());
+    assert_eq!(state.full, None, "the first Escape leaves the section");
 }

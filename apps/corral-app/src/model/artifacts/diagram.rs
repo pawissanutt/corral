@@ -344,11 +344,29 @@ pub fn back_edges(recipe: &WorkflowRecipe) -> Vec<bool> {
                 state[to] = 1;
                 stack.push((to, 0));
             }
-            1 => back[edge] = true,
+            // A self link has no direction to reverse; its loop is placed apart instead.
+            1 => back[edge] = to != *node,
             _ => {}
         }
     }
     back
+}
+
+/// Each self link's place among its node's self links, so the viewer draws every loop apart
+/// (G6 bends a loop by placement and distance, not by bow); none for an edge between two nodes.
+pub fn loops(recipe: &WorkflowRecipe) -> Vec<Option<u32>> {
+    let mut seen: BTreeMap<&str, u32> = BTreeMap::new();
+    recipe
+        .edges
+        .iter()
+        .map(|edge| {
+            (edge.from == edge.to).then(|| {
+                let count = seen.entry(edge.from.as_str()).or_default();
+                *count += 1;
+                *count - 1
+            })
+        })
+        .collect()
 }
 
 /// The viewer's whole input: no bindings, paths or commit, only what it draws.
@@ -370,7 +388,8 @@ pub fn payload(recipe: &WorkflowRecipe) -> String {
         .iter()
         .zip(bows(recipe))
         .zip(back_edges(recipe))
-        .map(|((edge, bow), back)| {
+        .zip(loops(recipe))
+        .map(|(((edge, bow), back), place)| {
             json!({
                 "id": edge.id,
                 "source": edge.from,
@@ -379,6 +398,7 @@ pub fn payload(recipe: &WorkflowRecipe) -> String {
                 "kind": edge_kind(edge.kind),
                 "bow": bow,
                 "back": back,
+                "loop": place,
             })
         })
         .collect();
