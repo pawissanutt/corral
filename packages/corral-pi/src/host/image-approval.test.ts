@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import * as sdk from "@earendil-works/pi-coding-agent";
@@ -138,6 +138,34 @@ linuxTest("image_gen requests approval before dispatch and allow-once covers onl
     expect((await draw()).isError).toBeTrue();
     expect(requests).toHaveLength(1);
     expect(readdirSync(outside)).toEqual([]);
+  });
+}, 30_000);
+
+test.skipIf(process.platform !== "linux" || statSync(tmpdir(), { bigint: true }).birthtimeNs === 0n)("image_gen session grants survive sibling publication and cover new images", async () => {
+  await imageHost(async ({ host, outside, path, requests, draw }) => {
+    const second = join(outside, "second.png"), third = join(outside, "third.png");
+    expect((await draw()).isError).toBeTrue();
+    const firstQuestion = host.pendingOwnerQuestions()[0]!;
+    expect((await draw("Draw another dot", second)).isError).toBeTrue();
+    const questions = host.pendingOwnerQuestions();
+    expect(questions).toHaveLength(2);
+    expect(firstQuestion.question).toContain("new images in this directory");
+    for (const question of questions) {
+      await host.answerQuestion({ question: question.id, option: CHOICE.session }, async () => {});
+      await host.session.waitForIdle();
+      if (question.id === firstQuestion.id) expect((await draw()).isError).toBeFalse();
+    }
+    expect((await draw("Draw another dot", second)).isError).toBeFalse();
+    expect((await draw("Draw a third dot", third)).isError).toBeFalse();
+    expect(host.pendingOwnerQuestions()).toEqual([]);
+    expect(requests).toHaveLength(3);
+    expect(readFileSync(path, "base64")).toBe(png);
+    expect(readFileSync(second, "base64")).toBe(png);
+    expect(readFileSync(third, "base64")).toBe(png);
+    renameSync(outside, `${outside}-moved`);
+    mkdirSync(outside);
+    expect((await draw("Draw a fourth dot", join(outside, "fourth.png"))).text).toContain("Waiting for owner approval");
+    expect(requests).toHaveLength(3);
   });
 }, 30_000);
 

@@ -122,6 +122,32 @@ test("a session file grant is limited to the canonical destination and never res
   expect(approvals.write("edit", edit, outside)).toContain("Waiting");
 });
 
+test("a shorter answer on a pending image card does not revoke an existing session grant", async () => {
+  const { questions, approvals, advance } = fixture(true);
+  const image = (name: string) => approvals.write("image_gen", { path: `/outside/${name}.png`, prompt: name },
+    { action: "ask", path: `/outside/${name}.png`, canonical: `/outside/${name}.png` }, "directory-identity");
+  expect(image("stale")).toContain("Waiting");
+  questions.cancel(questions.pending()[0]!.id);
+  expect(approvals.write("image_gen", { path: "/outside/stale.png", prompt: "changed" },
+    { action: "ask", path: "/outside/stale.png", canonical: "/outside/stale.png" }, "directory-identity")).toContain("Waiting");
+  const stalePending = questions.pending()[0]!.id;
+  expect(image("first")).toContain("Waiting");
+  expect(image("second")).toContain("Waiting");
+  expect(image("denied")).toContain("Waiting");
+  const [, first, second, denied] = questions.pending();
+  await questions.answer(denied!.id, [{ option: CHOICE.deny }]);
+  await questions.answer(first!.id, [{ option: CHOICE.session }]);
+  expect(image("denied")).toContain("denied");
+  expect(image("stale")).toContain(stalePending);
+  expect(image("second")).toContain(second!.id);
+  expect(approvals.write("image_gen", { path: "/outside/second.png", prompt: "changed" },
+    { action: "ask", path: "/outside/second.png", canonical: "/outside/second.png" }, "directory-identity"))
+    .toContain(second!.id);
+  await questions.answer(second!.id, [{ option: CHOICE.timed }]);
+  advance(APPROVAL_TTL);
+  expect(image("third")).toBeUndefined();
+});
+
 test("a command with a supplementary format character is shown losslessly", () => {
   const { questions, approvals } = fixture();
   const command = "echo \u{e0001}";

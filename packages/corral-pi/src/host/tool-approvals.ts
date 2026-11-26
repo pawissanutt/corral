@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { dirname } from "node:path";
 import type { WriteScopeDecision } from "../roles/assistant/write-scope.ts";
 import { sha256Hex } from "../tools/corral.ts";
 import { APPROVAL_CHOICES as CHOICE, isToolApproval, type PendingQuestion, type PendingQuestions } from "./pending-questions.ts";
@@ -40,7 +41,7 @@ function writeSummary(tool: WriteTool, input: Input): string {
 /** Live bindings to structured owner answers. Neither pending requests nor grants are restored. */
 export class ToolApprovals {
   private readonly requests = new Map<string, { id: string; scope: string; destination?: string }>();
-  private readonly grants = new Map<string, { monotonic: number; wall: number }>();
+  private readonly grants = new Map<string, { monotonic: number; wall: number }[]>();
   private readonly denials = new Set<string>();
 
   constructor(private readonly questions: PendingQuestions, private readonly cwd: string,
@@ -64,15 +65,18 @@ export class ToolApprovals {
       this.denials.add(`${key}\0${request.scope}`);
     } else {
       const duration = choice === CHOICE.timed ? APPROVAL_TTL : Infinity;
-      this.grants.set(request.scope, { monotonic: this.now() + duration, wall: this.wallNow() + duration });
+      const current = this.grants.get(request.scope) ?? [];
+      this.grants.set(request.scope, [...current.filter(until => until.monotonic > this.now() && until.wall > this.wallNow()),
+        { monotonic: this.now() + duration, wall: this.wallNow() + duration }]);
     }
   }
 
   private hasGrant(scope: string): boolean {
-    const until = this.grants.get(scope);
-    if (until === undefined) return false;
+    const grants = this.grants.get(scope);
+    if (grants === undefined) return false;
     // Wall time includes suspend; monotonic time prevents a wall-clock rollback extending a grant.
-    if (until.monotonic > this.now() && until.wall > this.wallNow()) return true;
+    const live = grants.filter(until => until.monotonic > this.now() && until.wall > this.wallNow());
+    if (live.length) { this.grants.set(scope, live); return true; }
     this.grants.delete(scope);
     return false;
   }
@@ -97,7 +101,9 @@ export class ToolApprovals {
   write(tool: WriteTool, input: Input, decision: WriteScopeDecision, identity?: string): string | undefined {
     const key = this.key(tool, input);
     const previous = this.requests.get(key);
-    const scope = decision.action === "ask" ? `file:${decision.canonical}${identity === undefined ? "" : `\0${identity}`}` : undefined;
+    const scope = decision.action === "ask"
+      ? `${tool === "image_gen" ? `image-directory:${dirname(decision.canonical)}` : `file:${decision.canonical}`}${identity === undefined ? "" : `\0${identity}`}`
+      : undefined;
     if (previous && (decision.action !== "ask" || previous.destination !== decision.canonical || previous.scope !== scope)) {
       this.requests.delete(key);
       this.questions.cancel(previous.id);
@@ -109,7 +115,8 @@ export class ToolApprovals {
     const target = quoted(decision.canonical);
     const via = decision.path === decision.canonical ? "" : `\nRequested as: ${quoted(decision.path)}`;
     const title = `Allow ${tool} outside the session directory?\nDestination: ${target}${via}`
-      + (this.reusable ? "\nA longer grant allows future writes to this file only." : "");
+      + (this.reusable ? tool === "image_gen" ? "\nA longer grant allows new images in this directory."
+        : "\nA longer grant allows future writes to this file only." : "");
     const summary = writeSummary(tool, input);
     const preview = `${title}\n${summary}`;
     return this.confirm(key, scope!, "file_write",
@@ -130,18 +137,18 @@ export class ToolApprovals {
       const answer = this.questions.get(prior.id);
       if (answer?.status === "pending") return waiting(prior.id);
       this.requests.delete(key);
-      if (this.questions.allowed(prior.id) || grant) return undefined;
+      if (this.questions.allowed(prior.id)) return undefined;
       const choice = answer?.answers?.[0]?.option;
-      if (choice !== CHOICE.timed && choice !== CHOICE.session) return `No current owner approval for this tool call; ${effect}.`;
+      if (!grant && choice !== CHOICE.timed && choice !== CHOICE.session) return `No current owner approval for this tool call; ${effect}.`;
     }
-    if (grant) return undefined;
     if (this.reusable && destination !== undefined) {
-      // One live decision per file prevents two cards from conflicting over a reusable scope.
-      const pending = [...this.requests.values()].find(request => request.scope === scope &&
+      // One live decision per destination; distinct image files may share a grant scope.
+      const pending = [...this.requests.values()].find(request => request.scope === scope && request.destination === destination &&
         this.questions.get(request.id)?.status === "pending");
       if (pending) return `A different change to this file is waiting for owner approval ${pending.id}; ${effect}. `
         + "Allow once applies only to the original change.";
     }
+    if (grant) return undefined;
     if (!fitsPrompt(question)) return `The full command or destination does not fit in the owner prompt; ${effect}.`;
     const options = this.reusable ? [CHOICE.deny, CHOICE.once, CHOICE.timed, CHOICE.session] : [CHOICE.legacyOnce, CHOICE.deny];
     const record = this.questions.ask(randomUUID(), [{ question, options, freeText: false }], kind);

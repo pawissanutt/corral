@@ -160,8 +160,9 @@ export function preparePng(root: string, path: string): { path: string; identity
     catch { throw new Error("Image destination directory must be writable."); }
     return {
       path: target,
-      identity: [rootIdentity.dev, rootIdentity.ino, rootIdentity.birthtimeNs, rootIdentity.ctimeNs,
-        parentIdentity.dev, parentIdentity.ino, parentIdentity.birthtimeNs, parentIdentity.ctimeNs].join(":"),
+      // Without birth time, conservatively invalidate on ctime changes to avoid inode reuse.
+      identity: [rootIdentity.dev, rootIdentity.ino, rootIdentity.birthtimeNs || rootIdentity.ctimeNs,
+        parentIdentity.dev, parentIdentity.ino, parentIdentity.birthtimeNs || parentIdentity.ctimeNs].join(":"),
       close,
       revalidate() { revalidate(); rejectExisting(); },
       publish(bytes) {
