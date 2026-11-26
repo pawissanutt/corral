@@ -500,6 +500,10 @@ impl AppState {
     /// Puts any session (a chat, a Code or Build session, a run of any role) in the pane on a
     /// tab of its own and shows it there.
     pub fn dock_session(&self, id: &Id) {
+        self.try_dock_session(id);
+    }
+
+    pub(super) fn try_dock_session(&self, id: &Id) -> bool {
         // A full pane gives up an ended session's tab, or one of Ask's chat (which the strip
         // does not show), first.
         let mut gone: Vec<String> = untracked(|| self.dock_tabs())
@@ -514,7 +518,7 @@ impl AppState {
             if dock::supported(self.form) {
                 self.open_ask();
             }
-            return;
+            return true;
         }
         if self.change_dock(|saved| {
             let id = exact.ok_or(dock::UNAVAILABLE)?;
@@ -525,6 +529,9 @@ impl AppState {
         }) {
             self.leave_ask_for_tab();
             self.show_dock();
+            true
+        } else {
+            false
         }
     }
 

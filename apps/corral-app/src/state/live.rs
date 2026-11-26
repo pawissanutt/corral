@@ -316,7 +316,14 @@ impl AppState {
         }
         match effect {
             Effect::OpenLive(live) => self.open_live(live),
-            Effect::OpenBeside(id) => self.dock_session(&id),
+            Effect::OpenBeside(id) => {
+                if !self.try_dock_session(&id) {
+                    if !self.settings.with_untracked(|state| state.config.dirty()) {
+                        self.open_from_pane(vec![Effect::OpenLive(Live::Session(id))]);
+                    }
+                    self.toast("Session started. If its page did not open, find it in Sessions.");
+                }
+            }
             Effect::Select(live) => self.select(live),
             Effect::AskAbout { context, text } => self.ask_about(context, text),
             Effect::Act(act) => self.dispatch(act),

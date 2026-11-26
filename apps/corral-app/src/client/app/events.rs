@@ -230,7 +230,17 @@ impl AppState {
         };
         if let Some(id) = &id {
             let ended_chat = ended.is_some();
+            // Start replies can precede the assistants subscription. Publish the returned row
+            // before settling the operation, so opening it in the dock can resolve its id.
+            let started = matches!(method, wire::build::CODE_START | wire::build::BUILD_START)
+                .then(|| serde_json::from_value::<wire::rows::AssistantRow>(result.clone()).ok())
+                .flatten();
             feed.update(|feed| {
+                if let Some(row) = started {
+                    feed.assistants
+                        .entry(Id::from(row.id.as_str()))
+                        .or_insert(row);
+                }
                 if let Some(operation) = feed.operations.get_mut(id.as_str()) {
                     operation.loading = false;
                     operation.value = Some(result.clone());
@@ -380,6 +390,49 @@ mod tests {
     use super::*;
     use corral_protocol::session_host::SessionSent;
     use corral_protocol::session_state::SendPolicy;
+
+    #[test]
+    fn start_reply_makes_session_dockable_before_subscription_catches_up() {
+        let runtime = nsh_core::element::Runtime::default();
+        let _entered = runtime.enter();
+        let sample = crate::model::preview::feed(0, String::new(), String::new(), None);
+        for (method, id) in [
+            (corral_protocol::build::CODE_START, "B-code"),
+            (corral_protocol::build::BUILD_START, "B-k3x9"),
+        ] {
+            let row = &sample.assistants[id];
+            let feed = signal(Feed::default());
+            feed.update(|feed| {
+                feed.operations.insert(
+                    "start-1".into(),
+                    Operation {
+                        method: method.into(),
+                        loading: true,
+                        value: None,
+                        error: None,
+                        refusal: None,
+                    },
+                );
+            });
+            let mut app = AppState::new();
+            let event = Event::Reply {
+                method,
+                tag: Some("start-1".into()),
+                params: json!({}),
+                outcome: Ok(serde_json::to_value(row).unwrap()),
+                error_data: None,
+            };
+            app.event(feed, event).unwrap();
+            assert!(!feed.with_untracked(|feed| feed.operations["start-1"].loading));
+            assert_eq!(
+                feed.with_untracked(|feed| crate::model::dock::exact(
+                    feed,
+                    &Id::from(row.id.as_str())
+                )),
+                Some(row.id.clone())
+            );
+        }
+    }
 
     fn send(id: &str) -> ClientRequest {
         ClientRequest::SessionSend(SessionSend {

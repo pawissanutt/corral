@@ -317,17 +317,19 @@ fn rewinding_a_session_reloads_its_transcript() {
 /// name, closes, and the new build's session page opens.
 #[test]
 fn starting_a_build_opens_its_session_page() {
-    let mut app = sessions(desktop());
-    app.press("id:btn-new").unwrap();
-    app.press("id:btn-new-build").unwrap();
-    app.wait_for("id:field-build-name").unwrap();
-    app.press("id:seg-build-project-corral").unwrap();
-    app.type_text("id:field-build-name", "walk").unwrap();
-    app.press("id:btn-start-build").unwrap();
-    app.wait_for_gone("id:field-build-name", Duration::from_secs(5))
-        .unwrap();
-    app.wait_for("id:btn-session-actions").unwrap();
-    app.wait_for("text:walk").unwrap();
+    for command in ["id:btn-new-build", "id:btn-new-code"] {
+        let mut app = sessions(desktop());
+        app.press("id:btn-new").unwrap();
+        app.press(command).unwrap();
+        app.wait_for("id:field-build-name").unwrap();
+        app.press("id:seg-build-project-corral").unwrap();
+        app.type_text("id:field-build-name", "walk").unwrap();
+        app.press("id:btn-start-build").unwrap();
+        app.wait_for_gone("id:field-build-name", Duration::from_secs(5))
+            .unwrap();
+        app.wait_for("id:btn-session-actions").unwrap();
+        app.wait_for("text:walk").unwrap();
+    }
 }
 
 /// The sample build waits on a two-question card: its answer card takes one answer per

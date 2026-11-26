@@ -360,21 +360,22 @@ fn the_switcher_opens_a_code_session_in_the_side_pane() {
     app.wait_for("id:list-tasks").unwrap();
 }
 
-/// The strip's + starts a build that opens on a tab of its own in the side pane, the page
-/// staying where it was.
+/// Both commands start a session on a tab, leaving the page where it was.
 #[test]
 fn the_panes_plus_starts_a_build_on_a_tab_of_its_own() {
-    let mut app = preview(desktop(), &[("corral.destination", "tasks")]);
-    app.wait_for("id:list-tasks").unwrap();
-    app.press_key("/").unwrap();
-    app.wait_for("id:pane-new").unwrap();
-    app.press("id:pane-new").unwrap();
-    app.press("id:pane-new-build").unwrap();
-    app.wait_for("id:field-build-name").unwrap();
-    app.press("id:seg-build-project-corral").unwrap();
-    app.type_text("id:field-build-name", "walk").unwrap();
-    app.press("id:btn-start-build").unwrap();
-    app.wait_for("id:dock-transcript").unwrap();
-    app.wait_for("text:walk").unwrap();
-    app.wait_for("id:list-tasks").unwrap();
+    for command in ["id:pane-new-build", "id:pane-new-code"] {
+        let mut app = preview(desktop(), &[("corral.destination", "tasks")]);
+        app.wait_for("id:list-tasks").unwrap();
+        app.press_key("/").unwrap();
+        app.wait_for("id:pane-new").unwrap();
+        app.press("id:pane-new").unwrap();
+        app.press(command).unwrap();
+        app.wait_for("id:field-build-name").unwrap();
+        app.press("id:seg-build-project-corral").unwrap();
+        app.type_text("id:field-build-name", "walk").unwrap();
+        app.press("id:btn-start-build").unwrap();
+        app.wait_for("id:dock-transcript").unwrap();
+        app.wait_for("text:walk").unwrap();
+        app.wait_for("id:list-tasks").unwrap();
+    }
 }
