@@ -768,8 +768,7 @@ pub(super) fn finish(feed: &Feed, run: &mut Run, ended: u64, outcome: Outcome) {
     }
 }
 
-/// A gate check on the task's latest submitted head, recording the round and the worker run
-/// it gated.
+/// A gate check on the latest worker while Running, or the latest submitted head otherwise.
 pub(super) fn gate(
     feed: &Feed,
     record: &TaskDetail,
@@ -777,8 +776,12 @@ pub(super) fn gate(
     notes: Option<&str>,
     at: u64,
 ) -> Check {
-    let submitted = record.runs.iter().rev().find(|run| run.head_sha.is_some());
-    let head = submitted
+    let worker = if record.task.status == Status::Running {
+        super::rollup::last_worker(record)
+    } else {
+        record.runs.iter().rev().find(|run| run.head_sha.is_some())
+    };
+    let head = worker
         .and_then(|run| run.head_sha.clone())
         .unwrap_or_else(|| sha(&format!("{}/wip", record.task.id), 40));
     Check {
@@ -795,7 +798,7 @@ pub(super) fn gate(
         by: Actor::Auto,
         at: ago(feed, at),
         round: Some(record.task.round),
-        run: submitted.map(|run| run.id.clone()),
+        run: worker.map(|run| run.id.clone()),
     }
 }
 

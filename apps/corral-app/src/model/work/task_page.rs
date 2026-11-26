@@ -4,7 +4,7 @@
 
 use corral_protocol::detail::TaskDetail;
 use corral_protocol::rows::TaskRow;
-use corral_types::{Check, CheckKind};
+use corral_types::{Check, CheckKind, Status};
 
 use crate::model::daemon;
 
@@ -23,7 +23,12 @@ pub fn detail_task(detail: &TaskDetail) -> daemon::Task {
     daemon::Task::new(TaskRow {
         task: detail.task.clone(),
         run: detail.runs.iter().max_by_key(|run| run.started).cloned(),
-        gate: latest(detail, CheckKind::Gate),
+        // Detail is history, with no observation of the current worktree HEAD.
+        gate: if detail.task.status == Status::Running {
+            None
+        } else {
+            latest(detail, CheckKind::Gate)
+        },
         review: latest(detail, CheckKind::Review),
         ready: false,
         ..TaskRow::default()

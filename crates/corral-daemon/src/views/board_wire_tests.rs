@@ -232,6 +232,88 @@ reviewer = "generic"
 }
 
 #[test]
+fn running_board_serves_only_the_current_gate_and_preserves_attempts() {
+    use corral_types::CheckResult;
+
+    let fixture = Fixture::new();
+    fixture.project();
+    let command = "test -f .gate-pass";
+    fs::write(
+        fixture.shared.root().join(".corral-next/corral.toml"),
+        format!(
+            "[runner]\nmode = 'process'\n[projects.demo]\npath = 'repo'\ngate = ['{command}']\n"
+        ),
+    )
+    .unwrap();
+    let id = fixture.named_task("Gate before submitting", Some("demo"));
+    let run = fixture.dispatch(&id);
+    let engine = fixture.shared.engine().unwrap();
+    let gate = || {
+        let SubDelta::Tasks { delta } = subscribe(&fixture.shared, Topic::Tasks) else {
+            panic!("expected tasks");
+        };
+        let row = delta
+            .rows
+            .into_iter()
+            .find(|row| row.task.id == id)
+            .unwrap();
+        assert_eq!(row.task.status, Status::Running);
+        assert!(row.run.unwrap().head_sha.is_none());
+        row.gate
+    };
+    fixture.apply(Op::Gate { id: id.clone() });
+    let failed = gate().unwrap();
+    assert_eq!(failed.result, CheckResult::Fail);
+    assert_eq!(failed.notes.as_deref(), Some(command));
+    assert!(failed.log.is_some());
+
+    git(
+        &run.worktree,
+        &["commit", "--allow-empty", "-qm", "next candidate"],
+    );
+    fixture.shared.publish();
+    assert!(gate().is_none());
+    git(&run.worktree, &["reset", "--hard", &failed.key]);
+
+    let mut task = engine.store.require_task(&id).unwrap();
+    task.round += 1;
+    engine.store.update_task(&task).unwrap();
+    fixture.shared.publish();
+    assert!(
+        gate().is_none(),
+        "the same HEAD failed only in an older round"
+    );
+
+    // Retry resets the round counter and reuses the checkout. The previous worker's
+    // failure must not appear current even though the HEAD and round match again.
+    let replacement = fixture
+        .apply(Op::Retry {
+            id: id.clone(),
+            profile: None,
+            fresh: false,
+            note: None,
+        })
+        .run
+        .unwrap();
+    assert_ne!(replacement.id, run.id);
+    assert!(gate().is_none());
+
+    fixture.apply(Op::Gate { id: id.clone() });
+    let failed_again = gate().unwrap();
+    assert_eq!(failed_again.result, CheckResult::Fail);
+    assert_eq!(failed_again.key, failed.key);
+    assert_eq!(failed_again.round, failed.round);
+    fs::write(replacement.worktree.join(".gate-pass"), "").unwrap();
+    fixture.apply(Op::Gate { id: id.clone() });
+    let passed = gate().unwrap();
+    assert_eq!(passed.result, CheckResult::Pass);
+    assert_eq!(
+        engine.store.list_checks(&id).unwrap(),
+        [failed, failed_again, passed]
+    );
+}
+
+#[test]
 fn served_projects_and_health_show_open_tasks_and_dispatch_slot_budget() {
     let fixture = Fixture::new();
     fixture.project();

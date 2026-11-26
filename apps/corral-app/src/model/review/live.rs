@@ -131,13 +131,17 @@ impl<'a> Shown<'a> {
             .map(|run| run.branch.as_str())
     }
 
-    /// The check of `kind` that decides now: the board row's (the newest gate for HEAD, the
-    /// review of the round), else the newest the detail's history holds for the same key.
+    /// The check of `kind` that decides now: the board row's gate or review. While Running,
+    /// only the row can tell whether a gate still applies; elsewhere, fall back to the detail
+    /// for the same key.
     pub fn check(&self, kind: CheckKind) -> Option<&'a Check> {
         let row = match kind {
             CheckKind::Gate => self.task.row.gate.as_ref(),
             CheckKind::Review => self.task.row.review.as_ref(),
         };
+        if kind == CheckKind::Gate && self.task.status() == Status::Running {
+            return row;
+        }
         let round = self.task.task().round.to_string();
         let key = match kind {
             CheckKind::Gate => self.head(),

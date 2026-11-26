@@ -119,10 +119,18 @@ pub(super) fn row(feed: &Feed, record: &TaskDetail, records: &[TaskDetail]) -> T
                 .map(|other| other.task.status),
         })
         .collect();
+    let worker = last_worker(record);
+    let gate = newest(CheckKind::Gate, None).filter(|check| {
+        record.task.status != Status::Running
+            || worker.is_some_and(|worker| {
+                check.round.is_none_or(|round| round == record.task.round)
+                    && check.run.as_deref().is_none_or(|run| run == worker.id)
+            })
+    });
     TaskRow {
         task: record.task.clone(),
-        run: last_worker(record).cloned(),
-        gate: newest(CheckKind::Gate, None),
+        run: worker.cloned(),
+        gate,
         review: newest(CheckKind::Review, Some(&round)),
         ready,
         max_rounds: Some(workspace::max_rounds(feed, record.task.project.as_deref())),

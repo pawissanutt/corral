@@ -1,7 +1,5 @@
-//! The rounds of a candidate: every gate and review check corrald stored for the task, in the
-//! order it recorded them, split into the submissions they judged, each with the reviewer's
-//! notes; the task's round against its limit; and the reviewer session, which stays with the task
-//! across rounds.
+//! Check history: the task's recorded gate and review checks, excluding the receipts already
+//! shown in readiness. Checks stay in insertion order, grouped by the submissions they judged.
 
 use corral_types::{Check, CheckKind, CheckResult, Status};
 
@@ -37,8 +35,7 @@ pub struct Rounds {
     /// acted, from 0) against their limit, as counted, not the meta line's round number.
     pub count: Option<String>,
     pub hint: &'static str,
-    /// Oldest first; empty while the task is in its first round, which the readiness chain
-    /// already shows.
+    /// Oldest first; includes earlier attempts within the current round.
     pub rounds: Vec<Round>,
     pub reviewer: Option<ReviewerLine>,
 }
@@ -154,43 +151,61 @@ pub(super) fn rounds(feed: &Feed, shown: &Shown) -> Option<Rounds> {
             ),
         }
     });
-    let checks = shown
-        .review
-        .map(|review| review.checks.as_slice())
-        .unwrap_or_default();
+    // Both details serve the same append-only history, but may refresh at different times.
+    let checks = [
+        shown.review.map(|review| review.checks.as_slice()),
+        shown.detail.map(|detail| detail.checks.as_slice()),
+    ]
+    .into_iter()
+    .flatten()
+    .max_by_key(|checks| checks.len())
+    .unwrap_or_default();
+    // Skip just the occurrence represented in readiness, not all checks for its commit or round.
+    let selected = [CheckKind::Gate, CheckKind::Review].map(|kind| {
+        shown
+            .check(kind)
+            .and_then(|current| checks.iter().rfind(|check| *check == current))
+    });
+    let is_selected = |check: &Check| {
+        selected
+            .into_iter()
+            .flatten()
+            .any(|current| std::ptr::eq(check, current))
+    };
     let split = split(checks);
     let numbers = numbers(&split, task.round);
     let open = !matches!(task.status, Status::Done | Status::Dropped);
     let last = split.len().saturating_sub(1);
-    let rounds: Vec<Round> = if split.len() < 2 {
-        Vec::new()
-    } else {
-        split
-            .iter()
-            .zip(numbers)
-            .enumerate()
-            .map(|(at, (checks, number))| {
-                let current = open && at == last;
-                Round {
-                    title: title(number, checks, current),
-                    current,
-                    links: checks
-                        .iter()
-                        .map(|check| recorded(feed, check, true))
-                        .collect(),
-                }
+    let rounds: Vec<Round> = split
+        .iter()
+        .zip(numbers)
+        .enumerate()
+        .filter_map(|(at, (checks, number))| {
+            let links: Vec<_> = checks
+                .iter()
+                .filter(|check| !is_selected(check))
+                .map(|check| recorded(feed, check, true))
+                .collect();
+            let current = open
+                && at == last
+                && number == task.round
+                && checks.iter().copied().any(is_selected);
+            (!links.is_empty()).then(|| Round {
+                title: title(number, checks, current),
+                current,
+                links,
             })
-            .collect()
-    };
+        })
+        .collect();
     if rounds.is_empty() && reviewer.is_none() {
         return None;
     }
     Some(Rounds {
-        heading: "Rounds",
+        heading: "Check history",
         // `task.round` counts automatic send-backs against their budget, from 0; it is not the
         // meta line's round number, so the caption names what it counts.
         count: max.map(|max| format!("sent back {} of {max}", task.round)),
-        hint: "Each round is one submission and the checks that judged it. A red gate or a review asking changes sends the work back for another round; once the rounds are used, the task waits for you.",
+        hint: "Recorded checks grouped by round. In the review pipeline, failed checks can send work back for another round. A manual gate on a Running task does not send it back.",
         rounds,
         reviewer,
     })
@@ -199,8 +214,13 @@ pub(super) fn rounds(feed: &Feed, shown: &Shown) -> Option<Rounds> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use corral_types::Actor;
+    use corral_protocol::detail::ReviewDetail;
+    use corral_types::{Actor, Role, Run};
     use jiff::Timestamp;
+
+    use crate::model::board::Mark;
+    use crate::model::daemon::{Task, bare_task, task_row};
+    use crate::model::review::readiness::readiness_chain;
 
     fn check(kind: CheckKind, key: &str, pass: bool) -> Check {
         Check {
@@ -256,5 +276,77 @@ mod tests {
         let rounds = split(&served);
         assert_eq!(rounds.iter().map(Vec::len).collect::<Vec<_>>(), [2, 3]);
         assert_eq!(numbers(&rounds, 1), [0, 1]);
+    }
+
+    #[test]
+    fn superseded_same_round_gate_is_history_not_current() {
+        let feed = Feed::default();
+        let failed = Check {
+            round: Some(0),
+            run: Some("R1".into()),
+            notes: Some("first failure".into()),
+            ..check(CheckKind::Gate, "aaaaaaa", false)
+        };
+        let passed = Check {
+            result: CheckResult::Pass,
+            notes: None,
+            ..failed.clone()
+        };
+        let run = Run {
+            id: "R1".into(),
+            task: "T-1".into(),
+            role: Role::Worker,
+            profile: String::new(),
+            harness: String::new(),
+            model: None,
+            effort: None,
+            worktree: Default::default(),
+            branch: String::new(),
+            base: String::new(),
+            base_sha: String::new(),
+            session: None,
+            started: Timestamp::UNIX_EPOCH,
+            ended: None,
+            outcome: None,
+            summary: None,
+            head_sha: Some(failed.key.clone()),
+            quiet_since: None,
+        };
+        for (gate, checks, mark) in [
+            (None, vec![failed.clone()], Mark::Next),
+            (
+                Some(passed.clone()),
+                vec![failed.clone(), passed],
+                Mark::Done,
+            ),
+        ] {
+            let mut row = task_row(bare_task(
+                "T-1",
+                "Task",
+                Status::Running,
+                Timestamp::UNIX_EPOCH,
+            ));
+            row.gate = gate;
+            let task = Task::new(row);
+            let detail = ReviewDetail {
+                task: "T-1".into(),
+                run: Some(run.clone()),
+                diff: None,
+                checks,
+                max_rounds: 2,
+                files: vec![],
+            };
+            let shown = Shown {
+                task: &task,
+                review_cache: None,
+                review: Some(&detail),
+                detail: None,
+            };
+            assert_eq!(readiness_chain(&feed, &shown)[0].mark, mark);
+            let history = rounds(&feed, &shown).unwrap().rounds;
+            assert_eq!(history.len(), 1);
+            assert_eq!(history[0].links, [recorded(&feed, &failed, true)]);
+            assert_eq!(history[0].current, mark == Mark::Done);
+        }
     }
 }

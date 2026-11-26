@@ -2,8 +2,9 @@
 //! happening in bold, the plain phrase under it, then what the owner can do there. A Blocked
 //! task: the engine's detail, the reply box (`field-reply`) and the next steps (`btn-next-<n>`).
 //! A review the owner decides: the Onto line and the decide bar (`btn-approve`,
-//! `btn-land-anyway`). Anything else: its one next step (`next-<id>`). Every step stays
-//! pressable; the engine decides, and a refusal opens the refusal sheet.
+//! `btn-land-anyway`). A Running task with a failed gate gets the failing command, a retry and
+//! its log link. Anything else: its one next step (`next-<id>`). Every step stays pressable;
+//! the engine decides, and a refusal opens the refusal sheet.
 //!
 //! The band is drawn in parts so the reply box survives every change around it (an age
 //! ticking, a run starting): it is drawn again only when its step changes, keeping the words
@@ -12,17 +13,19 @@
 use nsh_core::element::color as for_appearance;
 use nsh_core::prelude::*;
 
+use crate::model::hue::Hue;
 use crate::model::tasks::band::{Band, Hold, band};
 use crate::model::work::{self, ReplyBox};
-use crate::model::{Form, Id};
+use crate::model::{Effect, Form, Id};
 use crate::state::AppState;
 use crate::ui::composer::copyable_input;
 use crate::ui::icons::Icon;
-use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
+use crate::ui::kit::button::{ButtonKind, ButtonOptions, button, button_with};
+use crate::ui::kit::marks::hue_ink;
 use crate::ui::kit::more::press;
 use crate::ui::kit::next::next_button;
-use crate::ui::kit::text::plain;
-use crate::ui::kit::work::pressable;
+use crate::ui::kit::text::{mono, plain};
+use crate::ui::kit::work::{model_button, pressable};
 use crate::ui::term;
 use crate::ui::tokens::{FONT_TEXT, Token, color};
 
@@ -36,6 +39,7 @@ const TARGET: f32 = 44.0;
 enum Kind {
     Blocked,
     Decide,
+    GateFailed,
     Step,
 }
 
@@ -59,6 +63,7 @@ pub(crate) fn decision(app: AppState, id: Id, flat: bool) -> AnyElement {
             band.as_ref().map(|band| match band.hold {
                 Hold::Blocked(_) => Kind::Blocked,
                 Hold::Decide => Kind::Decide,
+                Hold::GateFailed(_) => Kind::GateFailed,
                 Hold::Step(_) => Kind::Step,
             })
         })
@@ -82,6 +87,7 @@ pub(crate) fn decision(app: AppState, id: Id, flat: bool) -> AnyElement {
         Some(untracked(move || match kind {
             Kind::Blocked => blocked(app, model),
             Kind::Decide => decided(app, id),
+            Kind::GateFailed => gate_failed(app, id, model, inset),
             Kind::Step => step(app, model),
         }))
     });
@@ -100,9 +106,19 @@ pub(crate) fn decision(app: AppState, id: Id, flat: bool) -> AnyElement {
     }
 }
 
-/// What is happening in bold, the phrase under it.
+/// What is happening in bold, the failing command when known, then the worker or task context.
 fn head(app: AppState, band: &Band) -> AnyElement {
-    let what = plain(app, band.what.clone()).font_weight(FontWeight::BOLD);
+    let mut what = plain(app, band.what.clone()).font_weight(FontWeight::BOLD);
+    let command = match &band.hold {
+        Hold::GateFailed(failure) => {
+            what = what.text_color(hue_ink(Hue::Fail));
+            failure
+                .command
+                .as_ref()
+                .map(|command| mono(app, format!("$ {command}")).test_id("gate-failing-command"))
+        }
+        _ => None,
+    };
     let how = (!band.how.is_empty()).then(|| {
         text(band.how.clone())
             .text_color(color(Token::Ink2))
@@ -114,8 +130,60 @@ fn head(app: AppState, band: &Band) -> AnyElement {
         .gap(space(app, 4.0))
         .pb(space(app, 8.0))
         .child(what)
+        .children(command)
         .children(how)
         .into_element()
+}
+
+fn gate_failed(app: AppState, id: Id, model: Memo<Option<Band>>, inset: bool) -> AnyElement {
+    let failure = computed(move || {
+        model.with(|band| match &band.as_ref()?.hold {
+            Hold::GateFailed(failure) => Some(failure.clone()),
+            _ => None,
+        })
+    });
+    dynamic(move || {
+        let failure = failure.get()?;
+        let log = failure.log.map(|reference| {
+            button(
+                app,
+                "Open gate log",
+                ButtonKind::Quiet,
+                "btn-gate-log",
+                move || {
+                    app.run(vec![Effect::OpenArtifact {
+                        reference: reference.clone(),
+                        section: None,
+                    }]);
+                },
+            )
+        });
+        Some(
+            view()
+                .when(inset, |row| row.px(term::cells(1.0)))
+                .flex_row()
+                .flex_wrap()
+                .gap(if app.form == Form::Terminal {
+                    term::cells(1.0)
+                } else {
+                    px(8.0)
+                })
+                .child(model_button(
+                    app,
+                    &failure.retry,
+                    "btn-retry-gate".into(),
+                    false,
+                ))
+                .children(log)
+                .children(
+                    failure
+                        .session
+                        .as_ref()
+                        .map(|step| next_button(app, id.as_str(), step, false)),
+                )
+                .into_element(),
+        )
+    })
 }
 
 /// A Blocked task's detail, its reply box and its other next steps, the first one primary.

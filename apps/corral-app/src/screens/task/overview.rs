@@ -232,7 +232,7 @@ pub(crate) fn pipeline(app: AppState, id: Id) -> AnyElement {
     })
 }
 
-/// The newest gate and review in the readiness chain's words, then each earlier round.
+/// The current gate and review, then the remaining recorded attempts grouped by round.
 fn checks(app: AppState, id: Id) -> AnyElement {
     let model = computed(move || {
         app.feed.with(|feed| {
@@ -244,24 +244,34 @@ fn checks(app: AppState, id: Id) -> AnyElement {
     dynamic(move || {
         let (links, rounds): (Vec<ReadyLink>, Option<Rounds>) = model.get();
         let note = rounds.as_ref().and_then(|rounds| rounds.count.clone());
-        let earlier: Vec<AnyElement> = rounds
-            .iter()
-            .flat_map(|rounds| rounds.rounds.iter())
-            .filter(|round| !round.current)
-            .map(|round| {
+        let history = rounds
+            .filter(|rounds| !rounds.rounds.is_empty())
+            .map(|rounds| {
+                let gap = px(if app.form == Form::Terminal { 0.0 } else { 8.0 });
                 view()
-                    .pt(px(if app.form == Form::Terminal { 0.0 } else { 8.0 }))
-                    .child(quiet(app, round.title.clone()))
-                    .child(chain(app, &round.links))
+                    .pt(gap)
+                    .child(quiet(app, rounds.heading))
+                    .children(
+                        rounds
+                            .rounds
+                            .into_iter()
+                            .map(|round| {
+                                view()
+                                    .pt(gap)
+                                    .child(quiet(app, round.title))
+                                    .child(chain(app, &round.links))
+                                    .into_element()
+                            })
+                            .collect::<Vec<_>>(),
+                    )
                     .into_element()
-            })
-            .collect();
-        let content = if links.is_empty() && earlier.is_empty() {
+            });
+        let content = if links.is_empty() && history.is_none() {
             quiet(app, page::NO_CHECKS)
         } else {
             view()
                 .child(chain(app, &links))
-                .children(earlier)
+                .children(history)
                 .into_element()
         };
         block(app, page::CHECKS, note, content)

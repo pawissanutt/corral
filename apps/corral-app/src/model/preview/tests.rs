@@ -55,6 +55,43 @@ fn unfinished_dependency_refuses_dispatch_until_forced() {
     );
 }
 
+#[test]
+fn retry_in_preview_does_not_inherit_the_old_workers_gate() {
+    use corral_types::CheckResult;
+
+    let mut feed = feed(1_800_000_000, "2027-01-15".into(), "08:00".into(), None);
+    let id = "T-10";
+    assert_eq!(
+        feed.board
+            .task(id)
+            .unwrap()
+            .row
+            .gate
+            .as_ref()
+            .unwrap()
+            .result,
+        CheckResult::Fail
+    );
+    let retry = Op::Retry {
+        id: id.into(),
+        profile: None,
+        fresh: false,
+        note: None,
+    };
+    act(&mut feed, &Act::with_key(Id::new("retry"), retry, false)).unwrap();
+    let row = &feed.board.task(id).unwrap().row;
+    assert_eq!(row.task.status, Status::Running);
+    assert!(row.gate.is_none());
+
+    let gate = Op::Gate { id: id.into() };
+    act(&mut feed, &Act::with_key(Id::new("gate"), gate, false)).unwrap();
+    let row = &feed.board.task(id).unwrap().row;
+    assert_eq!(row.task.status, Status::Running);
+    let receipt = row.gate.as_ref().unwrap();
+    assert_eq!(receipt.result, CheckResult::Pass);
+    assert_eq!(receipt.run.as_ref(), row.run.as_ref().map(|run| &run.id));
+}
+
 /// The pause controls a session's Session menu offers; the turn a reply starts adds Cancel.
 fn pausing(feed: &Feed, session: &str) -> Vec<Control> {
     agents::controls(feed, session)

@@ -430,13 +430,21 @@ pub(super) fn current_checks(
             last_worker = engine.store.latest_run(&task.id, Role::Worker)?;
             last_worker.as_ref()
         };
-        worker
-            .map(|run| engine.observed_head(run))
-            .transpose()?
-            .flatten()
-            .map(|head| engine.store.latest_check(&task.id, CheckKind::Gate, &head))
-            .transpose()?
-            .flatten()
+        if let Some(worker) = worker
+            && let Some(head) = engine.observed_head(worker)?
+        {
+            engine
+                .store
+                .latest_check(&task.id, CheckKind::Gate, &head)?
+                .filter(|check| {
+                    // A Running worker may reuse the same commit after a send-back or retry.
+                    task.status != Status::Running
+                        || (check.round.is_none_or(|round| round == task.round)
+                            && check.run.as_deref().is_none_or(|run| run == worker.id))
+                })
+        } else {
+            None
+        }
     } else {
         None
     };
