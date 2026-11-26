@@ -528,11 +528,44 @@ fn a_titled_markdown_artifact_renders_its_diagrams_from_every_route() {
         content(&feed, &prose, Form::Desktop, true).body,
         Body::Text(_)
     ));
-    // A file named by its extension says what it is: its `#` comment is not a heading.
-    let script = artifact("T-9", 3, ArtifactKind::Evidence, "setup.sh", 3);
-    served_as(&mut feed, &script, "", "# Install\nset -e\n```\n", false);
+
+    // Only the title varies, with the media type corrald derives from it: the same Markdown
+    // bytes render the same, whatever the title says; the same script stays text.
+    let pipeline = "Build steps:\n\n```mermaid\nflowchart LR\n  A[Build] --> B[Gate]\n```\n";
+    let script = "# Install\nset -e\n# Then build\nmake\n";
+    for (id, (title, media)) in [
+        ("Build pipeline", ""),
+        ("Build pipeline v1.0rc1", ""),
+        ("Build pipeline.txt", "text/plain"),
+        ("Build pipeline.log", "text/plain"),
+        ("Build pipeline.html", "text/html"),
+        ("pipeline.md", "text/markdown"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let id = 10 + 2 * id as u32;
+        let doc = artifact("T-9", id, ArtifactKind::Report, title, 3);
+        served_as(&mut feed, &doc, media, pipeline, false);
+        let Body::Markdown(words) = content(&feed, &doc, Form::Desktop, true).body else {
+            panic!("{title:?} renders its Markdown");
+        };
+        assert_eq!(words, pipeline, "{title:?}");
+        let setup = artifact("T-9", id + 1, ArtifactKind::Evidence, title, 3);
+        served_as(&mut feed, &setup, media, script, false);
+        let body = content(&feed, &setup, Form::Desktop, true).body;
+        let expected_log = title.ends_with(".log");
+        assert!(
+            matches!(&body, Body::Text(_)) && !expected_log
+                || matches!(&body, Body::Log(_)) && expected_log,
+            "{title:?}: a script's `#` comments are not Markdown: {body:?}"
+        );
+    }
+    // A recorded log stays a log even when a line looks like Markdown structure.
+    let gate = artifact("T-9", 30, ArtifactKind::Gate, "Gate attempt", 4);
+    served_as(&mut feed, &gate, "", "# gate\n- step: pass\n", false);
     assert!(matches!(
-        content(&feed, &script, Form::Desktop, true).body,
-        Body::Text(_)
+        content(&feed, &gate, Form::Desktop, true).body,
+        Body::Log(_)
     ));
 }

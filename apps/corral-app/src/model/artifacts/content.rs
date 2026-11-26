@@ -1,7 +1,7 @@
 //! What an artifact's served content is and how the finder shows it. Contents come from
 //! corrald's artifact catalog (`DetailRef::Artifact` by reference), never from a host file.
-//! corrald names a media type from the title and may serve raw bytes, so the app tells them
-//! apart: Markdown, a diff, a log and other UTF-8 text are drawn (without terminal control
+//! corrald names a media type from the title alone and may serve raw bytes, so the app tells
+//! them apart by the bytes themselves and the artifact's kind, never its display title: Markdown, a diff, a log and other UTF-8 text are drawn (without terminal control
 //! sequences); an image is drawn full size where the form can draw one; anything else is shown
 //! as its facts.
 
@@ -109,54 +109,42 @@ pub(crate) fn html_signature(text: &str) -> bool {
     opens("<!doctype html") || opens("<html")
 }
 
-/// What the text is, from corrald's media type, an HTML signature, then the artifact's kind
-/// and title, and last the text's own Markdown structure.
-fn shape(artifact: &Artifact, media: Option<&str>, page: &ArtifactPage) -> Shape {
-    // corrald names `text/html` from the title alone, so neither it nor a `.html` suffix makes
-    // a page: only the served bytes' own start does.
-    if original_text(page).is_some_and(|text| html_signature(&text)) {
+/// What the text is. The display title, and the media type corrald derives from it alone, never
+/// decide Markdown or a page: the served bytes' own signatures do (an HTML start, then Markdown
+/// structure), after the artifact's recorded kind (a diff, a gate or run log). A cited section
+/// is Markdown, as the engine cut it from a Markdown document. A title's `.diff`, `.patch` or
+/// `.log` suffix only colours text that is not Markdown.
+fn shape(artifact: &Artifact, page: &ArtifactPage, section: bool) -> Shape {
+    let text = original_text(page);
+    if text.as_deref().is_some_and(html_signature) {
         return Shape::Html;
     }
-    let title = artifact.title.as_str();
-    match media.unwrap_or_default() {
-        "text/markdown" => return Shape::Markdown,
-        "text/x-diff" | "text/x-patch" => return Shape::Diff,
+    if section {
+        return Shape::Markdown;
+    }
+    match artifact.kind {
+        ArtifactKind::Diff => return Shape::Diff,
+        ArtifactKind::Gate | ArtifactKind::Log => return Shape::Log,
         _ => {}
     }
-    let diff = matches!(artifact.kind, ArtifactKind::Diff);
-    let log = matches!(artifact.kind, ArtifactKind::Gate | ArtifactKind::Log);
-    if ends_with(title, &[".md", ".markdown"]) {
-        Shape::Markdown
-    } else if diff || ends_with(title, &[".diff", ".patch"]) {
+    if text.as_deref().is_some_and(markdown_signature) {
+        return Shape::Markdown;
+    }
+    let title = artifact.title.as_str();
+    if ends_with(title, &[".diff", ".patch"]) {
         Shape::Diff
-    } else if log || ends_with(title, &[".log"]) {
+    } else if ends_with(title, &[".log"]) {
         Shape::Log
-    } else if !file_name(title) && original_text(page).is_some_and(|text| markdown_signature(&text))
-    {
-        Shape::Markdown
     } else {
         Shape::Text
     }
 }
 
-/// Whether the title is a file's name with an extension (`deploy.sh`, `notes.txt`): such a file
-/// says what it is, and its `#` comments or fences are not Markdown. A descriptive title
-/// (`Delivery plan`, `Plan v1.2`) names none.
-fn file_name(title: &str) -> bool {
-    title.rsplit_once('.').is_some_and(|(stem, extension)| {
-        !stem.is_empty()
-            && !stem.ends_with(char::is_whitespace)
-            && (1..=10).contains(&extension.len())
-            && extension.bytes().all(|byte| byte.is_ascii_alphanumeric())
-            && extension.bytes().any(|byte| byte.is_ascii_alphabetic())
-    })
-}
-
-/// Whether the text reads as a Markdown document by its own structure: its first line that says
-/// something is an ATX heading (`# Plan`), or, within its first 64 KiB, it holds a closed code fence (```` ``` ```` or
-/// `~~~`, a Mermaid diagram's included) or a table's delimiter row (`|---|---|`). A descriptive
-/// title (`Delivery plan`) names no suffix and corrald's media type follows the title, so this
-/// is what renders a titled agent document as Markdown rather than its source.
+/// Whether the text reads as a Markdown document by its own structure, within its first 64 KiB:
+/// a closed code fence (```` ``` ```` or `~~~`, a Mermaid diagram's included), a table's
+/// delimiter row (`|---|---|`), or a leading ATX heading (`# Plan`) with another construct only
+/// Markdown writes (a list item, a link, emphasis or a quote). A lone `#` line is a script's or a
+/// config's comment as often as a heading, so it is not enough.
 pub(crate) fn markdown_signature(text: &str) -> bool {
     let text = &text[..text.floor_char_boundary(MARKDOWN_SIGNATURE_BYTES)];
     let mut lines = text.lines().map(str::trim_end);
@@ -168,6 +156,7 @@ pub(crate) fn markdown_signature(text: &str) -> bool {
         .clone()
         .find(|line| !line.trim().is_empty())
         .is_some_and(|line| heading(line.trim_start_matches('\u{feff}')))
+        && lines.clone().skip(1).any(markdown_construct)
     {
         return true;
     }
@@ -194,6 +183,23 @@ pub(crate) fn markdown_signature(text: &str) -> bool {
         }
     }
     false
+}
+
+/// A line only Markdown writes: a list item (`- x`, `* x`, `+ x`, `1. x`), a quote (`> x`), an
+/// inline link (`[x](y)`) or strong emphasis (`**x**`).
+fn markdown_construct(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    let digits = trimmed.bytes().take_while(u8::is_ascii_digit).count();
+    ["- ", "* ", "+ ", "> "]
+        .iter()
+        .any(|mark| trimmed.starts_with(mark))
+        || (digits > 0 && trimmed[digits..].starts_with(". "))
+        || trimmed
+            .find("](")
+            .is_some_and(|at| trimmed[..at].contains('['))
+        || trimmed
+            .find("**")
+            .is_some_and(|at| trimmed[at + 2..].contains("**"))
 }
 
 /// A GitHub table's delimiter row: cells of dashes, optionally aligned with colons, between
@@ -337,7 +343,7 @@ pub fn is_html(feed: &Feed, artifact: &Artifact) -> bool {
         return false;
     };
     match served(page) {
-        Served::Text(_) => shape(artifact, page.media_type.as_deref(), page) == Shape::Html,
+        Served::Text(_) => shape(artifact, page, false) == Shape::Html,
         Served::Image(_) | Served::Binary => false,
     }
 }
@@ -420,7 +426,7 @@ pub fn content_of(
             };
         }
     };
-    let shape = shape(artifact, page.media_type.as_deref(), page);
+    let shape = shape(artifact, page, reference.contains('#'));
     if shape == Shape::Html && !full {
         return Content {
             body: Body::Facts(HTML),

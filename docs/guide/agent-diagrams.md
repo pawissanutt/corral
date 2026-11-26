@@ -58,10 +58,13 @@ stays readable and points to its successor.
 
 ## What the app draws
 
-The app reads a Markdown artifact from its `.md`/`.markdown` title or, for a title that is not a
-file name with another extension, from its own structure: a first line that is a heading, or a
-closed code fence or table within its first 64 KiB. A descriptively titled report therefore
-renders as Markdown, not as its source, while `deploy.sh` or `notes.txt` stays text.
+The app never decides the format from the title (or the media type corrald derives from it).
+After the artifact's recorded kind (a `diff`, `gate` or `log` artifact keeps that view), it reads
+the content: within its first 64 KiB, a closed code fence, a table's delimiter row, or a leading
+heading followed by a list item, link, quote or `**strong**` text makes it Markdown. The same
+bytes therefore render the same under `Build pipeline`, `Build pipeline v1.0rc1` or
+`pipeline.txt`. A lone leading `# line` is not enough, so a script's comments stay text. A
+`mermaid` fence is always a closed fence, so a diagram report always qualifies.
 
 On desktop and web each `mermaid` fence is drawn on the app's diagram canvas:
 
