@@ -83,6 +83,12 @@ fn direction(word: &str) -> bool {
     matches!(word, "TB" | "TD" | "BT" | "RL" | "LR")
 }
 
+/// Why a statement the canvas cannot represent is not drawn.
+fn refused(statement: &str) -> String {
+    let word = statement.split_whitespace().next().unwrap_or(statement);
+    format!("“{word}” blocks are not drawn here")
+}
+
 fn at(number: usize, why: &str) -> String {
     format!("line {number}: {why}")
 }
@@ -214,9 +220,9 @@ const FLOW_SKIP: &[&str] = &[
     "linkstyle",
     "click",
     "direction",
-    "subgraph",
-    "end",
 ];
+/// Groups the canvas does not draw: a box drawn without its group would misstate the diagram.
+const FLOW_REFUSED: &[&str] = &["subgraph", "end"];
 
 fn flow_line(built: &mut Built, line: &str) -> Result<(), String> {
     for statement in split_outside(line, ';') {
@@ -229,6 +235,9 @@ fn flow_line(built: &mut Built, line: &str) -> Result<(), String> {
         }
         if statement.is_empty() || starts_with_word(statement, FLOW_SKIP) {
             continue;
+        }
+        if starts_with_word(statement, FLOW_REFUSED) {
+            return Err(refused(statement));
         }
         flow_statement(built, statement)?;
     }
@@ -356,13 +365,8 @@ fn shape(rest: &mut &str) -> Result<Option<String>, String> {
             c if c == close && !quoted => {
                 depth -= 1;
                 if depth <= 0 {
-                    let inner = &rest[open.len_utf8()..at];
-                    let inner = inner
-                        .trim_start_matches(['[', '(', '{', '/', '\\'])
-                        .trim_end_matches([']', ')', '}', '/', '\\']);
+                    let inner = framed(&rest[open.len_utf8()..at], open == '>')?;
                     *rest = &rest[at + 1..];
-                    // A doubled shape (`((x))`, `[[x]]`) closes with its last bracket.
-                    *rest = rest.trim_start_matches([')', ']', '}']);
                     return Ok(Some(label(inner)));
                 }
             }
@@ -370,6 +374,27 @@ fn shape(rest: &mut &str) -> Result<Option<String>, String> {
         }
     }
     Err("a node's shape is not closed".into())
+}
+
+/// A shape's words inside its inner frame (`(x)` of `[(x)]`, `/x\` of `[/x\]`), which must
+/// close as it opened; an asymmetric shape (`>x]`) has none. Words may end in a bracket of
+/// their own (`[Run (fast)]`): only an opening frame asks for a closing one.
+fn framed(inner: &str, asymmetric: bool) -> Result<&str, String> {
+    let opens = inner.len() - inner.trim_start_matches(['[', '(', '{', '/', '\\']).len();
+    let mut words = &inner[opens..];
+    for open in inner[..opens].chars() {
+        let closed = match open {
+            '[' => words.strip_suffix(']'),
+            '(' => words.strip_suffix(')'),
+            '{' => words.strip_suffix('}'),
+            _ => words.strip_suffix(['/', '\\']),
+        };
+        match closed {
+            Some(rest) if !asymmetric => words = rest,
+            _ => return Err(format!("the shape “{inner}” does not close as it opens")),
+        }
+    }
+    Ok(words)
 }
 
 /// The line a one-way link draws: solid (`-->`), thick (`==>`) or dotted (`-.->`), of any
@@ -455,7 +480,7 @@ fn arrow(rest: &mut &str) -> Result<Option<String>, String> {
 
 // State diagrams.
 
-const STATE_SKIP: &[&str] = &["direction", "classdef", "class", "--", "}", "style"];
+const STATE_SKIP: &[&str] = &["direction", "classdef", "class", "style"];
 const START: &str = "[*] start";
 const END: &str = "[*] end";
 
@@ -470,8 +495,13 @@ fn state_line(built: &mut Built, line: &str, in_note: &mut bool) -> Result<(), S
         *in_note = !line.contains(':');
         return Ok(());
     }
-    if starts_with_word(line, STATE_SKIP) || line == "}" {
+    if starts_with_word(line, STATE_SKIP) {
         return Ok(());
+    }
+    // Composite and concurrent states, forks, joins and choices: drawn flat, their inner
+    // start and end would merge with the diagram's and a choice would read as a state.
+    if line.contains(['{', '}']) || line.contains("<<") || line == "--" {
+        return Err(format!("“{line}” is a structure not drawn here"));
     }
     if let Some((from, to)) = line.split_once("-->") {
         let (to, words) = match to.split_once(':') {
@@ -483,8 +513,8 @@ fn state_line(built: &mut Built, line: &str, in_note: &mut bool) -> Result<(), S
         return built.edge(from, to, words, "Transition".into());
     }
     if let Some(declared) = line.strip_prefix("state ") {
-        let declared = declared.trim().trim_end_matches('{').trim();
-        // `state "Long words" as Id`, `state Id <<fork>>`, `state Id`.
+        let declared = declared.trim();
+        // `state "Long words" as Id`, `state Id`.
         if let Some((words, id)) = declared.split_once(" as ") {
             built.node(id.trim(), Some(label(words)), "State")?;
         } else {
@@ -526,28 +556,22 @@ fn state_id(id: &str) -> Result<&str, String> {
 
 // Sequence diagrams.
 
+/// What changes no message: numbering (messages are numbered anyway), activation bars, notes,
+/// the title and participants' menus.
 const SEQUENCE_SKIP: &[&str] = &[
     "autonumber",
     "activate",
     "deactivate",
     "note",
-    "loop",
-    "alt",
-    "else",
-    "opt",
-    "par",
-    "and",
-    "critical",
-    "option",
-    "break",
-    "rect",
-    "end",
-    "box",
     "title",
     "link",
     "links",
-    "create",
-    "destroy",
+];
+/// Blocks that make messages conditional, repeated or parallel, and participants' lifetimes:
+/// drawn as plain steps they would say something else.
+const SEQUENCE_REFUSED: &[&str] = &[
+    "loop", "alt", "else", "opt", "par", "and", "critical", "option", "break", "rect", "end",
+    "box", "create", "destroy",
 ];
 /// Message arrows, longest first so `-->>` is not read as `-->`.
 const MESSAGES: &[&str] = &[
@@ -571,6 +595,9 @@ fn sequence_line(built: &mut Built, line: &str) -> Result<(), String> {
     }
     if starts_with_word(line, SEQUENCE_SKIP) {
         return Ok(());
+    }
+    if starts_with_word(line, SEQUENCE_REFUSED) {
+        return Err(refused(line));
     }
     let (at, sign) = MESSAGES
         .iter()

@@ -61,12 +61,23 @@ fn invalid_headers_and_links_other_than_one_way_arrows_fall_back() {
         "sequenceDiagram\n  A->B: no head\n",
         "sequenceDiagram\n  A-xB: lost\n",
         "sequenceDiagram\n  A<<->>B: both\n",
+        "sequenceDiagram\nalt authorized\nA->>B: Grant\nelse denied\nA->>B: Reject\nend\n",
+        "sequenceDiagram\nalt authorized\nA->>B: Grant\n",
+        "sequenceDiagram\nloop every page\nA->>B: read\nend\n",
+        "flowchart TD\nA[Box]] --> B\n",
+        "flowchart TD\nA[(db]] --> B\n",
+        "flowchart TD\nsubgraph S\nA --> B\nend\n",
+        "stateDiagram-v2\nstate Busy {\n[*] --> Work\n}\n",
+        "stateDiagram-v2\nstate pick <<choice>>\n[*] --> pick\n",
     ] {
         assert!(parse(source).is_err(), "{source:?} is drawn");
     }
     let drawn = parse("flowchart LR\n  A -- yes --> B -. maybe .-> C == sure ==> D\n").unwrap();
     let words: Vec<_> = drawn.edges.iter().map(|e| e.label.as_str()).collect();
     assert_eq!(words, ["yes", "maybe", "sure"]);
+    let shaped =
+        parse("flowchart LR\n  A[Run (fast)] --> B[(db)] --> C((x)) --> D[/in\\]\n").unwrap();
+    assert_eq!(labels(&shaped.nodes), ["Run (fast)", "db", "x", "in"]);
 }
 
 #[test]
