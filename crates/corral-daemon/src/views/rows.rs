@@ -637,7 +637,8 @@ fn projects(engine: &Engine) -> Result<Vec<ProjectRow>> {
             let row_bytes = serde_json::to_vec(&row)?.len();
             row.local_branches = local_branches
                 .map(|branches| branch_preview(branches, row_bytes))
-                .transpose()?;
+                .transpose()?
+                .filter(|preview| !preview.is_empty());
             Ok(row)
         })
         .collect()
