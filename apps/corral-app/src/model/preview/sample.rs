@@ -535,7 +535,7 @@ fn work(feed: &Feed, record: &mut TaskDetail) {
                 feed,
                 record,
                 ArtifactKind::Report,
-                "narrow-sidebar-report.html",
+                "Standalone narrow sidebar report",
                 3 * HOUR,
             ));
         }

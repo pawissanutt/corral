@@ -83,7 +83,8 @@ fn ends_with(title: &str, endings: &[&str]) -> bool {
 
 /// Whether the text starts as a standalone HTML document does (`<!doctype html`, `<html`),
 /// after a byte-order mark, white space and comments, within its first [`SIGNATURE_BYTES`]:
-/// a descriptive title names no suffix, and corrald's media type follows the title.
+/// a descriptive title names no suffix, and corrald's media type follows the title, so this
+/// start is the only evidence that opens a browser.
 pub(crate) fn html_signature(text: &str) -> bool {
     let mut start = text[..text.floor_char_boundary(SIGNATURE_BYTES)]
         .trim_start_matches('\u{feff}')
@@ -108,16 +109,17 @@ pub(crate) fn html_signature(text: &str) -> bool {
 
 /// What the text is, from corrald's media type, an HTML signature, then the artifact's kind
 /// and title.
-fn shape(artifact: &Artifact, media: Option<&str>, text: &str) -> Shape {
+fn shape(artifact: &Artifact, media: Option<&str>, page: &ArtifactPage) -> Shape {
+    // corrald names `text/html` from the title alone, so neither it nor a `.html` suffix makes
+    // a page: only the served bytes' own start does.
+    if original_text(page).is_some_and(|text| html_signature(&text)) {
+        return Shape::Html;
+    }
     let title = artifact.title.as_str();
     match media.unwrap_or_default() {
         "text/markdown" => return Shape::Markdown,
         "text/x-diff" | "text/x-patch" => return Shape::Diff,
-        "text/html" => return Shape::Html,
         _ => {}
-    }
-    if html_signature(text) {
-        return Shape::Html;
     }
     let diff = matches!(artifact.kind, ArtifactKind::Diff);
     let log = matches!(artifact.kind, ArtifactKind::Gate | ArtifactKind::Log);
@@ -127,8 +129,6 @@ fn shape(artifact: &Artifact, media: Option<&str>, text: &str) -> Shape {
         Shape::Diff
     } else if log || ends_with(title, &[".log"]) {
         Shape::Log
-    } else if ends_with(title, &[".html", ".htm"]) {
-        Shape::Html
     } else {
         Shape::Text
     }
@@ -237,8 +237,21 @@ fn served(page: &ArtifactPage) -> Served {
     }
 }
 
-/// Whether the artifact corrald serves is a standalone HTML page, from its media type or its
-/// start; false until its content has loaded and for a cited section.
+/// The served head's text as corrald sent it, before control characters are removed; none for
+/// bytes that are not UTF-8.
+fn original_text(page: &ArtifactPage) -> Option<std::borrow::Cow<'_, str>> {
+    match page.encoding {
+        ArtifactEncoding::Text => Some(page.content.as_str().into()),
+        ArtifactEncoding::Base64 => {
+            let bytes = STANDARD.decode(&page.content).ok()?;
+            utf8_text(&bytes, page.truncated).map(|text| text.to_owned().into())
+        }
+        ArtifactEncoding::Other => None,
+    }
+}
+
+/// Whether the artifact corrald serves is a standalone HTML page, by the signature its own
+/// served head starts with; false until its content has loaded and for a cited section.
 pub fn is_html(feed: &Feed, artifact: &Artifact) -> bool {
     let Some(DetailBody::Artifact(page)) = feed
         .detail(&target(&artifact.reference()))
@@ -247,7 +260,7 @@ pub fn is_html(feed: &Feed, artifact: &Artifact) -> bool {
         return false;
     };
     match served(page) {
-        Served::Text(text) => shape(artifact, page.media_type.as_deref(), &text) == Shape::Html,
+        Served::Text(_) => shape(artifact, page.media_type.as_deref(), page) == Shape::Html,
         Served::Image(_) | Served::Binary => false,
     }
 }
@@ -330,7 +343,7 @@ pub fn content_of(
             };
         }
     };
-    let shape = shape(artifact, page.media_type.as_deref(), &text);
+    let shape = shape(artifact, page.media_type.as_deref(), page);
     if shape == Shape::Html && !full {
         return Content {
             body: Body::Facts(HTML),

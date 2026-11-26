@@ -306,11 +306,16 @@ fn a_library_is_found_by_its_project_and_offers_no_task() {
 
 /// The content corrald served for `artifact` so far, and whether more of it waits.
 fn content_served(feed: &mut Feed, artifact: &Artifact, text: &str, truncated: bool) {
+    served_as(feed, artifact, "text/plain", text, truncated);
+}
+
+/// [`content_served`] under the media type corrald named, which it derives from the title.
+fn served_as(feed: &mut Feed, artifact: &Artifact, media: &str, text: &str, truncated: bool) {
     let target = content_target(&artifact.reference());
     let body = DetailBody::Artifact(corral_protocol::detail::ArtifactPage {
         task: artifact.task.clone(),
         key: artifact.id.to_string(),
-        media_type: Some("text/plain".into()),
+        media_type: Some(media.into()),
         encoding: corral_protocol::detail::ArtifactEncoding::Text,
         content: text.into(),
         truncated,
@@ -367,7 +372,7 @@ fn previews_stay_bounded_and_say_when_they_are_partial() {
 }
 
 /// The reported standalone report: titled in words, so corrald names no HTML media type, yet
-/// its own start says it is a page. It must offer Open in browser over the whole verified
+/// its own start says it is a page; a `.html` title without that start is not one. It must offer Open in browser over the whole verified
 /// artifact rather than read as plain text; text that merely mentions a tag must not, and a
 /// page past the preview's bound is refused before anything is read.
 #[test]
@@ -399,6 +404,19 @@ fn a_descriptively_titled_html_report_opens_in_the_browser() {
     let notes = artifact("T-7", 2, ArtifactKind::Report, "Notes on html", 2);
     content_served(&mut feed, &notes, "We should emit <html> later.\n", false);
     assert!(!preview(&feed, &notes, Form::Desktop, false).html);
+
+    // A `.html` title, and the `text/html` corrald names from it, are not evidence of a page.
+    let named = artifact("T-7", 3, ArtifactKind::Report, "notes.html", 3);
+    served_as(
+        &mut feed,
+        &named,
+        "text/html",
+        "Plain notes, no markup.\n",
+        false,
+    );
+    let shown = preview(&feed, &named, Form::Desktop, false);
+    assert!(!shown.html, "a suffix alone offers no browser");
+    assert!(matches!(shown.content.body, Body::Text(_)));
 
     let mut huge = report.clone();
     huge.bytes = browser::MAX_BYTES + 1;

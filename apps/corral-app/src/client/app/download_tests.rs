@@ -203,3 +203,83 @@ fn a_large_text_artifact_previews_its_head_without_reading_the_rest() {
         assert!(content.starts_with(head.content.as_bytes()));
     });
 }
+
+#[derive(Debug, Default)]
+struct Staged {
+    bytes: Vec<u8>,
+    launched: bool,
+}
+
+/// A preview that records what it was handed and whether it launched.
+struct Preview(Arc<Mutex<Staged>>);
+impl crate::client::html::HtmlSink for Preview {
+    fn append(&mut self, bytes: &[u8]) -> Result<(), String> {
+        self.0.lock().unwrap().bytes.extend_from_slice(bytes);
+        Ok(())
+    }
+
+    fn finish(self: Box<Self>) -> crate::client::html::HtmlFinish {
+        Box::pin(async move {
+            self.0.lock().unwrap().launched = true;
+            Ok(())
+        })
+    }
+}
+
+/// Open in browser on a descriptively titled HTML report goes through the download's transfer
+/// into the preview: it launches with every byte of the artifact only when the read matches the
+/// catalog, and never for a head shorter than the catalog's size or for a mismatched SHA-256.
+#[test]
+fn open_in_browser_launches_only_the_whole_verified_artifact() {
+    let runtime = nsh_core::element::Runtime::default();
+    let _entered = runtime.enter();
+    let mut app = AppState::new();
+    let feed = signal(Feed::default());
+    app.ready = true;
+    let page = b"<!doctype html><title>Standalone coverage report</title><p>ok</p>".to_vec();
+    let digest = format!("{:x}", Sha256::digest(&page));
+    let head = digest.clone();
+    for (catalog_bytes, sha256, launches) in [
+        (page.len() as u64, digest, true),
+        // The catalog's artifact is longer than what was served: a head, not the page.
+        (page.len() as u64 + 64, head, false),
+        (
+            page.len() as u64,
+            format!("{:x}", Sha256::digest(b"other")),
+            false,
+        ),
+    ] {
+        let status = signal(Saving::Reading {
+            id: "o".into(),
+            percent: 0,
+        });
+        let staged = Arc::new(Mutex::new(Staged::default()));
+        let mut outgoing = app.request(
+            feed,
+            ClientRequest::SaveArtifact(SaveArtifact {
+                id: "o".into(),
+                reference: "T-1:2".into(),
+                bytes: catalog_bytes,
+                sha256,
+                status,
+                output: Box::new(crate::client::html::HtmlSave(Box::new(Preview(
+                    staged.clone(),
+                )))),
+            }),
+        );
+        while let Some(next) = outgoing.pop() {
+            outgoing = app.event(feed, serve(next, &page, true, 7)).unwrap();
+        }
+        let staged = staged.lock().unwrap();
+        assert_eq!(staged.launched, launches, "catalog {catalog_bytes} bytes");
+        if launches {
+            assert_eq!(staged.bytes, page);
+            assert_eq!(
+                status.get_untracked(),
+                Saving::Saved("in the browser".into())
+            );
+        } else {
+            assert!(matches!(status.get_untracked(), Saving::Failed(_)));
+        }
+    }
+}

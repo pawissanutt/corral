@@ -11,8 +11,8 @@ use std::{cell::RefCell, rc::Rc, sync::atomic::Ordering};
 
 use nsh_core::prelude::*;
 
-use crate::client::download::{SaveArtifact, SaveFinish, SaveSink, SaveStep};
-use crate::client::html::Output;
+use crate::client::download::SaveArtifact;
+use crate::client::html::HtmlSave;
 use crate::client::requests::{self, ClientRequest};
 use crate::model::artifacts::Save;
 use crate::model::artifacts::browser::{
@@ -188,26 +188,11 @@ fn start(app: AppState, opens: Opens, save: Save) {
         bytes: save.bytes,
         sha256: save.sha256,
         status,
-        output: Box::new(Preview(output)),
+        output: Box::new(HtmlSave(output)),
     }));
     if !sent {
         status.set(Saving::Failed(
             "The connection to corrald is unavailable.".into(),
         ));
-    }
-}
-
-/// The download's sink that stages the page in the isolated preview; the transfer calls
-/// `finish`, which launches it, only after the bytes matched the catalog.
-struct Preview(Output);
-
-impl SaveSink for Preview {
-    fn append<'a>(&'a mut self, bytes: &'a [u8]) -> SaveStep<'a> {
-        let appended = self.0.append(bytes);
-        Box::pin(async move { appended })
-    }
-
-    fn finish(self: Box<Self>) -> SaveFinish {
-        Box::pin(async move { self.0.finish().await.map(|()| "in the browser".to_owned()) })
     }
 }

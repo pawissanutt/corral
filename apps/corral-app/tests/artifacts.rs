@@ -44,10 +44,11 @@ fn a_reports_mermaid_fence_draws_as_a_diagram_beside_its_code() {
     assert_eq!(app.screen().count("id:mermaid-source").unwrap(), 0);
 }
 
-/// A standalone HTML report offers Open in browser beside View source and Download.
+/// A standalone HTML report titled in words (no suffix, served as plain text) is a page by its
+/// own doctype: it offers Open in browser beside View source and Download.
 #[test]
-fn an_html_report_offers_open_in_browser_and_its_source() {
-    let mut app = finder("narrow-sidebar-report");
+fn a_descriptively_titled_html_report_offers_open_in_browser_and_its_source() {
+    let mut app = finder("standalone narrow sidebar");
     app.wait_for("id:btn-open-html-artifact").unwrap();
     app.wait_for("id:btn-download-artifact").unwrap();
     app.wait_for("id:btn-open-full >> text:View source")

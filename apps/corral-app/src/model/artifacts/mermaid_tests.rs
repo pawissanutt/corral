@@ -34,13 +34,39 @@ fn a_flowchart_reads_its_shapes_chains_and_arrow_words() {
     );
 }
 
-/// A circle or cross head is an arrow, not the start of its words, and statements may follow
-/// the header on its line.
+/// Statements may follow the header on its line, and a node's style class is not its name.
 #[test]
-fn arrow_heads_and_header_statements_are_read() {
-    let diagram = parse("flowchart TD; A --o B\n  B --x C\n").unwrap();
+fn header_statements_and_style_classes_are_read() {
+    let diagram = parse("flowchart TD; A:::hot --> B\n  B ==> C\n").unwrap();
     assert_eq!(labels(&diagram.nodes), ["A", "B", "C"]);
     assert_eq!(diagram.edges.len(), 2);
+}
+
+/// Mermaid would refuse these, or draw them other than as one-way arrows: the app must show
+/// the source rather than a picture that says something else.
+#[test]
+fn invalid_headers_and_links_other_than_one_way_arrows_fall_back() {
+    for source in [
+        "flowchart NOT_A_DIRECTION\nA --> B\n",
+        "flowchart LR extra\nA --> B\n",
+        "graph TD\n  direction SIDEWAYS\n  A --> B\n",
+        "stateDiagram-v2 LR\n  [*] --> A\n",
+        "flowchart LR\n  A --- B\n",
+        "flowchart LR\n  A -.- B\n",
+        "flowchart LR\n  A <--> B\n",
+        "flowchart LR\n  A --o B\n",
+        "flowchart LR\n  A --x B\n",
+        "flowchart LR\n  A ~~~ B\n",
+        "flowchart LR\n  A -- words --- B\n",
+        "sequenceDiagram\n  A->B: no head\n",
+        "sequenceDiagram\n  A-xB: lost\n",
+        "sequenceDiagram\n  A<<->>B: both\n",
+    ] {
+        assert!(parse(source).is_err(), "{source:?} is drawn");
+    }
+    let drawn = parse("flowchart LR\n  A -- yes --> B -. maybe .-> C == sure ==> D\n").unwrap();
+    let words: Vec<_> = drawn.edges.iter().map(|e| e.label.as_str()).collect();
+    assert_eq!(words, ["yes", "maybe", "sure"]);
 }
 
 #[test]

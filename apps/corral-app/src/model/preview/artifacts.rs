@@ -222,8 +222,13 @@ pub(super) fn content(feed: &Feed, reference: &str) -> Result<ArtifactPage, Stri
         ),
         ArtifactKind::Evidence => text("text/plain", evidence(&record, row)),
         _ if row.title.ends_with(".md") => text("text/markdown", markdown(feed, &record, row)),
+        // corrald names the media type from the title, so a page titled in words is plain text.
         _ => text(
-            "text/html",
+            if row.title.ends_with(".html") {
+                "text/html"
+            } else {
+                "text/plain"
+            },
             format!(
                 "<!doctype html><title>{}</title><h1>{}</h1><p>Preview sample report.</p>",
                 row.title, record.task.title

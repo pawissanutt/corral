@@ -38,27 +38,33 @@ pub fn parse(source: &str) -> Result<Diagram, String> {
     };
     // `flowchart TD; A --> B` puts statements on the header's line.
     let (header, tail) = header.split_once(';').unwrap_or((header, ""));
-    let kind = header
-        .split_whitespace()
-        .next()
-        .unwrap_or_default()
-        .to_ascii_lowercase();
+    let mut words = header.split_whitespace();
+    let kind = words.next().unwrap_or_default();
+    let options: Vec<&str> = words.collect();
+    // Mermaid refuses a header it does not know, so the app does too rather than guess.
+    let header_ok = match kind {
+        "graph" | "flowchart" => options.len() <= 1 && options.iter().all(|d| direction(d)),
+        _ => options.is_empty() && tail.trim().is_empty(),
+    };
+    if !header_ok {
+        return Err(format!("the header “{}” is not understood", header.trim()));
+    }
     let mut built = Built::default();
-    let diagram = match kind.as_str() {
+    let diagram = match kind {
         "graph" | "flowchart" => {
             for (number, line) in std::iter::once((first, tail)).chain(lines) {
                 flow_line(&mut built, line).map_err(|why| at(number, &why))?;
             }
             LensKind::State
         }
-        "statediagram" | "statediagram-v2" => {
+        "stateDiagram" | "stateDiagram-v2" => {
             let mut in_note = false;
             for (number, line) in lines {
                 state_line(&mut built, line, &mut in_note).map_err(|why| at(number, &why))?;
             }
             LensKind::State
         }
-        "sequencediagram" => {
+        "sequenceDiagram" => {
             for (number, line) in lines {
                 sequence_line(&mut built, line).map_err(|why| at(number, &why))?;
             }
@@ -70,6 +76,11 @@ pub fn parse(source: &str) -> Result<Diagram, String> {
         return Err("it names nothing to draw".into());
     }
     Ok(built.diagram(diagram))
+}
+
+/// A flowchart's direction, as Mermaid names one.
+fn direction(word: &str) -> bool {
+    matches!(word, "TB" | "TD" | "BT" | "RL" | "LR")
 }
 
 fn at(number: usize, why: &str) -> String {
@@ -210,6 +221,12 @@ const FLOW_SKIP: &[&str] = &[
 fn flow_line(built: &mut Built, line: &str) -> Result<(), String> {
     for statement in split_outside(line, ';') {
         let statement = statement.trim();
+        if let Some(to) = statement.strip_prefix("direction ") {
+            if !direction(to.trim()) {
+                return Err(format!("“{statement}” names no direction"));
+            }
+            continue;
+        }
         if statement.is_empty() || starts_with_word(statement, FLOW_SKIP) {
             continue;
         }
@@ -246,7 +263,7 @@ fn flow_statement(built: &mut Built, statement: &str) -> Result<(), String> {
         if rest.is_empty() {
             return Ok(());
         }
-        let words = arrow(&mut rest).ok_or_else(|| format!("“{}” is not understood", rest))?;
+        let words = arrow(&mut rest)?.ok_or_else(|| format!("“{}” is not understood", rest))?;
         let right = flow_group(built, &mut rest)?;
         for &from in &left {
             for &to in &right {
@@ -274,7 +291,7 @@ fn flow_node(built: &mut Built, rest: &mut &str) -> Result<usize, String> {
     let text = rest.trim_start();
     let end = text
         .char_indices()
-        .find(|(_, c)| !(c.is_alphanumeric() || matches!(c, '_' | ':' | '$')))
+        .find(|(_, c)| !(c.is_alphanumeric() || matches!(c, '_' | '$')))
         .map_or(text.len(), |(at, _)| at);
     // An id may hold a hyphen, but an arrow starts with one: keep the hyphens before a letter.
     let mut end = end;
@@ -296,6 +313,13 @@ fn flow_node(built: &mut Built, rest: &mut &str) -> Result<usize, String> {
     let id = &text[..end];
     let mut after = &text[end..];
     let shaped = shape(&mut after)?;
+    // `A:::name` gives the node a style class: style only, so it is skipped.
+    if let Some(class) = after.strip_prefix(":::") {
+        let name = class
+            .find(|c: char| !(c.is_alphanumeric() || matches!(c, '_' | '-')))
+            .unwrap_or(class.len());
+        after = &class[name..];
+    }
     *rest = after;
     built.node(id, shaped, "Node")
 }
@@ -338,47 +362,85 @@ fn shape(rest: &mut &str) -> Result<Option<String>, String> {
     Err("a node's shape is not closed".into())
 }
 
-/// The arrow at the start of `rest` and its words (`-->`, `-.->`, `==>`, `-- x -->`,
-/// `-->|x|`); none when no arrow starts there.
-fn arrow(rest: &mut &str) -> Option<String> {
+/// The line a one-way link draws: solid (`-->`), thick (`==>`) or dotted (`-.->`), of any
+/// length; none for an open, two-way or invisible link, which the app's arrows would misstate.
+fn one_way(link: &str) -> Option<char> {
+    let line = link.strip_suffix('>')?;
+    let all = |c: char| line.len() >= 2 && line.chars().all(|d| d == c);
+    if all('-') {
+        Some('-')
+    } else if all('=') {
+        Some('=')
+    } else {
+        let dots = line.strip_prefix('-')?.strip_suffix('-')?;
+        (!dots.is_empty() && dots.chars().all(|c| c == '.')).then_some('.')
+    }
+}
+
+fn not_drawn(link: &str) -> String {
+    format!("the link “{link}” is not a one-way arrow, the only link the app draws")
+}
+
+/// The length of the link characters `text` starts with.
+fn link_run(text: &str) -> usize {
+    text.find(|c: char| !matches!(c, '-' | '=' | '.' | '<' | '>' | '~'))
+        .unwrap_or(text.len())
+}
+
+/// A circle or cross head (`--o`, `--x`) right after a link's line.
+fn headed(line: &str, after: &str) -> bool {
+    line.ends_with(['-', '='])
+        && after.starts_with(['o', 'x'])
+        && after[1..]
+            .chars()
+            .next()
+            .is_none_or(|c| !c.is_alphanumeric())
+}
+
+/// The one-way link at the start of `rest` and its words (`-->`, `-.->`, `==>`, `-- x -->`,
+/// `-->|x|`); none when no link starts there, an error for a link the app would misdraw.
+fn arrow(rest: &mut &str) -> Result<Option<String>, String> {
     let text = *rest;
-    let run = text
-        .char_indices()
-        .find(|(_, c)| !matches!(c, '-' | '=' | '.' | '<' | '>' | '~'))
-        .map_or(text.len(), |(at, _)| at);
-    let mut end = run;
+    let run = link_run(text);
     let body = &text[..run];
     if run < 2 || !body.contains(['-', '=', '~']) {
-        return None;
+        return Ok(None);
     }
-    // A circle or cross head stands right after the line, before a space.
-    if body.ends_with(['-', '=']) && text[run..].starts_with(['o', 'x']) {
-        let next = text[run + 1..].chars().next();
-        if next.is_none_or(|c| c.is_whitespace()) {
-            end += 1;
-        }
+    let mut after = &text[run..];
+    if headed(body, after) {
+        return Err(not_drawn(&text[..run + 1]));
     }
     let mut words = String::new();
-    let mut after = &text[end..];
-    // Words inside the arrow: `-- words -->`, `== words ==>`, `-. words .->`.
-    if end == run && matches!(body, "--" | "==" | "-.") && after.starts_with(char::is_whitespace) {
-        let ends = ["-->", "---", "==>", "===", ".->", ".-", "--o", "--x"];
-        let (at, ending) = ends
+    // Words inside the link: `-- words -->`, `== words ==>`, `-. words .->`.
+    if matches!(body, "--" | "==" | "-.") && after.starts_with(char::is_whitespace) {
+        let at = ["--", "==", ".-"]
             .iter()
-            .filter_map(|ending| after.find(ending).map(|at| (at, *ending)))
-            .min_by_key(|(at, _)| *at)?;
+            .filter_map(|close| after.find(close))
+            .min()
+            .ok_or_else(|| not_drawn(body))?;
+        let length = link_run(&after[at..]);
+        let close = &after[at..at + length];
+        let line = match body {
+            "-." => one_way(&format!("-{close}")).filter(|&kind| kind == '.'),
+            _ => one_way(close).filter(|&kind| body.starts_with(kind)),
+        };
+        if line.is_none() || headed(close, &after[at + length..]) {
+            return Err(not_drawn(&format!("{body} … {close}")));
+        }
         words = label(&after[..at]);
-        after = &after[at + ending.len()..];
-        after = after.trim_start_matches(['-', '=', '.', '>']);
+        after = &after[at + length..];
+    } else if one_way(body).is_none() {
+        return Err(not_drawn(body));
     }
-    let trimmed = after.trim_start();
-    if let Some(piped) = trimmed.strip_prefix('|') {
-        let close = piped.find('|')?;
+    if let Some(piped) = after.trim_start().strip_prefix('|') {
+        let close = piped
+            .find('|')
+            .ok_or_else(|| "a link's words are not closed".to_owned())?;
         words = label(&piped[..close]);
         after = &piped[close + 1..];
     }
     *rest = after;
-    Some(words)
+    Ok(Some(words))
 }
 
 // State diagrams.
@@ -481,6 +543,8 @@ const SEQUENCE_SKIP: &[&str] = &[
 const MESSAGES: &[&str] = &[
     "<<-->>", "<<->>", "-->>", "->>", "-->", "--x", "--)", "->", "-x", "-)",
 ];
+/// The messages the app draws faithfully as one arrow: an arrowhead or an async open head.
+const ARROWS: &[&str] = &["-->>", "->>", "--)", "-)"];
 
 fn sequence_line(built: &mut Built, line: &str) -> Result<(), String> {
     for word in ["participant ", "actor "] {
@@ -503,6 +567,11 @@ fn sequence_line(built: &mut Built, line: &str) -> Result<(), String> {
         .filter_map(|sign| line.find(sign).map(|at| (at, *sign)))
         .min_by_key(|(at, sign)| (*at, std::cmp::Reverse(sign.len())))
         .ok_or_else(|| format!("“{line}” is not understood"))?;
+    if !ARROWS.contains(&sign) {
+        return Err(format!(
+            "the message “{sign}” has no single arrowhead, the only message the app draws"
+        ));
+    }
     let from = line[..at].trim();
     let (to, words) = line[at + sign.len()..]
         .split_once(':')
