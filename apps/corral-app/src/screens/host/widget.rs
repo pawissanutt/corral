@@ -133,10 +133,11 @@ fn body(app: AppState, data: Memo<HostView>) -> AnyElement {
         .into_element()
 }
 
-/// A figure's value and the words said for it: the value, or why it has none.
+/// A figure's value and the words said for it: the value, or why it has none. A tile shows
+/// the value in its fewest Cells, so its totals stay in sight.
 fn value_of(view: &HostView, kind: Kind) -> (Option<String>, String, bool) {
     let metric = view.metric(kind);
-    let value = metric.and_then(|m| m.value.clone());
+    let value = metric.and_then(|m| m.brief.clone().or_else(|| m.value.clone()));
     let why = metric
         .and_then(|m| m.absent.clone().or_else(|| m.detail.clone()))
         .unwrap_or_default();
@@ -172,8 +173,7 @@ fn tile(app: AppState, data: Memo<HostView>, kind: Kind) -> AnyElement {
             why
         );
         let shown_value = text(value.clone().unwrap_or_else(|| NO_VALUE.to_owned()))
-            .number_of_lines(1u32)
-            .truncate()
+            .number_of_lines(2u32)
             .min_w(px(0.0))
             .font_family(FONT_MONO)
             .tabular_nums()
@@ -340,9 +340,9 @@ pub fn phone_row(app: AppState) -> AnyElement {
                     .text_color(color(Token::Ink)),
             )
             .child(
+                // Wraps rather than cuts, so every figure and its totals stay in sight.
                 text(figures)
-                    .number_of_lines(2u32)
-                    .truncate()
+                    .number_of_lines(4u32)
                     .font_family(FONT_MONO)
                     .tabular_nums()
                     .text_size(px(12.0))
@@ -350,8 +350,7 @@ pub fn phone_row(app: AppState) -> AnyElement {
             )
             .child(
                 text(format!("{host_line} · {}", host::HOST_WIDE))
-                    .number_of_lines(1u32)
-                    .truncate()
+                    .number_of_lines(2u32)
                     .font_family(FONT_TEXT)
                     .text_size(px(12.0))
                     .text_color(color(Token::Ink3)),

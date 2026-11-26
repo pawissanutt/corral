@@ -417,8 +417,8 @@ fn metric(m: &HostMetrics, kind: Kind) -> Metric {
         }
         Kind::Space => match &m.filesystem {
             Some(fs) => Metric {
-                value: Some(format!("{} used · {} free", bytes(fs.used), bytes(fs.free))),
-                detail: Some(format!("of {}", bytes(fs.total))),
+                value: Some(format!("{} used", bytes(fs.used))),
+                detail: Some(format!("{} free of {}", bytes(fs.free), bytes(fs.total))),
                 share: share(fs.used, fs.total),
                 brief: Some(format!("{} used {} free", terse(fs.used), terse(fs.free))),
                 note: Some(match &fs.mount {
