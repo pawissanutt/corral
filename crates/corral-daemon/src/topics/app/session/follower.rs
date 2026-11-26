@@ -141,9 +141,16 @@ impl Follower {
             self.skip_through = page.map_or(0, |page| page.host_tail);
             starts.clear();
         }
+        // A tail read again: whether it is the whole journal, and when its first message
+        // was written.
+        let mut held = None;
         match journal {
             Ok(Journal::Changes(changes)) => self.pair(changes, &mut starts, &mut ops),
             Ok(Journal::Snapshot(older, messages)) => {
+                let first = messages
+                    .first()
+                    .and_then(|(message, ..)| message.at.as_deref()?.parse().ok());
+                held = Some((older.is_none(), first));
                 self.seen.clear();
                 for (message, ..) in &messages {
                     if message.author != "assistant" {
@@ -170,6 +177,11 @@ impl Follower {
                     // reset takes the messages being written from a reader, so those the
                     // journal does not hold yet are put again, from the words the host
                     // writes next.
+                    if let Some(mark) = self.mark
+                        && !reaches(held, mark.since)
+                    {
+                        self.lose_turn();
+                    }
                     self.count();
                     let recorded = self.recorded;
                     self.open.retain(|ordinal, _| *ordinal > recorded);
@@ -193,6 +205,10 @@ impl Follower {
             // its first message).
             let since: Option<jiff::Timestamp> =
                 seed.message_at.as_deref().and_then(|at| at.parse().ok());
+            if since.is_some_and(|since| !reaches(held, since)) {
+                self.lose_turn();
+                return ops;
+            }
             let before = seed.message.saturating_sub(1);
             self.mark = since.map(|since| Mark {
                 base: before,
@@ -419,6 +435,15 @@ impl Follower {
         }
     }
 
+    /// Stops following the turn's words: which of its messages the journal holds is not
+    /// known. Its records still arrive, and the next turn is followed from its start.
+    fn lose_turn(&mut self) {
+        self.turn = None;
+        self.pending_end = None;
+        self.mark = None;
+        self.open.clear();
+    }
+
     fn drop_open(&mut self, ops: &mut Vec<Op>) {
         ops.extend(
             std::mem::take(&mut self.open)
@@ -426,6 +451,12 @@ impl Follower {
                 .map(|open| Op::Drop { id: open.id }),
         );
     }
+}
+
+/// Whether a tail that was read again holds every record written from `since` on. It is
+/// one page of the journal's latest messages: records before its first are not counted.
+fn reaches(held: Option<(bool, Option<jiff::Timestamp>)>, since: jiff::Timestamp) -> bool {
+    held.is_none_or(|(whole, first)| whole || first.is_some_and(|first| first <= since))
 }
 
 struct Start {
