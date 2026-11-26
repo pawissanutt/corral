@@ -1,5 +1,6 @@
 import { BridgeRefusal, SESSION_PART_MAX } from "../../bridge/protocol.ts";
 import { EXPORT_COMMAND } from "../export.ts";
+import { WORKTREE_ACCESS_COMMAND } from "../worktree-access.ts";
 import type { RemoteRegistry } from "./registry.ts";
 import { clipText, fitRows } from "./state.ts";
 
@@ -27,6 +28,8 @@ export function commandsPart(registry: RemoteRegistry, input: {
   if (registry.get("exit_open")) commands.push({ name: "finish", description: "Choose how to finish the build", source: "host" });
   if (registry.get("board_refresh")) commands.push({ name: "board", description: "Refresh the build board", source: "host" });
   if (registry.get("export")) commands.push({ name: EXPORT_COMMAND, description: "Attach an offline HTML session export", source: "host" });
+  if (registry.get("worktree_access")) commands.push({ name: WORKTREE_ACCESS_COMMAND,
+    description: "Inspect or revoke task worktree access", source: "host", args_hint: "[status | revoke]" });
   if (input.rewind) commands.push({ name: "rewind", description: "Restore a recorded turn", source: "host", args_hint: "[--list]" });
   if (registry.get("plan")) commands.push({ name: "todo", description: "Show the session plan", source: "host" });
   if (registry.get("plan_mode")) commands.push({ name: "plan", description: "Toggle plan mode", source: "host", args_hint: "[request | off]" });
@@ -44,15 +47,15 @@ export function commandsPart(registry: RemoteRegistry, input: {
 
 /** Commands with a host action use the same preflight when typed instead of picked. */
 export function typedSessionAction(registry: RemoteRegistry, text: string) {
-  const command = /^\/(finish|board|compact|corral-export|plan)(?:[ \t]+([\s\S]*))?$/.exec(text);
+  const command = /^\/(finish|board|compact|corral-export|plan|worktree-access)(?:[ \t]+([\s\S]*))?$/.exec(text);
   if (!command) return;
   const name = command[1], args = command[2]?.trim();
   const method = name === "finish" ? "exit_open" : name === "board" ? "board_refresh" : name === "compact" ? "compact"
-    : name === "plan" ? "plan_mode" : "export";
+    : name === "plan" ? "plan_mode" : name === WORKTREE_ACCESS_COMMAND ? "worktree_access" : "export";
   const run = registry.get(method);
   if (!run) return;
   return Promise.resolve().then(() => {
-    if (method === "plan_mode") return run({ command: args ?? "" });
+    if (method === "plan_mode" || method === "worktree_access") return run({ command: args ?? "" });
     if (args && method !== "compact") throw new BridgeRefusal("bad_input", "this command does not take arguments");
     return run(method === "compact" && args ? { instructions: args } : {});
   });
@@ -61,6 +64,7 @@ export function typedSessionAction(registry: RemoteRegistry, text: string) {
 export function registerCommands(registry: RemoteRegistry, source: {
   list(): object; ready(): boolean; compact(instructions?: string): Promise<{ tokensBefore: number }>;
   export?: () => Promise<{ text: string; committed: boolean }>;
+  worktreeAccess?: (command: string) => { text: string };
 }): void {
   registry.register({ name: "commands", parse: () => undefined, run: () => source.list() });
   let compacting = false;
@@ -77,6 +81,11 @@ export function registerCommands(registry: RemoteRegistry, source: {
       return { text: `Compacted session context (${result.tokensBefore} tokens before compaction)` };
     } finally { compacting = false; }
   } });
+  const worktreeAccess = source.worktreeAccess;
+  if (worktreeAccess) registry.register({ name: "worktree_access", parse: ({ command }) => {
+    if (typeof command !== "string" || command.length > 16) throw new BridgeRefusal("bad_input", "Use /worktree-access [status | revoke]");
+    return command;
+  }, run: worktreeAccess });
   const exportSession = source.export;
   if (exportSession) registry.register({ name: "export", parse: () => undefined, run: async () => {
     if (!source.ready()) throw new BridgeRefusal("export_unavailable", "Wait for the current session action to finish");

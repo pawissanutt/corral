@@ -25,7 +25,9 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use super::{InputTag, LaunchSpec, Origin, Runner, SessionRef, SessionStatus};
+use super::{
+    InputTag, LaunchSpec, Origin, Runner, SessionRef, SessionStatus, UncertainWriterLaunch,
+};
 use crate::{config::shell_quote, refuse};
 
 mod activity;
@@ -34,7 +36,7 @@ mod build;
 pub use build::{BuildLaunch, build_session, build_socket, is_build_id, pi_data_root};
 
 mod chat;
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 mod task_host;
 pub use chat::{ChatLaunch, chat_session};
 
@@ -630,9 +632,9 @@ impl<'a> PiRunner<'a> {
         if let Err(error) = self.wait_for_hello(&client, &inner) {
             return match self.inner.stop(&inner) {
                 Ok(()) => Err(error),
-                Err(cleanup) => {
-                    Err(error.context(format!("failed to stop Pi launch placement: {cleanup:#}")))
-                }
+                Err(cleanup) => Err(error
+                    .context(format!("failed to stop Pi launch placement: {cleanup:#}"))
+                    .context(UncertainWriterLaunch)),
             };
         }
         Ok(SessionRef::Pi {
@@ -650,6 +652,32 @@ impl Runner for PiRunner<'_> {
 
     fn status(&self, session: &SessionRef) -> Result<SessionStatus> {
         self.observe(session).map(|(status, _)| status)
+    }
+
+    #[cfg(unix)]
+    fn checkout_session_gone(&self, session: &SessionRef) -> Result<bool> {
+        let SessionRef::Pi { socket, inner, dir } = session else {
+            return self.inner.checkout_session_gone(session);
+        };
+        match UnixStream::connect(socket) {
+            Ok(_) => return Ok(false),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
+                ) => {}
+            Err(error) => return Err(error).context("inspect Pi writer socket"),
+        }
+        // A socket can disappear before the host exits. An unavailable or idle
+        // herdr pane (on an unrecorded selector) is not evidence the host died.
+        if task_host::takeover_absent(dir, socket)? {
+            return if matches!(inner.as_ref(), SessionRef::Process { .. }) {
+                self.inner.checkout_session_gone(inner)
+            } else {
+                Ok(true)
+            };
+        }
+        Ok(false)
     }
 
     fn send(&self, session: &SessionRef, text: &str, origin: Origin) -> Result<()> {

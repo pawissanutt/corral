@@ -74,9 +74,10 @@ const LEADER = [
  * signalled only while its leader runs: a group ID whose leader is gone may belong to someone else. The leader
  * outlives a stop, so the kill after the grace reaches a line that ignores SIGTERM itself.
  */
-async function runLine(command: string, options: { cwd: string; env: NodeJS.ProcessEnv; fd: number; signal?: AbortSignal }): Promise<number | null> {
+async function runLine(command: string, options: { cwd: string; env: NodeJS.ProcessEnv; fd: number; writerFd?: number; signal?: AbortSignal }): Promise<number | null> {
   const { promise, resolve, reject } = Promise.withResolvers<number | null>();
-  const child = spawn("sh", ["-c", LEADER, "sh", command], { cwd: options.cwd, env: options.env, stdio: ["ignore", options.fd, options.fd], detached: true });
+  const child = spawn("sh", ["-c", LEADER, "sh", command], { cwd: options.cwd, env: options.env,
+    stdio: ["ignore", options.fd, options.fd, ...(options.writerFd === undefined ? [] : [options.writerFd])], detached: true });
   let running = true, grace: ReturnType<typeof setTimeout> | undefined;
   const kill = (signal: NodeJS.Signals) => {
     if (!running || child.pid === undefined) return;
@@ -154,7 +155,7 @@ export async function verifyBuild(context: BuildContext, git: Run, journal: Buil
           writeSync(fd, `$ ${command}\n`);
           watch?.command?.(index);
           await check();
-          const code = await runLine(command, { cwd: worktree, env: executionEnv, fd, signal: stop });
+          const code = await runLine(command, { cwd: worktree, env: executionEnv, fd, writerFd: context.writerFd, signal: stop });
           // A stopped gate has no result: it is neither a pass nor this command's failure.
           stop.throwIfAborted();
           if (code !== 0) { failed = command; break; }

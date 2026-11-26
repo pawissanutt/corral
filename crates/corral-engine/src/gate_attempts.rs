@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     Actor, Check, CheckKind, CheckResult, Engine, Next, Op, Run, Store,
     artifacts::{ArtifactOwner, ArtifactTarget},
+    checkout::Checkout,
     config::EffectiveProject,
     events::EventKind,
     refuse,
@@ -74,6 +75,10 @@ impl Engine {
         effects_started: &mut bool,
     ) -> Result<Check> {
         self.require_worktree(run)?;
+        // This run is resolved after waiting for the pipeline lock. Its repo can differ
+        // from the one observed at operation admission.
+        let checkout = Checkout::from_run(run)?;
+        let _writer = self.checkout_repo_writer(&checkout.repo, &run.task)?;
         let sha = corral_git::rev_sha(&run.worktree, "HEAD").context("read gate HEAD")?;
         let steps = u32::try_from(project.map_or(0, |project| project.gate.len()))
             .context("too many gate commands")?;
@@ -105,10 +110,22 @@ impl Engine {
         let Some(attempt) = self.latest_gate_attempt(task)? else {
             return Ok(());
         };
+        self.require_gate_log_idle(&attempt)
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn require_previous_gate_closed_read_only(&self, task: &str) -> Result<()> {
+        if let Some(stored) = self.store.latest_stored_gate_attempt(task)? {
+            self.require_gate_log_idle(&stored.attempt)?;
+        }
+        Ok(())
+    }
+
+    fn require_gate_log_idle(&self, attempt: &GateAttempt) -> Result<()> {
         if attempt.check.is_some() {
             return Ok(());
         }
-        let Some(log) = self.open_gate_log(&attempt)? else {
+        let Some(log) = self.open_gate_log(attempt)? else {
             return Ok(());
         };
         // The command holds a separate inherited descriptor for this lock: ordinary
@@ -118,7 +135,7 @@ impl Engine {
             Err(TryLockError::WouldBlock) => Err(refuse(
                 "the previous gate command is still active; retry after it exits",
                 vec![Next::run(Op::Gate {
-                    id: task.to_owned(),
+                    id: attempt.task.clone(),
                 })],
             )),
             Err(TryLockError::Error(error)) => Err(error).context("probe previous gate writers"),
@@ -200,10 +217,7 @@ impl Engine {
 
     pub fn latest_gate_attempt(&self, task: &str) -> Result<Option<GateAttempt>> {
         self.store
-            .optional_document(
-                "SELECT document FROM gate_attempts WHERE task=?1 ORDER BY seq DESC LIMIT 1",
-                [task],
-            )?
+            .latest_stored_gate_attempt(task)?
             .map(|attempt| self.observe_gate(attempt).map(|observed| observed.attempt))
             .transpose()
     }
@@ -315,6 +329,13 @@ impl Engine {
 }
 
 impl Store {
+    fn latest_stored_gate_attempt(&self, task: &str) -> Result<Option<StoredAttempt>> {
+        self.optional_document(
+            "SELECT document FROM gate_attempts WHERE task=?1 ORDER BY seq DESC LIMIT 1",
+            [task],
+        )
+    }
+
     fn gate_attempt(&self, task: &str, id: &str) -> Result<Option<StoredAttempt>> {
         self.optional_document(
             "SELECT document FROM gate_attempts WHERE task=?1 AND id=?2",
@@ -490,6 +511,7 @@ impl GateRunner {
             .stderr(log.try_clone().context("clone gate stderr log")?);
         #[cfg(unix)]
         let _work_lease = inherit_work_lease(&mut command, log)?;
+        let _checkout_leases = corral_git::inherit_command_leases(&mut command)?;
         let mut child = command
             .spawn()
             .with_context(|| format!("run gate line {:?}", command_title(line)))?;

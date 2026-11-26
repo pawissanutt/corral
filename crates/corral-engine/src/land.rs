@@ -24,6 +24,7 @@ fn reviewable(task: &Task) -> bool {
 
 impl Engine {
     pub fn approve(&self, id: &str, onto: Option<&str>, force: bool) -> Result<Run> {
+        let _writer = self.checkout_writer(id)?;
         self.with_pipeline_lock(id, || self.approve_as(id, onto, force, self.actor))
     }
 
@@ -34,15 +35,26 @@ impl Engine {
         force: bool,
         actor: Actor,
     ) -> Result<Run> {
+        let _writer = self.checkout_writer(id)?;
         self.check_force(force, || approve_op(id, onto))?;
         let task = self.store.require_task(id)?;
         let worker = self.last_worker(&self.store, &task)?;
-        let checkout = Checkout::from_run(&worker)?;
+        let landing_repo = Checkout::from_run(&worker)?.repo;
         let _lock =
-            corral_git::landing_lock(&checkout.repo).context("acquire repository landing lock")?;
+            corral_git::landing_lock(&landing_repo).context("acquire repository landing lock")?;
         let task = self.store.require_task(id)?;
         let mut worker = self.last_worker(&self.store, &task)?;
         let checkout = Checkout::from_run(&worker)?;
+        if checkout.repo != landing_repo {
+            return Err(refuse(
+                "the task repository changed while waiting to land; retry approval",
+                vec![Next {
+                    op: approve_op(id, onto),
+                    force,
+                }],
+            ));
+        }
+        let _source = self.checkout_repo_writer(&checkout.repo, id)?;
         let target = onto.unwrap_or(&checkout.base);
         let reason = if target == checkout.branch {
             Some(format!(
@@ -88,6 +100,7 @@ impl Engine {
                 vec![next_retry(id)],
             ));
         }
+        let _target_writer = self.landing_target_writer(&checkout.repo, target)?;
         self.require_previous_gate_closed(id)?;
         let mut effects_started = false;
         let result = (|| -> Result<()> {
@@ -204,8 +217,13 @@ impl Engine {
                         vec![next_done(id), next_force()],
                     ));
                 }
-                corral_git::fast_forward_in_worktree(&checkout.repo, &checkout.branch, target)
-                    .context("fast-forward landing target")?;
+                corral_git::fast_forward_in_worktree_guarded(
+                    &checkout.repo,
+                    &checkout.branch,
+                    target,
+                    |path| self.landing_checkout_writer(&checkout.repo, path),
+                )
+                .context("fast-forward landing target")?;
                 self.stop_landing_sessions(store, id, &worker.id, actor)?;
                 corral_git::worktree_remove(&checkout.repo, &checkout.path, true)
                     .context("remove landed task worktree")?;
@@ -314,7 +332,7 @@ impl Engine {
         skipped: &[&str],
         actor: Actor,
     ) -> Result<()> {
-        self.launch_transaction(|store, pending| {
+        self.launch_transaction(&worker.task, |store, pending| {
             let mut task = store.require_task(&worker.task)?;
             // A failed landing must not replace feedback already waiting to run.
             if store.has_queued_repair(&worker.task)? {

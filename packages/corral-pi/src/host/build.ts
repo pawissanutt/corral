@@ -12,6 +12,7 @@ import { sendCodeLaunch, serializeCodeSeed, type CodeBootstrap, type CodeHandoff
 import { headlessEnabled } from "./headless.ts";
 import { readSessionRecord } from "./session-record.ts";
 import { resolveStartupModel, StartupModelRequired } from "./startup-model.ts";
+import { taskWriterLock } from "./worktree-writer.ts";
 
 /** A refused launch or resume: the error's message keeps the code and detail; `what` and `fix` are what the owner reads. */
 class LaunchRefused extends Error {
@@ -149,6 +150,8 @@ function quitLines(dataRoot: string, fallback: BuildSessionRecord): readonly str
 export async function buildCommand(argv: readonly string[], assets: string, command: BuildCommand = "build",
   bootstrap?: CodeBootstrap): Promise<void> {
   let resume: string | undefined;
+  let writerLock: Awaited<ReturnType<typeof taskWriterLock>>;
+  let cleanupOwnsLock = false;
   try {
     const prune = command === "build" ? parsePruneFlags(argv) : undefined;
     if (prune) {
@@ -205,6 +208,7 @@ export async function buildCommand(argv: readonly string[], assets: string, comm
       const ready = { ...launch, ...choice };
       const draft = createSession(ready, { worktree: launch.repoRoot, branch: null, base: null }, local.id);
       assertNewId(draft.id);
+      writerLock = await taskWriterLock(launch.repoRoot, launch.corral, launch.workspaceRoot);
       try {
         if (local.codeCwd) record = { ...draft, ...prepareCodeCheckout(launch.repoRoot, local.codeCwd) };
         else if (launch.bare) {
@@ -215,10 +219,10 @@ export async function buildCommand(argv: readonly string[], assets: string, comm
           } else {
             const branch = spawnSync("git", ["-C", launch.repoRoot, "symbolic-ref", "--quiet", "--short", "HEAD"], { encoding: "utf8" });
             if (branch.status !== 0 && branch.status !== 1) throw new Error(branch.error?.message ?? branch.stderr.trim());
-            record = { ...draft, ...prepareWorktree(launch.repoRoot, draft.name, launch.here), repository: true,
+            record = { ...draft, ...prepareWorktree(launch.repoRoot, draft.name, launch.here, writerLock?.fd), repository: true,
               baseBranch: branch.status === 0 ? branch.stdout.trim() : null };
           }
-        } else record = { ...draft, ...prepareWorktree(launch.repoRoot, draft.name, launch.here) };
+        } else record = { ...draft, ...prepareWorktree(launch.repoRoot, draft.name, launch.here, writerLock?.fd) };
       }
       catch (error) {
         if (launch.trustedCode) throw error;
@@ -231,13 +235,14 @@ export async function buildCommand(argv: readonly string[], assets: string, comm
     }
     const dir = sessionDir(launch.dataRoot, record.id);
     const config = buildHostConfig(launch, record, assets, local);
+    writerLock ??= await taskWriterLock(record.worktree, launch.corral, record.workspaceRoot);
     record = { ...record, socket: config.local.socket, pid: process.pid };
     // Keep historical billing metadata until the host has migrated the transcript's provider
     // alias. A failed resume must not erase the information needed by the next attempt.
     const previousRoute = resume ? readSessionRecord(dir).route as (BuildRoute & { connection?: unknown }) | undefined : undefined;
     const legacyRoute = previousRoute?.provider === "anthropic" && previousRoute.connection === "anthropic-api" ? previousRoute : undefined;
     saveSession(launch.dataRoot, legacyRoute ? { ...record, route: legacyRoute } : record);
-    const build: BuildContext = { session: record, settings: launch.settings, dir, corral: launch.corral ?? "" };
+    const build: BuildContext = { session: record, settings: launch.settings, dir, corral: launch.corral ?? "", writerFd: writerLock?.fd };
     const prepareHandoff = bootstrap && record.trustedCode && !local.headless && !headlessEnabled(config.capabilities)
       ? async (request: CodeHandoffRequest, activeModel: string, effort: string): Promise<CodeLaunch> => {
         const args = ["--data-dir", launch.dataRoot];
@@ -267,10 +272,13 @@ export async function buildCommand(argv: readonly string[], assets: string, comm
     // Pi ends an ordinary quit with process.exit(0); this prints after the terminal is restored.
     const session = record;
     process.on("exit", code => {
-      if (code !== 0 || handingOff) return;
-      const lines = quitLines(launch.dataRoot, session);
-      if (lines.length) writeSync(process.stdout.fd, `${lines.join("\n")}\n`);
+      try {
+        if (code !== 0 || handingOff) return;
+        const lines = quitLines(launch.dataRoot, session);
+        if (lines.length) writeSync(process.stdout.fd, `${lines.join("\n")}\n`);
+      } finally { writerLock?.close(); }
     });
+    cleanupOwnsLock = true;
     await runHost(config, { build, codeBootstrap: bootstrap, prepareHandoff, commitHandoff: async next => {
       await sendCodeLaunch(next);
       handingOff = true;
@@ -279,6 +287,8 @@ export async function buildCommand(argv: readonly string[], assets: string, comm
     if (error instanceof RemovedModelOption) throw error;
     process.stderr.write(`${refusalLines(error, resume, command).join("\n")}\n`);
     process.exit(2);
+  } finally {
+    if (!cleanupOwnsLock) writerLock?.close();
   }
 }
 

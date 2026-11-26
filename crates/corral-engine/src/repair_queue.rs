@@ -57,7 +57,7 @@ impl Engine {
             return Ok(false);
         }
         let mut attempted = None;
-        let result = self.launch_transaction(|store, pending| {
+        let result = self.launch_transaction(id, |store, pending| {
             let mut task = store.require_task(id)?;
             if task.status == Status::Review
                 && let Some(repair) = store.repair(id)?

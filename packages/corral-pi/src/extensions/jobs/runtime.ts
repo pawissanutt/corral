@@ -52,6 +52,7 @@ const realSchedule: Schedule = (run, ms) => {
 export interface JobRuntimeOptions {
   readonly cwd: string;
   readonly runtimeDir: string;
+  readonly writerFd?: number;
   readonly settings: JobSettings;
   readonly shell?: string;
   readonly environment?: () => NodeJS.ProcessEnv;
@@ -210,7 +211,10 @@ export class JobRuntime {
     const fd = openSync(file, "w", 0o600);
     const shell = this.options.shell ?? "/bin/bash";
     const child = spawn(shell, ["-c", LAUNCHER, shell, command], {
-      cwd: this.options.cwd, detached: true, stdio: ["pipe", "pipe", "pipe"],
+      cwd: this.options.cwd, detached: true,
+      // fd 3 is the launcher's control pipe; additional task writers inherit fd 4.
+      stdio: this.options.writerFd === undefined ? ["pipe", "pipe", "pipe"]
+        : ["pipe", "pipe", "pipe", "ignore", this.options.writerFd],
       ...(this.options.environment ? { env: this.options.environment() } : {}),
     });
     const spawned = await new Promise<Error | undefined>((resolve) => {
@@ -222,9 +226,9 @@ export class JobRuntime {
       this.options.onEvent?.("job_exited", { job: id, exit_code: 127 });
       throw new JobError(`job ${id} did not start: ${spawned?.message ?? "no pid"}`);
     }
+    let unregister: (() => void) | undefined;
     try {
-      const remove = this.options.registerCapability?.(child.pid);
-      if (remove) child.once("exit", remove);
+      unregister = this.options.registerCapability?.(child.pid);
     } catch (error) {
       child.stdin?.end(); // The not-yet-armed launcher exits on EOF without running anything.
       closeSync(fd);
@@ -263,6 +267,9 @@ export class JobRuntime {
       if (job.fd !== undefined) closeSync(job.fd);
       job.fd = undefined;
       void this.sweep(job).then(() => {
+        // The leader can exit before its group clears. Keep durable writer evidence if
+        // this host dies during the sweep or cannot confirm that all members stopped.
+        if (job.groupClear) unregister?.();
         this.options.onEvent?.("job_exited", { job: id, exit_code: job.exitCode, signal: job.signal, group_clear: job.groupClear });
       }).finally(() => { close(); finish(); });
     });

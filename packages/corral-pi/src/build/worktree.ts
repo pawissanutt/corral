@@ -3,9 +3,10 @@ import { existsSync, lstatSync } from "node:fs";
 import { join } from "node:path";
 
 /** Git is always invoked with argv; its stderr survives every refusal. */
-export function prepareWorktree(repoRoot: string, name: string, here: boolean): { worktree: string; branch: string | null; base: string } {
+export function prepareWorktree(repoRoot: string, name: string, here: boolean, writerFd?: number): { worktree: string; branch: string | null; base: string } {
   const git = (args: string[], allowFailure = false) => {
-    const result = spawnSync("git", ["-C", repoRoot, ...args], { encoding: "utf8" });
+    const result = spawnSync("git", ["-C", repoRoot, ...args], { encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe", ...(writerFd === undefined ? [] : [writerFd])] });
     if (result.error) throw new Error(`git ${args.join(" ")}: ${result.error.message}; ${result.stderr ?? ""}`);
     if (result.status !== 0 && !allowFailure) throw new Error(`git ${args.join(" ")}: ${result.stderr.trim() || `exit ${result.status}`}`);
     return result;

@@ -5,6 +5,8 @@ use std::process::{Command, Output, Stdio};
 
 use anyhow::{Context, Result, bail};
 
+mod command_lease;
+pub use command_lease::{CommandLease, InheritedCommandLeases, inherit_command_leases};
 #[cfg(test)]
 mod contract_tests;
 mod history;
@@ -152,6 +154,7 @@ fn git_raw(dir: &Path, args: &[&str]) -> Result<Output> {
     let _timer = work::timed();
     let mut command = Command::new("git");
     scrub_env(&mut command, std::env::vars_os().map(|(name, _)| name));
+    let _leases = inherit_command_leases(&mut command)?;
     command
         .arg("-C")
         .arg(dir)
@@ -621,6 +624,17 @@ pub fn fast_forward(repo: &Path, branch: &str, base: &str) -> Result<()> {
 /// Fast-forward an existing target, merging in its checkout if Git lists one.
 /// Caller holds `landing_lock` across rebase, checks and this update.
 pub fn fast_forward_in_worktree(repo: &Path, branch: &str, target: &str) -> Result<()> {
+    fast_forward_in_worktree_guarded(repo, branch, target, |_| Ok(()))
+}
+
+/// Acquire a writer guard for the exact selected checkout, not an earlier branch lookup.
+/// When no linked checkout is selected the fallback never discovers one to write into.
+pub fn fast_forward_in_worktree_guarded<G>(
+    repo: &Path,
+    branch: &str,
+    target: &str,
+    guard: impl FnOnce(&Path) -> Result<G>,
+) -> Result<()> {
     let target_ref = format!("refs/heads/{target}");
     let args = ["worktree", "list", "--porcelain", "-z"];
     let out = git_raw(repo, &args)?;
@@ -643,6 +657,7 @@ pub fn fast_forward_in_worktree(repo: &Path, branch: &str, target: &str) -> Resu
             };
             #[cfg(not(unix))]
             let path = Path::new(std::str::from_utf8(path).context("decode worktree path")?);
+            let _writer = guard(path)?;
             anyhow::ensure!(
                 symbolic_branch(path, "HEAD")?.as_deref() == Some(target_ref.as_str()),
                 "{} is no longer on {target}",
@@ -653,6 +668,7 @@ pub fn fast_forward_in_worktree(repo: &Path, branch: &str, target: &str) -> Resu
             return Ok(());
         }
     }
+    let _writer = guard(repo)?;
     fast_forward(repo, branch, target)
 }
 

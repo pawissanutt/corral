@@ -166,6 +166,11 @@ fn quiet_gate_retry_and_runner_exit_are_observable() {
     runner.0.kill().unwrap();
     assert!(!runner.0.wait().unwrap().success());
     // The runner disappeared; the command is still alive after redirecting stdout/stderr.
+    let reader = Engine::open_read_only(root).unwrap();
+    let orphan = reader
+        .require_previous_gate_closed_read_only(&task)
+        .unwrap_err();
+    assert!(as_refusal(&orphan).is_some());
     let interrupted = page(&active.attempt.id, None);
     let premature_retry = cx.engine.gate(&task);
     fs::write(root.join("interrupted"), "release orphaned shell").unwrap();

@@ -276,6 +276,37 @@ fn lost_task_host_is_not_kept_running_by_its_idle_placement() {
 }
 
 #[test]
+fn pi_takeover_waits_for_managed_processes_after_host_exit() {
+    let fixture = Fixture::new();
+    let dir = fixture.temp.path().canonicalize().unwrap().join("T-11/R1");
+    let sessions = dir.join("sessions");
+    fs::create_dir_all(&sessions).unwrap();
+    let socket = fixture.socket(&dir);
+    fs::write(
+        dir.join("session.json"),
+        json!({"id":"T-11/R1", "role":"worker", "pid":i32::MAX,
+               "socket":socket, "sessionFile":sessions.join("worker.jsonl")})
+        .to_string(),
+    )
+    .unwrap();
+    let runner = PiRunner::new(&fixture.placement);
+    let session = SessionRef::Pi {
+        socket,
+        dir: dir.clone(),
+        inner: Box::new(fixture.placement.start(&spec(&dir, "test-worker")).unwrap()),
+    };
+    let prior_registry = sessions.join("worker.jsonl.capabilities-222.json");
+    fs::write(
+        &prior_registry,
+        json!([{"pid":std::process::id()}]).to_string(),
+    )
+    .unwrap();
+    assert!(!runner.checkout_session_gone(&session).unwrap());
+    fs::write(&prior_registry, json!([{"pid":i32::MAX}]).to_string()).unwrap();
+    assert!(runner.checkout_session_gone(&session).unwrap());
+}
+
+#[test]
 fn oversized_legacy_status_proves_liveness_without_claiming_idle_or_gone() {
     let fixture = Fixture::new();
     let socket = fixture.temp.path().join("legacy.sock");

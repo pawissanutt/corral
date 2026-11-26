@@ -27,6 +27,8 @@ pub(crate) enum SendBack<'a> {
 
 impl Engine {
     pub fn done(&self, id: &str, summary: &str) -> Result<Option<Run>> {
+        let _writer = self.checkout_writer(id)?;
+        let mut _exact_writer = None;
         let (run, submitted) =
             self.store.transaction(|store| {
                 let mut task = store.require_task(id)?;
@@ -42,6 +44,7 @@ impl Engine {
                 }
                 self.require_worktree(&run)?;
                 let checkout = Checkout::from_run(&run)?;
+                _exact_writer = Some(self.checkout_repo_writer(&checkout.repo, id)?);
                 checkout.verify_branch()?;
                 corral_git::commit_all(&run.worktree, &format!("{id} {}", task.title))
                     .context("commit task changes")?;
@@ -96,6 +99,7 @@ impl Engine {
     }
 
     pub fn gate(&self, id: &str) -> Result<Check> {
+        let _writer = self.checkout_writer(id)?;
         let check = self.with_pipeline_lock(id, || {
             let task = self.store.require_task(id)?;
             let run = self.last_worker(&self.store, &task)?;
@@ -183,7 +187,7 @@ impl Engine {
         actor: Actor,
         selected: Option<&str>,
     ) -> Result<Run> {
-        self.launch_transaction(|store, pending| {
+        self.launch_transaction(id, |store, pending| {
             let mut task = store.require_task(id)?;
             if let Some(run) = selected {
                 store.require_relaunch_target(&task, Role::Reviewer, run)?;
@@ -346,7 +350,8 @@ impl Engine {
         notes: Option<&str>,
         bound: Option<(&str, &str)>,
     ) -> Result<Option<Run>> {
-        let (run, close, recorded) = self.launch_transaction(|store, pending| {
+        let _writer = self.checkout_writer(id)?;
+        let (run, close, recorded) = self.launch_transaction(id, |store, pending| {
             let mut task = store.require_task(id)?;
             let mut reviewer = store.latest_run(id, Role::Reviewer)?;
             let intent;
@@ -456,7 +461,7 @@ impl Engine {
     }
 
     pub fn changes(&self, id: &str, text: &str) -> Result<Option<Run>> {
-        self.launch_transaction(|store, pending| {
+        self.launch_transaction(id, |store, pending| {
             let mut task = store.require_task(id)?;
             if !matches!(task.status, Status::Review | Status::Blocked) {
                 return Err(refuse(
@@ -477,6 +482,9 @@ impl Engine {
         reason: SendBack<'_>,
     ) -> Result<Option<Run>> {
         let mut worker = self.last_worker(store, task)?;
+        pending.reserve_checkout(
+            self.checkout_repo_writer(&Checkout::from_run(&worker)?.repo, &task.id)?,
+        );
         let project = self.project_for(task)?;
         // Ordinary send-backs stay in the task's existing slot. A forced
         // landing of an unadmitted task can also reach this path on conflict.
@@ -582,7 +590,7 @@ impl Engine {
     }
 
     pub(crate) fn send_back(&self, id: &str, notes: &str) -> Result<()> {
-        self.launch_transaction(|store, pending| {
+        self.launch_transaction(id, |store, pending| {
             let mut task = store.require_task(id)?;
             if task.status == Status::Review {
                 self.send_back_in(

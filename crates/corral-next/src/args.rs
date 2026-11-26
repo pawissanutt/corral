@@ -230,6 +230,15 @@ pub(crate) enum Command {
     },
     #[command(hide = true)]
     Pipeline { task: String },
+    #[cfg(unix)]
+    #[command(hide = true)]
+    TakeoverProbe { task: String },
+    #[cfg(unix)]
+    #[command(hide = true)]
+    TakeoverVerify { task: String },
+    #[cfg(unix)]
+    #[command(hide = true)]
+    TakeoverWriterLock { task: String, checkout: PathBuf },
 }
 
 #[derive(Args)]

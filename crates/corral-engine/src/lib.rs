@@ -35,6 +35,7 @@ pub mod runner;
 mod session_recovery;
 pub mod store;
 mod sync;
+pub mod takeover;
 pub mod tasks;
 pub mod usage;
 
@@ -219,11 +220,16 @@ impl Engine {
     }
 
     pub fn open(root: impl AsRef<Path>) -> Result<Self> {
-        Self::open_with(root.as_ref(), None)
+        Self::open_with(root.as_ref(), None, false)
     }
 
     pub fn open_with_runner(root: impl AsRef<Path>, runner: Box<dyn Runner>) -> Result<Self> {
-        Self::open_with(root.as_ref(), Some(runner))
+        Self::open_with(root.as_ref(), Some(runner), false)
+    }
+
+    /// Open an engine view without running schema setup or allowing database writes.
+    pub fn open_read_only(root: impl AsRef<Path>) -> Result<Self> {
+        Self::open_with(root.as_ref(), None, true)
     }
 
     /// Route socket-backed sessions through Pi, and ordinary sessions through
@@ -232,7 +238,7 @@ impl Engine {
         runner::pi::PiRunner::new(self.runner.as_ref())
     }
 
-    fn open_with(root: &Path, runner: Option<Box<dyn Runner>>) -> Result<Self> {
+    fn open_with(root: &Path, runner: Option<Box<dyn Runner>>, read_only: bool) -> Result<Self> {
         let root = root.canonicalize().context("resolve workspace root")?;
         let state_dir = root.join(".corral-next");
         if !state_dir.join("corral.db").is_file() {
@@ -242,7 +248,12 @@ impl Engine {
             ));
         }
         let config = Config::load(&state_dir.join("corral.toml"))?;
-        let store = Store::open(&state_dir.join("corral.db"))?;
+        let database = state_dir.join("corral.db");
+        let store = if read_only {
+            Store::open_read_only(&database)?
+        } else {
+            Store::open(&database)?
+        };
         let runner = match runner {
             Some(runner) => runner,
             None => select_runner(&config)?,

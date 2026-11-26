@@ -70,7 +70,7 @@ export function createBuildControls(options: BuildControlsOptions): BuildControl
     },
   });
   const run = options.run ?? engineRun(context.corral);
-  const git = options.git ?? gitRun();
+  const git = options.git ?? gitRun(context.writerFd);
   journal = createJournal({ context, git, fleet: () => fleet.snapshot(), changed: options.changed, now: options.now,
     session: () => loadSession(dataRoot, session.id) });
   const buildJournal = journal;

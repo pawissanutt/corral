@@ -581,6 +581,8 @@ name = "corral-git"
 version = "0.6.0"
 dependencies = [
  "anyhow",
+ "libc",
+ "rustix",
  "tempfile",
 ]
 

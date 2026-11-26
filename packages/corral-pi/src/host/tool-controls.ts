@@ -49,6 +49,8 @@ export interface ToolControls {
   readonly approvals?: ToolApprovals;
   /** Undefined for roles without a parent-session write guard; null for an unbound build. */
   readonly writeScope?: Parameters<typeof classifyWriteScope>[1] | null;
+  /** A host-owned assistant lease can decide only paths in the one approved task checkout. */
+  readonly taskWriteScope?: (path: string) => ReturnType<typeof classifyWriteScope> | undefined;
   /** Plan mode's refusals, and the plan document it keeps out of the write-scope decision. */
   readonly plan?: Pick<PlanMode, "refusal" | "writesPlan">;
   readonly events: EventLog;
@@ -91,7 +93,7 @@ export function installToolControls(pi: ExtensionAPI, controls: ToolControls): v
       if (!controls.writeScope || typeof input.path !== "string") {
         return { block: true, reason: "File changes require a bound session directory and a target path; nothing was written." };
       }
-      const decision = classifyWriteScope(input.path, controls.writeScope);
+      const decision = controls.taskWriteScope?.(input.path) ?? classifyWriteScope(input.path, controls.writeScope);
       const detail = { tool_call_id: event.toolCallId, tool: toolName, ...(nested ? { nested: true } : {}) };
       const reason = ctx?.signal?.aborted ? "File change aborted; nothing was written."
         : controls.approvals ? controls.approvals.write(toolName, input, decision)

@@ -168,6 +168,11 @@ impl Engine {
     }
 
     pub fn edit_task(&self, id: &str, mut edit: TaskEdit) -> Result<Task> {
+        let _writer = edit
+            .project
+            .as_ref()
+            .map(|_| self.checkout_writer(id))
+            .transpose()?;
         self.store.transaction(|store| {
             let mut task = store.require_task(id)?;
             if let Some(size) = &edit.size
@@ -253,6 +258,7 @@ impl Engine {
     }
 
     pub fn move_task(&self, id: &str, status: Status, force: bool) -> Result<Task> {
+        let _writer = self.checkout_writer(id)?;
         let move_op = || Op::Move {
             id: id.to_owned(),
             status,
@@ -301,6 +307,7 @@ impl Engine {
     }
 
     pub fn drop_task(&self, id: &str) -> Result<Task> {
+        let _writer = self.checkout_writer(id)?;
         let task = self.store.transaction(|store| {
             let mut task = store.require_task(id)?;
             let from = task.status;
@@ -313,6 +320,7 @@ impl Engine {
     }
 
     pub fn reopen(&self, id: &str) -> Result<Task> {
+        let _writer = self.checkout_writer(id)?;
         self.store.transaction(|store| {
             let mut task = store.require_task(id)?;
             let from = task.status;

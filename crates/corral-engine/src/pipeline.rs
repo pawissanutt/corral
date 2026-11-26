@@ -11,7 +11,8 @@ use serde_json::json;
 use crate::{
     Actor, Blocked, CheckKind, CheckResult, Engine, Next, Op, PipelineMode, Status, Store, Task,
     as_refusal, checkout::Checkout, events::EventKind, review::gate_notes,
-    review_verdict::changed_approved_candidate, tasks::next_force_approve,
+    review_verdict::changed_approved_candidate, takeover::is_checkout_reserved,
+    tasks::next_force_approve,
 };
 
 pub(crate) const GATE_FAILED: &str = "gate failed";
@@ -26,6 +27,9 @@ pub(crate) struct OperationFailure<'a> {
 
 impl Engine {
     pub fn advance(&self, id: &str) -> Result<()> {
+        let Some(_writer) = self.try_checkout_writer(id)? else {
+            return Ok(());
+        };
         let task = self.store.require_task(id)?;
         if task.status != Status::Review {
             return self.clean_terminal_pipeline_lock(&task);
@@ -38,6 +42,9 @@ impl Engine {
         }
         let mut effects_started = false;
         let result = self.advance_locked(id, &mut effects_started);
+        if result.as_ref().is_err_and(is_checkout_reserved) {
+            return Ok(());
+        }
         if let Err(error) = &result
             && (effects_started || as_refusal(error).is_none())
         {

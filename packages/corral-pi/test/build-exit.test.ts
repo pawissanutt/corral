@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type * as Sdk from "@earendil-works/pi-coding-agent";
@@ -39,10 +39,13 @@ function gateResult(): BuildGateResult {
   return { attempt: "G1", head, result: "pass", commands: ["check"], started: "2026-01-01T00:00:00Z", ended: "2026-01-01T00:01:00Z", log: "/logs/G1.log" };
 }
 /** Stateful refs, with a real verification journal and disposable gate directory. */
-function fixture(settings: { policy?: ExitPolicy; conflict?: boolean; dirtyBase?: boolean; onStaleOffer?: () => Promise<void> } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "build-exit-"));
+function fixture(settings: { policy?: ExitPolicy; conflict?: boolean; dirtyBase?: boolean; taskDestination?: boolean; onStaleOffer?: () => Promise<void> } = {}) {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "build-exit-")));
   const start = context(settings.policy);
-  const ctx = { ...start, dir, session: { ...start.session, workspaceRoot: dir, worktree: dir } };
+  const checkout = settings.taskDestination ? join(dir, ".worktrees", "T-1") : "/primary";
+  const ctx = { ...start, dir, corral: settings.taskDestination ? join(dir, "corral") : start.corral,
+    session: { ...start.session, workspaceRoot: dir, worktree: dir } };
+  if (settings.taskDestination) mkdirSync(checkout, { recursive: true });
   mkdirSync(join(dir, ".corral-next"));
   const setGate = (command: string, env = "") => writeFileSync(join(dir, ".corral-next", "corral.toml"),
     '[projects.app]\nbase="main"\ngate=[' + JSON.stringify(command) + ']\n' + env);
@@ -57,8 +60,9 @@ function fixture(settings: { policy?: ExitPolicy; conflict?: boolean; dirtyBase?
     if (argv.includes("--absolute-git-dir")) return ok(dir);
     if (argv.includes("--git-common-dir")) return ok(dir);
     if (argv.includes("--show-prefix")) return ok("");
-    if (argv[0] === "rev-parse" && !argv.includes("--abbrev-ref")) return ok(argv.at(-1) === "HEAD" && options.cwd !== "/primary" ? repo.candidate : repo.tip);
-    if (argv[0] === "symbolic-ref") return ok(options.cwd === "/primary" ? "refs/heads/main" : "refs/heads/build/parser");
+    if (argv[0] === "rev-parse" && !argv.includes("--abbrev-ref")) return ok(argv.at(-1) === "HEAD" && options.cwd !== checkout ? repo.candidate : repo.tip);
+    if (argv[0] === "symbolic-ref") return ok(options.cwd === checkout ? "refs/heads/main" : "refs/heads/build/parser");
+    if (argv[0] === "config") return { ...ok(""), code: 1 };
     if (argv[0] === "merge-base") return argv.includes("--is-ancestor") ? { code: repo.ancestor ? 0 : 1, stdout: "", stderr: "" } : ok(repo.ancestor ? repo.tip : base);
     if (argv[0] === "reflog") return ok(`${reflogAction} (start): checkout ${repo.tip}`);
     if (argv.includes("rebase") && settings.conflict) {
@@ -71,8 +75,8 @@ function fixture(settings: { policy?: ExitPolicy; conflict?: boolean; dirtyBase?
     }
     if (argv.includes("--diff-filter=U")) return ok("src/parser.ts\0");
     if (argv.includes("--name-only") && settings.dirtyBase) return ok("src/parser.ts\n");
-    if (argv[0] === "worktree") return ok("worktree /primary\0HEAD " + repo.tip + (settings.dirtyBase ? "\0branch refs/heads/main\0\0" : "\0branch refs/heads/other\0\0"));
-    if (argv[0] === "status" && options.cwd !== "/primary") return ok(repo.dirty ? " M src/parser.ts\n" : "");
+    if (argv[0] === "worktree") return ok(`worktree ${checkout}\0HEAD ${repo.tip}\0branch refs/heads/${settings.dirtyBase || settings.taskDestination ? "main" : "other"}\0\0`);
+    if (argv[0] === "status" && options.cwd !== checkout) return ok(repo.dirty ? " M src/parser.ts\n" : "");
     if (argv[0] === "update-ref") {
       if (argv.at(-1) !== repo.tip) return { code: 1, stdout: "", stderr: "old tip changed" };
       repo.tip = argv.at(-2)!;
@@ -87,7 +91,7 @@ function fixture(settings: { policy?: ExitPolicy; conflict?: boolean; dirtyBase?
     control.open(candidate ?? null);
     return control.options().find(option => option.choice === "land")?.authorization;
   };
-  return { ctx, journal, control, run, offer, repo, setGate, calls, close() { control.close(); rmSync(dir, { recursive: true, force: true }); } };
+  return { ctx, journal, control, run, offer, repo, setGate, calls, checkout, close() { control.close(); rmSync(dir, { recursive: true, force: true }); } };
 }
 function child(id = "parser", kind: ChildSnapshot["kind"] = "slice"): ChildSnapshot {
   return { id, kind, call: "call", title: "Parser", brief: "Build parser", owns: ["src/parser.ts"], after: [], profile: "default", model: "provider/model",
@@ -156,6 +160,21 @@ describe("build exits", () => {
       expect(result.record).toMatchObject({ landed, baseBranch: "release", gateAttempt: "G1" });
       expect(journal.record().verification).toHaveLength(1);
     } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+  test("Land cannot start a fast-forward when writer admission denies the exact task checkout", async () => {
+    const f = fixture({ taskDestination: true });
+    try {
+      writeFileSync(f.ctx.corral, '#!/bin/sh\nprintf "%s\\n" "$@" > admitted-args\nexit 1\n', { mode: 0o700 });
+      const authorization = await f.offer();
+      expect(authorization).toBeDefined();
+      const at = f.calls.length;
+      expect((await f.control.choose("land", { authorization })).phase).toBe("failed");
+      expect(f.calls.slice(at).some(args => args.includes("--show-toplevel") || args[0] === "update-ref")).toBeFalse();
+      expect(readFileSync(join(f.ctx.dir, "admitted-args"), "utf8").trimEnd().split("\n")).toEqual([
+        "--root", f.ctx.dir, "--json", "takeover-writer-lock", "T-1", f.checkout,
+      ]);
+      expect(f.repo.tip).toBe(base);
+    } finally { f.close(); }
   });
   test("a failed gate cannot authorize or repair a candidate, even with a review override", async () => {
     const f = fixture({ policy: "review" });

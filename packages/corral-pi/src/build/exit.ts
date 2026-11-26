@@ -1,4 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { lstatSync, realpathSync } from "node:fs";
+import { isAbsolute } from "node:path";
+import { taskDestinationLock } from "../host/worktree-writer.ts";
 import { checked, type Run } from "./corral-cli.ts";
 import { fastForward, PartialFastForward } from "./fast-forward.ts";
 import { LandTracker, TAIL_FAILED } from "./land-progress.ts";
@@ -48,6 +51,14 @@ interface Pin {
   readonly source: string;
 }
 interface Offer { readonly pin: Pin; readonly authorization: string; shown: boolean }
+
+function checkoutIdentity(checkout: string) {
+  if (!isAbsolute(checkout)) throw new Error("The landing checkout path must be absolute.");
+  const path = realpathSync(checkout);
+  const stat = lstatSync(path, { bigint: true });
+  if (!stat.isDirectory()) throw new Error(`The landing checkout at ${checkout} is unavailable.`);
+  return { path, device: stat.dev, inode: stat.ino };
+}
 
 export function createExit(options: {
   context: BuildContext; git: Run; fleet: () => FleetSnapshot; journal: BuildJournal;
@@ -174,17 +185,17 @@ export function createExit(options: {
     ];
   }
 
-  async function checkIdentity(pin: Pin): Promise<void> {
+  async function checkIdentity(pin: Pin, run = git): Promise<void> {
     if (closed) throw new Error("The session closed.");
     if (pin !== prepared) throw new PreparationError(`The prepared landing candidate is no longer current. ${PREPARATION_NEEDED}`);
     const { candidate, target } = pin;
-    const current = await landingTarget(git, context);
+    const current = await landingTarget(run, context);
     if (target.ref !== current.ref) throw new PreparationError(`The configured base branch changed from ${target.name} to ${current.name}. ${PREPARATION_NEEDED}`);
     if (target.gateInputFingerprint !== current.gateInputFingerprint) throw new PreparationError(`The configured gate inputs changed. ${PREPARATION_NEEDED} Run build_verify for the new commands.`);
-    const tip = await commit(git, target.ref, cwd);
+    const tip = await commit(run, target.ref, cwd);
     if (tip !== candidate.base) throw baseMoved(target, candidate.base, tip);
-    if (await sourceBranch(git, cwd) !== candidate.branch) throw new PreparationError(`The build branch changed since preparation. ${PREPARATION_NEEDED}`);
-    if (await commit(git, "HEAD", cwd) !== candidate.head) throw new CandidateMoved(`Build HEAD changed since preparation. ${PREPARATION_NEEDED}`);
+    if (await sourceBranch(run, cwd) !== candidate.branch) throw new PreparationError(`The build branch changed since preparation. ${PREPARATION_NEEDED}`);
+    if (await commit(run, "HEAD", cwd) !== candidate.head) throw new CandidateMoved(`Build HEAD changed since preparation. ${PREPARATION_NEEDED}`);
     if (pin !== prepared) throw new PreparationError(`The prepared landing candidate is no longer current. ${PREPARATION_NEEDED}`);
   }
   function checkReviewPolicy(pin: Pin): void {
@@ -192,13 +203,17 @@ export function createExit(options: {
       throw new PreparationError(`The configured review inputs changed. ${PREPARATION_NEEDED}`);
     }
   }
-  async function checkPin(pin: Pin): Promise<string | undefined> {
+  function inspectDestination(target: LandingTarget, base: string, head?: string, run = git) {
+    // Even diagnostic Git commands can refresh the destination's index unless opted out.
+    return checkDestination((argv, options) => run(argv, { ...options, env: { ...options.env, GIT_OPTIONAL_LOCKS: "0" } }), context, target, base, head);
+  }
+  async function checkPin(pin: Pin, run = git): Promise<string | undefined> {
     checkAvailable();
-    await checkSource(git, context);
+    await checkSource(run, context);
     const { candidate, target } = pin;
     checkTargetConfig(context, target);
-    const checkout = await checkDestination(git, context, target, candidate.base, candidate.head);
-    await checkIdentity(pin);
+    const checkout = await inspectDestination(target, candidate.base, candidate.head, run);
+    await checkIdentity(pin, run);
     checkReviewPolicy(pin);
     checkAvailable();
     return checkout;
@@ -234,7 +249,7 @@ export function createExit(options: {
       if (source === base || !alreadyBased && await ancestor(git, source, base, cwd)) {
         throw new Error("There are no candidate commits beyond the integration tip.");
       }
-      await checkDestination(git, context, target, base, alreadyBased ? source : undefined);
+      await inspectDestination(target, base, alreadyBased ? source : undefined);
       let head = source;
       if (!alreadyBased) {
         const fork = await git(["merge-base", base, source], { cwd });
@@ -374,7 +389,9 @@ export function createExit(options: {
         progress.done("rebase", `prepared ${short(candidate.head)}`);
         progress.begin("land");
         candidateStatus = evidenceStatus(pin);
-        await checkPin(pin);
+        const checkout = await checkPin(pin);
+        const workspace = session.workspaceRoot;
+        const destination = checkout ? checkoutIdentity(checkout) : undefined;
         const authorize = () => {
           if (options.evidenceBusy?.()) throw new Error("Wait for the current build evidence to finish.");
           const needsReason = reviewReason(pin);
@@ -389,32 +406,50 @@ export function createExit(options: {
         if (overrideReason) journal.decision("override", overrideReason);
         candidateStatus = { ...pinStatus(pin), ...(passed ? { gateAttempt: passed.attempt } : {}) };
         update("landing", `Fast-forwarding ${target.name} to ${short(candidate.head)}.`, record, true);
-        // After publishing progress, validate again, then perform only the fast-forward to the offered SHA.
-        const checkout = await checkPin(pin);
+        // The Build host's lifetime writer lock covers its source, not this checkout.
+        const writer = destination ? await taskDestinationLock(destination.path, context.corral, workspace) : undefined;
+        const destinationChanged = () => new PreparationError(`The checkout of ${target.name} changed during landing. ${PREPARATION_NEEDED}`);
+        const checkDestinationWriter = () => {
+          if (destination && checkout) {
+            const current = checkoutIdentity(checkout);
+            if (current.path !== destination.path || current.device !== destination.device || current.inode !== destination.inode) {
+              throw destinationChanged();
+            }
+          }
+          writer?.check();
+        };
+        const landingGit: Run = writer ? (argv, options) => git(argv, { ...options, leaseFds: [...(options.leaseFds ?? []), writer.fd] }) : git;
+        const leaseFds = [context.writerFd, writer?.fd].filter(fd => fd !== undefined);
         let receipt: ReturnType<typeof authorize>;
         try {
-          await fastForward(git, { source: cwd, checkout, ref: target.ref, base: candidate.base, head: candidate.head, async beforeWrite() {
+          // Do not silently switch to another checkout (or a ref-only update) after admission.
+          if (await checkPin(pin, landingGit) !== checkout) throw destinationChanged();
+          checkDestinationWriter();
+          await fastForward(landingGit, { source: cwd, checkout: destination?.path ?? checkout, ref: target.ref, base: candidate.base, head: candidate.head, leaseFds, async beforeWrite() {
             // Destination locks and index staging can take time. Recheck the source
             // against the offer here without reacquiring any destination locks.
-            await checkSource(git, context);
-            await checkIdentity(pin);
-            if (!checkout && await checkDestination(git, context, target, candidate.base, candidate.head)) {
+            await checkSource(landingGit, context);
+            await checkIdentity(pin, landingGit);
+            if (!checkout && await inspectDestination(target, candidate.base, candidate.head, landingGit)) {
               throw new Error(`The base ${target.name} is now checked out. ${PREPARATION_NEEDED}`);
             }
-            if (checkout && session.bare && (await checked(git, ["status", "--porcelain", "--untracked-files=no", "--ignore-submodules=none"], checkout)).trim()) {
+            if (checkout && session.bare && (await checked(landingGit, ["status", "--porcelain", "--untracked-files=no", "--ignore-submodules=none"], checkout)).trim()) {
               throw new Error("The repository's primary checkout has tracked changes; commit or stash them before landing.");
             }
             checkAvailable();
             checkTargetConfig(context, target);
             checkReviewPolicy(pin);
+            checkDestinationWriter();
             receipt = authorize();
-          } });
-        } catch (error) {
-          // Do not hide partial-checkout diagnostics or automatically reprepare over one.
-          if (error instanceof PartialFastForward) throw error;
-          const actual = await commit(git, target.ref, cwd).catch(() => undefined);
-          if (actual && actual !== candidate.base) throw baseMoved(target, candidate.base, actual);
-          throw error;
+          } }).catch(async error => {
+            // Do not hide partial-checkout diagnostics or automatically reprepare over one.
+            if (error instanceof PartialFastForward) throw error;
+            const actual = await commit(git, target.ref, cwd).catch(() => undefined);
+            if (actual && actual !== candidate.base) throw baseMoved(target, candidate.base, actual);
+            throw error;
+          });
+        } finally {
+          writer?.close();
         }
         progress.done("land");
         prepared = undefined;

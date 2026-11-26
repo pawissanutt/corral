@@ -68,6 +68,17 @@ impl Runner for ProcessRunner {
         })
     }
 
+    #[cfg(unix)]
+    fn checkout_session_gone(&self, session: &SessionRef) -> Result<bool> {
+        let (pid, _) = process_session(session)?;
+        let pid = libc::pid_t::try_from(pid).context("process group exceeds Unix pid range")?;
+        if pid <= 1 {
+            bail!("invalid process session group {pid}");
+        }
+        // A leader can record completion or exit while a child is still alive.
+        Ok(!group_exists(pid)?)
+    }
+
     fn send(&self, session: &SessionRef, text: &str, _origin: Origin) -> Result<()> {
         let (_, dir) = process_session(session)?;
         Err(retry_refusal(

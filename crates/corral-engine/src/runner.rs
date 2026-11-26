@@ -3,7 +3,7 @@
 //! A process session owns its run directory. Its `exit_code` is the durable completion
 //! marker, including when the command outlives the caller that launched it.
 
-use std::{path::PathBuf, process::Command};
+use std::{fmt, path::PathBuf, process::Command};
 
 use anyhow::Result;
 use corral_types::Origin;
@@ -41,6 +41,16 @@ pub struct InputTag<'a> {
     pub attachments: &'a [serde_json::Value],
 }
 
+/// A launch failed and its attempted cleanup could not confirm that it stopped.
+#[derive(Debug)]
+pub(crate) struct UncertainWriterLaunch;
+
+impl fmt::Display for UncertainWriterLaunch {
+    fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
+        out.write_str("could not confirm the failed launch stopped")
+    }
+}
+
 pub trait Runner: Send + Sync {
     fn start(&self, spec: &LaunchSpec) -> Result<SessionRef>;
     /// Start an engine-owned command directly rather than evaluating a harness shell line.
@@ -51,6 +61,12 @@ pub trait Runner: Send + Sync {
     /// Unlike the presentation status, an unknown sample is not idle evidence.
     fn reconciliation_status(&self, session: &SessionRef) -> Result<Option<SessionStatus>> {
         self.status(session).map(Some)
+    }
+    /// Affirmative evidence for exclusive checkout ownership, not presentation or
+    /// reconciliation status. The default is deliberately unknown.
+    #[cfg(unix)]
+    fn checkout_session_gone(&self, _session: &SessionRef) -> Result<bool> {
+        Ok(false)
     }
     /// Owner replies and automatic input share the transport. Runners that can
     /// pause a session may defer automatic input.

@@ -36,6 +36,32 @@ launches are headless by default. `--plan` starts chat, Build or Code in
 [plan mode](plan-mode.md). For build defaults and cleanup, see
 [Build sessions](build-sessions.md).
 
+### Edit a stopped task from Chat
+
+An assistant can call `request_task_worktree` with a task ID. Stop any live run
+first if you intend to take over; the request itself never stops one. The
+question in `/questions` or the app names the task, last worker run, canonical
+checkout and requesting session. Choose **allow for this session** or **deny**.
+Ordinary chat, cancellation and unanswered cards do not grant access.
+
+The grant covers `edit` and `write` at absolute paths in that one checkout. It
+excludes Git and Corral state, symlink and hardlink destinations, and other
+checkouts. The session's ordinary file and shell permissions are unchanged.
+While it holds the checkout, Corral won't dispatch, retry, gate or land changes
+there, start a competing Code/Build host bound there, or let another Corral file
+tool write there. This is writer coordination among current Corral components,
+not an OS sandbox for external editors or trusted shells. Corral refuses the
+request if it cannot establish that the previous writer is gone, and refuses
+managed writes to a task-shaped checkout whose owning board it cannot verify.
+Git and gate subprocesses inherit the writer lock. Configured gates must still
+wait for their writers: a detached subprocess that closes inherited descriptors
+is outside the host's writer coordination.
+
+Use `/worktree-access` to inspect the request or grant and `/worktree-access revoke`
+to hand back the checkout. The session records the decisions. Closing or
+replacing the host releases the checkout; resuming does not restore permission.
+Hand-back leaves edits on disk. It does not commit, submit, or approve them.
+
 ### Trusted coding in place
 
 Run `corral-pi code` from the directory you want to work in. It does not need a

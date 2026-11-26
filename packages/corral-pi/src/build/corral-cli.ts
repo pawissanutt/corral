@@ -10,17 +10,20 @@ export type Run = (argv: readonly string[], options: {
   env?: Readonly<NodeJS.ProcessEnv>;
   stdoutDigest?: "sha256";
   stdoutFd?: number;
+  /** Additional checkout lease descriptors held by the caller through spawn. */
+  leaseFds?: readonly number[];
   /** Consume stdout as bytes instead of collecting it; the result's stdout will be empty. */
   stdoutChunk?: (chunk: Buffer) => void;
 }) => Promise<{ code: number; stdout: string; stderr: string }>;
 
 const OUTPUT_LIMIT = 256 * 1024;
 
-export function engineRun(executable: string): Run {
+export function engineRun(executable: string, boundLeases: readonly number[] = []): Run {
   return async (argv, options) => {
     if (options.stdoutChunk && (options.stdoutDigest || options.stdoutFd !== undefined)) throw new Error("Choose one stdout consumer");
     const child = spawn(executable, [...argv], { cwd: options.cwd, shell: false,
-      env: options.env && { ...process.env, ...options.env }, stdio: ["pipe", options.stdoutFd ?? "pipe", "pipe"] });
+      env: options.env && { ...process.env, ...options.env },
+      stdio: ["pipe", options.stdoutFd ?? "pipe", "pipe", ...boundLeases, ...(options.leaseFds ?? [])] });
     const { promise, resolve, reject } = Promise.withResolvers<{ code: number; stdout: string; stderr: string }>();
     const stdout: Buffer[] = [], stderr: Buffer[] = [];
     const digest = options.stdoutDigest ? createHash(options.stdoutDigest) : undefined;
@@ -59,7 +62,7 @@ export function engineRun(executable: string): Run {
   };
 }
 
-export function gitRun(): Run { return engineRun("git"); }
+export function gitRun(writerFd?: number): Run { return engineRun("git", writerFd === undefined ? [] : [writerFd]); }
 
 export async function checked(run: Run, argv: readonly string[], cwd: string): Promise<string> {
   const result = await run(argv, { cwd });

@@ -43,17 +43,19 @@ export async function checkCheckoutSupport(git: Run, checkout: string): Promise<
 }
 
 /** A live transaction: EOF without commit aborts. Never replay or guess the result of a failed commit. */
-async function withPreparedRef<T>(cwd: string, operation: string, action: (commit: () => Promise<void>, assertHeld: () => void) => Promise<T>): Promise<T> {
+async function withPreparedRef<T>(cwd: string, operation: string, leaseFds: readonly number[], action: (commit: () => Promise<void>, assertHeld: () => void) => Promise<T>): Promise<T> {
   const child = spawn("git", ["update-ref", "-m", "corral: land prepared candidate", "--stdin"],
-    { cwd, env: { ...process.env, ...LOCAL }, shell: false, stdio: ["pipe", "pipe", "pipe"] });
+    { cwd, env: { ...process.env, ...LOCAL }, shell: false, stdio: ["pipe", "pipe", "pipe", ...leaseFds] });
   let stderr = "", failure = "", ended = false;
   const done = new Promise<void>(resolve => {
     child.on("error", error => { failure = error.message; });
     child.on("close", (code, signal) => { failure ||= signal ? `terminated by ${signal}` : code ? `exit ${code}` : ""; ended = true; resolve(); });
   });
-  child.stderr.setEncoding("utf8").on("data", chunk => { stderr = (stderr + chunk).slice(0, 16384); });
-  child.stdin.on("error", error => { failure ||= error.message; });
-  const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
+  const { stdin, stdout, stderr: diagnostics } = child;
+  if (!stdin || !stdout || !diagnostics) { child.kill("SIGKILL"); throw new Error("Git ref transaction pipes are unavailable."); }
+  diagnostics.setEncoding("utf8").on("data", chunk => { stderr = (stderr + chunk).slice(0, 16384); });
+  stdin.on("error", error => { failure ||= error.message; });
+  const lines = createInterface({ input: stdout, crlfDelay: Infinity });
   const replies = lines[Symbol.asyncIterator]();
   const timeout = () => { failure ||= "transaction timed out"; child.kill("SIGKILL"); };
   let timer = setTimeout(timeout, TIMEOUT);
@@ -63,7 +65,7 @@ async function withPreparedRef<T>(cwd: string, operation: string, action: (commi
     if (reply.value !== `${text}: ok`) throw new Error(`Git ref transaction ${text} failed: ${stderr.trim() || failure || reply.value || "missing acknowledgement"}`);
   };
   try {
-    child.stdin.write(`start\n${operation}\nprepare\n`);
+    stdin.write(`start\n${operation}\nprepare\n`);
     await expect("start");
     await expect("prepare");
     clearTimeout(timer); // Never time out a held lock while the checkout operation is still running.
@@ -73,14 +75,14 @@ async function withPreparedRef<T>(cwd: string, operation: string, action: (commi
     return await action(async () => {
       assertHeld();
       timer = setTimeout(timeout, TIMEOUT);
-      child.stdin.end("commit\n");
+      stdin.end("commit\n");
       await expect("commit");
       await done;
       if (failure) throw new Error(`Git ref transaction commit result is uncertain: ${stderr.trim() || failure}`);
     }, assertHeld);
   } finally {
     clearTimeout(timer);
-    if (!ended && !child.stdin.writableEnded) child.stdin.end("abort\n");
+    if (!ended && !stdin.writableEnded) stdin.end("abort\n");
     timer = setTimeout(timeout, TIMEOUT);
     await done;
     clearTimeout(timer);
@@ -88,17 +90,19 @@ async function withPreparedRef<T>(cwd: string, operation: string, action: (commi
   }
 }
 
-async function scratchGit(cwd: string, args: string[], extra: NodeJS.ProcessEnv = {}, digestOutput = false): Promise<string> {
+async function scratchGit(leaseFds: readonly number[], cwd: string, args: string[], extra: NodeJS.ProcessEnv = {}, digestOutput = false): Promise<string> {
   // Only this invocation sees the private HEAD/index. Never change the process environment.
   return new Promise<string>((resolve, reject) => {
-    const child = spawn("git", args, { cwd, env: { ...process.env, ...LOCAL, ...extra }, shell: false, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn("git", args, { cwd, env: { ...process.env, ...LOCAL, ...extra }, shell: false, stdio: ["ignore", "pipe", "pipe", ...leaseFds] });
     let text = "", timedOut = false;
     const digest = digestOutput ? createHash("sha256") : undefined;
     const collect = (chunk: Buffer) => { text = (text + chunk.toString("utf8")).slice(0, 16384); };
-    child.stdout.on("data", (chunk: Buffer) => { if (digest) digest.update(chunk); else collect(chunk); });
-    child.stderr.on("data", collect);
-    const timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, TIMEOUT);
     child.once("error", reject);
+    const { stdout, stderr } = child;
+    if (!stdout || !stderr) { child.kill("SIGKILL"); reject(new Error("Git checkout pipes are unavailable.")); return; }
+    stdout.on("data", (chunk: Buffer) => { if (digest) digest.update(chunk); else collect(chunk); });
+    stderr.on("data", collect);
+    const timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, TIMEOUT);
     child.once("close", (code, signal) => {
       clearTimeout(timer);
       if (code === 0 && !timedOut) resolve(digest?.digest("hex") ?? "");
@@ -140,9 +144,11 @@ async function unchangedLock(lock: FileHandle, path: string): Promise<boolean> {
  */
 export async function fastForward(git: Run, request: {
   source: string; checkout?: string; ref: string; base: string; head: string;
+  /** Retain writer exclusion in directly spawned Git if the host dies mid-operation. */
+  leaseFds?: readonly number[];
   beforeWrite: () => void | Promise<void>;
 }): Promise<void> {
-  const { source, checkout, ref, base, head, beforeWrite } = request;
+  const { source, checkout, ref, base, head, beforeWrite, leaseFds = [] } = request;
   if (!SHA.test(base) || !SHA.test(head) || base.length !== head.length || base === head || !ref.startsWith("refs/heads/")) {
     throw new Error("Invalid pinned fast-forward.");
   }
@@ -151,7 +157,7 @@ export async function fastForward(git: Run, request: {
   // Protect the update-ref stdin protocol even if a runner is substituted in tests.
   if (/[\s\0]/.test(ref)) throw new Error("Invalid pinned branch name.");
   const operation = `option no-deref\nupdate ${ref} ${head} ${base}`;
-  const guardedUpdate = (action: (commit: () => Promise<void>, assertHeld: () => void) => Promise<void>) => withPreparedRef(source, operation, async (commit, assertHeld) => {
+  const guardedUpdate = (action: (commit: () => Promise<void>, assertHeld: () => void) => Promise<void>) => withPreparedRef(source, operation, leaseFds, async (commit, assertHeld) => {
     const symbolic = await git(["symbolic-ref", "--quiet", "--no-recurse", ref], { cwd: source });
     if (symbolic.code !== 1) throw new Error(`The landing target ${ref} is not a direct local branch.`);
     await action(commit, assertHeld);
@@ -181,7 +187,7 @@ export async function fastForward(git: Run, request: {
   });
   let temp: string | undefined, installed = false, checkoutStarted = false;
   try {
-    await withPreparedRef(checkout, `option no-deref\nverify HEAD ${base}`, async (_neverCommitHead, assertHeadLocked) => {
+    await withPreparedRef(checkout, `option no-deref\nverify HEAD ${base}`, leaseFds, async (_neverCommitHead, assertHeadLocked) => {
       const branch = (await checked(git, ["symbolic-ref", "--quiet", "--no-recurse", "HEAD"], checkout)).trimEnd();
       if (branch !== ref || await locate(["--absolute-git-dir"], checkout) !== gitDir) throw new Error(`The checkout at ${checkout} switched branches before landing.`);
       await guardedUpdate(async (commit, assertRefLocked) => {
@@ -213,17 +219,17 @@ export async function fastForward(git: Run, request: {
         // the original common dir. Disable scratch hooks, autostash, and maintenance.
         const format = (await checked(git, ["rev-parse", "--show-object-format"], checkout)).trim();
         if (format !== "sha1" && format !== "sha256") throw new Error("Unsupported object format for landing.");
-        await scratchGit(temp, ["init", "--quiet", "--bare", "--template=", `--object-format=${format}`, privateDir]);
+        await scratchGit(leaseFds, temp, ["init", "--quiet", "--bare", "--template=", `--object-format=${format}`, privateDir]);
         const env = { GIT_DIR: privateDir, GIT_COMMON_DIR: common, GIT_WORK_TREE: destination, GIT_INDEX_FILE: privateIndex };
         const config = ["-c", "core.hooksPath=/dev/null", "-c", "core.splitIndex=false", "-c", "core.fsmonitor=false", "-c", "maintenance.auto=false",
           "-c", "gc.auto=0", "-c", "rerere.enabled=false", "-c", "submodule.recurse=false", "-c", "merge.autoStash=false"];
-        await scratchGit(temp, [...config, "update-ref", "--no-deref", "HEAD", base], env);
+        await scratchGit(leaseFds, temp, [...config, "update-ref", "--no-deref", "HEAD", base], env);
         // Do not bypass worktree config or conditional Git includes (e.g. filters
         // configured for the real Git directory or target branch). Fail closed if
         // the private detached Git context cannot reproduce the checkout config.
         const configArgs = ["config", "--null", "--list"];
         const actualConfig = await git(configArgs, { cwd: checkout, stdoutDigest: "sha256" });
-        if (actualConfig.code || actualConfig.stdout !== await scratchGit(destination, configArgs, env, true)) {
+        if (actualConfig.code || actualConfig.stdout !== await scratchGit(leaseFds, destination, configArgs, env, true)) {
           throw new Error("Landing cannot reproduce the checkout's worktree-specific or conditional Git configuration.");
         }
         await beforeWrite();
@@ -231,7 +237,7 @@ export async function fastForward(git: Run, request: {
         assertRefLocked();
         if (!await unchangedLock(lock, lockPath)) throw new Error("The checkout index lock was removed or replaced before checkout.");
         checkoutStarted = true;
-        await scratchGit(destination, [...config, "merge", "--ff-only", "--no-autostash", "--no-overwrite-ignore", "--no-edit", "--no-stat", head], env);
+        await scratchGit(leaseFds, destination, [...config, "merge", "--ff-only", "--no-autostash", "--no-overwrite-ignore", "--no-edit", "--no-stat", head], env);
         // Keep index.lock until after ref commit, preventing a concurrent Git checkout
         // from installing its own index/worktree while the expected base is still old.
         const result = await open(privateIndex, SAFE_READ);

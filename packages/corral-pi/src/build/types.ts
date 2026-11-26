@@ -133,6 +133,8 @@ export interface BuildContext {
   /** `<dataRoot>/build/<id>`: transcripts, journal and child session files. */
   readonly dir: string;
   readonly corral: string;
+  /** Host-owned shared checkout lease for spawned Git and gate writers. */
+  readonly writerFd?: number;
 }
 
 // ---------- children ----------

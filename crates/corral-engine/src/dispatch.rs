@@ -19,6 +19,9 @@ use crate::{
     tasks::{next_force_approve, next_retry, next_review, set_lifecycle},
 };
 
+mod pending;
+pub(crate) use pending::PendingLaunch;
+
 pub(crate) struct LaunchRequest<'a> {
     pub task: &'a Task,
     pub checkout: &'a Checkout,
@@ -27,13 +30,6 @@ pub(crate) struct LaunchRequest<'a> {
     pub note: Option<&'a str>,
     pub project: Option<&'a EffectiveProject>,
     pub fresh: bool,
-}
-
-#[derive(Default)]
-pub(crate) struct PendingLaunch {
-    checkout: Option<(Checkout, bool)>,
-    dir: Option<PathBuf>,
-    session: Option<SessionRef>,
 }
 
 impl Engine {
@@ -61,7 +57,7 @@ impl Engine {
             base: base.map(str::to_owned),
         };
         self.check_force(force, || op(id))?;
-        self.launch_transaction(|store, pending| {
+        self.launch_transaction(id, |store, pending| {
             let mut task = store.require_task(id)?;
             if !matches!(task.status, Status::Backlog | Status::Ready) {
                 let move_op = Op::Move {
@@ -152,6 +148,7 @@ impl Engine {
             let reuse = latest.as_ref().is_some_and(|last| {
                 last.branch == checkout.branch && last.worktree == checkout.path
             });
+            pending.reserve_checkout(self.checkout_repo_writer(&checkout.repo, id)?);
             self.prepare_checkout(&mut checkout, pending, reuse, false, None)?;
             let run = self.start_run(
                 store,
@@ -242,6 +239,7 @@ impl Engine {
         paths: &[PathBuf],
         send: impl FnOnce(PiRunner<'_>, &SessionRef, Origin, &str) -> Result<T>,
     ) -> Result<(Run, T)> {
+        let _writer = self.checkout_writer(id)?;
         self.store.transaction(|store| {
             let mut task = store.require_task(id)?;
             let mut run = self.last_worker(store, &task)?;
@@ -317,6 +315,7 @@ impl Engine {
     }
 
     fn stop_selected(&self, id: &str, selected: Option<&str>) -> Result<Run> {
+        let _writer = self.checkout_writer(id)?;
         self.store.transaction(|store| {
             let mut task = store.require_task(id)?;
             let runs = store.live_runs_for_task(id)?;
@@ -383,7 +382,7 @@ impl Engine {
         note: Option<&str>,
         selected: Option<&str>,
     ) -> Result<Run> {
-        self.launch_transaction(|store, pending| {
+        self.launch_transaction(id, |store, pending| {
             let mut task = store.require_task(id)?;
             if let Some(run) = selected {
                 store.require_relaunch_target(&task, Role::Worker, run)?;
@@ -409,6 +408,7 @@ impl Engine {
                 self.require_dispatch_slot(store, task.project.as_deref(), project.as_ref())?;
             }
             let mut checkout = Checkout::from_run(&last)?;
+            pending.reserve_checkout(self.checkout_repo_writer(&checkout.repo, id)?);
             self.supersede_runs(store, id, |run| run.role == Role::Worker)?;
             self.prepare_checkout(
                 &mut checkout,
@@ -519,6 +519,7 @@ impl Engine {
             project,
             fresh,
         } = request;
+        pending.reserve_checkout(self.checkout_repo_writer(&checkout.repo, &task.id)?);
         let definition = self
             .config
             .profiles
@@ -664,8 +665,10 @@ impl Engine {
 
     pub(crate) fn launch_transaction<T>(
         &self,
+        id: &str,
         execute: impl FnOnce(&Store, &mut PendingLaunch) -> Result<T>,
     ) -> Result<T> {
+        let _writer = self.checkout_writer(id)?;
         let mut pending = PendingLaunch::default();
         self.store
             .transaction(|store| {
@@ -737,37 +740,6 @@ impl Engine {
                     })
                     .collect(),
             );
-        }
-        error
-    }
-}
-
-impl PendingLaunch {
-    fn rollback(&mut self, engine: &Engine, mut error: anyhow::Error) -> anyhow::Error {
-        if let Some(session) = self.session.take()
-            && let Err(cleanup) = engine.session_runner().stop(&session)
-        {
-            error = error.context(format!("failed to close uncommitted launch: {cleanup:#}"));
-        }
-        if let Some(dir) = self.dir.take() {
-            if let Err(cleanup) = fs::remove_dir_all(&dir) {
-                error = error.context(format!(
-                    "failed to remove uncommitted run directory {}: {cleanup}",
-                    dir.display()
-                ));
-            }
-            if let Some(parent) = dir.parent() {
-                let _ = fs::remove_dir(parent);
-            }
-        }
-        if let Some((checkout, new_branch)) = self.checkout.take() {
-            if let Err(cleanup) = corral_git::worktree_remove(&checkout.repo, &checkout.path, true)
-            {
-                error = error.context(format!("failed to roll back task worktree: {cleanup:#}"));
-            }
-            if new_branch && let Err(cleanup) = checkout.delete_branch() {
-                error = error.context(format!("failed to roll back task branch: {cleanup:#}"));
-            }
         }
         error
     }

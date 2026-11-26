@@ -137,6 +137,38 @@ fn run(command: Command, out: &mut Output<'_>) -> Result<u8> {
     if matches!(command, Command::Hook) && hook::nudge(&root)? {
         return Ok(0);
     }
+    #[cfg(unix)]
+    match &command {
+        Command::TakeoverProbe { task } | Command::TakeoverVerify { task } => {
+            let engine = Engine::open_read_only(&root)?;
+            let snapshot = if matches!(command, Command::TakeoverProbe { .. }) {
+                engine.takeover_probe(task)?
+            } else {
+                engine.takeover_verify(task)?
+            };
+            out.value(&snapshot, |out, value| {
+                writeln!(
+                    out,
+                    "{} {}: {}",
+                    value.task,
+                    value.run,
+                    value.checkout.display()
+                )
+            })?;
+            return Ok(0);
+        }
+        Command::TakeoverWriterLock { task, checkout } => {
+            let value = Engine::open_read_only(&root)?.takeover_writer_lock(task, checkout)?;
+            out.value(&value, |out, value| {
+                if let Some(lock) = &value.lock {
+                    writeln!(out, "{}", lock.display())?;
+                }
+                Ok(())
+            })?;
+            return Ok(0);
+        }
+        _ => (),
+    }
     let engine = Engine::open(root)?;
     match command {
         Command::New {
@@ -381,6 +413,10 @@ fn run(command: Command, out: &mut Output<'_>) -> Result<u8> {
             )?;
         }
         Command::Pipeline { task } => engine.advance(&task)?,
+        #[cfg(unix)]
+        Command::TakeoverProbe { .. }
+        | Command::TakeoverVerify { .. }
+        | Command::TakeoverWriterLock { .. } => unreachable!("handled with the read-only engine"),
         #[cfg(unix)]
         Command::PiStartup(_) => unreachable!("handled before opening the engine"),
         Command::Init { .. }

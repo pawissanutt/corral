@@ -169,6 +169,11 @@ impl Runner for FakeRunner {
         Ok(state.default_status.clone())
     }
 
+    #[cfg(unix)]
+    fn checkout_session_gone(&self, session: &SessionRef) -> Result<bool> {
+        Ok(self.status(session)? == SessionStatus::Gone)
+    }
+
     fn send(&self, session: &SessionRef, text: &str, origin: Origin) -> Result<()> {
         let mut state = self.lock();
         let status = state

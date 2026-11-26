@@ -26,6 +26,9 @@ import { CHECKPOINT_ENTRY, Checkpoints } from "../capabilities/checkpoints.ts";
 import { jobControl, type JobControl } from "./job-controls.ts";
 import { type HostControls, installToolControls, parseControls } from "./tool-controls.ts";
 import { ToolApprovals } from "./tool-approvals.ts";
+import { WORKTREE_ACCESS_COMMAND, WORKTREE_ACCESS_ENTRY, WORKTREE_REQUEST_TOOL, WorktreeAccess } from "./worktree-access.ts";
+import { worktreeTools } from "./worktree-tools.ts";
+import { taskDestinationLock } from "./worktree-writer.ts";
 import { type CapabilityGuidance, type Guidance, selectGuidance } from "../capabilities/guidance.ts";
 import { PROVIDERS, type ProviderId, billingKind, hostDestinations, isApiProvider, isProviderId } from "../auth/providers.ts";
 import type { AuthContext, Fetch } from "../auth/types.ts";
@@ -448,6 +451,7 @@ export class HostSession {
   private additionalLsp: LspToolkit | undefined;
   private readonly additionalLspFactory: (() => LspToolkit) | undefined;
   private readonly toolApprovals: ToolApprovals | undefined;
+  private readonly worktreeAccess: WorktreeAccess | undefined;
   private readonly checkpoints: Checkpoints | undefined;
   private rewinding = false;
   private readonly auxiliary: AuxiliaryRuntime | undefined;
@@ -843,6 +847,7 @@ export class HostSession {
       changed: question => {
         if (question) {
           this.toolApprovals?.observeAnswer(question);
+          this.worktreeAccess?.observe(question);
           this.remotePrompts.changed(question);
           options.events.emit("owner_question", { id: question.id, status: question.status });
           options.herdr?.questionChanged(question.id, question.status === "pending");
@@ -857,6 +862,17 @@ export class HostSession {
     }) : undefined;
     this.ownerQuestions = questions;
     this.toolApprovals = questions ? new ToolApprovals(questions, options.cwd, writeApprovalRole) : undefined;
+    const assistantScope = this.assistantScope();
+    const supportsSourceTools = role.upstreamTools.includes("edit") && role.upstreamTools.includes("write");
+    this.worktreeAccess = questions && assistantScope && options.client.configured && supportsSourceTools ? new WorktreeAccess({
+      cwd: options.cwd, questions, session: () => this.sessionId(),
+      ready: () => this.remoteActionsReady && !this.automationRetired && (!this.planMode || this.planMode.phase === "off"),
+      command: argv => options.client.command(argv, options.client.workspaceRoot),
+      audit: record => {
+        options.sessionManager.appendCustomEntry(WORKTREE_ACCESS_ENTRY, record, { immediate: true });
+        options.events.emit("task_worktree_access", record);
+      },
+    }) : undefined;
     this.localTools = [...(lspEnabled ? roleLocal : roleLocal.filter((tool) => !tool.name.startsWith("lsp_"))),
       ...(dialogEnabled && questions ? [askUserTool(async answer => {
         if (!this.dialogPi) throw new Error("dialog session is unavailable");
@@ -871,6 +887,12 @@ export class HostSession {
       } })), ...(webEnabled && options.network.web ? webTools(options.network.web,
         searchOverride !== undefined ? false : subscriptionSearch ? this.runSearch : undefined) : []),
       ...this.hostedTools(),
+      ...(this.worktreeAccess ? [this.worktreeAccess.tool()] : []),
+      ...(supportsSourceTools ? worktreeTools(options.sdk, options.cwd, {
+        lock: path => this.taskDestinationLock(path),
+        ...(assistantScope && this.worktreeAccess ? { takeover: { scope: assistantScope, access: this.worktreeAccess,
+          writesPlan: (tool, input) => this.planMode?.writesPlan(tool, input) === true } } : {}),
+      }) : []),
       ...(this.jobs ? jobTools(this.jobs, true, this.commands, this.inputWake).filter(tool => tool.name !== "bash" || role.upstreamTools.includes("bash")) : []),
       ...(this.fleet && auxiliary.explore ? [exploreTool(this.fleet)] : []),
       ...(this.auxiliary && auxiliary.expert ? [expertTool(this.auxiliary)] : []),
@@ -943,7 +965,7 @@ export class HostSession {
       throw new Error("module_invalid: background_shell needs an eligible role, settings and a runtime directory");
     }
     return new JobRuntime({
-      cwd: options.cwd, runtimeDir: options.runtimeDir,
+      cwd: options.cwd, runtimeDir: options.runtimeDir, writerFd: options.build?.writerFd,
       settings: settings.data, registerCapability,
       environment: () => ({ ...process.env, PI_SESSION_ID: this.sessionId(), PI_SESSION_FILE: this.session.sessionFile,
         PI_PROVIDER: this.session.model?.provider, PI_MODEL: this.session.model?.id, PI_REASONING_LEVEL: this.session.thinkingLevel }),
@@ -994,7 +1016,7 @@ export class HostSession {
   };
 
   private childLocalTools(): readonly ToolDefinition[] {
-    return this.localTools.filter(tool => tool.name !== "image_gen" &&
+    return this.localTools.filter(tool => tool.name !== "image_gen" && tool.name !== WORKTREE_REQUEST_TOOL &&
       (tool.name !== "web_search" || this.options.capabilities?.hosted_tools?.web_search === undefined));
   }
 
@@ -1008,6 +1030,12 @@ export class HostSession {
     const image = this.boundImageTool(child);
     if (image) tools.push(image);
     return tools;
+  }
+
+  private taskDestinationLock(path: string) {
+    const { client, identity, cwd } = this.options;
+    const own = identity.role === "worker" && identity.task ? cwd : undefined;
+    return taskDestinationLock(path, client.executable, client.configured ? client.workspaceRoot : undefined, own);
   }
 
   private boundImageTool(child?: { kind: "slice" | "explore" | "review"; owns: readonly string[] }): ToolDefinition | undefined {
@@ -1030,7 +1058,7 @@ export class HostSession {
     }, authorize: (path, prompt, preparedPath, destinationIdentity) => {
       if (!scope) throw new Error("image_generation_unavailable: no write scope");
       return authorizeImageDestination(path, prompt, preparedPath, destinationIdentity, scope, this.toolApprovals);
-    } });
+    }, reserveOutput: path => this.taskDestinationLock(path) });
   }
 
   /** Build the tool's catalog on first invocation. Never widen a chat or fallback catalog. */
@@ -1283,7 +1311,17 @@ export class HostSession {
       const model = this.session.model;
       if (model) this.modelChanged(`${model.provider}/${model.id}`, event.level);
     });
-    pi.on("session_start", () => { this.toolApprovals?.clear(); });
+    pi.on("session_start", () => {
+      this.toolApprovals?.clear();
+      this.revokeWorktreeAccess("session changed");
+    });
+    if (this.worktreeAccess) pi.registerCommand(WORKTREE_ACCESS_COMMAND, {
+      description: "Inspect task worktree access, or hand it back with /worktree-access revoke",
+      handler: async (args, ctx) => {
+        const result = this.worktreeAccessAction(args.trim());
+        this.notice(result.text, "text", ctx.ui);
+      },
+    });
     if (this.ownerQuestions) {
       this.questionUi = new OwnerQuestionUi(this.ownerQuestions, () => this.bound && !this.closing,
         message => { this.session.sessionManager.appendCustomMessageEntry(message.customType, message.content, message.display, undefined); },
@@ -1463,12 +1501,11 @@ export class HostSession {
       };
     });
     const shellRefusal = this.options.modules.role.shellRefusal;
-    const { cwd, workspaceRoot, identity, build } = this.roleContext;
-    const assistantWorkspace = identity.role === "assistant" && workspaceRoot && existsSync(join(workspaceRoot, ".corral-next", "corral.toml"))
-      ? workspaceRoot : undefined;
+    const { identity, build } = this.roleContext;
     const policy = identity.role === "build" ? buildParentPolicy(this.roleContext, shellRefusal, this.controls.bashRules, plan) : {
       fixed: shellRefusal && ((command: string) => shellRefusal(command, build?.session.bare === true)),
-      writeScope: identity.role === "assistant" ? { cwd, root: cwd, workspace: assistantWorkspace } : undefined,
+      writeScope: this.assistantScope(),
+      taskWriteScope: this.worktreeAccess ? (path: string) => this.worktreeAccess?.decision(path) : undefined,
       rules: this.controls.bashRules, plan,
     };
     installToolControls(pi, {
@@ -1544,6 +1581,7 @@ export class HostSession {
     pi.on("session_shutdown", async (event) => {
       // InteractiveMode exits the process after runtime disposal; main's finally never runs.
       // Await the release here, but keep reporting through extension reloads.
+      this.revokeWorktreeAccess(event.reason === "reload" ? "host reload" : "session ended");
       if (event.reason === "quit") await this.options.herdr?.close();
       if (event.reason === "reload") await this.auxiliary?.cancelAll(); else await this.auxiliary?.close();
       if (event.reason === "reload") await this.fleet?.cancelAll(); else await this.fleet?.close();
@@ -1941,8 +1979,28 @@ export class HostSession {
       ready: () => this.remoteActionsReady && !this.open && !this.session.isStreaming && !this.session.isCompacting,
       compact: instructions => this.session.compact(instructions),
       export: this.exportable() ? () => this.reportedExport() : undefined,
+      worktreeAccess: this.worktreeAccess ? args => this.worktreeAccessAction(args) : undefined,
     });
     if (this.planMode) registerPlanMode(registry, this.planMode);
+  }
+
+  private assistantScope() {
+    const { identity, cwd, workspaceRoot } = this.roleContext;
+    if (identity.role !== "assistant") return;
+    const workspace = workspaceRoot && existsSync(join(workspaceRoot, ".corral-next", "corral.toml")) ? workspaceRoot : undefined;
+    return { cwd, root: cwd, workspace };
+  }
+
+  private worktreeAccessAction(args: string): { text: string } {
+    if (!this.worktreeAccess || !this.remoteActionsReady) throw new BridgeRefusal("worktree_access_unavailable", "No live worktree access interface");
+    if (args === "revoke") return { text: this.worktreeAccess.revoke("owner handed back access") };
+    if (args !== "" && args !== "status") throw new BridgeRefusal("bad_input", "Use /worktree-access [status | revoke]");
+    return { text: this.worktreeAccess.status() };
+  }
+
+  private revokeWorktreeAccess(reason: string): void {
+    try { this.worktreeAccess?.revoke(reason); }
+    catch (error) { this.options.events.emit("task_worktree_audit_failed", { reason: String(error) }); }
   }
 
   private remoteCommands() {
@@ -2011,6 +2069,7 @@ export class HostSession {
     closeResidentSession(this.sessionId());
     if (this.open) this.stopCause ??= "host";
     this.closing = true;
+    this.revokeWorktreeAccess("session ended");
     this.imageGeneration?.close();
     this.dialogs.close();
     clearTimeout(this.remoteJobSample);
@@ -2172,6 +2231,7 @@ export class HostSession {
     if (reason) return { retired: false, reason };
     if (this.queue.count("steer") || this.queue.count("follow_up")) return { retired: false, reason: "busy" };
     this.automationRetired = true;
+    this.revokeWorktreeAccess("session retired");
     return { retired: true };
   }
 

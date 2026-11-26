@@ -211,7 +211,9 @@ fn git(dir: &Path, args: &[&str]) -> Result<()> {
 }
 
 fn output(dir: &Path, args: &[&str]) -> Result<Output> {
-    git_command(dir, args)
+    let mut command = git_command(dir, args);
+    let _leases = corral_git::inherit_command_leases(&mut command)?;
+    command
         .output()
         .with_context(|| format!("run git {} in {}", args[0], dir.display()))
 }
@@ -241,4 +243,101 @@ fn git_failure(dir: &Path, verb: &str, out: &Output) -> anyhow::Error {
         out.status,
         String::from_utf8_lossy(&out.stderr).trim()
     )
+}
+
+pub(crate) fn branch_worktree(repo: &Path, branch: &str) -> Result<Option<PathBuf>> {
+    let args = ["worktree", "list", "--porcelain", "-z"];
+    let out = output(repo, &args)?;
+    if !out.status.success() {
+        return Err(git_failure(repo, args[0], &out));
+    }
+    let reference = format!("branch refs/heads/{branch}");
+    let mut checkout = None;
+    for field in out.stdout.split(|byte| *byte == 0) {
+        if field.is_empty() {
+            checkout = None;
+        } else if let Some(path) = field.strip_prefix(b"worktree ") {
+            checkout = Some(path);
+        } else if field == reference.as_bytes() {
+            let path = checkout.context("Git worktree branch has no path")?;
+            #[cfg(unix)]
+            let path = {
+                use std::os::unix::ffi::OsStrExt as _;
+                Path::new(std::ffi::OsStr::from_bytes(path))
+            };
+            #[cfg(not(unix))]
+            let path = Path::new(std::str::from_utf8(path).context("decode Git worktree path")?);
+            return Ok(Some(path.to_path_buf()));
+        }
+    }
+    Ok(None)
+}
+
+/// Confirm the registered directory and its administrative backlink, without
+/// requiring a clean worktree or running Git commands that write the index.
+#[cfg(unix)]
+pub(crate) fn verify_linked_checkout(
+    repo: &Path,
+    checkout: &Path,
+    branch: &str,
+    check_markers: bool,
+) -> Result<()> {
+    use std::{ffi::OsStr, fs, os::unix::ffi::OsStrExt as _};
+
+    ensure!(
+        checkout.canonicalize().context("resolve task checkout")? == checkout,
+        "task checkout path or its .worktrees parent is an alias"
+    );
+    let git_file = checkout.join(".git");
+    ensure!(
+        fs::symlink_metadata(&git_file)
+            .context("inspect checkout .git entry")?
+            .is_file(),
+        "task checkout must have a regular linked worktree .git file"
+    );
+    ensure!(
+        corral_git::repo_root(repo)? == repo && corral_git::repo_root(checkout)? == checkout,
+        "task checkout or project is not a Git worktree root"
+    );
+    let common = corral_git::git_common_dir(repo)?;
+    ensure!(
+        corral_git::git_common_dir(checkout)? == common,
+        "task checkout belongs to another Git repository"
+    );
+    let args = ["rev-parse", "--absolute-git-dir"];
+    let out = output(checkout, &args)?;
+    if !out.status.success() {
+        return Err(git_failure(checkout, args[0], &out));
+    }
+    let bytes = out.stdout.strip_suffix(b"\n").unwrap_or(&out.stdout);
+    let admin = Path::new(OsStr::from_bytes(bytes));
+    ensure!(
+        admin.parent() == Some(common.join("worktrees").as_path())
+            && admin
+                .canonicalize()
+                .context("resolve linked worktree administration")?
+                == admin,
+        "task checkout uses an unexpected Git worktree registration"
+    );
+    let backlink = fs::read(admin.join("gitdir")).context("read Git worktree backlink")?;
+    let backlink = Path::new(OsStr::from_bytes(
+        backlink.strip_suffix(b"\n").unwrap_or(&backlink),
+    ));
+    ensure!(
+        admin
+            .join(backlink)
+            .canonicalize()
+            .context("resolve Git worktree backlink")?
+            == git_file,
+        "Git worktree registration points to another checkout"
+    );
+    ensure!(
+        branch_worktree(repo, branch)?.as_deref() == Some(checkout)
+            && corral_git::current_branch(checkout)? == branch,
+        "task checkout is not registered on its worker branch"
+    );
+    if check_markers {
+        corral_git::check_target_markers(admin, &common, branch)?;
+    }
+    Ok(())
 }

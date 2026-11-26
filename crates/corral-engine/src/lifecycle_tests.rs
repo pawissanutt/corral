@@ -17,6 +17,9 @@ use crate::{
 mod gate_attempts_tests;
 #[path = "review_verdict_tests.rs"]
 mod review_verdict_tests;
+#[cfg(unix)]
+#[path = "takeover_tests.rs"]
+mod takeover_tests;
 
 struct Fixture {
     _root: tempfile::TempDir,

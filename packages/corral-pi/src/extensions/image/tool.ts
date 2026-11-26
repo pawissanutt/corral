@@ -12,6 +12,8 @@ export interface ImageScope {
   refusal(path?: string): string | undefined;
   /** Authorize the prepared destination; return a check to repeat before publication. */
   authorize?(path: string, prompt: string, preparedPath: string, identity: string): () => void;
+  /** Participate in task checkout writer exclusion; never grants image authorization. */
+  reserveOutput?(path: string): Promise<{ check(): void; close(): void } | undefined>;
 }
 
 /** Shared by one host and its children: changing the tool binding cannot open another slot. */
@@ -45,12 +47,14 @@ export class ImageGeneration {
         if (this.busy) throw new Error("image_generation_unavailable: another image request is running");
         this.busy = true;
         let output: ReturnType<typeof preparePng> | undefined;
+        let writer: Awaited<ReturnType<NonNullable<ImageScope["reserveOutput"]>>>;
         try {
           let recheck: (() => void) | undefined;
           if (root && path) {
             output = preparePng(root, path);
             if (!scope.authorize) throw new Error("image_generation_unavailable: write authorization is unavailable");
             recheck = scope.authorize(path, prompt, output.path, output.identity);
+            if (scope.reserveOutput) writer = await scope.reserveOutput(output.path);
             check();
             output.revalidate();
             recheck?.();
@@ -74,11 +78,15 @@ export class ImageGeneration {
           if (!preview || preview.data.length > 128 * 1024) throw new Error("image_generation_failed: cannot prepare a bounded preview");
           check();
           recheck?.();
+          writer?.check();
           output?.publish(bytes);
           const receipt = { provider, model, ...(generated.servedModel ? { served_model: generated.servedModel } : {}), path: output?.path ?? null,
             bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") };
           return { content: [{ type: "text", text: JSON.stringify(receipt) }, { type: "image", mimeType: preview.mimeType, data: preview.data }], details: undefined };
-        } finally { try { output?.close(); } finally { this.busy = false; } }
+        } finally {
+          try { output?.close(); }
+          finally { this.busy = false; writer?.close(); }
+        }
       },
     };
   }

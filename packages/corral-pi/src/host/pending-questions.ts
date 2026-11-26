@@ -21,7 +21,7 @@ export function validAnswer(q: ChoiceQuestion, a: ChoiceAnswer): boolean {
 }
 const Record = z.object({ version: z.literal(1), id: z.string(), session: z.string(),
   questions: z.array(Choice).min(1).max(4), expires: z.number(),
-  tool: z.enum(["ask_user", "bash", "file_write"]).optional(),
+  tool: z.enum(["ask_user", "bash", "file_write", "task_worktree"]).optional(),
   status: z.enum(["pending", "answered", "cancelled", "expired", "withdrawn", "ended"]),
   answers: z.array(Answer).optional(), message: z.string().optional(),
 });
@@ -29,7 +29,7 @@ export type PendingQuestion = z.infer<typeof Record>;
 export const APPROVAL_CHOICES = {
   deny: "deny", once: "allow once", legacyOnce: "allow", timed: "allow for 30 minutes", session: "allow for this session",
 } as const;
-export const isToolApproval = (q: PendingQuestion): boolean => q.tool === "bash" || q.tool === "file_write";
+export const isToolApproval = (q: PendingQuestion): boolean => q.tool === "bash" || q.tool === "file_write" || q.tool === "task_worktree";
 export type QuestionEntry = { type: string; customType?: string; data?: unknown; message?: unknown };
 export interface QuestionHost {
   session(): string;

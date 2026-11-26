@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use anyhow::{Context, Result, bail, ensure};
 use corral_herdr::{AgentStatus, Herdr};
 
-use super::{LaunchSpec, Origin, Runner, SessionRef, SessionStatus};
+use super::{LaunchSpec, Origin, Runner, SessionRef, SessionStatus, UncertainWriterLaunch};
 use crate::config::{shell_quote, valid_env_key};
 use crate::error::refuse;
 
@@ -45,9 +45,11 @@ impl Runner for HerdrRunner {
             // Closing the only pane also removes its workspace.
             return match self.herdr.pane_close(pane) {
                 Ok(()) => Err(error),
-                Err(cleanup) => Err(error.context(format!(
-                    "also failed to close herdr pane {pane} after launch failure: {cleanup:#}"
-                ))),
+                Err(cleanup) => Err(error
+                    .context(format!(
+                        "also failed to close herdr pane {pane} after launch failure: {cleanup:#}"
+                    ))
+                    .context(UncertainWriterLaunch)),
             };
         }
         Ok(SessionRef::Herdr {
