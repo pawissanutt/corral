@@ -17,7 +17,7 @@ import { childToolBindings, executionRefusal, exploreLoadout, type ChildHostedTo
 import { researchCode } from "../codemode/research.ts";
 import type { HelperEvent } from "../subagent/inspection.ts";
 import { observeHelperEvent, withChildBaseCalibration } from "../subagent/session.ts";
-import { ANSWER_FORMAT, CODE_METHOD, DEPTH_GUIDANCE, GAP_CHECK_PROMPT, researchBudget, researchPrompt, researchResult, strongerThinking, wantsGapCheck,
+import { ANSWER_FORMAT, CODE_METHOD, DEPTH_GUIDANCE, GAP_CHECK_PROMPT, GAP_CHECK_RESERVE_MS, researchBudget, researchPrompt, researchResult, strongerThinking, wantsGapCheck,
   type ResearchOptions, type ResearchReport } from "../subagent/research.ts";
 import { projectOrientation } from "../subagent/orientation.ts";
 import type { FleetContext } from "./runtime.ts";
@@ -304,6 +304,7 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
     let turns = 0;
     let toolCalls = 0;
     let kept: number | undefined;
+    let keptCalls: number | undefined;
     let gapNote: string | undefined;
     let synthesis: "turn_limit" | "time_reserve" | undefined;
     let synthesisUsed: typeof synthesis;
@@ -343,7 +344,7 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
           const stopReason: ResearchReport["stopReason"] = signal.aborted
             ? signal.reason instanceof Error && signal.reason.name === "TimeoutError" ? "timeout" : "cancelled"
             : limitReached ? synthesisUsed ?? "turn_limit" : failed ? "provider_error" : synthesisUsed ?? "completed";
-          const findings = researchResult(messages, stopReason, toolCalls);
+          const findings = researchResult(messages, stopReason, keptCalls ?? toolCalls);
           text = findings.text;
           researchReport = findings.report;
         } else if (limitReached) failed ??= "Child turn limit reached";
@@ -503,16 +504,27 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
             now: (options.now ?? Date.now)(), stopped: signal.aborted || limitReached || synthesis !== undefined })) {
           const before = session.messages.length;
           const limits = { limitReached, synthesisUsed };
+          const callsBefore = toolCalls;
           let reason: string | undefined;
+          // The optional phase ends well before the child deadline, so a slow follow-up falls back
+          // to the first answer instead of timing the whole child out.
+          const deadlineAt = execution?.deadlineAt;
+          const cutoff = deadlineAt === undefined ? undefined : setTimeout(() => {
+            reason = "time reserve reached";
+            void session!.abort().catch(() => {});
+          }, Math.max(0, deadlineAt - GAP_CHECK_RESERVE_MS - (options.now ?? Date.now)()));
           try { await session.prompt(GAP_CHECK_PROMPT, { source: "rpc" }); }
-          catch (error) { reason = error instanceof Error ? error.message : String(error); }
+          catch (error) { reason ??= error instanceof Error ? error.message : String(error); }
+          finally { clearTimeout(cutoff); }
+          // Explicit cancellation and the child's own deadline keep their usual meaning.
           signal.throwIfAborted();
           const replacement = session.messages.slice(before).findLast(message => message.role === "assistant");
           // The first answer already completed; budget spent by the optional follow-up never fails the run.
           ({ limitReached, synthesisUsed } = limits);
           if (reason !== undefined || !isFinalAnswer(replacement)) {
-            // Keep the first valid answer when the follow-up has nothing usable.
+            // Keep the first valid answer, and its own depth, when the follow-up has nothing usable.
             kept = before;
+            keptCalls = callsBefore;
             gapNote = `(A follow-up gap check produced no usable answer${reason ? `: ${reason.slice(0, 200)}` : ""}; this is the original answer.)`;
           }
         }

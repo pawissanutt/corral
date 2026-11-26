@@ -82,6 +82,8 @@ export const GAP_CHECK_PROMPT = "Before you finish: list each claim in your answ
   + "Then give your complete final answer again in full (it replaces the previous one), including what you verified and what remains uncertain.";
 /** Tool calls below which a non-quick answer earns one gap check. */
 export const GAP_CHECK_MIN_CALLS = 8;
+/** The follow-up stops this long before the child deadline and falls back to the first answer. */
+export const GAP_CHECK_RESERVE_MS = 15_000;
 /** Whether a finished research run should get one gap-check follow-up. */
 export function wantsGapCheck(input: { effort?: ResearchEffort; toolCalls: number; turns: number; maxTurns?: number;
   deadlineAt?: number; now: number; stopped: boolean }): boolean {
