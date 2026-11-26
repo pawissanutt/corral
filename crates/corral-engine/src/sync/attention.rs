@@ -44,13 +44,40 @@ pub(super) fn elapsed(since: Option<Timestamp>, now: Timestamp, seconds: u64) ->
     })
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Reason {
+    PickupFailed,
+    PickupTimedOut,
+    Unfinished,
+    PossiblyStalled,
+}
+
+impl Reason {
+    pub(super) fn message(self, role: Role) -> &'static str {
+        match (self, role) {
+            (Self::PickupFailed | Self::PickupTimedOut, Role::Worker) => {
+                "Send-back feedback wasn’t picked up. Open the session to follow up."
+            }
+            (Self::PickupFailed | Self::PickupTimedOut, Role::Reviewer) => {
+                "Review request wasn’t picked up. Open the session to follow up."
+            }
+            (Self::Unfinished, Role::Worker) => {
+                "Worker settled without submitting. Open the session to follow up."
+            }
+            (Self::Unfinished, Role::Reviewer) => {
+                "Reviewer settled without a verdict. Open the session to follow up."
+            }
+            (Self::PossiblyStalled, _) => "Possibly stalled. Open the session to check progress.",
+        }
+    }
+}
+
 pub(super) fn pi_reason(
-    role: Role,
     activity: &Activity,
     pickup: Option<&Pickup>,
     since: Option<Timestamp>,
     now: Timestamp,
-) -> Option<&'static str> {
+) -> Option<Reason> {
     if activity.waiting || activity.busy {
         return None;
     }
@@ -59,28 +86,18 @@ pub(super) fn pi_reason(
         match state {
             Some(InputState::Applied) => (),
             Some(InputState::Failed { turn }) if activity.turn > turn => (),
-            Some(InputState::Failed { .. }) => return Some(pickup_reason(role)),
+            Some(InputState::Failed { .. }) => return Some(Reason::PickupFailed),
             Some(InputState::Pending { quiet_ms }) => {
                 return (quiet_ms >= 1_000 * PICKUP_WINDOW_SECS
                     && elapsed(since, now, PICKUP_WINDOW_SECS))
-                .then(|| pickup_reason(role));
+                .then_some(Reason::PickupTimedOut);
             }
             // A new turn after a failed or unknown pickup can still owe work,
             // but an earlier settled turn is never evidence for this request.
             None if pickup.before_turn.is_some_and(|turn| activity.turn > turn) => (),
-            None if pickup.rejected => return Some(pickup_reason(role)),
+            None if pickup.rejected => return Some(Reason::PickupFailed),
             None => return None,
         }
     }
-    activity.settled.then_some(match role {
-        Role::Worker => "Worker settled without submitting. Open the session to follow up.",
-        Role::Reviewer => "Reviewer settled without a verdict. Open the session to follow up.",
-    })
-}
-
-fn pickup_reason(role: Role) -> &'static str {
-    match role {
-        Role::Worker => "Send-back feedback wasn’t picked up. Open the session to follow up.",
-        Role::Reviewer => "Review request wasn’t picked up. Open the session to follow up.",
-    }
+    activity.settled.then_some(Reason::Unfinished)
 }

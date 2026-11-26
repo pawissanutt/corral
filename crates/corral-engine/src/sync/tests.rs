@@ -230,30 +230,40 @@ fn only_current_unfulfilled_work_gets_native_attention() {
 }
 
 #[cfg(unix)]
-#[test]
-fn pi_reviewer_error_does_not_mask_an_outstanding_verdict_or_failed_pickup() {
+fn terminal_error_samples<const N: usize>(
+    f: &Fixture,
+    mut run: Run,
+    input_id: &str,
+    samples: [(bool, &str, Option<&str>); N],
+) -> [Task; N] {
     use std::{
         io::{BufRead, BufReader, Write},
         os::unix::net::UnixListener,
         thread,
     };
 
-    let (f, mut run) = Fixture::new(Role::Reviewer, Status::Review, true);
     let dir = tempfile::tempdir_in("/tmp").unwrap();
-    let socket = dir.path().join("reviewer.sock");
+    let socket = dir.path().join("board.sock");
     let Some(SessionRef::Pi { socket: path, .. }) = &mut run.session else {
         unreachable!("expected a Pi run");
     };
     *path = socket.clone();
     f.engine.store.update_run(&run).unwrap();
-    f.event(
-        &run,
-        EventKind::ReviewStarted,
-        json!({"round": 0, "pickup": {"input_id": "board-review", "rejected": false}}),
-    );
+    let states = samples.map(|(waiting, input, question)| {
+        let owner_questions: Vec<_> = question
+            .into_iter()
+            .map(|question| json!({"question": question}))
+            .collect();
+        json!({
+            "paused": false, "turn": {"open": false}, "owner_questions": owner_questions,
+            "last_error": "Provider failed after closing the turn",
+            "activity": {"settled": true, "busy": false, "waiting": waiting,
+                "turn": 1, "inputs": {input_id: {"state": input, "turn": 1}}},
+        })
+    });
     let listener = UnixListener::bind(socket).unwrap();
     let host = thread::spawn(move || {
-        for (waiting, input) in [(false, "applied"), (true, "applied"), (false, "failed")] {
+        for state in states {
             let (mut connection, _) = listener.accept().unwrap();
             let mut line = String::new();
             BufReader::new(&connection).read_line(&mut line).unwrap();
@@ -263,38 +273,88 @@ fn pi_reviewer_error_does_not_mask_an_outstanding_verdict_or_failed_pickup() {
                 connection,
                 "{}",
                 json!({
-                    "id": req["id"], "version": 2, "ok": true, "result": {
-                        "paused": false, "turn": {"open": false}, "owner_questions": [],
-                        "last_error": "Provider failed after closing the turn",
-                        "activity": {"settled": true, "busy": false, "waiting": waiting,
-                            "turn": 1, "inputs": {"board-review": {"state": input, "turn": 1}}},
-                    },
+                    "id": req["id"], "version": 2, "ok": true, "result": state,
                 })
             )
             .unwrap();
         }
     });
-    let reasons = std::array::from_fn::<_, 3, _>(|_| {
+    let tasks = std::array::from_fn(|_| {
         f.engine.reconcile(&run).unwrap();
-        f.reason(&run)
+        f.engine.store.require_task(&run.task).unwrap()
     });
     host.join().unwrap();
-    assert!(reasons[0].as_deref().is_some_and(|reason| {
+    tasks
+}
+
+#[cfg(unix)]
+#[test]
+fn pi_reviewer_error_does_not_mask_an_outstanding_verdict_or_failed_pickup() {
+    let (f, run) = Fixture::new(Role::Reviewer, Status::Review, true);
+    f.event(
+        &run,
+        EventKind::ReviewStarted,
+        json!({"round": 0, "pickup": {"input_id": "board-review", "rejected": false}}),
+    );
+    let [outstanding, waiting, failed] = terminal_error_samples(
+        &f,
+        run,
+        "board-review",
+        [
+            (false, "applied", None),
+            (true, "applied", None),
+            (false, "failed", None),
+        ],
+    );
+    assert!(outstanding.attention.as_deref().is_some_and(|reason| {
         reason.starts_with("Reviewer settled without a verdict") && reason.contains("follow up")
     }));
     assert_eq!(
-        reasons[1], None,
+        waiting.attention, None,
         "an explicit wait still suppresses attention"
     );
     assert!(
-        reasons[2]
+        failed
+            .attention
             .as_deref()
             .is_some_and(|reason| reason.starts_with("Review request wasn’t picked up"))
     );
-    assert_eq!(
-        f.engine.store.require_task(&run.task).unwrap().status,
-        Status::Review
-    );
+    assert_eq!(failed.status, Status::Review);
+}
+
+#[cfg(unix)]
+#[test]
+fn worker_send_back_pickup_failure_survives_a_coarse_provider_block() {
+    for (receipt, question) in [
+        ("failed", None),
+        ("failed", Some("Which option should I take?")),
+        ("applied", None),
+    ] {
+        let (f, run) = Fixture::new(Role::Worker, Status::Running, true);
+        f.event(
+            &run,
+            EventKind::SentBack,
+            json!({"pickup": {"input_id": "board-feedback", "rejected": false}}),
+        );
+        let [_, task] = terminal_error_samples(
+            &f,
+            run,
+            "board-feedback",
+            [(question.is_some(), receipt, question); 2],
+        );
+        if receipt == "failed" && question.is_none() {
+            assert_eq!(task.status, Status::Running);
+            assert!(task.attention.as_deref().is_some_and(|reason|
+                reason.starts_with("Send-back feedback wasn’t picked up")));
+        } else {
+            assert_eq!(task.status, Status::Blocked);
+            assert_eq!(task.attention, None);
+            assert_eq!(
+                task.blocked.unwrap().detail.as_deref(),
+                Some(question.unwrap_or("Provider failed after closing the turn"))
+            );
+        }
+    }
 }
 
 #[test]

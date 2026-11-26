@@ -142,7 +142,14 @@ impl Engine {
                 && task.status == Status::Review
                 && store.has_review_request_since_done(&task.id, &run.id, task.round)?
                 && !store.has_verdict_since_done(&task.id, task.round)?;
-            self.reconcile_attention(store, &mut run, &mut task, review_requested, &sample, now)?;
+            let reason = self.reconcile_attention(
+                store,
+                &mut run,
+                &mut task,
+                review_requested,
+                &sample,
+                now,
+            )?;
             let Some(status) = sample.status else {
                 return Ok(());
             };
@@ -207,8 +214,11 @@ impl Engine {
                 return Ok(());
             }
             match status {
+                // A confirmed pickup failure is more specific than Pi's coarse
+                // provider error. An actual wait can't produce this reason.
                 SessionStatus::Blocked { excerpt }
-                    if task.status == Status::Running || waiting_for_reply =>
+                    if (task.status == Status::Running || waiting_for_reply)
+                        && reason != Some(attention::Reason::PickupFailed) =>
                 {
                     let blocked = worker_blocked(&task.id, excerpt);
                     self.block_in(store, &mut task, Some(&run.id), blocked, Actor::Auto)?;
@@ -239,7 +249,7 @@ impl Engine {
         review_requested: bool,
         sample: &Observation,
         now: Timestamp,
-    ) -> Result<()> {
+    ) -> Result<Option<attention::Reason>> {
         let pi = matches!(run.session, Some(SessionRef::Pi { .. }));
         let quiet = if pi {
             // Pi can report a diagnostic Blocked status after a terminal error
@@ -265,24 +275,25 @@ impl Engine {
             (run.role, task.status),
             (Role::Worker, Status::Running) | (Role::Reviewer, Status::Review)
         ) {
-            return Ok(());
+            return Ok(None);
         }
         let owed = run.role == Role::Worker || review_requested;
         let reason = if !quiet || !owed {
             None
         } else if let Some(activity) = &sample.activity {
             let pickup = store.obligation_pickup(run)?;
-            attention::pi_reason(run.role, activity, pickup.as_ref(), since, now)
+            attention::pi_reason(activity, pickup.as_ref(), since, now)
         } else if attention::elapsed(since, now, self.config.sync.quiet_after_secs) {
-            Some("Possibly stalled. Open the session to check progress.")
+            Some(attention::Reason::PossiblyStalled)
         } else {
             None
         };
-        if task.attention.as_deref() != reason {
-            task.attention = reason.map(str::to_owned);
+        let message = reason.map(|reason| reason.message(run.role));
+        if task.attention.as_deref() != message {
+            task.attention = message.map(str::to_owned);
             store.update_task(task)?;
         }
-        Ok(())
+        Ok(reason)
     }
 
     fn sync_error(
