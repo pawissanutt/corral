@@ -90,8 +90,9 @@ impl Follower {
             || page.is_some_and(|p| {
                 p.generation.is_some() && (p.gap.is_some() || (from_start && p.host_tail > 0))
             });
-        // Joining the host's stream, not only re-reading the journal on another branch.
-        let join = gap || self.tail.is_none();
+        // Joining the host's stream. Reading the journal again alone (another branch, or a
+        // read that failed) leaves the turn the host is in as it was followed.
+        let join = gap;
         if self.generation != generation {
             self.skip_through = 0;
         }
@@ -103,8 +104,8 @@ impl Follower {
         } else {
             None
         };
-        // When the newest assistant record of a tail that was read again was written.
-        let mut newest: Option<jiff::Timestamp> = None;
+        // When the assistant records of a tail that was read again were written.
+        let mut written: Vec<jiff::Timestamp> = Vec::new();
         let mut ops = Vec::new();
         let mut starts = page
             .into_iter()
@@ -155,11 +156,11 @@ impl Follower {
         } else {
             let (tail, older, messages) = Tail::snapshot(id, path, scope)?;
             self.tail = Some(tail);
-            newest = messages
+            written = messages
                 .iter()
-                .rev()
-                .find(|(message, ..)| message.author == "assistant")
-                .and_then(|(message, ..)| message.at.as_deref()?.parse().ok());
+                .filter(|(message, ..)| message.author == "assistant")
+                .filter_map(|(message, ..)| message.at.as_deref()?.parse().ok())
+                .collect();
             if join {
                 self.turn = None;
                 self.pending_end = None;
@@ -205,19 +206,20 @@ impl Follower {
         if join && let Some(seed) = seed {
             self.turn = Some(seed.turn);
             // The journal was read after the host answered. The latest message's record may
-            // have reached it in between, or not yet though the message has ended: its
-            // record is the assistant entry stamped at or after the message started.
-            let started = seed.message_at.as_deref().and_then(|at| at.parse().ok());
+            // have reached it in between, and a later message's too, or not yet though the
+            // message has ended: the records of that message and of those after it are the
+            // assistant entries stamped at or after the message started.
+            let started: Option<jiff::Timestamp> =
+                seed.message_at.as_deref().and_then(|at| at.parse().ok());
             let persisted = match started {
-                Some(started) => newest.is_some_and(|at: jiff::Timestamp| at >= started),
-                None => seed.ended,
+                Some(started) => written.iter().filter(|at| **at >= started).count() as u64,
+                None => u64::from(seed.ended),
             };
-            self.recorded = if persisted {
-                seed.message
-            } else {
-                seed.message.saturating_sub(1)
+            self.recorded = match seed.message {
+                0 => 0,
+                latest => latest - 1 + persisted,
             };
-            if !persisted && !seed.ended && seed.message != 0 {
+            if persisted == 0 && !seed.ended && seed.message != 0 {
                 let at = page
                     .events
                     .iter()

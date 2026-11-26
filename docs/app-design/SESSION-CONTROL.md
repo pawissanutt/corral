@@ -538,16 +538,18 @@ while a turn is open. `message` is the ordinal of the latest assistant message (
 the first) and `ended` whether it has finished. corrald reads the journal after the host
 answers, so that message's record may have reached the journal in between, or may not be
 there yet though the message ended: `message_at` is when the message started, on the
-clock that stamps journal entries, and its record is the assistant entry stamped at or
-after it. corrald opens the message only when the journal it read does not hold that
-record, and counts the record when it comes. While it is being written, `text` and
+clock that stamps journal entries, so the records of that message and of any after it
+are the assistant entries stamped at or after it. corrald counts those it has read,
+opens the message only when it has read none, and counts the record when it comes.
+While it is being written, `text` and
 `thinking` are the tails of what was written, at those byte offsets, cut on character
 boundaries so the serialized `open` stays within 24 KiB, and within less when the reply
 also carries the fleet and the state: those come whole, and the reply with one event
 still fits the bridge's frame. A host that sends no `open` (an older one) has its words
 left out until its next turn starts; its records still arrive.
 
-A `reset` for the journal alone (another branch) does not end the turn the host is in:
+A `reset` for the journal alone (another branch, or after a read of it failed) does not
+end the turn the host is in:
 corrald puts the messages being written again after the tail, from the words the host
 writes next, and goes on pairing.
 

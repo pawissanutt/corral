@@ -367,6 +367,15 @@ fn a_join_tells_whether_the_latest_message_is_in_the_journal_it_read() -> Result
     let ops = follower.visit("s", &path, None, Some(&next()), None);
     assert!(opened(&ops), "{ops:?}");
 
+    // Recorded, and the message after it too.
+    let path = dir.path().join("two.jsonl");
+    append(&path, record("a", None))?;
+    append(&path, record("b", Some("a")))?;
+    let mut follower = Follower::default();
+    follower.visit("s", &path, None, Some(&page(vec![])), Some(seed(false)?));
+    let ops = follower.visit("s", &path, None, Some(&next()), None);
+    assert!(ops.is_empty(), "{ops:?}");
+
     // Ended when the host answered, not yet in the journal.
     let path = dir.path().join("pending.jsonl");
     append(
@@ -384,6 +393,55 @@ fn a_join_tells_whether_the_latest_message_is_in_the_journal_it_read() -> Result
     );
     let ops = follower.visit("s", &path, None, Some(&next()), None);
     assert!(opened(&ops), "{ops:?}");
+    Ok(())
+}
+
+/// A journal read that failed made the next one a join without the host's word on the turn:
+/// the reply being written stopped until the next turn.
+#[test]
+fn a_failed_journal_read_does_not_end_the_reply_being_written() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("journal.jsonl");
+    append(
+        &path,
+        json!({"type":"message", "id":"u", "parentId":null,"message":{"role":"user","content":"hi"}}),
+    )?;
+    let mut follower = Follower::default();
+    follower.visit("s", &path, None, Some(&page(vec![])), None);
+    let writing = page(vec![
+        Kind::LiveTurn {
+            turn: 2,
+            state: SessionLiveTurnState::Started,
+        },
+        Kind::LiveText {
+            turn: 2,
+            message: 1,
+            offset: 0,
+            text: "he".into(),
+        },
+    ]);
+    follower.visit("s", &path, None, Some(&writing), None);
+    let missing = dir.path().join("missing.jsonl");
+    assert!(
+        follower
+            .visit("s", &missing, None, Some(&page_after(2, vec![])), None)
+            .is_empty()
+    );
+    let more = page_after(
+        2,
+        vec![Kind::LiveText {
+            turn: 2,
+            message: 1,
+            offset: 2,
+            text: "llo".into(),
+        }],
+    );
+    let ops = follower.visit("s", &path, None, Some(&more), None);
+    // The tail again, then the message from the words the host writes next.
+    assert!(
+        matches!(ops.as_slice(), [Op::Reset { .. }, Op::Put { open: false, .. }, Op::Put { message, open: true, .. }, Op::Append { offset: 0, text, .. }] if message.id == "s/open/1.2.1" && text == "llo"),
+        "{ops:?}"
+    );
     Ok(())
 }
 
