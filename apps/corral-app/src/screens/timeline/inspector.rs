@@ -145,7 +145,7 @@ fn body(app: AppState, inspector: Inspector) -> AnyElement {
         t.font_family(FONT_MONO).text_size(px(15.0))
     });
     let warning = inspector.warning.clone().map(|words| {
-        plain(app, format!("! {words}"))
+        plain(app, words)
             .font_weight(FontWeight::BOLD)
             .text_color(hue_ink(Hue::Fail))
             .into_element()

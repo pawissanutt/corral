@@ -5,6 +5,7 @@ mod inspect;
 mod live;
 mod plans;
 mod scope;
+mod words;
 
 pub use inspect::{Inspector, Link, inspect};
 pub use live::{
@@ -13,6 +14,7 @@ pub use live::{
 };
 pub use plans::{Edge, Landing, PlanGroup};
 pub use scope::{BurnupScope, ScopeOption, burnup_request, scope_options};
+pub use words::{header_spoken, lane_verb, lane_words};
 
 pub const BURNUP_SCOPE_LABEL: &str = "Burn-up scope";
 
@@ -56,10 +58,22 @@ pub struct State {
     pub folded: BTreeSet<String>,
 }
 impl State {
-    /// Select a range without navigating away.
+    /// Select a range without navigating away. The selection goes with the range: a lane of the
+    /// other range is another stretch of work, so it needs a press of its own.
     pub fn set_range(&mut self, range: Range) -> Vec<Effect> {
+        if self.range != range {
+            self.selected = None;
+        }
         self.range = range;
         Vec::new()
+    }
+    /// Whether the selection names a lane `plot` no longer has; the page then deselects, so a
+    /// lane that comes back later needs a press to select it again and its edges are not drawn
+    /// meanwhile.
+    pub fn selection_gone(&self, plot: &Plot) -> bool {
+        self.selected
+            .as_ref()
+            .is_some_and(|lane| !plot.lanes.iter().any(|l| l.id == *lane))
     }
     /// Select the grouping on any form. Lane ids differ between the groupings, so the selection
     /// goes with the lanes it named.

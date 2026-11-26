@@ -5,6 +5,7 @@
 use std::collections::BTreeMap;
 
 use corral_protocol::detail::{TimelinePage, TimelineTask};
+use corral_types::Status;
 use jiff::Timestamp;
 
 use super::PlotLane;
@@ -53,31 +54,36 @@ impl PlanGroup {
         }
     }
 
-    /// What a screen reader hears of the header.
+    /// What a screen reader hears of the header; a title that is only the id is said once.
     pub fn spoken(&self) -> String {
         match &self.id {
+            Some(id) if *id == self.title => format!("Plan {id}, {}", self.tally),
             Some(id) => format!("Plan {id} {}, {}", self.title, self.tally),
             None => format!("{}, {}", self.title, self.tally),
         }
     }
 }
 
-/// The plan a lane's task goes under: its parent, or the task itself when it is a plan of
-/// served children, so a plan with its own lane sits at the head of its group.
+/// The plan whose group a lane's task goes in. A task that is itself a plan (a served task
+/// names it as parent) heads its own group, so a plan nested in another keeps its children
+/// under it; any other task goes under its parent, the nearest plan above it, which heads a
+/// group whether corrald served the parent's own row or only its id.
 fn plan_of(task: &str, tasks: &Tasks) -> Option<String> {
-    if let Some(parent) = tasks.get(task).and_then(|t| t.parent.clone()) {
-        return Some(parent);
+    if tasks.values().any(|t| t.parent.as_deref() == Some(task)) {
+        return Some(task.to_owned());
     }
-    tasks
-        .values()
-        .any(|t| t.parent.as_deref() == Some(task))
-        .then(|| task.to_owned())
+    tasks.get(task).and_then(|t| t.parent.clone())
 }
 
 /// The lanes regrouped under their plans, groups in the order of their first lane (lanes come
-/// ordered by first activity), Unplanned last; none and the lanes untouched when no lane's task
-/// has a plan.
-pub fn group(lanes: Vec<PlotLane>, tasks: &Tasks) -> (Vec<PlotLane>, Vec<PlanGroup>) {
+/// ordered by first activity), a plan's own lane first in its group, Unplanned last; none and
+/// the lanes untouched when no lane's task has a plan. `title` names a plan; a plan it cannot
+/// name is headed by its id.
+pub fn group(
+    lanes: Vec<PlotLane>,
+    tasks: &Tasks,
+    title: impl Fn(&str) -> String,
+) -> (Vec<PlotLane>, Vec<PlanGroup>) {
     let plans: Vec<Option<String>> = lanes.iter().map(|lane| plan_of(&lane.id, tasks)).collect();
     if plans.iter().all(Option::is_none) {
         return (lanes, Vec::new());
@@ -95,12 +101,14 @@ pub fn group(lanes: Vec<PlotLane>, tasks: &Tasks) -> (Vec<PlotLane>, Vec<PlanGro
     let mut out = Vec::with_capacity(placed.len());
     let mut groups = Vec::with_capacity(order.len());
     for plan in order {
-        let members: Vec<PlotLane> = plans
+        let mut members: Vec<PlotLane> = plans
             .iter()
             .zip(placed.iter_mut())
             .filter(|(of, _)| **of == plan)
             .filter_map(|(_, lane)| lane.take())
             .collect();
+        // Stable: the plan's own lane leads, its children keep their order.
+        members.sort_by_key(|lane| plan.as_deref() != Some(lane.id.as_str()));
         let (landed, total) = match &plan {
             Some(plan) => {
                 let children: Vec<&&TimelineTask> = tasks
@@ -131,10 +139,9 @@ pub fn group(lanes: Vec<PlotLane>, tasks: &Tasks) -> (Vec<PlotLane>, Vec<PlanGro
         groups.push(PlanGroup {
             key: plan.clone().unwrap_or_else(|| UNPLANNED.to_owned()),
             title: match &plan {
-                Some(plan) => tasks
-                    .get(plan.as_str())
-                    .map(|t| t.title.clone())
-                    .unwrap_or_default(),
+                Some(plan) => Some(title(plan))
+                    .filter(|named| !named.is_empty())
+                    .unwrap_or_else(|| plan.clone()),
                 None => "Unplanned".to_owned(),
             },
             id: plan,
@@ -156,33 +163,54 @@ pub enum Landing {
     InWindow(Timestamp),
     /// Landed before the window starts.
     Before,
-    /// Never landed, or reopened since.
+    /// Done without a landing corrald recorded (closed before landings were recorded, or
+    /// done without landing): nothing to have started early for.
+    DoneUnrecorded,
+    /// Dropped: it will not land, so waiting on it means nothing.
+    Dropped,
+    /// Not landed yet, or reopened since.
     NotLanded,
 }
 
 impl Landing {
     pub fn of(task: &TimelineTask, window: &Window) -> Self {
-        match task.landed {
-            Some(at) if at >= window.from => Self::InWindow(at),
-            Some(_) => Self::Before,
-            None => Self::NotLanded,
+        match (task.landed, task.status) {
+            (Some(at), _) if at >= window.from => Self::InWindow(at),
+            (Some(_), _) => Self::Before,
+            (None, Status::Done) => Self::DoneUnrecorded,
+            (None, Status::Dropped) => Self::Dropped,
+            (None, _) => Self::NotLanded,
         }
     }
 
-    /// `landed 14:20`, `landed before this window`, `not landed`.
+    /// The words of a dependency with no landing instant; none for one that landed.
+    fn unlanded(self) -> Option<&'static str> {
+        match self {
+            Self::InWindow(_) | Self::Before => None,
+            Self::DoneUnrecorded => Some("done, landing not recorded"),
+            Self::Dropped => Some("dropped"),
+            Self::NotLanded => Some("not landed"),
+        }
+    }
+
+    /// `landed 14:20`, `landed before this window`, `dropped`, `not landed`.
     pub fn words(self, feed: &Feed) -> String {
         match self {
             Self::InWindow(at) => format!("landed {}", when(&at.to_string(), feed)),
             Self::Before => "landed before this window".to_owned(),
-            Self::NotLanded => "not landed".to_owned(),
+            other => other.unlanded().unwrap_or_default().to_owned(),
         }
     }
 }
 
-/// A dependent that started before its dependency landed, or while it had not landed, is out
-/// of order: its work may rest on what was not there yet.
-pub fn out_of_order(started: Timestamp, landed: Option<Timestamp>) -> bool {
-    landed.is_none_or(|landed| started < landed)
+/// A dependent that started before its dependency landed, or while it has not landed, is out
+/// of order: its work may rest on what was not there yet. A dependency dropped, or done without
+/// a recorded landing, has no landing to be early for, so it never makes its dependent so.
+pub fn out_of_order(started: Timestamp, dependency: &TimelineTask) -> bool {
+    match dependency.landed {
+        Some(landed) => started < landed,
+        None => !matches!(dependency.status, Status::Done | Status::Dropped),
+    }
 }
 
 /// What a lane carries when it started out of order: `started before T-852 landed`.
@@ -223,6 +251,7 @@ pub fn edges(
         let Some(task) = tasks.get(lane.id.as_str()) else {
             continue;
         };
+        // A dependent that started before the window is classified by its first run in the window.
         let Some(first) = page
             .runs
             .iter()
@@ -240,17 +269,17 @@ pub fn edges(
             let from_at = match landing {
                 Landing::InWindow(at) => clamp(window.minutes(at)),
                 Landing::Before => start,
-                Landing::NotLanded => lanes
+                Landing::DoneUnrecorded | Landing::Dropped | Landing::NotLanded => lanes
                     .iter()
                     .find(|l| l.id == *dependency)
                     .and_then(|l| l.segments.iter().map(|s| s.end).max())
                     .map_or(start, clamp),
             };
-            let early = out_of_order(first, dep.landed);
-            let label = if early {
-                format!("{} {}", lane.id, early_hint(dependency))
-            } else {
-                format!("{} started after {dependency} landed", lane.id)
+            let early = out_of_order(first, dep);
+            let label = match landing.unlanded() {
+                _ if early => format!("{} {}", lane.id, early_hint(dependency)),
+                Some(words) => format!("{} depends on {dependency}, {words}", lane.id),
+                None => format!("{} started after {dependency} landed", lane.id),
             };
             out.push(Edge {
                 from: dependency.clone(),

@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 use corral_protocol::detail::TimelinePage;
 use corral_types::{Event, Status};
 
-use super::live::{Window, duration, lane_gaps, moved, opens_task, task_title};
+use super::live::{Window, duration, lane_gaps, moved, task_title};
 use super::plans::{self, Landing};
 use super::{Gap, Opens, Plot};
 use crate::model::daemon::Feed;
@@ -36,7 +36,7 @@ pub struct Inspector {
     pub task: String,
     pub title: String,
     pub status: Option<Status>,
-    /// `started before T-852 landed`.
+    /// `! started before T-852 landed`.
     pub warning: Option<String>,
     /// Label and value: plan, who ran it, first start, elapsed against running.
     pub facts: Vec<(&'static str, String)>,
@@ -162,16 +162,19 @@ pub fn inspect(
         task: task.to_owned(),
         title: task_title(task, &tasks, feed),
         status: served.map(|t| t.status),
-        warning: placed.warning.clone(),
+        warning: placed.warning.as_deref().map(super::words::flagged),
         facts,
         waits_title: format!("Waits on {}", waits.len()),
         waits,
-        unblocks_title: format!("Unblocks {}", unblocks.len()),
+        // corrald serves only the dependents among this reply's tasks, not every task waiting
+        // on this one.
+        unblocks_title: format!("Unblocks {} in this view", unblocks.len()),
         unblocks,
         gaps_title: "Gaps on this lane",
         gaps: lane_gaps(plot, window, feed, lane),
         events_title: "Latest events",
         events,
-        open: opens_task(task),
+        // What the lane's second press opens: by run, the run's session rather than its task.
+        open: placed.opens.clone(),
     })
 }

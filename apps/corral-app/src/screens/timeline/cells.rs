@@ -233,6 +233,7 @@ fn spoken<'a>((name, title): (&str, &str), parts: impl Iterator<Item = &'a str>)
 /// the lane and every segment's label.
 pub fn lanes(app: AppState, data: Memo<Shown>) -> AnyElement {
     let width = signal(0.0_f32);
+    let focus: Focus = signal(None);
     let plot = computed(move || data.with(|shown| shown.plot.clone()));
     let chosen = computed(move || {
         app.timeline
@@ -252,7 +253,7 @@ pub fn lanes(app: AppState, data: Memo<Shown>) -> AnyElement {
             };
             (columns > 0).then(|| {
                 grid(
-                    app,
+                    (app, focus),
                     timeline::layout(&plot, MODEL_WIDTH, false, view),
                     columns,
                 )
@@ -261,16 +262,82 @@ pub fn lanes(app: AppState, data: Memo<Shown>) -> AnyElement {
         .into_element()
 }
 
+/// The test id of the lane or header the keyboard focus is on. It lives outside the redrawn
+/// rows, so a row's mark follows the focus the platform keeps across a redraw rather than
+/// starting blank in the new row.
+type Focus = Signal<Option<String>>;
+
+/// A row's first Cell, as a list row's: the focus mark while the keyboard is on the row, the
+/// selection's bar on the selected lane, else blank.
+fn gutter(mark: impl Fn() -> &'static str + 'static) -> AnyElement {
+    view()
+        .w(term::cells(1.0))
+        .flex_shrink_0()
+        .accessibility_elements_hidden(true)
+        .child(
+            text(mark)
+                .font_weight(FontWeight::BOLD)
+                .text_color(color(Token::Ink)),
+        )
+        .into_element()
+}
+
+/// A row that takes no focus, behind a blank gutter so it lines up with the buttons.
+fn still(row: AnyElement) -> AnyElement {
+    view()
+        .flex_row()
+        .child(gutter(|| " "))
+        .child(row)
+        .into_element()
+}
+
+/// A lane's or header's button `test_id` around `row`, marked in its gutter while it has the
+/// keyboard focus. A header's `caret` takes the gutter and its mark the Cell after it: the
+/// terminal draws a disclosure's own caret before its first glyph unless that glyph is one.
+fn focus_row(
+    focus: Focus,
+    test_id: String,
+    (selected, caret): (bool, Option<&'static str>),
+    row: AnyElement,
+) -> View {
+    let (mine, focused, blurred) = (test_id.clone(), test_id.clone(), test_id.clone());
+    let has_focus = computed(move || focus.with(|at| at.as_deref() == Some(mine.as_str())));
+    view()
+        .test_id(&test_id)
+        .flex_row()
+        .on_focus(move || focus.set(Some(focused.clone())))
+        .on_blur(move || {
+            focus.update(|at| {
+                if at.as_deref() == Some(blurred.as_str()) {
+                    *at = None;
+                }
+            })
+        })
+        .children(caret.map(|caret| {
+            view()
+                .w(term::cells(1.0))
+                .flex_shrink_0()
+                .accessibility_elements_hidden(true)
+                .child(text(caret).text_color(color(Token::Ink3)))
+        }))
+        .child(gutter(move || {
+            if has_focus.get() {
+                term::FOCUS_MARK
+            } else if selected {
+                "▌"
+            } else {
+                " "
+            }
+        }))
+        .child(row)
+}
+
 /// A lane's row as its button (`lane-<id>`): pressing it, or Enter on it, selects the lane, and
 /// on the selected lane opens what the lane opens; the focus bands it blue, the selection grey.
-fn lane_button(app: AppState, lane: &PlacedLane, row: AnyElement) -> AnyElement {
+fn lane_button((app, focus): (AppState, Focus), lane: &PlacedLane, row: AnyElement) -> AnyElement {
     let live = lane.opens.live.clone();
     let id = lane.id.clone();
-    let verb = if lane.selected {
-        lane.opens.label.clone()
-    } else {
-        format!("Select {}", lane.id)
-    };
+    let verb = timeline::lane_verb(lane);
     let spoken = spoken(
         (verb.as_str(), lane.title.as_str()),
         lane.warning
@@ -279,36 +346,41 @@ fn lane_button(app: AppState, lane: &PlacedLane, row: AnyElement) -> AnyElement 
             .chain(lane.segments.iter().map(|s| s.accessible_label.as_str()))
             .chain(lane.wait.as_deref()),
     );
-    view()
-        .test_id(&format!("lane-{}", lane.id))
-        .cursor_pointer()
-        .role(AccessibilityRole::Button)
-        .label(spoken)
-        .accessibility_state(AccessibilityState {
-            selected: lane.selected,
-            ..AccessibilityState::default()
-        })
-        .on_press(move || super::chart::press(app, &id, &live))
-        .when(lane.selected, |v| v.bg(color(Token::Hover)))
-        .focus_visible(|s| s.bg(color(Token::Sel)))
-        .hover(|s| s.bg(color(Token::Hover)))
-        .child(row)
-        .into_element()
+    focus_row(
+        focus,
+        format!("lane-{}", lane.id),
+        (lane.selected, None),
+        row,
+    )
+    .cursor_pointer()
+    .role(AccessibilityRole::Button)
+    .label(spoken)
+    .accessibility_state(AccessibilityState {
+        selected: lane.selected,
+        ..AccessibilityState::default()
+    })
+    .on_press(move || super::chart::press(app, &id, &live))
+    .when(lane.selected, |v| v.bg(color(Token::Hover)))
+    .focus_visible(|s| s.bg(color(Token::Sel)))
+    .hover(|s| s.bg(color(Token::Hover)))
+    .into_element()
 }
 
 /// A plan's header row as its button (`plan-<key>`): the caret, id and title in the label
 /// column, the summary bar over the plan's span with its landed share heavy in the landed
 /// colour, and `n/m landed` beside it. Enter or a press folds or unfolds the plan.
 fn header_row(
-    app: AppState,
+    (app, focus): (AppState, Focus),
     layout: &Layout,
     header: &PlacedHeader,
     (label, track): (Label, usize),
 ) -> AnyElement {
     let caret = super::headers::caret(header.folded);
+    // The caret takes the gutter's Cell and the focus mark the label's first, so the rest of
+    // the label is a Cell narrower and the header as wide as a lane.
     let lead = match &header.id {
         Some(id) if label.width > label.id => vec![
-            piece(column(&format!("{caret} {id}"), label.id), Some(Ink::Quiet)),
+            piece(column(id, label.id.saturating_sub(1)), Some(Ink::Quiet)),
             piece(
                 column(&header.title, label.width - label.id),
                 Some(Ink::Hue(Hue::Neutral)),
@@ -316,12 +388,12 @@ fn header_row(
             .font_weight(FontWeight::BOLD),
         ],
         Some(id) => vec![piece(
-            column(&format!("{caret} {id}"), label.width),
+            column(id, label.width.saturating_sub(1)),
             Some(Ink::Quiet),
         )],
         None => vec![
             piece(
-                column(&format!("{caret} {}", header.title), label.width),
+                column(&header.title, label.width.saturating_sub(1)),
                 Some(Ink::Hue(Hue::Neutral)),
             )
             .font_weight(FontWeight::BOLD),
@@ -352,27 +424,30 @@ fn header_row(
         }
     }
     let key = header.key.clone();
-    let verb = if header.folded { "unfold" } else { "fold" };
-    view()
-        .test_id(&format!("plan-{}", header.key))
-        .cursor_pointer()
-        .role(AccessibilityRole::Button)
-        .label(format!("{} · {verb}", header.spoken))
-        .accessibility_state(AccessibilityState {
-            expanded: Some(!header.folded),
-            ..AccessibilityState::default()
-        })
-        .on_press(move || {
-            let key = key.clone();
-            app.act(app.timeline, move |state, _| state.fold(&key));
-        })
-        .focus_visible(|s| s.bg(color(Token::Sel)))
-        .hover(|s| s.bg(color(Token::Hover)))
-        .child(line(lead, &cells.cells, Voice::Hidden))
-        .into_element()
+    let row = line(lead, &cells.cells, Voice::Hidden);
+    focus_row(
+        focus,
+        format!("plan-{}", header.key),
+        (false, Some(caret)),
+        row,
+    )
+    .cursor_pointer()
+    .role(AccessibilityRole::Button)
+    .label(timeline::header_spoken(header))
+    .accessibility_state(AccessibilityState {
+        expanded: Some(!header.folded),
+        ..AccessibilityState::default()
+    })
+    .on_press(move || {
+        let key = key.clone();
+        app.act(app.timeline, move |state, _| state.fold(&key));
+    })
+    .focus_visible(|s| s.bg(color(Token::Sel)))
+    .hover(|s| s.bg(color(Token::Hover)))
+    .into_element()
 }
 
-fn grid(app: AppState, layout: Layout, columns: usize) -> AnyElement {
+fn grid(app: (AppState, Focus), layout: Layout, columns: usize) -> AnyElement {
     // The id column holds the longest id with a blank after it (session lanes such as
     // `T-001/R1` are longer than task ids), within bounds that leave the title and track room.
     let longest = layout
@@ -390,7 +465,8 @@ fn grid(app: AppState, layout: Layout, columns: usize) -> AnyElement {
         let width = longest.clamp(LABEL_NARROW, ID_MAX);
         Label { id: width, width }
     };
-    let track = columns.saturating_sub(label.width).max(1);
+    // One Cell is the gutter's.
+    let track = columns.saturating_sub(label.width + 1).max(1);
     let blank = || vec![piece(" ".repeat(label.width), None)];
     let mut rows = Vec::new();
 
@@ -405,7 +481,7 @@ fn grid(app: AppState, layout: Layout, columns: usize) -> AnyElement {
             free = start + n + 1;
         }
     }
-    rows.push(line(blank(), &axis.cells, Voice::Hidden));
+    rows.push(still(line(blank(), &axis.cells, Voice::Hidden)));
 
     for (markers, name, ink) in [
         (&layout.owner, layout.owner_label, Ink::Hue(Hue::You)),
@@ -415,14 +491,14 @@ fn grid(app: AppState, layout: Layout, columns: usize) -> AnyElement {
         for marker in markers {
             track_row.mark(marker.x, ACTION_GLYPH, ink);
         }
-        rows.push(line(
+        rows.push(still(line(
             lead(name.0, name.1, label),
             &track_row.cells,
             Voice::Label(spoken(
                 name,
                 markers.iter().map(|m| m.accessible_label.as_str()),
             )),
-        ));
+        )));
     }
 
     // Headers and lanes in the order the layout stacks them.
@@ -454,7 +530,7 @@ fn grid(app: AppState, layout: Layout, columns: usize) -> AnyElement {
         if let Some(words) = &lane.wait {
             let mut notes = Track::new(track, &layout);
             notes.text(layout.label_width, words, Ink::Hue(Hue::Held));
-            rows.push(line(blank(), &notes.cells, Voice::Text));
+            rows.push(still(line(blank(), &notes.cells, Voice::Text)));
         }
         let mut lead = lead(&lane.id, &lane.title, label);
         // Started before a dependency landed: `!` in the danger colour right after the id.
@@ -482,7 +558,7 @@ fn grid(app: AppState, layout: Layout, columns: usize) -> AnyElement {
 
     let mut foot = Track::new(track, &layout);
     foot.text_end(layout.now.x, &layout.now.label, Ink::Hue(Hue::Neutral));
-    rows.push(line(blank(), &foot.cells, Voice::Text));
+    rows.push(still(line(blank(), &foot.cells, Voice::Text)));
 
     view()
         .flex_col()

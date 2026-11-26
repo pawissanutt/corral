@@ -240,6 +240,57 @@ impl Store {
         self.optional_document("SELECT document FROM tasks WHERE id=?1", [id])
     }
 
+    /// Read existing tasks for a set of IDs without one query per task.
+    pub fn tasks_by_ids(&self, ids: &[&str]) -> Result<Vec<Task>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut statement = self
+            .connection
+            .prepare_cached(
+                "SELECT document FROM tasks WHERE id IN (SELECT value FROM json_each(?1))",
+            )
+            .context("prepare tasks by IDs")?;
+        documents(&mut statement, [encode(&ids)?])
+    }
+
+    /// Read the named tasks and their ancestors in one batch. Limit the walk to eight parent
+    /// hops so even cyclic data stays bounded.
+    pub fn tasks_with_ancestors(&self, ids: &[&str]) -> Result<Vec<Task>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut statement = self
+            .connection
+            .prepare_cached(
+                "WITH RECURSIVE ancestors(id, depth) AS (
+                     SELECT value, 0 FROM json_each(?1)
+                     UNION
+                     SELECT json_extract(tasks.document,'$.parent'), ancestors.depth + 1
+                     FROM ancestors JOIN tasks ON tasks.id=ancestors.id
+                     WHERE ancestors.depth < 8
+                 )
+                 SELECT document FROM tasks WHERE id IN (SELECT id FROM ancestors)",
+            )
+            .context("prepare tasks with ancestors")?;
+        documents(&mut statement, [encode(&ids)?])
+    }
+
+    /// Find direct children of all named parents in a single scan of the task documents.
+    pub fn children_of(&self, parents: &[&str]) -> Result<Vec<Task>> {
+        if parents.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut statement = self
+            .connection
+            .prepare_cached(
+                "SELECT document FROM tasks
+                 WHERE json_extract(document,'$.parent') IN (SELECT value FROM json_each(?1))",
+            )
+            .context("prepare task children")?;
+        documents(&mut statement, [encode(&parents)?])
+    }
+
     pub fn require_task(&self, id: &str) -> Result<Task> {
         self.get_task(id)?.ok_or_else(|| {
             refuse(

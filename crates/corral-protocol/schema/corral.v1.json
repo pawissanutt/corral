@@ -11035,7 +11035,7 @@
             "type": "array"
           },
           "tasks": {
-            "description": "The tasks the window's runs and events name, their plans, those plans' other\nchildren and the tasks any of them depend on: enough to group lanes by plan, count\na plan's landed children and draw dependency edges. Absent from an older daemon.",
+            "description": "The tasks named by the window's runs and events, their ancestors (up to eight parent\nhops), and the direct children of those window tasks and their immediate parents.\nAlso includes one level of dependencies from that set. Absent from an older daemon.",
             "items": {
               "$ref": "#/components/schemas/TimelineTask"
             },
@@ -11061,7 +11061,7 @@
             "type": "string"
           },
           "landed": {
-            "description": "When the task last landed, from the whole event log (not only the window), unless a\nlater `reopened` undid it. Absent when it never landed.",
+            "description": "When the task last landed, from the whole event log (not only the window). Absent\nunless the task is currently Done and has a landing without a later `reopened` event.",
             "type": [
               "string",
               "null"

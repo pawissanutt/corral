@@ -149,6 +149,22 @@ pub fn keep_burnup(app: AppState, request: DetailRef) {
     });
 }
 
+/// Deselects once the plot shown no longer has the selected lane (`State::selection_gone`);
+/// while the plot is loading the selection waits for it.
+pub fn keep_selection(app: AppState, data: Memo<Shown>) {
+    effect(move || {
+        let gone = data.with(|shown| {
+            shown
+                .plot
+                .as_ref()
+                .is_some_and(|plot| app.timeline.with(|state| state.selection_gone(plot)))
+        });
+        if gone {
+            untracked(|| app.act(app.timeline, |state, _| state.deselect()));
+        }
+    });
+}
+
 /// Keeps the Timeline and Burnup details requested while the page is open: requested when the
 /// range, grouping, burn-up scope or day changes.
 pub fn keep_loaded(app: AppState) {

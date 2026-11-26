@@ -7,7 +7,7 @@ use nsh_core::canvas::CanvasTextAlign;
 use nsh_core::prelude::*;
 
 use super::chart::{ID_ADVANCE, LABEL_GAP, NOTE_ADVANCE, RING, Rect, TITLE_ADVANCE, clip};
-use crate::model::timeline::{Layout, PlacedHeader};
+use crate::model::timeline::{self, Layout, PlacedHeader};
 use crate::model::{Form, Hue};
 use crate::state::AppState;
 use crate::ui::chart::{ink, mono_font, now, text_font, tip};
@@ -130,8 +130,7 @@ pub fn buttons(app: AppState, layout: &Layout) -> Vec<AnyElement> {
         .iter()
         .map(|header| {
             let key = header.key.clone();
-            let verb = if header.folded { "unfold" } else { "fold" };
-            let spoken = format!("{} · {verb}", header.spoken);
+            let spoken = timeline::header_spoken(header);
             view()
                 .absolute()
                 .left(px(0.0))

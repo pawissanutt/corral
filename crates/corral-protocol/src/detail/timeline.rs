@@ -19,9 +19,9 @@ pub struct TimelinePage {
     pub runs: Vec<Run>,
     #[schemars(with = "Vec<crate::schema_types::Event>")]
     pub events: Vec<Event>,
-    /// The tasks the window's runs and events name, their plans, those plans' other
-    /// children and the tasks any of them depend on: enough to group lanes by plan, count
-    /// a plan's landed children and draw dependency edges. Absent from an older daemon.
+    /// The tasks named by the window's runs and events, their ancestors (up to eight parent
+    /// hops), and the direct children of those window tasks and their immediate parents.
+    /// Also includes one level of dependencies from that set. Absent from an older daemon.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tasks: Vec<TimelineTask>,
 }
@@ -38,8 +38,8 @@ pub struct TimelineTask {
     pub parent: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub depends_on: Vec<String>,
-    /// When the task last landed, from the whole event log (not only the window), unless a
-    /// later `reopened` undid it. Absent when it never landed.
+    /// When the task last landed, from the whole event log (not only the window). Absent
+    /// unless the task is currently Done and has a landing without a later `reopened` event.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "Option<String>")]
     pub landed: Option<Timestamp>,

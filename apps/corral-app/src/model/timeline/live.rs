@@ -443,7 +443,8 @@ pub fn plot(page: &TimelinePage, window: &Window, grouping: Grouping, feed: &Fee
     let (mut lanes, groups, edges) = match grouping {
         Grouping::ByTask => {
             let edges = plans::edges(page, window, &lanes, &tasks, (start, now));
-            let (lanes, groups) = plans::group(lanes, &tasks);
+            let (lanes, groups) =
+                plans::group(lanes, &tasks, |plan| task_title(plan, &tasks, feed));
             (lanes, groups, edges)
         }
         Grouping::ByAgent => (lanes, Vec::new(), Vec::new()),

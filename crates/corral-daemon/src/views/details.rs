@@ -7,8 +7,8 @@ use std::{
 use anyhow::{Context, Result, bail, ensure};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use corral_engine::{
-    Engine, Event, EventKind, Run, Store, Task, artifacts::ArtifactFilter, events::EventFilter,
-    store::TaskFilter,
+    Engine, Event, EventKind, Run, Status, Store, Task, artifacts::ArtifactFilter,
+    events::EventFilter, store::TaskFilter,
 };
 use corral_protocol::detail::*;
 use jiff::Timestamp;
@@ -221,8 +221,8 @@ fn body(engine: &Engine, target: &DetailRef) -> Result<DetailBody> {
 }
 
 fn timeline_tasks(store: &Store, runs: &[Run], events: &[Event]) -> Result<Vec<TimelineTask>> {
-    fn include(tasks: &mut BTreeMap<String, TimelineTask>, task: Task) {
-        tasks.insert(
+    fn keyed(task: Task) -> (String, TimelineTask) {
+        (
             task.id.clone(),
             TimelineTask {
                 id: task.id,
@@ -232,49 +232,41 @@ fn timeline_tasks(store: &Store, runs: &[Run], events: &[Event]) -> Result<Vec<T
                 depends_on: task.depends_on,
                 landed: None,
             },
-        );
+        )
     }
 
-    let ids: BTreeSet<_> = runs
+    let window: BTreeSet<_> = runs
         .iter()
         .map(|run| run.task.as_str())
         .chain(events.iter().filter_map(|event| event.task.as_deref()))
         .collect();
-    let mut tasks = BTreeMap::new();
-    let mut parents = BTreeSet::new();
-    for id in ids {
-        if let Some(task) = store.get_task(id)? {
-            parents.extend(task.parent.clone());
-            include(&mut tasks, task);
-        }
-    }
-    for id in parents {
-        if !tasks.contains_key(&id)
-            && let Some(parent) = store.get_task(&id)?
-        {
-            include(&mut tasks, parent);
-        }
-        for child in store.list_tasks(&TaskFilter {
-            parent: Some(id),
-            ..Default::default()
-        })? {
-            include(&mut tasks, child);
-        }
-    }
+    let context = store.tasks_with_ancestors(&window.iter().copied().collect::<Vec<_>>())?;
+    // Fetch siblings for plan counts and children so an active plan with idle children is
+    // still recognizable as a plan. Don't expand siblings of ancestors beyond this set.
+    let parents: Vec<_> = context
+        .iter()
+        .filter(|task| window.contains(task.id.as_str()))
+        .flat_map(|task| std::iter::once(task.id.as_str()).chain(task.parent.as_deref()))
+        .collect();
+    let children = store.children_of(&parents)?;
+    let mut tasks: BTreeMap<_, _> = context.into_iter().chain(children).map(keyed).collect();
+
     // Take one dependency step after filling in plans and siblings; do not expand its results.
     let dependencies: BTreeSet<_> = tasks
         .values()
-        .flat_map(|task| &task.depends_on)
+        .flat_map(|task| task.depends_on.iter().map(String::as_str))
         .filter(|id| !tasks.contains_key(*id))
-        .cloned()
         .collect();
-    for id in dependencies {
-        if let Some(task) = store.get_task(&id)? {
-            include(&mut tasks, task);
-        }
-    }
-    let landed = store.task_landed_times(&tasks.keys().map(String::as_str).collect::<Vec<_>>())?;
-    for (id, ts) in landed {
+    let dependencies = store.tasks_by_ids(&dependencies.into_iter().collect::<Vec<_>>())?;
+    tasks.extend(dependencies.into_iter().map(keyed));
+
+    // Moving a task out of Done need not record Reopened, so history alone isn't enough.
+    let done: Vec<_> = tasks
+        .values()
+        .filter(|task| task.status == Status::Done)
+        .map(|task| task.id.as_str())
+        .collect();
+    for (id, ts) in store.task_landed_times(&done)? {
         if let Some(task) = tasks.get_mut(&id) {
             task.landed = Some(ts);
         }

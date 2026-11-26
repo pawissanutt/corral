@@ -620,23 +620,7 @@ fn row_button(app: AppState, area: Rect, lane: &timeline::PlacedLane, cut: bool)
     let form = app.form;
     let live = lane.opens.live.clone();
     let id = lane.id.clone();
-    // Selected, a press opens; otherwise it selects.
-    let verb = if lane.selected {
-        lane.opens.label.clone()
-    } else {
-        format!("Select {}", lane.id)
-    };
-    let warning = lane
-        .warning
-        .as_ref()
-        .map(|words| format!(" · ! {words}"))
-        .unwrap_or_default();
-    let hint = if cut {
-        format!("{} {} · {verb}{warning}", lane.id, lane.title)
-    } else {
-        format!("{verb}{warning}")
-    };
-    let spoken = format!("{verb}: {} {}{warning}", lane.id, lane.title);
+    let (spoken, hint) = timeline::lane_words(lane, cut);
     view()
         .absolute()
         .left(px(area.x))

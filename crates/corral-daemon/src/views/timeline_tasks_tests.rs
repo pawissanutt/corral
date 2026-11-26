@@ -4,7 +4,7 @@ use corral_protocol::detail::{DetailBody, DetailGet, DetailRef, TimelineBy};
 use crate::views::{detail, tests::Fixture};
 
 #[test]
-fn timeline_keeps_unworked_children_and_out_of_window_dependencies_without_stale_landings() {
+fn timeline_serves_nested_plan_context_and_hides_a_landing_after_move_back() {
     let fixture = Fixture::new();
     let engine = fixture.shared.engine().unwrap();
     let last_landing = "2026-02-01T12:00:00Z".parse().unwrap();
@@ -12,7 +12,7 @@ fn timeline_keeps_unworked_children_and_out_of_window_dependencies_without_stale
         .store
         .transaction(|store| {
             for (id, title, status, parent, depends_on) in [
-                ("T-1", "Plan", Status::Backlog, None, vec![]),
+                ("T-1", "Plan", Status::Backlog, Some("T-6"), vec![]),
                 (
                     "T-2",
                     "Worked child",
@@ -22,13 +22,15 @@ fn timeline_keeps_unworked_children_and_out_of_window_dependencies_without_stale
                 ),
                 (
                     "T-3",
-                    "Unworked child",
-                    Status::Backlog,
+                    "Moved-back sibling",
+                    Status::Done,
                     Some("T-1"),
                     vec![],
                 ),
                 ("T-4", "Dependency", Status::Done, None, vec![]),
-                ("T-5", "Reopened", Status::Backlog, None, vec![]),
+                ("T-5", "Reopened plan", Status::Backlog, None, vec![]),
+                ("T-6", "Root plan", Status::Backlog, None, vec![]),
+                ("T-7", "Idle child", Status::Backlog, Some("T-5"), vec![]),
             ] {
                 store.insert_task(&Task {
                     id: id.into(),
@@ -67,6 +69,7 @@ fn timeline_keeps_unworked_children_and_out_of_window_dependencies_without_stale
                     "2026-02-01T08:00:00Z".parse().unwrap(),
                 ),
                 ("T-4", EventKind::Landed, last_landing),
+                ("T-3", EventKind::Landed, last_landing),
                 (
                     "T-5",
                     EventKind::Landed,
@@ -92,6 +95,9 @@ fn timeline_keeps_unworked_children_and_out_of_window_dependencies_without_stale
             Ok(())
         })
         .unwrap();
+    engine.move_task("T-3", Status::Backlog, false).unwrap();
+    // Still test that Reopened cancels a landing when status alone would keep it.
+    engine.move_task("T-5", Status::Done, true).unwrap();
 
     let reply = detail(
         &fixture.shared,
@@ -122,6 +128,8 @@ fn timeline_keeps_unworked_children_and_out_of_window_dependencies_without_stale
             ("T-3", None),
             ("T-4", Some(last_landing)),
             ("T-5", None),
+            ("T-6", None),
+            ("T-7", None),
         ]
     );
 }

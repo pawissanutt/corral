@@ -257,3 +257,41 @@ fn timeline_grouping_redraws_the_lanes_from_the_feed() {
     app.press("id:lane-T-15/R1").unwrap();
     app.wait_for("id:session-log").unwrap();
 }
+
+/// A redraw that replaced the Timeline's buttons would drop the keyboard focus: the Enter that
+/// folds a plan or selects a lane must leave the focus on it, so the next Enter unfolds the
+/// plan and opens the lane.
+#[test]
+fn timeline_keyboard_focus_survives_folding_a_plan_and_selecting_a_lane() {
+    let mut config = terminal_80();
+    config.viewport = Size::new(Points(1120.0), Points(704.0));
+    let mut app = preview(config, &[("corral.destination", "timeline")]);
+    app.wait_for("id:lane-T-11").unwrap();
+    // A row leads with the focus mark while the keyboard is on it.
+    let focused =
+        |app: &Headless, id: &str| app.screen().count(&format!("id:{id} >> text:›")).unwrap() > 0;
+    // The first plan's header, which holds T-11.
+    let mut tabs = 0;
+    while !focused(&app, "plan-T-1") {
+        assert!(tabs < 40, "Tab reached no plan header");
+        app.press_key("tab").unwrap();
+        tabs += 1;
+    }
+    app.press_key("enter").unwrap();
+    app.wait_for_gone("id:lane-T-11", Duration::from_secs(5))
+        .unwrap();
+    assert!(focused(&app, "plan-T-1"), "folding keeps the focus");
+    app.press_key("enter").unwrap();
+    app.wait_for("id:lane-T-11").unwrap();
+    app.press_key("tab").unwrap();
+    assert!(focused(&app, "lane-T-11"));
+    app.press_key("enter").unwrap();
+    app.wait_for("id:inspector").unwrap();
+    assert!(
+        selected(&app, "lane-T-11"),
+        "Enter selects the focused lane"
+    );
+    assert!(focused(&app, "lane-T-11"), "selecting keeps the focus");
+    app.press_key("enter").unwrap();
+    app.wait_for("id:task-page").unwrap();
+}

@@ -50,6 +50,7 @@ const GAPS_MEASURE: f32 = 844.0;
 pub fn screen(app: AppState) -> AnyElement {
     shown::keep_loaded(app);
     let data = computed(move || shown::shown(app));
+    shown::keep_selection(app, data);
     match app.form {
         Form::Desktop => desktop(app, data),
         Form::Phone => phone(app, data),
