@@ -65,6 +65,8 @@ export interface ChildHandle {
   steer(text: string): Promise<void>;
   setModel(provider: string, model: string, effort?: string, serviceTier?: "priority"): Promise<"applied" | "deferred">;
   usage(): ChildUsage;
+  /** Refuse cancellation once teardown has committed, even before done's observers run. */
+  canCancel?(): boolean;
 }
 export interface SdkRunnerOptions {
   readonly assetRoot?: string;
@@ -326,6 +328,7 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
     let synthesisUsed: typeof synthesis;
     let limitReached = false;
     let complete = false;
+    let teardownDone = false;
     let cached: ChildUsage = { input: 0, output: 0, turns: 0 };
     const usage = (): ChildUsage => {
       if (session && !complete) {
@@ -350,7 +353,7 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
       let unsubscribe = () => {};
       const abort = () => {
         if (signal.aborted) for (const job of ownedJobs) stopOwned(job);
-        if (session) void session.abort().catch(() => {});
+        if (session && !complete) void session.abort().catch(() => {});
       };
       const result = (failed?: string): Awaited<ChildHandle["done"]> => {
         // A discarded gap check leaves the first answer as the result.
@@ -567,23 +570,28 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
         readyReject(error);
         return result(error instanceof Error ? error.message : String(error));
       } finally {
-        signal.removeEventListener("abort", abort);
-        try { unsubscribe(); usage(); }
-        finally {
-          complete = true;
-          try { if (session) closeResidentSession(session.sessionId); }
+        try {
+          try { unsubscribe(); usage(); }
           finally {
-            try { session?.dispose(); await code?.runtime.close(); }
-            finally {
-              if (signal.aborted && (await Promise.all(stopping.values())).some(clear => !clear)) {
-                throw new Error("Could not confirm exit of the child's owned command groups");
-              }
+            complete = true;
+            try { if (session) closeResidentSession(session.sessionId); }
+            finally { session?.dispose(); await code?.runtime.close(); }
+          }
+        } finally {
+          // Cancel is still accepted during disposal and async teardown. Keep the owned-job
+          // listener alive until cleanup drains, then close admission before disconnecting it.
+          try {
+            if (signal.aborted && (await Promise.all(stopping.values())).some(clear => !clear)) {
+              throw new Error("Could not confirm exit of the child's owned command groups");
             }
+          } finally {
+            teardownDone = true;
+            signal.removeEventListener("abort", abort);
           }
         }
       }
     })();
-    return { done, usage,
+    return { done, usage, canCancel: () => !teardownDone,
       async steer(text) { await ready; if (complete) throw new Error("Child is no longer running"); await session!.steer(text); },
       async setModel(provider, model, effort, serviceTier) {
         if (!options.models.getModel(provider, model)) throw new Error(`model_unavailable: ${provider}/${model}`);

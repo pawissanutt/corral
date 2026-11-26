@@ -149,7 +149,8 @@ function fixture() {
   };
 }
 
-for (const kind of ["slice", "review"] as const) test(`owner Cancel clears a ${kind}'s detached command without touching the parent's job`, async () => {
+const cancellationCases = [["slice", "active"], ["review", "active"], ["slice", "disposal"]] as const;
+for (const [kind, boundary] of cancellationCases) test(`owner Cancel at ${kind} ${boundary} clears its detached command without touching the parent's job`, async () => {
   const f = fixture();
   const command = "git status";
   // A literal read-only Git operation is allowed even for reviewers. Substitute a sleeping fixture.
@@ -184,15 +185,23 @@ for (const kind of ["slice", "review"] as const) test(`owner Cancel clears a ${k
   try {
     await fleet.start("task", [{ id: "child", kind, title: "Child", brief: "Process the fixture", owns: [] }]);
     const [job] = await within(Promise.all([launched.promise, ready.promise]), 5000, "child command readiness");
-    const cancelled = Promise.resolve(registry.get("child_act")!({ child: "child", action: "cancel" }));
-    expect(f.aborted).toBeTrue();
-    // Killing the detached command must not wait for the provider/tool loop to drain.
-    await within(jobs.settled(job), 3000, "owned job exit");
+    const cancel = () => registry.get("child_act")!({ child: "child", action: "cancel" });
+    if (boundary === "disposal") {
+      const cancelled = Promise.withResolvers<object>();
+      f.session.dispose = () => { cancelled.resolve(cancel()); };
+      drained.resolve();
+      expect(await within(cancelled.promise, 3000, "owner cancellation at SDK disposal")).toEqual({ ok: true });
+    } else {
+      const cancelled = cancel();
+      expect(f.aborted).toBeTrue();
+      // Killing the detached command must not wait for the provider/tool loop to drain.
+      await within(jobs.settled(job), 3000, "owned job exit");
+      drained.resolve();
+      expect(await cancelled).toEqual({ ok: true });
+    }
     expect(jobs.peek(job)).toMatchObject({ state: "exited", group_clear: true, text: "retained\n" });
     expect(jobs.peek(String(parent.job)).state).toBe("running");
     if (kind === "slice") expect(readFileSync(join(f.dir, "kept.txt"), "utf8")).toBe("edited\n");
-    drained.resolve();
-    expect(await cancelled).toEqual({ ok: true });
   } finally { drained.resolve(); await fleet.close(); await jobs.shutdown(); f.cleanup(); }
 });
 

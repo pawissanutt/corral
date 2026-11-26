@@ -97,6 +97,7 @@ interface ReplyWait {
 }
 const STATE_CHAR = { queued: "q", running: "r", needs: "n", stopping: "r", done: "d", failed: "f", cancelled: "c" } as const;
 function live(entry: Entry): boolean { return entry.value.state === "queued" || entry.value.state === "running" || entry.value.state === "needs"; }
+function cancellable(entry: Entry): boolean { return live(entry) && entry.handle?.canCancel?.() !== false; }
 
 /** Compose only explicit Build handoff fields; a legacy brief stays byte-for-byte intact. */
 function assignment(brief: string, context?: string, role?: string, accept?: string): string {
@@ -420,7 +421,7 @@ export class FleetRuntime implements FleetControl {
           model: `${model.provider}/${model.model}`, effort: model.effort, state: "queued", createdAt: at, edits: [], steers: [], steeredAt: [], usage: { input: 0, output: 0, turns: 0 }, pulse: [], history: " ".repeat(Math.min(239, bucket)) + "q", messages: [] } };
       this.entries.set(spec.id, entry); added.push(entry);
       if (timeoutSecs !== undefined) entry.timer = setTimeout(() => {
-        if (live(entry)) { this.finish(entry, "cancelled", "Child timeout"); entry.controller.abort(new DOMException("Child timeout", "TimeoutError")); this.pump(); }
+        if (cancellable(entry)) { this.finish(entry, "cancelled", "Child timeout"); entry.controller.abort(new DOMException("Child timeout", "TimeoutError")); this.pump(); }
       }, timeoutSecs * 1000);
     }
     // Register the complete batch before a notification can reenter the runtime.
@@ -663,7 +664,7 @@ export class FleetRuntime implements FleetControl {
   }
   cancel(id: string): boolean {
     const entry = this.entries.get(id);
-    if (!entry || !live(entry)) return false;
+    if (!entry || !cancellable(entry)) return false;
     this.finish(entry, "cancelled"); entry.controller.abort(); this.pump(); return true;
   }
   /** Observe one child's teardown without collecting or suppressing its report to the parent. */
