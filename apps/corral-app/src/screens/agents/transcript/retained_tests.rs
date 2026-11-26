@@ -291,3 +291,42 @@ fn streaming_delta_retains_mounted_messages_and_item_wrappers() {
         "prepend remounted the placed item wrappers"
     );
 }
+
+const HANDOFF: &str = "Paste this into Code mode:\n\n\
+                       > Fix the selection in `markdown.rs`.\n>\n\
+                       > Then run the gate and attach the log.\n\n\
+                       That is all.";
+
+#[component]
+fn HandoffFixture() -> impl IntoElement {
+    let app = AppState::install(Form::Desktop);
+    let shown = computed(move || {
+        let mut page = crate::model::session::transcript::transcript(
+            &Id::from("fixture"),
+            &Ui::default(),
+            None,
+            &Feed::default(),
+        );
+        page.fill = Fill::Ready;
+        page.messages = vec![message_at("handoff", false, HANDOFF)];
+        Some(page)
+    });
+    view().child(transcript(app, &Reader::new(app), shown))
+}
+
+/// T-2119: a quoted multi-paragraph handoff in a desktop reply could not be selected, and
+/// nothing copied the reply whole. Its quoted words now sit in a selectable view, and Copy
+/// reply puts the recorded Markdown, quote lines and breaks included, on the clipboard.
+#[test]
+fn a_desktop_reply_with_a_quoted_handoff_selects_and_copies_whole() {
+    let mut config = EngineConfig::new(Root::of::<HandoffFixture>());
+    config.environment.os = nsh_core::platform::Os::Web;
+    config.environment.idiom = nsh_core::platform::Idiom::Desktop;
+    let mut app = Headless::start(config).unwrap();
+    app.wait_for("text:/Then run the gate/").unwrap();
+    for words in ["text:/Then run the gate/", "text:/That is all/"] {
+        assert_eq!(app.screen().in_selectable_view(words), Ok(true), "{words}");
+    }
+    app.press("id:btn-copy-reply-1").unwrap();
+    assert_eq!(app.screen().clipboard(), Some(HANDOFF));
+}

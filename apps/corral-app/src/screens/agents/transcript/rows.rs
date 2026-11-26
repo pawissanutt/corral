@@ -9,9 +9,10 @@ use nsh_core::prelude::*;
 
 use crate::model::Form;
 use crate::model::hue::Hue;
-use crate::model::session::transcript::{Card, Divider, Footer, Marker};
+use crate::model::session::transcript::{Card, Divider, Footer, Marker, Reply};
 use crate::screens::markdown::markdown;
 use crate::state::AppState;
+use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
 use crate::ui::kit::marks::hue_ink;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
@@ -314,5 +315,32 @@ pub(super) fn footer(app: AppState, footer: &Footer, id: &str) -> AnyElement {
             block.child(indented(app, sections(app, &footer.body)))
         })
         .children(state(app, &footer.more, id, false))
+        .into_element()
+}
+
+/// Copy reply under a finished agent message (`btn-copy-reply-<id>`): its words whole, as
+/// written, for pasting into another session; where some block is only a preview, its words
+/// and receipt say the copy is partial.
+pub(super) fn copy_reply(app: AppState, reply: &Reply, id: &str) -> AnyElement {
+    let copy = crate::ui::composer::copier(app);
+    let reply = reply.clone();
+    let label = reply.label();
+    view()
+        .flex_row()
+        .when(app.form != Form::Terminal, |row| row.mt(px(2.0)))
+        .child(button_with(
+            app,
+            label,
+            ButtonKind::Quiet,
+            ButtonOptions {
+                compact: true,
+                ..ButtonOptions::default()
+            },
+            format!("btn-copy-reply-{id}"),
+            move || {
+                copy(&reply.text);
+                app.toast(reply.receipt());
+            },
+        ))
         .into_element()
 }

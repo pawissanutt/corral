@@ -47,6 +47,24 @@ pub(crate) fn terminal_selectable(_app: AppState, view: View) -> View {
     view
 }
 
+/// Copies the text it is given.
+pub(crate) type Copier = std::rc::Rc<dyn Fn(&str)>;
+
+/// Puts text on the system clipboard as a copy of selected text does: in a terminal the
+/// composer's next paste reads it too, even where the desktop clipboard missed it.
+pub(crate) fn copier(_app: AppState) -> Copier {
+    #[cfg(target_os = "linux")]
+    let remember = terminal_paste::remembering(_app);
+    #[cfg(not(target_os = "linux"))]
+    let remember: Option<Copier> = None;
+    std::rc::Rc::new(move |text: &str| {
+        set_clipboard(text.to_owned());
+        if let Some(remember) = &remember {
+            remember(text);
+        }
+    })
+}
+
 /// An ordinary, controlled input. Observe native terminal copy/cut so a subsequent paste in
 /// the composer can recover the selected text even if the desktop clipboard did not update.
 /// Do not use for credentials or other secret inputs.

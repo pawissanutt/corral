@@ -272,6 +272,7 @@ fn code_block(app: AppState, code: &CodeBlock) -> AnyElement {
             scroll().horizontal().child(
                 view().flex_shrink_0().px(px(10.0)).py(px(8.0)).child(
                     text(code.code.clone())
+                        .select_text()
                         .flex_shrink_0()
                         .font_family(FONT_MONO)
                         .text_size(px(11.5))
@@ -405,10 +406,12 @@ fn document(
     document
 }
 
-/// A text view of the app's: its links open what they cite, its code blocks are the app's.
+/// A text view of the app's: its words select and copy with the platform's own gestures and
+/// commands (a drag selects without following a link; a press on one still opens it), its
+/// links open what they cite, its code blocks are the app's.
 fn shown(app: AppState, words: TextViewElement) -> AnyElement {
     let rendered = words
-        .selectable(app.form == Form::Terminal)
+        .selectable(true)
         .on_link_press(move |press: &TextViewLinkPressEvent| {
             if let Some(spelled) = press.url.strip_prefix(cite::SCHEME) {
                 app.open_cite(spelled);

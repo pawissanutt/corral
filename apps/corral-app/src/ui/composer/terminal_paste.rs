@@ -200,6 +200,15 @@ pub(super) fn observe_selection(app: AppState, view: View) -> View {
     })
 }
 
+/// Remembers text the app itself copied (Copy reply) for the composer's next paste.
+pub(super) fn remembering(app: AppState) -> Option<super::Copier> {
+    let cache = use_context::<CopyCache>()?;
+    Some(Rc::new(move |text: &str| match bounded_text(text) {
+        Some(text) => cache.remember(text, app.source_revision.get_untracked()),
+        None => cache.clear(),
+    }))
+}
+
 fn bounded_text(text: &str) -> Option<CopiedText> {
     if text.is_empty() {
         None

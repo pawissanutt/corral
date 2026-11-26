@@ -304,13 +304,24 @@ fn message_row(
     let head_words =
         computed(move || shown.with(|r| r.as_ref().map_or_else(Vec::new, |(m, _)| m.head.clone())));
     let live = computed(move || shown.with(|r| r.as_ref().is_some_and(|(m, _)| m.live)));
+    let reply = computed(move || {
+        shown.with(|row| {
+            let (m, first) = row.as_ref()?;
+            Some((m.reply()?, first + m.items.len()))
+        })
+    });
+    let copy = dynamic(move || {
+        reply
+            .get()
+            .map(|(reply, n)| rows::copy_reply(app, &reply, &n.to_string()))
+    });
     agent_message(
         app,
         &message,
         column_of,
         head_words,
         live,
-        vec![items(), footer()],
+        vec![items(), footer(), copy],
     )
 }
 

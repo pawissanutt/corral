@@ -29,6 +29,7 @@ pub(crate) mod mirror;
 mod overlay;
 mod pairs;
 mod replay;
+mod reply;
 mod seams;
 mod tool;
 mod tool_corral;
@@ -62,6 +63,7 @@ pub use items::{
 };
 pub use live::{ItemFetch, LiveSession, LiveTool, LiveToolState, TurnEnd};
 pub use replay::{anchor, fetches, reader_transcript, size, transcript, window_fetches};
+pub use reply::Reply;
 pub use seams::TranscriptSeams;
 pub(crate) use seams::preserve_anchors;
 pub use tool::{ToolState, ToolView};
