@@ -23,7 +23,11 @@ use crate::ui::kit::text::dim;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, Token, color};
 
-use super::agents::transcript::log_lines;
+use super::agents::transcript::wrapped_log_lines;
+
+#[cfg(test)]
+#[path = "gate_tests.rs"]
+mod tests;
 
 /// How close to the end still counts as at the end, in points.
 const END_SLACK: f32 = 24.0;
@@ -141,7 +145,7 @@ fn modal(app: AppState, open: GateOpen, ui: Signal<GateUi>) -> Modal {
         .child(head)
         .child(paging_before(app, open.clone(), shown, ui))
         .child(log(app, open, shown, ui, scroller))
-        .child(paging_after(app, shown, ui, scroller))
+        .child(paging_after(app, shown, ui))
         .into_element();
     Modal {
         test_id: "gate".into(),
@@ -158,10 +162,24 @@ fn modal(app: AppState, open: GateOpen, ui: Signal<GateUi>) -> Modal {
 /// its newest line.
 fn follow(shown: Memo<GateView>, ui: Signal<GateUi>, scroller: ElementRef) {
     let tail = computed(move || shown.with(|v| (v.end, v.lines.len())));
+    let following = computed(move || ui.with(is_following));
     effect(move || {
         let _ = tail.get();
-        if ui.with_untracked(|ui| ui.before.is_none() && ui.held.is_none()) {
-            after_answer(move || scroller.scroll_to_end(false));
+        if following.get() {
+            queue_end(ui, scroller);
+        }
+    });
+}
+
+fn is_following(ui: &GateUi) -> bool {
+    ui.before.is_none() && ui.held.is_none()
+}
+
+fn queue_end(ui: Signal<GateUi>, scroller: ElementRef) {
+    // A wheel or Earlier press may arrive between scheduling and executing the scroll.
+    after_answer(move || {
+        if ui.with_untracked(is_following) {
+            scroller.scroll_to_end(false);
         }
     });
 }
@@ -304,7 +322,12 @@ fn log(
     let lines = computed(move || shown.with(|v| v.lines.clone()));
     let content = dynamic(move || {
         let lines = lines.get();
-        Some(untracked(|| log_lines(app, &lines)))
+        Some(untracked(|| {
+            view()
+                .test_id("gate-log-content")
+                .child(wrapped_log_lines(app, &lines))
+                .into_element()
+        }))
     });
     let surface = scroll()
         .test_id("gate-log")
@@ -349,12 +372,7 @@ fn log(
 }
 
 /// Newest: from an older or pinned window back to the live end.
-fn paging_after(
-    app: AppState,
-    shown: Memo<GateView>,
-    ui: Signal<GateUi>,
-    scroller: ElementRef,
-) -> AnyElement {
+fn paging_after(app: AppState, shown: Memo<GateView>, ui: Signal<GateUi>) -> AnyElement {
     let newest = computed(move || shown.with(|v| v.newest));
     dynamic(move || {
         newest.get().then(|| {
@@ -366,10 +384,7 @@ fn paging_after(
                         "Newest output",
                         ButtonKind::Ghost,
                         "btn-gate-newest",
-                        move || {
-                            ui.set(GateUi::default());
-                            after_answer(move || scroller.scroll_to_end(false));
-                        },
+                        move || ui.set(GateUi::default()),
                     ))
                     .into_element()
             })

@@ -21,7 +21,11 @@ pub(crate) fn attempt(state: GateAttemptState) -> GateAttempt {
 }
 
 fn show(feed: &mut Feed, open: &GateOpen, page: &GateAttemptPage) {
-    let target = target(open.task.as_str(), &open.attempt, None);
+    cache_window(feed, open, None, page);
+}
+
+fn cache_window(feed: &mut Feed, open: &GateOpen, before: Option<u64>, page: &GateAttemptPage) {
+    let target = target(open.task.as_str(), &open.attempt, before);
     feed.details.insert(
         detail_key(&target),
         DetailCache {
@@ -87,4 +91,49 @@ fn the_log_catches_up_after_reconnect_without_moving_a_held_window() {
     assert_eq!(pinned.standing.0, Hue::Ok);
     assert_eq!(view(&feed, &open, &GateUi::default()).end, first.total);
     assert!(!due(&feed, &open, 102));
+}
+
+#[test]
+fn paging_a_long_line_keeps_every_marker_reachable_before_a_check_exists() {
+    let open = GateOpen {
+        task: Id::new("T-1"),
+        attempt: "gate-one".into(),
+    };
+    let stream: String = (0..3000).map(|n| format!("{n:04}")).collect();
+    let split = stream.len() - 8192;
+    let tail = GateAttemptPage {
+        attempt: attempt(GateAttemptState::Interrupted),
+        start: split as u64,
+        end: stream.len() as u64,
+        total: stream.len() as u64,
+        text: stream[split..].into(),
+    };
+    let mut feed = Feed::default();
+    show(&mut feed, &open, &tail);
+    let newest = view(&feed, &open, &GateUi::default());
+    let older = newest.older.expect("window before the tail");
+    let head = GateAttemptPage {
+        start: 0,
+        end: older,
+        text: stream[..split].into(),
+        ..tail
+    };
+    cache_window(&mut feed, &open, Some(older), &head);
+    let earlier = view(
+        &feed,
+        &open,
+        &GateUi {
+            before: Some(older),
+            held: None,
+        },
+    );
+    assert_eq!(earlier.older, None);
+    let joined: String = earlier
+        .lines
+        .iter()
+        .chain(&newest.lines)
+        .flat_map(|line| &line.text)
+        .map(|span| span.text.trim_start_matches('…'))
+        .collect();
+    assert_eq!(joined, stream);
 }

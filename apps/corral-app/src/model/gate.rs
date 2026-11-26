@@ -22,8 +22,6 @@ use crate::model::status::Stage;
 /// How often an open Gate view re-reads the selected bounded window and liveness.
 pub const POLL_SECS: u64 = 2;
 const RETRY_SECS: u64 = 5;
-/// A line longer than this is cut where it is drawn; the window bounds the bytes, not lines.
-const MAX_LINE_CHARS: usize = 2000;
 
 /// The attempt a Gate view shows.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -324,20 +322,18 @@ pub struct GateView {
     pub newest: bool,
 }
 
-/// The shown window's lines: each cut at `MAX_LINE_CHARS`, the first marked partial when the
-/// window starts inside the log.
+/// Keep the entire server-bounded window reachable; the renderer wraps long lines. The first
+/// row is marked when the log window does not start at the beginning.
 fn lines(page: &GateAttemptPage) -> Vec<Line> {
     page.text
         .lines()
         .enumerate()
         .map(|(at, text)| {
-            // Keep the newest suffix of a long line (for example, a progress line).
-            let skipped = text.chars().count().saturating_sub(MAX_LINE_CHARS);
             let mut shown = String::new();
-            if skipped > 0 || (at == 0 && page.start > 0) {
+            if at == 0 && page.start > 0 {
                 shown.push('…');
             }
-            shown.extend(text.chars().skip(skipped).map(|ch| {
+            shown.extend(text.chars().map(|ch| {
                 if ch.is_control() && ch != '\t' {
                     '�'
                 } else {

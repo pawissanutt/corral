@@ -405,6 +405,13 @@ pub(crate) fn log_lines(app: AppState, lines: &[Line]) -> AnyElement {
     if form == Form::Terminal {
         return cell_lines(lines);
     }
+    wrapped_log_lines(app, lines)
+}
+
+/// Let every word of a bounded log window wrap, including on a terminal. The regular job
+/// projector keeps its one-row-per-line terminal layout for paging by line.
+pub(crate) fn wrapped_log_lines(app: AppState, lines: &[Line]) -> AnyElement {
+    let form = app.form;
     let (size, leading) = if form == Form::Phone {
         (11.5, 17.0)
     } else {
@@ -416,10 +423,13 @@ pub(crate) fn log_lines(app: AppState, lines: &[Line]) -> AnyElement {
             let (ink, weight) = class_look(line.class);
             text("")
                 .min_w(px(0.0))
-                .min_h(px(leading))
-                .font_family(FONT_MONO)
-                .text_size(px(size))
-                .line_height(px(leading))
+                .when(form == Form::Terminal, |row| row.min_h(term::rows(1.0)))
+                .when(form != Form::Terminal, |row| {
+                    row.min_h(px(leading))
+                        .font_family(FONT_MONO)
+                        .text_size(px(size))
+                        .line_height(px(leading))
+                })
                 .font_weight(weight)
                 .text_color(ink)
                 .children(line.text.iter().map(|span| run_of(span, ink)))
