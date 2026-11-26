@@ -90,10 +90,14 @@ export function wantsGapCheck(input: { effort?: ResearchEffort; toolCalls: numbe
   return input.deadlineAt === undefined || input.deadlineAt - input.now >= 45_000;
 }
 
-/** Count what the helper looked at, including calls nested inside Code Mode cells. */
-export function researchDepth(messages: readonly AgentMessage[], nestedCalls = 0): ResearchDepth {
+/**
+ * Count what the helper looked at. `observed` is the runner's count of admitted calls (including
+ * calls inside Code Mode cells, excluding the cells themselves); without it, direct tool-call
+ * blocks are counted, which also includes refused calls.
+ */
+export function researchDepth(messages: readonly AgentMessage[], observed?: number): ResearchDepth {
   let turns = 0;
-  let toolCalls = nestedCalls;
+  let toolCalls = 0;
   let resultBytes = 0;
   for (const message of messages) {
     if (message.role === "assistant") {
@@ -103,7 +107,7 @@ export function researchDepth(messages: readonly AgentMessage[], nestedCalls = 0
       for (const block of message.content) if (block.type === "text") resultBytes += block.text.length;
     }
   }
-  return { turns, toolCalls, resultBytes };
+  return { turns, toolCalls: observed ?? toolCalls, resultBytes };
 }
 
 /** One line for the parent; a thin run is labelled so it can be retried deeper. */
@@ -116,7 +120,7 @@ export function depthLine(depth: ResearchDepth | undefined, effort?: ResearchEff
 }
 
 /** Never substitute a tool log for verified findings without labelling it. No thinking is exposed. */
-export function researchResult(messages: readonly AgentMessage[], stopReason: ResearchReport["stopReason"], nestedCalls = 0) {
+export function researchResult(messages: readonly AgentMessage[], stopReason: ResearchReport["stopReason"], observedCalls?: number) {
   const assistant = messages.filter(message => message.role === "assistant");
   const last = assistant.at(-1);
   const text = last?.content.filter(block => block.type === "text").map(block => block.text).join("\n").trim() ?? "";
@@ -136,6 +140,6 @@ export function researchResult(messages: readonly AgentMessage[], stopReason: Re
   const reason = stopReason === "completed" && !final
     ? last?.stopReason === "length" ? "output_limit" : "empty_response" : stopReason;
   const report: ResearchReport = { status: final && reason === "completed" ? "completed" : partial ? "partial" : "failed", stopReason: reason,
-    depth: researchDepth(messages, nestedCalls) };
+    depth: researchDepth(messages, observedCalls) };
   return { text: final ? text : partial || "No findings were produced. Narrow the question or inspect the child transcript before retrying.", report };
 }

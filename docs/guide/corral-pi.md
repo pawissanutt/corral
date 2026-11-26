@@ -132,8 +132,10 @@ seconds remain. Each result reports its depth (turns, tool calls and KB of tool
 output), and a thin answer is labelled so the parent can retry with `deep`.
 
 Explore `effort` (`quick`, `standard`, `deep`) is also accepted on `task`
-explore children. It sets a minimum thinking level (`off`, `low`, `high`); a
-profile with a stronger effort keeps its own. Code research children get a
+explore children; omitted means `standard`. It sets a minimum thinking level
+(`off`, `low`, `high`); a profile with a stronger effort keeps its own. If the
+gap-check follow-up fails or produces no answer, the first answer is kept with
+a note. Code research children get a
 two-level map of the worktree in their prompt, because they do not load project
 guide files.
 

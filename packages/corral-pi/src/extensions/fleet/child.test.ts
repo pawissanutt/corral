@@ -179,6 +179,22 @@ test("a research preset is a thinking floor and never lowers a stronger profile 
   }
 });
 
+test("a failed gap check keeps the first answer instead of failing the explore child", async () => {
+  const f = fixture();
+  f.body(async () => {
+    if (f.prompts.length === 1) f.messages.push(answer("First answer"));
+    else f.messages.push({ ...answer(""), content: [], stopReason: "error", errorMessage: "provider down" });
+  });
+  try {
+    const done = await createSdkRunner(f.options).run({ id: "explore", title: "Explore", brief: "Trace", owns: [], kind: "explore" },
+      { profile: "fixture", provider: "openai-codex", model: "fixture" }, f.hooks, new AbortController().signal).done;
+    expect(f.prompts).toHaveLength(2);
+    expect(done.failed).toBeUndefined();
+    expect(done.report.startsWith("First answer")).toBe(true);
+    expect(done.report).toContain("gap check produced no usable answer");
+  } finally { f.cleanup(); }
+});
+
 test("a thin research answer gets one gap check with project orientation, a quick one does not", async () => {
   for (const effort of ["standard", "quick"] as const) {
     const f = fixture();
