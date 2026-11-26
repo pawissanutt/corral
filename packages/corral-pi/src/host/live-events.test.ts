@@ -89,6 +89,36 @@ test("a reader behind the ring is told where the open turn is and what was writt
   expect(live.since(0, EVENT_PAGE_BYTES).open).toBeUndefined();
 });
 
+// The open turn was budgeted against the events only: beside a full fleet and state the reply
+// passed the bridge's frame bound, and the reader that needed it could not read at all.
+test("a joining reader's page fits the frame with a full fleet, state and open turn", () => {
+  const live = new LiveEvents(2);
+  live.observeFleet({ children: [], maxParallel: 3, mail: Array.from({ length: 5 }, (_, index) => ({
+    seq: index + 1, at: index, from: "parent", to: "all",
+    text: "\0".repeat(2050), delivery: "delivered" as const,
+  })) });
+  live.bindState(() => ({ parts: {}, state: { notices: [{ id: "n", tone: "info", text: "x".repeat(11_000) }],
+    queue: [], cards: [] } as never }));
+  start(live);
+  // Control characters are six bytes each in JSON, line breaks two.
+  delta(live, "\u0001".repeat(1750) + "\n".repeat(6442));
+  const page = live.since(0, EVENT_PAGE_BYTES);
+  expect(page.fleet).toBeDefined();
+  expect(page.state).toBeDefined();
+  expect(page.events.length).toBeGreaterThan(0);
+  expect(page.open!.text_offset + Buffer.byteLength(page.open!.text)).toBe(8192);
+  expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(EVENT_PAGE_BYTES);
+});
+
+test("a reader's first page says where the open turn is without a gap", () => {
+  const live = new LiveEvents();
+  start(live);
+  delta(live, "so far");
+  const page = live.since(0, EVENT_PAGE_BYTES);
+  expect(page.gap).toBeUndefined();
+  expect(page.open).toMatchObject({ turn: 7, message: 1, ended: false, text_offset: 0, text: "so far" });
+});
+
 test("a completing live event never precedes its session-file entry", () => {
   const live = new LiveEvents();
   start(live);

@@ -201,9 +201,11 @@ export class LiveEvents {
     }
   }
 
-  /** The open turn as of the latest event: a late reader cannot rebuild it from the ring. */
-  private open(): OpenTurn | undefined {
+  /** The open turn as of the latest event, in at most `room` bytes: a reader that joins
+   * cannot rebuild it from the ring. Without its tails it is a few hundred bytes. */
+  private open(room: number): OpenTurn | undefined {
     if (this.turn === undefined) return undefined;
+    const bound = Math.min(OPEN_BYTES, room);
     for (let limit = OPEN_TAIL_BYTES; ; limit >>= 1) {
       const text = tail(this.written.live_text, this.messageEnded ? 0 : limit);
       const thinking = tail(this.written.live_thinking, this.messageEnded ? 0 : limit);
@@ -211,7 +213,7 @@ export class LiveEvents {
         text_offset: this.textOffset - this.written.live_text.length + text.skipped, text: text.text,
         thinking_offset: this.thinkingOffset - this.written.live_thinking.length + thinking.skipped,
         thinking: thinking.text };
-      if (limit === 0 || Buffer.byteLength(JSON.stringify(open)) <= OPEN_BYTES) return open;
+      if (limit === 0 || Buffer.byteLength(JSON.stringify(open)) <= bound) return open;
     }
   }
 
@@ -220,9 +222,11 @@ export class LiveEvents {
     const initial = this.events.since(seq, 0, 1);
     const fleet = initial.gap || seq < this.fleetSeq ? this.fleet : undefined;
     const state = initial.gap || seq < this.stateSeq ? this.state : undefined;
-    const open = initial.gap ? this.open() : undefined;
-    const budget = Math.min(maxBytes, PAGE_BYTES) - (fleet ? this.fleetBytes : 0) - (state?.bytes ?? 0) - 256
-      - (open ? Buffer.byteLength(JSON.stringify(open)) : 0);
+    const room = Math.min(maxBytes, PAGE_BYTES) - (fleet ? this.fleetBytes : 0) - (state?.bytes ?? 0) - 256;
+    // A reader that joins (its first read, or a gap) is told where the turn is. The fleet and
+    // the state come whole, so the turn's tails give way to them and to one event.
+    const open = initial.gap || seq === 0 ? this.open(room - EVENT_MAX_BYTES) : undefined;
+    const budget = room - (open ? Buffer.byteLength(JSON.stringify(open)) : 0);
     const page = this.events.since(seq, budget, 32);
     // Older owner prompts may carry a full question larger than a live event. Preserve its identity
     // and status so a reader can reread the canonical card; keep both replacements in the page.
