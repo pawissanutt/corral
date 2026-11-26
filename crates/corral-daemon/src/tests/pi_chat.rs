@@ -42,6 +42,40 @@ fn text(subscriber: &mut Client, expected: &str) {
     }
 }
 
+/// A `session.transcript.v1` client is sent the journal's tail and then the words being
+/// written as an open message, in place of live_text events.
+fn mirrors(path: &Path, id: &str) {
+    use wire::subscription::{SessionLiveKind, TranscriptOp};
+    let mut mirror = Client::connect_with(path, vec![wire::app::SESSION_TRANSCRIPT_V1.into()]);
+    mirror.ok::<()>(wire::SUB_OPEN, json!({"topic":"session", "scope":id}));
+    let mut ops = Vec::new();
+    while !ops
+        .iter()
+        .any(|op| matches!(op, TranscriptOp::Append { text, .. } if text == "worker live text"))
+    {
+        let SubDelta::Session {
+            events, transcript, ..
+        } = live_page(&mut mirror)
+        else {
+            panic!("expected session page");
+        };
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event.kind, SessionLiveKind::LiveText { .. }))
+        );
+        ops.extend(transcript);
+    }
+    assert!(matches!(ops[0], TranscriptOp::Reset { .. }));
+    let recorded = |op: &TranscriptOp| {
+        matches!(op, TranscriptOp::Put { message, open: false, .. } if message.items.iter().any(
+            |item| matches!(item, SessionItem::Text { text } if text == "recorded **Pi** text")
+        ))
+    };
+    let open = |op: &TranscriptOp| matches!(op, TranscriptOp::Put { open: true, .. });
+    assert!(ops.iter().position(recorded) < ops.iter().position(open));
+}
+
 #[test]
 fn worker_live_replay_cancel_and_paused_engine_send_back_share_the_session() {
     let fixture = Fixture::with_repository();
@@ -91,10 +125,12 @@ fn worker_live_replay_cancel_and_paused_engine_send_back_share_the_session() {
     {
         let mut state = host.state.lock().unwrap();
         state.open = true;
+        state.begin();
         state.emit("worker live text");
     }
     crate::topics::start_session_live(fixture.shared()).unwrap();
     text(&mut watch(&path, &id), "worker live text");
+    mirrors(&path, &id);
     let page: DetailReply = owner.ok(wire::app::DETAIL_GET, json!({"kind":"session", "id":id}));
     let Some(DetailBody::Session(page)) = page.body else {
         panic!("expected session detail")

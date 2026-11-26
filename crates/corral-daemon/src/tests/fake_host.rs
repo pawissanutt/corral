@@ -162,6 +162,14 @@ pub(super) struct HostState {
 }
 
 impl HostState {
+    /// A turn that starts after every record the journal holds (those are stamped `AT`).
+    pub(super) fn begin(&mut self) {
+        self.events.push(
+            json!({"seq": self.events.len() + 1, "at": "2026-11-18T12:30:00Z",
+            "kind": "live_turn", "turn": 1, "state": "started"}),
+        );
+    }
+
     pub(super) fn emit(&mut self, text: &str) {
         self.events.push(
             json!({"seq": self.events.len() + 1, "at": AT, "kind": "live_text",
