@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, path::Path};
+use std::{
+    collections::{BTreeMap, VecDeque},
+    path::Path,
+};
 
 use anyhow::Result;
 use corral_protocol::{
@@ -10,7 +13,7 @@ use corral_protocol::{
 use serde::Deserialize;
 
 use super::reader::LivePage;
-use crate::views::transcript::tail::Tail;
+use crate::views::transcript::tail::{Change, Message, Tail};
 
 #[derive(Deserialize)]
 pub(super) struct HostOpen {
@@ -36,7 +39,27 @@ pub(super) struct Follower {
     recorded: u64,
     open: BTreeMap<u64, Open>,
     from_start: bool,
+    mark: Option<Mark>,
+    /// When the latest assistant records this follower read were written.
+    seen: VecDeque<jiff::Timestamp>,
 }
+
+/// Where the journal's clock parts a turn's records: the assistant records stamped at
+/// `since` or later (`past`: only later) are the turn's messages after `base`. The host
+/// stamps its events and the journal's entries with one clock.
+#[derive(Clone, Copy)]
+struct Mark {
+    base: u64,
+    since: jiff::Timestamp,
+    past: bool,
+}
+
+enum Journal {
+    Changes(Vec<Change>),
+    Snapshot(Option<String>, Vec<Message>),
+}
+
+const SEEN: usize = 64;
 
 struct Open {
     id: String,
@@ -67,45 +90,24 @@ impl Follower {
         page: Option<&LivePage>,
         seed: Option<HostOpen>,
     ) -> Vec<Op> {
-        match self.read(id, path, scope, page, seed) {
-            Ok(ops) => ops,
-            Err(_) => {
-                self.tail = None;
-                Vec::new()
-            }
-        }
-    }
-
-    fn read(
-        &mut self,
-        id: &str,
-        path: &Path,
-        scope: Option<&Path>,
-        page: Option<&LivePage>,
-        seed: Option<HostOpen>,
-    ) -> Result<Vec<Op>> {
         let generation = page.and_then(|p| p.generation);
         let from_start = std::mem::take(&mut self.from_start);
-        let gap = self.generation != generation
+        // Joining the host's stream. Reading the journal again alone (another branch, or a
+        // read that failed) leaves the turn the host is in as it was followed.
+        let join = self.generation != generation
             || page.is_some_and(|p| {
                 p.generation.is_some() && (p.gap.is_some() || (from_start && p.host_tail > 0))
             });
-        // Joining the host's stream. Reading the journal again alone (another branch, or a
-        // read that failed) leaves the turn the host is in as it was followed.
-        let join = gap;
         if self.generation != generation {
             self.skip_through = 0;
         }
         self.generation = generation;
-        let changes = if gap {
-            None
-        } else if let Some(tail) = &mut self.tail {
-            tail.advance(id, path, scope)?
-        } else {
-            None
-        };
-        // When the assistant records of a tail that was read again were written.
-        let mut written: Vec<jiff::Timestamp> = Vec::new();
+        // The host's page is followed whether or not the journal can be read: the reader
+        // does not ask for it again.
+        let journal = self.journal(id, path, scope, join);
+        if journal.is_err() {
+            self.tail = None;
+        }
         let mut ops = Vec::new();
         let mut starts = page
             .into_iter()
@@ -122,104 +124,88 @@ impl Follower {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        if let Some(changes) = changes {
-            for (row, assistant) in changes {
-                let replaces = if assistant {
-                    let at = row
-                        .as_ref()
-                        .and_then(|(message, ..)| message.at.as_deref())
-                        .and_then(|at| at.parse().ok());
-                    if let Some(start) = locate_start(&mut starts, at, self.turn.is_some()) {
-                        start.records += 1;
-                        None
-                    } else if self.turn.is_some() {
-                        self.recorded += 1;
-                        self.open.remove(&self.recorded).map(|open| open.id)
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-                if let Some((message, before, cut)) = row {
-                    ops.push(Op::Put {
-                        message,
-                        before,
-                        replaces,
-                        open: false,
-                        cut,
-                    });
-                } else if let Some(id) = replaces {
-                    ops.push(Op::Drop { id });
-                }
+        if join {
+            // What the ring still holds cannot be paired by order with records the journal
+            // already has: a turn's start may be pages away from its words. The host's
+            // `open` says where the turn is, and only what it emits after this page is
+            // followed.
+            if journal.is_err() {
+                // No reset takes the messages that were being written from a reader.
+                self.drop_open(&mut ops);
             }
-        } else {
-            let (tail, older, messages) = Tail::snapshot(id, path, scope)?;
-            self.tail = Some(tail);
-            written = messages
-                .iter()
-                .filter(|(message, ..)| message.author == "assistant")
-                .filter_map(|(message, ..)| message.at.as_deref()?.parse().ok())
-                .collect();
-            if join {
-                self.turn = None;
-                self.pending_end = None;
-                self.recorded = 0;
-                self.open.clear();
-                // What the ring still holds cannot be paired by order with records this
-                // snapshot already has: a turn's start may be pages away from its words,
-                // and the snapshot is one page of its records. The host's `open` says
-                // where the turn is, and only what it emits after this page is followed.
-                self.skip_through = page.map_or(0, |page| page.host_tail);
-                starts.clear();
-            } else {
+            self.turn = None;
+            self.pending_end = None;
+            self.recorded = 0;
+            self.mark = None;
+            self.open.clear();
+            self.skip_through = page.map_or(0, |page| page.host_tail);
+            starts.clear();
+        }
+        match journal {
+            Ok(Journal::Changes(changes)) => self.pair(changes, &mut starts, &mut ops),
+            Ok(Journal::Snapshot(older, messages)) => {
+                self.seen.clear();
                 for (message, ..) in &messages {
-                    if message.author == "assistant"
-                        && let Some(at) = message.at.as_deref().and_then(|at| at.parse().ok())
-                        && let Some(start) = locate_start(&mut starts, Some(at), true)
-                    {
+                    if message.author != "assistant" {
+                        continue;
+                    }
+                    let Some(at) = message.at.as_deref().and_then(|at| at.parse().ok()) else {
+                        continue;
+                    };
+                    self.see(at);
+                    if !join && let Some(start) = locate_start(&mut starts, Some(at), true) {
                         start.records += 1;
                     }
                 }
-            }
-            ops.push(Op::Reset { older });
-            ops.extend(messages.into_iter().map(|(message, before, cut)| Op::Put {
-                message,
-                before,
-                replaces: None,
-                open: false,
-                cut,
-            }));
-            if !join {
-                // Only the journal was read again (another branch): the turn the host is
-                // in goes on. A reset takes the messages being written from a reader, so
-                // they are put again, from the words the host writes next.
-                for open in self.open.values_mut() {
-                    open.offsets = open.ends;
-                    ops.push(put_open(&open.id, open.at.clone()));
+                ops.push(Op::Reset { older });
+                ops.extend(messages.into_iter().map(|(message, before, cut)| Op::Put {
+                    message,
+                    before,
+                    replaces: None,
+                    open: false,
+                    cut,
+                }));
+                if !join {
+                    // Only the journal was read again: the turn the host is in goes on. A
+                    // reset takes the messages being written from a reader, so those the
+                    // journal does not hold yet are put again, from the words the host
+                    // writes next.
+                    self.count();
+                    let recorded = self.recorded;
+                    self.open.retain(|ordinal, _| *ordinal > recorded);
+                    for open in self.open.values_mut() {
+                        open.offsets = open.ends;
+                        ops.push(put_open(&open.id, open.at.clone()));
+                    }
                 }
             }
+            Err(_) => {}
         }
         let (Some(generation), Some(page)) = (generation, page) else {
-            return Ok(ops);
+            return ops;
         };
         if join && let Some(seed) = seed {
             self.turn = Some(seed.turn);
             // The journal was read after the host answered. The latest message's record may
             // have reached it in between, and a later message's too, or not yet though the
             // message has ended: the records of that message and of those after it are the
-            // assistant entries stamped at or after the message started.
-            let started: Option<jiff::Timestamp> =
+            // assistant entries stamped at or after the message started (the turn, before
+            // its first message).
+            let since: Option<jiff::Timestamp> =
                 seed.message_at.as_deref().and_then(|at| at.parse().ok());
-            let persisted = match started {
-                Some(started) => written.iter().filter(|at| **at >= started).count() as u64,
-                None => u64::from(seed.ended),
+            let before = seed.message.saturating_sub(1);
+            self.mark = since.map(|since| Mark {
+                base: before,
+                since,
+                past: false,
+            });
+            self.recorded = match since {
+                Some(_) => before,
+                None if seed.message == 0 => 0,
+                None => before + u64::from(seed.ended),
             };
-            self.recorded = match seed.message {
-                0 => 0,
-                latest => latest - 1 + persisted,
-            };
-            if persisted == 0 && !seed.ended && seed.message != 0 {
+            self.count();
+            if self.recorded < seed.message && !seed.ended {
                 let at = page
                     .events
                     .iter()
@@ -252,7 +238,7 @@ impl Follower {
                 );
             }
             // A seed describes the host's current turn, not the oldest surviving event.
-            return Ok(ops);
+            return ops;
         }
         let journal_pending = self.tail.as_ref().is_some_and(Tail::has_pending_records);
         if !journal_pending
@@ -277,6 +263,13 @@ impl Follower {
                         .iter()
                         .find(|start| start.turn == *turn)
                         .map_or(0, |start| start.records);
+                    // Its records may have been read on an earlier visit than this page.
+                    self.mark = event.at.parse().ok().map(|since| Mark {
+                        base: 0,
+                        since,
+                        past: false,
+                    });
+                    self.count();
                 }
                 SessionLiveKind::LiveTurn {
                     turn,
@@ -336,7 +329,94 @@ impl Follower {
                 _ => {}
             }
         }
-        Ok(ops)
+        ops
+    }
+
+    /// What the journal holds now: what was appended to the tail this follower reads, or
+    /// the tail read again.
+    fn journal(
+        &mut self,
+        id: &str,
+        path: &Path,
+        scope: Option<&Path>,
+        join: bool,
+    ) -> Result<Journal> {
+        if !join
+            && let Some(tail) = &mut self.tail
+            && let Some(changes) = tail.advance(id, path, scope)?
+        {
+            return Ok(Journal::Changes(changes));
+        }
+        let (tail, older, messages) = Tail::snapshot(id, path, scope)?;
+        self.tail = Some(tail);
+        Ok(Journal::Snapshot(older, messages))
+    }
+
+    /// Pairs records appended to the journal with the messages being written.
+    fn pair(&mut self, changes: Vec<Change>, starts: &mut [Start], ops: &mut Vec<Op>) {
+        for (row, assistant) in changes {
+            let replaces = if assistant {
+                let at = row
+                    .as_ref()
+                    .and_then(|(message, ..)| message.at.as_deref())
+                    .and_then(|at| at.parse().ok());
+                if let Some(at) = at {
+                    self.see(at);
+                }
+                if let Some(start) = locate_start(starts, at, self.turn.is_some()) {
+                    start.records += 1;
+                    None
+                } else if self.turn.is_some() {
+                    self.recorded += 1;
+                    if let Some(since) = at {
+                        self.mark = Some(Mark {
+                            base: self.recorded,
+                            since,
+                            past: true,
+                        });
+                    }
+                    self.open.remove(&self.recorded).map(|open| open.id)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            if let Some((message, before, cut)) = row {
+                ops.push(Op::Put {
+                    message,
+                    before,
+                    replaces,
+                    open: false,
+                    cut,
+                });
+            } else if let Some(id) = replaces {
+                ops.push(Op::Drop { id });
+            }
+        }
+    }
+
+    fn see(&mut self, at: jiff::Timestamp) {
+        if self.seen.len() == SEEN {
+            self.seen.pop_front();
+        }
+        self.seen.push_back(at);
+    }
+
+    /// Counts the turn's records by the journal's clock. The journal and the host are
+    /// read at different moments, so a record may have been read before the event that
+    /// says which message it is of, or while the journal could not be followed.
+    fn count(&mut self) {
+        if self.turn.is_some()
+            && let Some(mark) = self.mark
+        {
+            let records = self
+                .seen
+                .iter()
+                .filter(|at| **at > mark.since || (!mark.past && **at == mark.since))
+                .count() as u64;
+            self.recorded = self.recorded.max(mark.base + records);
+        }
     }
 
     fn drop_open(&mut self, ops: &mut Vec<Op>) {

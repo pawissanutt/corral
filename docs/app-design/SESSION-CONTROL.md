@@ -537,20 +537,29 @@ is: the `live_since` reply to a read from `seq` 0 or to a reader with a gap carr
 while a turn is open. `message` is the ordinal of the latest assistant message (0 before
 the first) and `ended` whether it has finished. corrald reads the journal after the host
 answers, so that message's record may have reached the journal in between, or may not be
-there yet though the message ended: `message_at` is when the message started, on the
-clock that stamps journal entries, so the records of that message and of any after it
-are the assistant entries stamped at or after it. corrald counts those it has read,
-opens the message only when it has read none, and counts the record when it comes.
-While it is being written, `text` and
+there yet though the message ended: `message_at` is when the message started (the turn,
+before its first message), on the clock that stamps journal entries, so the records of
+that message and of any after it are the assistant entries stamped at or after it.
+corrald counts those it has read, opens the message only when it has read none, and
+counts the record when it comes. While it is being written, `text` and
 `thinking` are the tails of what was written, at those byte offsets, cut on character
 boundaries so the serialized `open` stays within 24 KiB, and within less when the reply
 also carries the fleet and the state: those come whole, and the reply with one event
 still fits the bridge's frame. A host that sends no `open` (an older one) has its words
 left out until its next turn starts; its records still arrive.
 
+corrald reads the journal and the host at different moments at every step, not only when
+it joins: the journal to its end, the host a page at a time. The host stamps its events
+and the journal's entries with one clock, and that clock is what pairs them. A turn's
+records are the assistant entries stamped at or after its `live_turn started`, so one
+read before that event's page is counted when the turn starts, and its words are not
+opened after it.
+
 A `reset` for the journal alone (another branch, or after a read of it failed) does not
-end the turn the host is in: corrald puts the messages being written again after the
-tail, from the words the host writes next, and goes on pairing.
+end the turn the host is in. While the journal cannot be read corrald still follows the
+host's pages, which it does not ask for again, and the reply goes on growing. When the
+journal is read again corrald counts the records that reached it meanwhile and puts
+the messages still being written after the tail, from the words the host writes next.
 
 Operations share the page's byte budget with its events. A subscriber's operations are a
 bounded backlog beside the buffered events; one that falls behind it is sent `reset` and
