@@ -160,15 +160,15 @@ impl AppState {
                 .with(|confirmed| confirmed.values().any(|(sent, _)| sent.op == *op))
     }
 
-    /// A confirmed move stays under way until the board shows its task outside the status it
-    /// had; the row's next step then is another, or the row is gone.
+    /// A move that may have been applied stays under way until the board shows a walk taken
+    /// after it (`act::board_caught_up`); a stalled board keeps it so, and nothing resends it.
     fn settle_catching_up(self) {
         effect(move || {
             let caught: Vec<Id> = self.catching_up.with(|confirmed| {
                 self.feed.with(|feed| {
                     confirmed
                         .iter()
-                        .filter(|(_, (act, from))| act::board_caught_up(feed, &act.op, *from))
+                        .filter(|(_, (act, behind))| act::board_caught_up(feed, &act.op, *behind))
                         .map(|(key, _)| key.clone())
                         .collect()
                 })
@@ -329,7 +329,7 @@ impl AppState {
                 return;
             }
             untracked(move || {
-                let behind: Vec<(Act, corral_types::Status)> = self.feed.with(|feed| {
+                let behind: Vec<(Act, act::Behind)> = self.feed.with(|feed| {
                     settled
                         .iter()
                         .filter_map(|(act, status)| {

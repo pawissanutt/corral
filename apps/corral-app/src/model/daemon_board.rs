@@ -222,9 +222,28 @@ pub struct Board {
     pub complete: bool,
     rows: Vec<Task>,
     pending_epoch: Option<u64>,
+    /// The Tasks subscriptions whose first walk was applied, counted on this device: a new
+    /// one starts its revisions again.
+    pub subscriptions: u64,
+    /// The cursor revision of the last walk applied within the current subscription. corrald
+    /// pins one walk at a time, so a later walk was taken after the one before it completed.
+    pub walk_rev: u64,
 }
 
 impl Board {
+    /// Records a complete walk's cursor revision; `replacement` is a new subscription's first.
+    pub fn walked(&mut self, rev: u64, replacement: bool) {
+        if replacement {
+            self.subscriptions = self.subscriptions.saturating_add(1);
+        }
+        self.walk_rev = rev;
+    }
+
+    /// Whether a replacement snapshot is on its way and the previous one still shows.
+    pub fn replacing(&self) -> bool {
+        self.pending_epoch.is_some()
+    }
+
     pub fn tasks(&self) -> &[Task] {
         &self.rows
     }

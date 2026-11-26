@@ -126,7 +126,7 @@ pub struct AppState {
     watching: Signal<BTreeMap<Id, Act>>,
     /// Moves corrald confirmed whose task the board still shows in the status it had, with
     /// that status: still under way for the step button and the duplicate guard.
-    catching_up: Signal<BTreeMap<Id, (Act, corral_types::Status)>>,
+    catching_up: Signal<BTreeMap<Id, (Act, crate::model::act::Behind)>>,
     /// Operations corrald answered `running`, by their submission's key: the id `op.result`
     /// follows until the outcome is in, kept here so a lost reply is asked for again.
     following: Signal<BTreeMap<Id, String>>,
