@@ -75,7 +75,9 @@ pub(super) fn overlay(
             .enumerate()
             .filter(|(_, call)| !calls.contains(call.call.as_str()))
             .map(|(at, call)| {
-                let key = format!("{base}|call:{}", call.call);
+                // The call's id is the host's own words: the fixed last part keeps the key from
+                // ever reading as a recorded item's, whose last part is its ordinal.
+                let key = format!("{base}|{}|call", call.call);
                 ((call.after, 1, at), (key, tool::live(call, cx)))
             }),
     );

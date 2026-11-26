@@ -323,6 +323,39 @@ fn message_row(
     )
 }
 
+/// The body of an item numbered `number`, at `place` (scope, message, key) when it is keyed:
+/// made again when anything about it but the words being written changes.
+fn body(
+    app: AppState,
+    item: Memo<MessageItem>,
+    words: Memo<String>,
+    number: usize,
+    place: Option<(String, String, String)>,
+) -> AnyElement {
+    dynamic(move || {
+        let body = item.get();
+        let live = written(&body).is_some().then_some(words);
+        let spot = place
+            .as_ref()
+            .map(|(scope, anchor, key)| Spot { scope, anchor, key });
+        untracked(|| item_body(app, &body, number, spot, live))
+    })
+}
+
+/// The `item-<n>` id of words that keep their view when renumbered: a view over them, of
+/// their size, that the pointer passes through.
+fn tag(n: usize) -> AnyElement {
+    view()
+        .test_id(&format!("item-{n}"))
+        .absolute()
+        .top(px(0.0))
+        .left(px(0.0))
+        .right(px(0.0))
+        .bottom(px(0.0))
+        .pointer_events(PointerEvents::None)
+        .into_element()
+}
+
 /// The words of an item still being written, which each beat adds to.
 fn written(item: &MessageItem) -> Option<&str> {
     match item {
@@ -429,31 +462,27 @@ fn item_list(
             let item = computed(move || row.with(|row| settled(&row.body)));
             let words =
                 computed(move || row.with(|row| written(&row.body).unwrap_or_default().to_owned()));
-            let content = {
-                let scope = scope.clone();
-                let anchor = anchor.clone();
-                let key = key.clone();
-                dynamic(move || {
-                    let number = number.get();
-                    let scope = scope.clone();
-                    let anchor = anchor.clone();
-                    let key = key.clone();
-                    // Numbered test IDs are static in NSH; renumber only this inner region on prepend.
-                    numbered(
-                        number,
-                        dynamic(move || {
-                            let body = item.get();
-                            let live = written(&body).is_some().then_some(words);
-                            let spot = key.as_deref().map(|key| Spot {
-                                scope: &scope,
-                                anchor: &anchor,
-                                key,
-                            });
-                            untracked(|| item_body(app, &body, number, spot, live))
-                        }),
-                    )
-                })
-            };
+            let stays = computed(move || {
+                row.with(|row| matches!(&row.body, MessageItem::Prose(words) if words.streaming))
+            });
+            let place = key.clone().map(|key| (scope.clone(), anchor.clone(), key));
+            let content = dynamic(move || {
+                let place = place.clone();
+                if stays.get() {
+                    // Words being written keep their view whatever number the rows above give
+                    // them: a call before them that is recorded, or folds into a run,
+                    // renumbers them mid-reply. A view over them carries the number instead.
+                    return view()
+                        .relative()
+                        .min_w(px(0.0))
+                        .child(body(app, item, words, number.get_untracked(), place))
+                        .child(dynamic(move || tag(number.get())))
+                        .into_element();
+                }
+                // Numbered test IDs are static in NSH; renumber only this inner region on prepend.
+                let number = number.get();
+                numbered(number, body(app, item, words, number, place))
+            });
             match key {
                 Some(key) => placed(&scope, &anchor, &key, column.as_deref(), content),
                 None => content,

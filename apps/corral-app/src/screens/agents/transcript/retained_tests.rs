@@ -148,6 +148,11 @@ fn streaming_delta_retains_mounted_messages_and_item_wrappers() {
     app.wait_for("id:item-3").unwrap();
     let prepended = nodes(&mut app, 1);
     assert_eq!(
+        words,
+        earlier(&mut app),
+        "renumbering remounted the reply's words"
+    );
+    assert_eq!(
         original[0], prepended[0],
         "prepend remounted the measured column"
     );
