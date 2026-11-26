@@ -315,9 +315,19 @@ fn flow_node(built: &mut Built, rest: &mut &str) -> Result<usize, String> {
     let shaped = shape(&mut after)?;
     // `A:::name` gives the node a style class: style only, so it is skipped.
     if let Some(class) = after.strip_prefix(":::") {
+        // A hyphen joins words of the name (`hot-path`) but `-->` after it is the link.
         let name = class
-            .find(|c: char| !(c.is_alphanumeric() || matches!(c, '_' | '-')))
-            .unwrap_or(class.len());
+            .char_indices()
+            .find(|&(at, c)| {
+                !(c.is_alphanumeric()
+                    || c == '_'
+                    || (c == '-'
+                        && class[at + 1..]
+                            .chars()
+                            .next()
+                            .is_some_and(char::is_alphanumeric)))
+            })
+            .map_or(class.len(), |(at, _)| at);
         after = &class[name..];
     }
     *rest = after;

@@ -37,7 +37,7 @@ fn a_flowchart_reads_its_shapes_chains_and_arrow_words() {
 /// Statements may follow the header on its line, and a node's style class is not its name.
 #[test]
 fn header_statements_and_style_classes_are_read() {
-    let diagram = parse("flowchart TD; A:::hot --> B\n  B ==> C\n").unwrap();
+    let diagram = parse("flowchart TD; A:::hot --> B:::hot-path\n  B:::hot==>C\n").unwrap();
     assert_eq!(labels(&diagram.nodes), ["A", "B", "C"]);
     assert_eq!(diagram.edges.len(), 2);
 }
