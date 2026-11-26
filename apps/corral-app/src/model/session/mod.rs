@@ -72,6 +72,8 @@ mod keys_tests;
 #[cfg(test)]
 mod picker_tests;
 #[cfg(test)]
+mod plan_review_progress_tests;
+#[cfg(test)]
 mod plan_review_tests;
 #[cfg(test)]
 mod plan_tests;
