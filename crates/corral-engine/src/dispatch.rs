@@ -550,6 +550,7 @@ impl Engine {
             head_sha: None,
             quiet_since: None,
         };
+        let checkout_identity = crate::takeover::identity::CheckoutIdentity::capture_worker(&run);
         let parent = self.state_dir.join("runs").join(&task.id);
         fs::create_dir_all(&parent).context("create task run directory")?;
         let dir = parent.join(&run.id);
@@ -660,6 +661,9 @@ impl Engine {
         pending.session = Some(session.clone());
         run.session = Some(session);
         store.insert_run(&run)?;
+        if let Some(identity) = checkout_identity {
+            identity.record(store, &run)?;
+        }
         Ok(run)
     }
 

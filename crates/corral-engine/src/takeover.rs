@@ -15,6 +15,8 @@ use crate::{Engine, as_refusal, refuse};
 #[cfg(unix)]
 use crate::{Run, Runner, Status, Task};
 
+pub(crate) mod identity;
+
 const RESERVED: &str =
     "task checkout is reserved by an assistant session; hand it back before retrying";
 
@@ -254,11 +256,16 @@ impl Engine {
                 repo_lock_path(&repo, id)? == lock,
                 "registered checkout moved to another lock namespace"
             );
+            let registered = identity::CheckoutIdentity::load(&self.store, &worker)?.ok_or_else(|| refuse(
+                format!("worker {} has no registered checkout identity; start a new worker run before requesting takeover", worker.id),
+                vec![],
+            ))?;
             let checkout = worker.worktree;
             crate::checkout::verify_linked_checkout(&repo, &checkout, &worker.branch, true)?;
-            let (device, inode) = file_identity(
-                &fs::symlink_metadata(&checkout).context("inspect task checkout identity")?,
-            );
+            if identity::CheckoutIdentity::capture(&checkout).as_ref() != Some(&registered) {
+                return Err(refuse(format!("the checkout no longer matches the identity registered for worker {}", worker.id), vec![]));
+            }
+            let (device, inode) = registered.directory_identity();
             let (lock_device, lock_inode) = file_identity(&require_visible_lock(&lock, file)?);
             Ok(TakeoverSnapshot {
                 task: id.to_owned(),

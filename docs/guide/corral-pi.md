@@ -51,8 +51,11 @@ While it holds the checkout, Corral won't dispatch, retry, gate or land changes
 there, start a competing Code/Build host bound there, or let another Corral file
 tool write there. This is writer coordination among current Corral components,
 not an OS sandbox for external editors or trusted shells. Corral refuses the
-request if it cannot establish that the previous writer is gone, and refuses
-managed writes to a task-shaped checkout whose owning board it cannot verify.
+request if it cannot establish that the previous writer is gone or that the
+checkout still matches the identity recorded when that worker started. Runs
+created before identity recording need a new worker run; approval never adopts
+an unverified checkout. Managed writes also refuse a task-shaped checkout whose
+owning board cannot be verified.
 Git and gate subprocesses inherit the writer lock. Configured gates must still
 wait for their writers: a detached subprocess that closes inherited descriptors
 is outside the host's writer coordination.

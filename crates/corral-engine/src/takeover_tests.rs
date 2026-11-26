@@ -140,19 +140,14 @@ fn gate_leases_the_selected_run_even_when_admission_pinned_the_prior_repo() {
 }
 
 #[test]
-fn takeover_rejects_alias_and_reports_recreated_checkout_identity() {
+fn takeover_refuses_checkout_recreated_before_the_first_probe() {
     let fixture = Fixture::new(&[]);
     let task = fixture.backlog("Identify checkout");
     let run = fixture.dispatch(&task);
     let engine = &fixture.engine;
     engine.stop(&task).unwrap();
-    let preview = engine.takeover_probe(&task).unwrap();
-    let prior = run.worktree.with_file_name("moved");
-    fs::rename(&run.worktree, &prior).unwrap();
-    std::os::unix::fs::symlink(&prior, &run.worktree).unwrap();
-    assert!(engine.takeover_probe(&task).is_err());
 
-    fs::remove_file(&run.worktree).unwrap();
+    fs::rename(&run.worktree, run.worktree.with_file_name("moved")).unwrap();
     git(&fixture.repo, &["worktree", "prune", "--expire", "now"]);
     git(
         &fixture.repo,
@@ -163,10 +158,40 @@ fn takeover_rejects_alias_and_reports_recreated_checkout_identity() {
             &run.branch,
         ],
     );
-    let host = File::open(&preview.lock).unwrap();
-    host.lock().unwrap();
-    let recreated = engine.takeover_verify(&task).unwrap();
-    assert_eq!(recreated.checkout, preview.checkout);
-    assert_eq!(recreated.run, preview.run);
-    assert_ne!(recreated.inode, preview.inode);
+    // Git accepts the replacement on the same path and branch. The old run does not.
+    let error = engine.takeover_probe(&task).unwrap_err();
+    assert!(
+        as_refusal(&error)
+            .unwrap()
+            .reason
+            .contains("no longer matches")
+    );
+
+    let replacement = engine.retry(&task, None, false, None).unwrap();
+    engine.stop(&task).unwrap();
+    let preview = engine.takeover_probe(&task).unwrap();
+    assert_ne!(preview.run, run.id);
+    assert_eq!(preview.run, replacement.id);
+    assert_eq!(preview.checkout, run.worktree);
+}
+
+#[test]
+fn takeover_does_not_adopt_a_legacy_checkout_without_run_identity() {
+    let fixture = Fixture::new(&[]);
+    let task = fixture.backlog("Legacy checkout");
+    fixture.dispatch(&task);
+    let engine = &fixture.engine;
+    engine.stop(&task).unwrap();
+    engine
+        .store
+        .connection
+        .execute("DROP TABLE run_checkout_identities", [])
+        .unwrap();
+    let error = engine.takeover_probe(&task).unwrap_err();
+    assert!(
+        as_refusal(&error)
+            .unwrap()
+            .reason
+            .contains("no registered checkout identity")
+    );
 }

@@ -56,6 +56,9 @@ impl Store {
         connection
             .execute_batch(crate::gate_attempts::SCHEMA)
             .context("initialize gate attempt table")?;
+        connection
+            .execute_batch(crate::takeover::identity::SCHEMA)
+            .context("initialize run checkout identity table")?;
         let store = Self { connection };
         crate::artifacts::prepare_catalog(&store)?;
         Ok(store)
