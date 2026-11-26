@@ -52,7 +52,7 @@ const loopDist = d => 36 + 40 * Math.floor((d.data.loop ?? 0) / 2);
 async function start() {
   const graph = new G6.Graph({
     container: host, width: host.clientWidth, height: host.clientHeight,
-    padding: 24, animation: false, zoomRange: [0.01, 2.5], data,
+    padding: 24, animation: false, zoomRange: [0.25, 2.5], data,
     layout: {type: 'antv-dagre', rankdir: 'LR', nodesep: 46, ranksep: 84},
     node: {
       type: 'rect',
@@ -88,15 +88,26 @@ async function start() {
   };
   graph.on('node:click', report);
   graph.on('edge:click', report);
-  // Fit the graph to the view, never enlarging a small one past its own size; centred.
+  // Fit the graph to the view, never enlarging a small one past its own size; centred. The
+  // zoom floor follows what this graph needs in this view, so no fit leaves part of it out.
+  const ZOOM_FLOOR = 0.25;
+  const needed = () => {
+    const boxes = [...data.nodes, ...data.edges].map(e => graph.getElementRenderBounds(e.id));
+    const lo = [0, 1].map(a => Math.min(...boxes.map(b => b.min[a])));
+    const hi = [0, 1].map(a => Math.max(...boxes.map(b => b.max[a])));
+    const room = [host.clientWidth - 48, host.clientHeight - 48];
+    return Math.min(...[0, 1].map(a => room[a] / Math.max(1, hi[a] - lo[a])));
+  };
+  const reach = () => graph.setZoomRange([Math.max(1e-4, Math.min(ZOOM_FLOOR, needed() * 0.95)), 2.5]);
   const fit = async () => {
+    reach();
     await graph.fitView();
     if (graph.getZoom() > 1) await graph.zoomTo(1);
     await graph.fitCenter();
   };
   await graph.render();
   await fit();
-  document.getElementById('fit').onclick = () => graph.fitView();
+  document.getElementById('fit').onclick = () => { reach(); graph.fitView(); };
   let selected = null;
   addEventListener('message', event => {
     let message;
