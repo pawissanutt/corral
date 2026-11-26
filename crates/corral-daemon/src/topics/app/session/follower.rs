@@ -42,6 +42,9 @@ pub(super) struct Follower {
     mark: Option<Mark>,
     /// When the latest assistant records this follower read were written.
     seen: VecDeque<jiff::Timestamp>,
+    /// When the first message of the tail last read again was written, unless that tail
+    /// was the whole journal: records before it were not read.
+    held: Option<jiff::Timestamp>,
 }
 
 /// Where the journal's clock parts a turn's records: the assistant records stamped at
@@ -107,6 +110,7 @@ impl Follower {
         let journal = self.journal(id, path, scope, join);
         if journal.is_err() {
             self.tail = None;
+            self.held = None;
         }
         let mut ops = Vec::new();
         let mut starts = page
@@ -141,16 +145,13 @@ impl Follower {
             self.skip_through = page.map_or(0, |page| page.host_tail);
             starts.clear();
         }
-        // A tail read again: whether it is the whole journal, and when its first message
-        // was written.
-        let mut held = None;
         match journal {
             Ok(Journal::Changes(changes)) => self.pair(changes, &mut starts, &mut ops),
             Ok(Journal::Snapshot(older, messages)) => {
-                let first = messages
-                    .first()
-                    .and_then(|(message, ..)| message.at.as_deref()?.parse().ok());
-                held = Some((older.is_none(), first));
+                self.held = older.as_ref().and_then(|_| {
+                    let mut stamps = messages.iter().map(|(message, ..)| message.at.as_deref());
+                    stamps.find_map(|at| at?.parse().ok())
+                });
                 self.seen.clear();
                 for (message, ..) in &messages {
                     if message.author != "assistant" {
@@ -178,7 +179,7 @@ impl Follower {
                     // journal does not hold yet are put again, from the words the host
                     // writes next.
                     if let Some(mark) = self.mark
-                        && !reaches(held, mark.since)
+                        && !reaches(self.held, mark.since)
                     {
                         self.lose_turn();
                     }
@@ -205,7 +206,7 @@ impl Follower {
             // its first message).
             let since: Option<jiff::Timestamp> =
                 seed.message_at.as_deref().and_then(|at| at.parse().ok());
-            if since.is_some_and(|since| !reaches(held, since)) {
+            if since.is_some_and(|since| !reaches(self.held, since)) {
                 self.lose_turn();
                 return ops;
             }
@@ -286,6 +287,13 @@ impl Follower {
                         past: false,
                     });
                     self.count();
+                    // Or written before the tail that was read again begins.
+                    if self
+                        .mark
+                        .is_some_and(|mark| !reaches(self.held, mark.since))
+                    {
+                        self.lose_turn();
+                    }
                 }
                 SessionLiveKind::LiveTurn {
                     turn,
@@ -455,8 +463,8 @@ impl Follower {
 
 /// Whether a tail that was read again holds every record written from `since` on. It is
 /// one page of the journal's latest messages: records before its first are not counted.
-fn reaches(held: Option<(bool, Option<jiff::Timestamp>)>, since: jiff::Timestamp) -> bool {
-    held.is_none_or(|(whole, first)| whole || first.is_some_and(|first| first <= since))
+fn reaches(held: Option<jiff::Timestamp>, since: jiff::Timestamp) -> bool {
+    held.is_none_or(|first| first <= since)
 }
 
 struct Start {

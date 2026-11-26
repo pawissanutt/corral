@@ -473,50 +473,64 @@ fn a_failed_journal_read_does_not_end_the_reply_being_written() -> Result<()> {
 #[test]
 fn a_reply_recorded_before_the_tail_read_again_is_not_put_as_being_written() -> Result<()> {
     let dir = tempfile::tempdir()?;
-    let path = dir.path().join("journal.jsonl");
     let entry = |id: &str, parent: Option<&str>, role: &str, second: u8| {
         json!({"type":"message", "id":id, "parentId":parent,
             "timestamp":format!("2026-11-18T12:00:0{second}Z"),
             "message":{"role":role,"content":"words"}})
     };
-    append(&path, entry("u", None, "user", 0))?;
-    let mut follower = Follower::default();
-    follower.visit("s", &path, None, Some(&page(vec![])), None);
     let text = |message: u64| Kind::LiveText {
         turn: 2,
         message,
         offset: 0,
         text: "words".into(),
     };
-    let mut writing = page(vec![
-        Kind::LiveTurn {
+    let started = |words: Vec<Kind>| {
+        let mut events = vec![Kind::LiveTurn {
             turn: 2,
             state: SessionLiveTurnState::Started,
-        },
-        text(1),
-    ]);
-    writing.events[0].0.at = "2026-11-18T12:00:01Z".into();
-    follower.visit("s", &path, None, Some(&writing), None);
-    let missing = dir.path().join("missing.jsonl");
-    follower.visit("s", &missing, None, Some(&page_after(2, vec![])), None);
-    append(&path, entry("a", Some("u"), "assistant", 5))?;
-    let mut parent = "a".to_owned();
-    for n in 0..40 {
-        let id = format!("n{n}");
-        append(&path, entry(&id, Some(&parent), "user", 6))?;
-        parent = id;
+        }];
+        events.extend(words);
+        let mut page = page(events);
+        page.events[0].0.at = "2026-11-18T12:00:01Z".into();
+        page
+    };
+    // The turn's start reaches the follower before the read fails, or only after it.
+    for late in [false, true] {
+        let path = dir.path().join(format!("{late}.jsonl"));
+        append(&path, entry("u", None, "user", 0))?;
+        let mut follower = Follower::default();
+        follower.visit("s", &path, None, Some(&page(vec![])), None);
+        let mut read = 0;
+        if !late {
+            follower.visit("s", &path, None, Some(&started(vec![text(1)])), None);
+            read = 2;
+        }
+        let missing = dir.path().join("missing.jsonl");
+        follower.visit("s", &missing, None, Some(&page_after(read, vec![])), None);
+        append(&path, entry("a", Some("u"), "assistant", 5))?;
+        let mut parent = "a".to_owned();
+        for n in 0..40 {
+            let id = format!("n{n}");
+            append(&path, entry(&id, Some(&parent), "user", 6))?;
+            parent = id;
+        }
+        let recovery = if late {
+            started(vec![text(1), text(2)])
+        } else {
+            page_after(read, vec![text(2)])
+        };
+        let ops = follower.visit("s", &path, None, Some(&recovery), None);
+        // Which of the turn's messages are recorded is not known: its words are left out.
+        assert!(
+            matches!(ops.first(), Some(Op::Reset { older: Some(_) })),
+            "{ops:?}"
+        );
+        assert!(
+            ops.iter()
+                .all(|op| matches!(op, Op::Reset { .. } | Op::Put { open: false, .. })),
+            "{ops:?}"
+        );
     }
-    let ops = follower.visit("s", &path, None, Some(&page_after(2, vec![text(2)])), None);
-    // Which of the turn's messages are recorded is not known: its words are left out.
-    assert!(
-        matches!(ops.first(), Some(Op::Reset { older: Some(_) })),
-        "{ops:?}"
-    );
-    assert!(
-        ops.iter()
-            .all(|op| matches!(op, Op::Reset { .. } | Op::Put { open: false, .. })),
-        "{ops:?}"
-    );
     Ok(())
 }
 
