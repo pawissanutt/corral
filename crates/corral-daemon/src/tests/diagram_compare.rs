@@ -123,8 +123,14 @@ fn socket_diagram_compare_reports_changed_moved_and_removed_bindings_at_the_cand
         }
     };
 
+    let summary = read(&query(CompareTarget::Candidate, None));
+    assert_eq!(summary.subject.commit, pinned);
     let gate = read(&query(CompareTarget::Candidate, Some("gate")));
-    assert_eq!(gate.subject.commit, pinned);
+    assert_eq!(gate.target, summary.target);
+    assert!(
+        gate.elements.is_empty(),
+        "an element read leaves the summary to its own read"
+    );
     let CompareResolution::Resolved {
         origin: CompareOrigin::Candidate,
         commit,
@@ -136,7 +142,8 @@ fn socket_diagram_compare_reports_changed_moved_and_removed_bindings_at_the_cand
     };
     assert_eq!((commit, &submitted.head), (&candidate, &candidate));
     let change = |id: &str| {
-        gate.elements
+        summary
+            .elements
             .iter()
             .find(|element| element.id == id)
             .map(|element| element.change.clone())
@@ -162,8 +169,12 @@ fn socket_diagram_compare_reports_changed_moved_and_removed_bindings_at_the_cand
         matches!(&selected.base_source, SourceResult::Resolved { excerpt, .. }
         if excerpt.commit == pinned && excerpt.lines == ["pub fn gate() {}"])
     );
+    // Git's line diff maps the changed line to its new text, not to the old line number.
     assert!(
-        matches!(&selected.target_source, SourceResult::Resolved { excerpt, .. } if excerpt.commit == candidate)
+        matches!(&selected.target_source, SourceResult::Resolved { excerpt, .. }
+        if excerpt.commit == candidate && excerpt.lines.iter().any(|line| line == "pub fn gate(ready: bool) {}")),
+        "{:?}",
+        selected.target_source
     );
     assert_eq!(
         selected.entity_change,
@@ -183,9 +194,13 @@ fn socket_diagram_compare_reports_changed_moved_and_removed_bindings_at_the_cand
         [
             CompareLink::Diff {
                 task: id.clone(),
+                head: candidate.clone(),
                 path: ANCHOR.into()
             },
-            CompareLink::Impact { task: id.clone() }
+            CompareLink::Impact {
+                task: id.clone(),
+                head: candidate.clone()
+            }
         ]
     );
 
@@ -206,6 +221,20 @@ fn socket_diagram_compare_reports_changed_moved_and_removed_bindings_at_the_cand
         if excerpt.commit == pinned && excerpt.path == DEPENDENT)
     );
     assert!(matches!(land.target_source, SourceResult::Missing { .. }));
+
+    // A worker's commit the project head never reached is not accepted as a pinned head.
+    let forged = read(&query(
+        CompareTarget::Pinned {
+            origin: CompareOrigin::ObservedHead,
+            commit: candidate.clone(),
+        },
+        None,
+    ));
+    assert!(
+        matches!(forged.target, CompareResolution::Unavailable { .. }),
+        "{:?}",
+        forged.target
+    );
 
     // The artifact keeps its bytes and pinned subject.
     let stored = engine

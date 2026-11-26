@@ -189,10 +189,14 @@ impl DiffContext {
     }
 
     fn output(&self, args: &[&str]) -> Result<Vec<u8>> {
-        let dir = self.dir.path();
-        let mut git = command(dir);
+        run(self.command(), self.dir.path(), args)
+    }
+
+    /// A Git command in the temporary repository over the original object database.
+    fn command(&self) -> Command {
+        let mut git = command(self.dir.path());
         git.env("GIT_OBJECT_DIRECTORY", &self.objects);
-        run(git, dir, args)
+        git
     }
 }
 

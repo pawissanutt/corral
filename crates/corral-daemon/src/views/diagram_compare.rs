@@ -5,7 +5,7 @@ use std::{collections::BTreeMap, path::Path};
 
 use anyhow::{Context, Result, ensure};
 use corral_engine::{Engine, Role};
-use corral_facts::{Revision, committed_file, renames, resolve_local_commit};
+use corral_facts::{CommittedFile, Revision, is_ancestor, map_span, renames, resolve_local_commit};
 use corral_protocol::{
     detail::*,
     diagram::{DiagramSubject, EntityRequest, SourceRequest, SourceSpan, WorkflowRecipe},
@@ -65,8 +65,12 @@ pub(super) fn compare(
         base: base_rev.as_ref(),
         target: &target_rev,
         renames: None,
+        files: BTreeMap::new(),
     };
-    detail.elements = summary(&mut sides, &recipe);
+    // The summary is its own read; a selected element's read does only that element's work.
+    if selected.is_none() {
+        detail.elements = summary(&mut sides, &recipe);
+    }
     if let Some(element) = selected {
         let links = links(engine, &artifact, &detail.target)?;
         detail.selected = Some(inspect(
@@ -97,22 +101,25 @@ fn resolve(
     subject: &DiagramSubject,
     target: &CompareTarget,
 ) -> Result<(CompareResolution, Option<Revision>)> {
-    let (origin, commit) = match target {
-        CompareTarget::ObservedHead => {
-            let Ok(snapshot) = shared.system.map(shared, &subject.project) else {
-                return Ok((unavailable("the project's head is not observed"), None));
-            };
-            match snapshot.head {
-                Some(head) => (CompareOrigin::ObservedHead, head),
-                None if snapshot.building => return Ok((CompareResolution::Pending, None)),
-                None => {
-                    let reason = snapshot
-                        .error
-                        .unwrap_or_else(|| "the project's head is not observed".into());
-                    return Ok((unavailable(reason), None));
-                }
+    let observed = || -> Result<String, CompareResolution> {
+        let Ok(snapshot) = shared.system.map(shared, &subject.project) else {
+            return Err(unavailable("the project's head is not observed"));
+        };
+        match snapshot.head {
+            Some(head) => Ok(head),
+            None if snapshot.building => Err(CompareResolution::Pending),
+            None => {
+                Err(unavailable(snapshot.error.unwrap_or_else(|| {
+                    "the project's head is not observed".into()
+                })))
             }
         }
+    };
+    let (origin, commit) = match target {
+        CompareTarget::ObservedHead => match observed() {
+            Ok(head) => (CompareOrigin::ObservedHead, head),
+            Err(resolution) => return Ok((resolution, None)),
+        },
         CompareTarget::Candidate => match latest_submission(engine, artifact, subject)? {
             Ok(candidate) => (CompareOrigin::Candidate, candidate.head),
             Err(reason) => return Ok((unavailable(reason), None)),
@@ -139,6 +146,27 @@ fn resolve(
             None,
         ));
     };
+    // A pinned head is only ever one the project's head reached: the current observation or an
+    // ancestor of it, never an arbitrary commit labelled as the head.
+    if let CompareTarget::Pinned {
+        origin: CompareOrigin::ObservedHead,
+        ..
+    } = target
+    {
+        let head = match observed() {
+            Ok(head) => head,
+            Err(resolution) => return Ok((resolution, None)),
+        };
+        let reached = resolve_local_commit(repo, &head)
+            .and_then(|head| is_ancestor(repo, &rev, &head))
+            .unwrap_or(false);
+        if !reached {
+            return Ok((
+                unavailable("the pinned commit is not on the project's observed head"),
+                None,
+            ));
+        }
+    }
     let current_candidate = match &candidate {
         Some(candidate) => latest_submission(engine, artifact, subject)?
             .is_ok_and(|latest| latest.head == candidate.head),
@@ -225,17 +253,38 @@ fn links(
     engine: &Engine,
     artifact: &Artifact,
     target: &CompareResolution,
-) -> Result<Option<(String, std::collections::BTreeSet<String>)>> {
+) -> Result<Option<Links>> {
     let CompareResolution::Resolved {
         origin: CompareOrigin::Candidate,
         current_candidate: true,
-        ..
+        commit,
+        candidate: Some(candidate),
     } = target
     else {
         return Ok(None);
     };
+    // The patch must be the compared submission's own: the same run, still at that head.
     Ok(review::submitted_paths(engine, &artifact.task)?
-        .map(|(_, paths)| (artifact.task.clone(), paths)))
+        .filter(|(run, _)| run.id == candidate.run)
+        .filter(|_| {
+            engine
+                .store
+                .submitted_revision(&artifact.task, &candidate.run)
+                .ok()
+                .flatten()
+                .is_some_and(|submitted| &submitted.sha == commit)
+        })
+        .map(|(_, paths)| Links {
+            task: artifact.task.clone(),
+            head: commit.clone(),
+            paths,
+        }))
+}
+
+struct Links {
+    task: String,
+    head: String,
+    paths: std::collections::BTreeSet<String>,
 }
 
 struct Sides<'a> {
@@ -244,9 +293,23 @@ struct Sides<'a> {
     target: &'a Revision,
     /// Git's renames from base to target, found once per read when first needed.
     renames: Option<Result<BTreeMap<String, String>, ()>>,
+    /// Tree lookups of this read, by side (`true` for the target) and path.
+    files: BTreeMap<(bool, String), Result<Option<CommittedFile>, ()>>,
 }
 
 impl Sides<'_> {
+    /// One tree lookup per side and path in a read, however many elements bind it.
+    fn file(&mut self, target: bool, path: &str) -> Result<Option<CommittedFile>, ()> {
+        let rev = if target { Some(self.target) } else { self.base };
+        let (repo, Some(rev)) = (self.repo, rev) else {
+            return Err(());
+        };
+        self.files
+            .entry((target, path.to_owned()))
+            .or_insert_with(|| corral_facts::committed_file(repo, rev, path).map_err(|_| ()))
+            .clone()
+    }
+
     fn renamed(&mut self, path: &str) -> Result<Option<String>, ()> {
         let Some(base) = self.base else {
             return Err(());
@@ -289,20 +352,20 @@ fn unknown(reason: &str) -> SourceChange {
 }
 
 /// How the bound text changed, and where to read it at the target.
-fn source_change(sides: &mut Sides<'_>, request: &SourceRequest) -> (SourceChange, SourceRequest) {
-    let same = request.clone();
-    let Some(base) = sides.base else {
+fn source_change(
+    sides: &mut Sides<'_>,
+    request: &SourceRequest,
+) -> (SourceChange, Option<SourceRequest>) {
+    let same = Some(request.clone());
+    if sides.base.is_none() {
         return (
             unknown("the pinned commit is not available locally as a Git commit"),
             same,
         );
-    };
-    let (repo, target) = (sides.repo, sides.target);
+    }
+    let (repo, target_commit) = (sides.repo, sides.target.commit().to_owned());
     let path = request.path.as_str();
-    let (base_file, target_file) = match (
-        committed_file(repo, base, path),
-        committed_file(repo, target, path),
-    ) {
+    let (base_file, target_file) = match (sides.file(false, path), sides.file(true, path)) {
         (Ok(base), Ok(target)) => (base, target),
         _ => return (unknown("could not read a committed tree"), same),
     };
@@ -317,8 +380,8 @@ fn source_change(sides: &mut Sides<'_>, request: &SourceRequest) -> (SourceChang
         (Some(base_file), Some(target_file)) => (base_file, target_file, path.to_owned()),
         (Some(base_file), None) => match sides.renamed(path) {
             Err(()) => return (unknown("Git's rename detection failed"), same),
-            Ok(None) => return (SourceChange::Removed, same),
-            Ok(Some(renamed)) => match committed_file(repo, target, &renamed) {
+            Ok(None) => return (SourceChange::Removed, None),
+            Ok(Some(renamed)) => match sides.file(true, &renamed) {
                 Ok(Some(target_file)) => (base_file, target_file, renamed),
                 _ => return (unknown("the renamed file could not be read"), same),
             },
@@ -340,7 +403,7 @@ fn source_change(sides: &mut Sides<'_>, request: &SourceRequest) -> (SourceChang
                 path: target_path.clone(),
             },
         };
-        return (change, at(None));
+        return (change, Some(at(None)));
     };
     if base_file.blob() == target_file.blob() {
         let change = if renamed {
@@ -351,7 +414,7 @@ fn source_change(sides: &mut Sides<'_>, request: &SourceRequest) -> (SourceChang
         } else {
             SourceChange::Unchanged
         };
-        return (change, at(Some(span.clone())));
+        return (change, Some(at(Some(span.clone()))));
     }
     let (Some(before), Some(after)) = (base_file.text(repo), target_file.text(repo)) else {
         return (
@@ -379,36 +442,62 @@ fn source_change(sides: &mut Sides<'_>, request: &SourceRequest) -> (SourceChang
         } else {
             SourceChange::Unchanged
         };
-        return (change, at(Some(span.clone())));
+        return (change, Some(at(Some(span.clone()))));
     }
-    // The same contiguous lines elsewhere: the nearest occurrence to where they were.
-    let found = after
-        .windows(bound.len())
-        .enumerate()
-        .filter(|(_, lines)| *lines == bound)
-        .map(|(at, _)| at)
-        .min_by_key(|at| at.abs_diff(first));
-    match found {
-        Some(at_line) => {
-            let start = at_line as u32 + 1;
-            let moved = SourceSpan {
-                start,
-                end: start + (last - first) as u32 - 1,
+    let changed = SourceChange::Changed {
+        path: target_path.clone(),
+    };
+    // Git's line diff of the two blobs says where the bound lines went.
+    let mapped = map_span(
+        repo,
+        &base_file,
+        &target_file,
+        &target_commit,
+        first as u64 + 1,
+        last as u64,
+    );
+    match mapped {
+        Err(_) => (unknown("Git's line diff of the bound file failed"), None),
+        Ok(Some((start, end))) => {
+            let end = end.min(start + 199);
+            let place = SourceSpan {
+                start: start as u32,
+                end: end as u32,
             };
-            (
-                SourceChange::Moved {
+            if after.get(start as usize - 1..end as usize) == Some(bound) {
+                let moved = SourceChange::Moved {
                     path: target_path.clone(),
-                    first: Some(u64::from(start)),
-                },
-                at(Some(moved)),
-            )
+                    first: Some(start),
+                };
+                (moved, Some(at(Some(place))))
+            } else {
+                (changed, Some(at(Some(place))))
+            }
         }
-        None => (
-            SourceChange::Changed {
-                path: target_path.clone(),
-            },
-            at(Some(span.clone())),
-        ),
+        // Every bound line was deleted there: a single exact copy elsewhere is a move; none,
+        // or several, is not claimed as one.
+        Ok(None) => {
+            let mut copies = after
+                .windows(bound.len())
+                .enumerate()
+                .filter(|(_, lines)| *lines == bound)
+                .map(|(at, _)| at);
+            match (copies.next(), copies.next()) {
+                (Some(at_line), None) => {
+                    let start = at_line as u32 + 1;
+                    let place = SourceSpan {
+                        start,
+                        end: start + (last - first) as u32 - 1,
+                    };
+                    let moved = SourceChange::Moved {
+                        path: target_path.clone(),
+                        first: Some(u64::from(start)),
+                    };
+                    (moved, Some(at(Some(place))))
+                }
+                _ => (changed, None),
+            }
+        }
     }
 }
 
@@ -418,7 +507,7 @@ fn inspect(
     subject: &DiagramSubject,
     provider_enabled: bool,
     element: SelectedElement,
-    links: Option<(String, std::collections::BTreeSet<String>)>,
+    links: Option<Links>,
 ) -> ElementCompare {
     let (source_request, entity_request) = diagram::requests(&element);
     let (source_request, entity_request) = (source_request.cloned(), entity_request.cloned());
@@ -441,11 +530,14 @@ fn inspect(
                 Some(base) => diagram::read_source(sides.repo, base, request),
                 None => missing_base(),
             };
-            let target = match change {
-                SourceChange::Removed => SourceResult::Missing {
+            let target = match (&change, at_target) {
+                (SourceChange::Removed, _) => SourceResult::Missing {
                     reason: "the file is absent at the comparison commit".into(),
                 },
-                _ => diagram::read_source(sides.repo, sides.target, &at_target),
+                (_, None) => SourceResult::Missing {
+                    reason: "the bound lines were deleted at the comparison commit".into(),
+                },
+                (_, Some(at)) => diagram::read_source(sides.repo, sides.target, &at),
             };
             (base, target, change)
         }
@@ -493,17 +585,22 @@ fn inspect(
         }
     }
     let links = match links {
-        Some((task, patched)) => {
+        Some(Links {
+            task,
+            head,
+            paths: patched,
+        }) => {
             let mut links: Vec<CompareLink> = paths
                 .into_iter()
                 .filter(|path| patched.contains(*path))
                 .map(|path| CompareLink::Diff {
                     task: task.clone(),
+                    head: head.clone(),
                     path: path.to_owned(),
                 })
                 .collect();
             links.dedup();
-            links.push(CompareLink::Impact { task });
+            links.push(CompareLink::Impact { task, head });
             links
         }
         None => Vec::new(),
@@ -525,7 +622,7 @@ fn renamed_entity(sides: &mut Sides<'_>, request: &EntityRequest) -> EntityReque
     let path = match request {
         EntityRequest::File { path } | EntityRequest::Definition { path, .. } => path,
     };
-    if committed_file(sides.repo, sides.target, path).is_ok_and(|file| file.is_none())
+    if sides.file(true, path).is_ok_and(|file| file.is_none())
         && let Ok(Some(renamed)) = sides.renamed(path)
     {
         return match request {
@@ -578,12 +675,24 @@ pub(super) fn entity_change(base: &EntityResult, target: &EntityResult) -> Entit
             if extension(base_evidence) != extension(target_evidence) {
                 return insufficient("the two commits were read with different fact providers");
             }
+            // Built-in coverage and any provider's own skips, omissions and dropped files all
+            // count: a row missing from either side must not read as a removal.
             let complete = |evidence: &EntityEvidence, omitted: usize| {
                 evidence.read_status == ReadStatus::Complete
                     && !evidence.provider_pending
                     && evidence.coverage.failed == 0
                     && evidence.coverage.skipped_non_utf8_paths == 0
                     && omitted == 0
+                    && evidence.provider.as_ref().is_none_or(|provider| {
+                        provider.error.is_none()
+                            && provider.coverage.dropped_unknown_files == 0
+                            && provider
+                                .coverage
+                                .skipped
+                                .values()
+                                .chain(provider.coverage.omitted.values())
+                                .all(|&total| total == 0)
+                    })
             };
             if !complete(base_evidence, *base_omitted)
                 || !complete(target_evidence, *target_omitted)

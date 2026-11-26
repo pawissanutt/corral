@@ -111,7 +111,17 @@ impl AppState {
                 self.retained.pins.remove(&key);
                 // Only Now's open Closed section reads a Closed page, and a kept one is
                 // refetched on every board change; folding, paging or leaving drops it.
-                if matches!(target, DetailRef::Closed { .. }) {
+                // An unpinned diagram comparison resolves a moving head or candidate: a new
+                // choice must ask again rather than pin a kept answer.
+                if matches!(
+                    target,
+                    DetailRef::Closed { .. }
+                        | DetailRef::ArtifactDiagramCompare {
+                            target: corral_protocol::detail::CompareTarget::ObservedHead
+                                | corral_protocol::detail::CompareTarget::Candidate,
+                            ..
+                        }
+                ) {
                     self.evict_detail(feed, &key);
                 }
             }

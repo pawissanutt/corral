@@ -104,15 +104,25 @@ impl Mark {
 /// A link to the candidate's own changes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Link {
-    Diff { task: String, path: String },
-    Impact { task: String },
+    Diff {
+        task: String,
+        head: String,
+        path: String,
+    },
+    Impact {
+        task: String,
+        head: String,
+    },
 }
 
 impl Link {
+    /// Names the submission it was served for, so the owner can tell it from a later one.
     pub fn label(&self) -> String {
         match self {
-            Link::Diff { task, path } => format!("{task} diff · {path}"),
-            Link::Impact { task } => format!("{task} Impact"),
+            Link::Diff { task, head, path } => {
+                format!("{task} diff of {} · {path}", short(head))
+            }
+            Link::Impact { task, head } => format!("{task} Impact of {}", short(head)),
         }
     }
 }
@@ -168,6 +178,11 @@ fn body<'a>(
     }
 }
 
+fn fresh(feed: &Feed, target: &DetailRef) -> bool {
+    feed.detail(target)
+        .is_some_and(|cache| !cache.loading && !cache.stale && cache.error.is_none())
+}
+
 /// The comparison of `graph` for its chosen target.
 pub fn view(feed: &Feed, graph: &Graph, compare: &Compare) -> View {
     let summary_read = target(&graph.reference, &graph.sha256, compare, None);
@@ -188,7 +203,10 @@ pub fn view(feed: &Feed, graph: &Graph, compare: &Compare) -> View {
             shown.status = status(&detail.target);
             match &detail.target {
                 CompareResolution::Pending => shown.pending = true,
-                CompareResolution::Resolved { commit, .. } if compare.commit.is_none() => {
+                // Only an answer read for this choice pins: never a kept or revalidating one.
+                CompareResolution::Resolved { commit, .. }
+                    if compare.commit.is_none() && fresh(feed, &summary_read) =>
+                {
                     shown.pin = Some(commit.clone());
                 }
                 _ => {}
@@ -283,7 +301,9 @@ fn change_words(change: &SourceChange) -> String {
         SourceChange::Moved { path, first: None } => {
             format!("The same file is now at {path}.")
         }
-        SourceChange::Changed { path } => format!("The bound source differs in {path}."),
+        SourceChange::Changed { path } => format!(
+            "The bound source differs in {path}; below are the lines Git's diff places it at, if any."
+        ),
         SourceChange::Removed => {
             "The bound file is gone at the comparison commit; Source above still shows it at the pinned commit."
                 .into()
@@ -356,11 +376,15 @@ fn side(detail: &DiagramCompareDetail) -> Side {
             .links
             .iter()
             .map(|link| match link {
-                CompareLink::Diff { task, path } => Link::Diff {
+                CompareLink::Diff { task, head, path } => Link::Diff {
                     task: task.clone(),
+                    head: head.clone(),
                     path: path.clone(),
                 },
-                CompareLink::Impact { task } => Link::Impact { task: task.clone() },
+                CompareLink::Impact { task, head } => Link::Impact {
+                    task: task.clone(),
+                    head: head.clone(),
+                },
             })
             .collect(),
         pending,

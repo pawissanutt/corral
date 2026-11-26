@@ -178,13 +178,26 @@ pub(super) fn side(app: AppState, side: Side) -> AnyElement {
         .into_element()
 }
 
-/// A candidate link opens its task's Changes, at the diff or at Impact.
+/// A candidate link opens its task's Changes, at the named file's diff (expanded) or at Impact.
 fn open(app: AppState, link: &Link) {
-    let (task, view) = match link {
-        Link::Diff { task, .. } => (task, ChangesView::Diff),
-        Link::Impact { task } => (task, ChangesView::Impact),
+    let (task, view, path) = match link {
+        Link::Diff { task, path, .. } => (task, ChangesView::Diff, Some(path.clone())),
+        Link::Impact { task, .. } => (task, ChangesView::Impact, None),
     };
-    app.open_live(Live::Task(task.as_str().into()));
+    let id: crate::model::Id = task.as_str().into();
+    app.open_live(Live::Task(id.clone()));
     app.set_task_tab(TaskTab::Changes);
     app.impact_act(task, ImpactAction::View(view));
+    if let Some(path) = path {
+        let filter = app.scope_filter();
+        app.reduce(app.review, move |state, feed, selection, _| {
+            state.apply_live_filtered(
+                crate::model::review::Action::Expand(path),
+                feed,
+                selection,
+                Some(&id),
+                &filter,
+            )
+        });
+    }
 }

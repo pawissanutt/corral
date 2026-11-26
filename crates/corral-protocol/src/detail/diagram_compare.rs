@@ -17,7 +17,9 @@ pub enum CompareTarget {
     ObservedHead,
     /// Resolve the latest submission of the artifact's own task worker run.
     Candidate,
-    /// Re-read a comparison an earlier reply resolved, at exactly that commit.
+    /// Re-read a comparison an earlier reply resolved, at exactly that commit. A pinned head
+    /// must still be the observed head or one of its ancestors; a pinned candidate must still be
+    /// a recorded submission of the task's latest worker run.
     Pinned {
         origin: CompareOrigin,
         commit: String,
@@ -148,10 +150,15 @@ pub struct LocationChange {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CompareLink {
-    /// The task's submitted patch for `path` (`DetailRef::ReviewFile`).
-    Diff { task: String, path: String },
-    /// The task's System Impact (`DetailRef::SystemReview`).
-    Impact { task: String },
+    /// The task's submitted patch for `path` (`DetailRef::ReviewFile`), whose candidate head
+    /// is `head`.
+    Diff {
+        task: String,
+        head: String,
+        path: String,
+    },
+    /// The task's System Impact (`DetailRef::SystemReview`) of the submission `head`.
+    Impact { task: String, head: String },
 }
 
 #[cfg(test)]

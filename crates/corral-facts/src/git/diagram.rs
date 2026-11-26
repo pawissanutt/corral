@@ -210,6 +210,65 @@ impl CommittedFile {
     }
 }
 
+/// Where a one-based inclusive span of `base`'s lines lies in `target`, by Git's line diff of
+/// the two blobs (diffed from objects only, at `target_commit`'s object format). Lines outside
+/// any edit keep their place, shifted by the edits before them; an end of the span inside an
+/// edit takes that edit's new lines. `None` when every bound line was deleted.
+pub fn map_span(
+    repo: &Path,
+    base: &CommittedFile,
+    target: &CommittedFile,
+    target_commit: &str,
+    start: u64,
+    end: u64,
+) -> Result<Option<(u64, u64)>> {
+    let hunks = super::LineDiff::new(repo, target_commit)?.hunks(&base.blob, &target.blob)?;
+    let within = |line: u64| hunks.iter().find(|h| h.old.contains(&line));
+    let shift = |line: u64| -> i64 {
+        hunks
+            .iter()
+            .filter(|h| h.old.end <= line && !h.old.contains(&line))
+            .map(|h| (h.new.end - h.new.start) as i64 - (h.old.end - h.old.start) as i64)
+            .sum()
+    };
+    let moved = |line: u64| u64::try_from(line as i64 + shift(line)).ok();
+    let first = match within(start) {
+        Some(hunk) => Some(hunk.new.start),
+        None => moved(start),
+    };
+    let last = match within(end) {
+        Some(hunk) => hunk.new.end.checked_sub(1),
+        None => moved(end),
+    };
+    Ok(match (first, last) {
+        (Some(first), Some(last)) if first >= 1 && last >= first => Some((first, last)),
+        _ => None,
+    })
+}
+
+/// Whether `ancestor` is `descendant` or reachable from it, using local objects only.
+pub fn is_ancestor(repo: &Path, ancestor: &Revision, descendant: &Revision) -> Result<bool> {
+    if ancestor.commit() == descendant.commit() {
+        return Ok(true);
+    }
+    let status = super::command(repo)
+        .args([
+            "merge-base",
+            "--is-ancestor",
+            ancestor.commit(),
+            descendant.commit(),
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .with_context(|| format!("running git merge-base in {}", repo.display()))?;
+    match status.code() {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        _ => anyhow::bail!("git merge-base in {} failed ({status})", repo.display()),
+    }
+}
+
 /// Every file Git's rename detection (default similarity) finds renamed from `base` to
 /// `target`, old path to new. The diff reads Git objects only, without the checkout's config,
 /// attributes or diff helpers. Paths that are not UTF-8 are left out.
@@ -218,23 +277,32 @@ pub fn renames(
     base: &Revision,
     target: &Revision,
 ) -> Result<std::collections::BTreeMap<String, String>> {
-    let bytes = super::DiffContext::new(repo, target.commit(), &[])?.output(&[
-        "diff-tree",
-        "-r",
-        "-z",
-        "--no-commit-id",
-        "--name-status",
-        "-M",
-        "--diff-filter=R",
-        "--no-textconv",
-        "--no-ext-diff",
-        "--ignore-submodules=none",
-        "--no-relative",
-        "--no-color",
-        base.commit(),
-        target.commit(),
-        "--",
-    ])?;
+    // At most 1 MiB of rename records; a larger answer is an error the caller reports as an
+    // unknown change rather than collected without bound.
+    let context = super::DiffContext::new(repo, target.commit(), &[])?;
+    let bytes = bounded_run(
+        context.command(),
+        repo,
+        &[
+            "diff-tree",
+            "-r",
+            "-z",
+            "--no-commit-id",
+            "--name-status",
+            "-M",
+            "--diff-filter=R",
+            "--no-textconv",
+            "--no-ext-diff",
+            "--ignore-submodules=none",
+            "--no-relative",
+            "--no-color",
+            base.commit(),
+            target.commit(),
+            "--",
+        ],
+        None,
+        1024 * 1024,
+    )?;
     let mut fields = records(&bytes)?;
     let mut renames = std::collections::BTreeMap::new();
     while let Some(status) = fields.next() {
@@ -249,7 +317,16 @@ pub fn renames(
 }
 
 fn bounded_output(repo: &Path, args: &[&str], input: Option<&str>, cap: usize) -> Result<Vec<u8>> {
-    let mut git = command(repo);
+    bounded_run(command(repo), repo, args, input, cap)
+}
+
+fn bounded_run(
+    mut git: std::process::Command,
+    repo: &Path,
+    args: &[&str],
+    input: Option<&str>,
+    cap: usize,
+) -> Result<Vec<u8>> {
     if input.is_some() {
         git.stdin(Stdio::piped());
     }

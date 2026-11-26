@@ -118,20 +118,25 @@ async function start() {
   await fit();
   document.getElementById('fit').onclick = () => { reach(); graph.fitView(); };
   let selected = null;
-  let marks = {};
+  // A Map, so a recipe ID such as `constructor` never reads an inherited property.
+  let marks = new Map();
   // Every element's states: its comparison mark under the selection, which draws over it.
-  const statesOf = id => [...(marks[id] ? [marks[id]] : []), ...(id === selected ? ['selected'] : [])];
+  const statesOf = id => [...(marks.has(id) ? [marks.get(id)] : []), ...(id === selected ? ['selected'] : [])];
   addEventListener('message', event => {
     let message;
     try { message = JSON.parse(event.data); } catch { return; }
     if (message?.v !== VERSION) return;
     const touched = new Set();
-    if ('marks' in message) {
-      const next = {};
-      for (const [id, mark] of Object.entries(message.marks ?? {})) {
-        if (ids.has(id) && MARKS.includes(mark)) next[id] = mark;
+    if (Object.hasOwn(message, 'marks')) {
+      const given = message.marks;
+      if (given === null || typeof given !== 'object' || Array.isArray(given)) return;
+      const entries = Object.entries(given);
+      if (entries.length > ids.size) return;
+      const next = new Map();
+      for (const [id, mark] of entries) {
+        if (ids.has(id) && typeof mark === 'string' && MARKS.includes(mark)) next.set(id, mark);
       }
-      for (const id of [...Object.keys(marks), ...Object.keys(next)]) touched.add(id);
+      for (const id of [...marks.keys(), ...next.keys()]) touched.add(id);
       marks = next;
     } else {
       const next = message.selection;

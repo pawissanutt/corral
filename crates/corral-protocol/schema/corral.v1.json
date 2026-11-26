@@ -2082,8 +2082,11 @@
       "CompareLink": {
         "oneOf": [
           {
-            "description": "The task's submitted patch for `path` (`DetailRef::ReviewFile`).",
+            "description": "The task's submitted patch for `path` (`DetailRef::ReviewFile`), whose candidate head\nis `head`.",
             "properties": {
+              "head": {
+                "type": "string"
+              },
               "kind": {
                 "const": "diff",
                 "type": "string"
@@ -2098,13 +2101,17 @@
             "required": [
               "kind",
               "task",
+              "head",
               "path"
             ],
             "type": "object"
           },
           {
-            "description": "The task's System Impact (`DetailRef::SystemReview`).",
+            "description": "The task's System Impact (`DetailRef::SystemReview`) of the submission `head`.",
             "properties": {
+              "head": {
+                "type": "string"
+              },
               "kind": {
                 "const": "impact",
                 "type": "string"
@@ -2115,7 +2122,8 @@
             },
             "required": [
               "kind",
-              "task"
+              "task",
+              "head"
             ],
             "type": "object"
           }
@@ -2228,7 +2236,7 @@
             "type": "object"
           },
           {
-            "description": "Re-read a comparison an earlier reply resolved, at exactly that commit.",
+            "description": "Re-read a comparison an earlier reply resolved, at exactly that commit. A pinned head\nmust still be the observed head or one of its ancestors; a pinned candidate must still be\na recorded submission of the task's latest worker run.",
             "properties": {
               "commit": {
                 "type": "string"

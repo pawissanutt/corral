@@ -185,25 +185,29 @@ CompareResolution, elements, selected }`.
   (the latest submission of the artifact's own task's worker run), or `{kind: "pinned", origin,
   commit}`. The first two are resolved once; the reply's `resolved { origin, commit, candidate,
   current_candidate }` names the commit, and every later read of that comparison sends it back
-  as `pinned`, so a head that moves mid-read does not change it. A pinned candidate must still
-  be a recorded submission of the task's latest worker run. `pending` means the head is not
+  as `pinned`, so a head that moves mid-read does not change it. A pinned head must still be
+  the observed head or one of its ancestors, and a pinned candidate a recorded submission of
+  the task's latest worker run; anything else is `unavailable`. `pending` means the head is not
   observed yet; `unavailable` says why nothing can be compared (a project library artifact has
   no candidate, a commit is not local, the subject is outside the artifact's project).
-- `elements` lists, in recipe order, every element with a `source` binding and its
-  `SourceChange`: `unchanged`, `changed { path }`, `moved { path, first? }` (identical lines or
-  file elsewhere: the nearest exact copy of the bound lines, or Git's rename detection),
-  `removed` (absent at the target and not renamed), `added`, or `unknown { reason }` when a side
-  cannot be read. Only Git objects at the two commits are compared.
+- Without `element`, `elements` lists, in recipe order, every element with a `source` binding
+  and its `SourceChange`: `unchanged`, `changed { path }`, `moved { path, first? }` (the
+  identical lines where Git's line diff places them, the single exact copy of lines the diff
+  deleted, or a file Git's rename detection found), `removed` (absent at the target and not
+  renamed), `added`, or `unknown { reason }` when a side cannot be read or Git's answer
+  exceeds its bound. Only Git objects at the two commits are compared. A read with `element`
+  leaves `elements` empty; ask for the summary separately.
 - With `element`, `selected` carries that element at both commits: the base source and entity
   exactly as the element detail resolves them (a removed file stays readable at the base), the
-  target source at its moved or renamed place, and an `EntityChange`. A relationship delta
+  target source where Git's line diff places the bound lines (`missing` when they were
+  deleted), and an `EntityChange`. A relationship delta
   (`changed { location?, added, removed }` of file references, or `removed`) is reported only
   when both sides resolved with complete file reads, no failed or skipped coverage, no omitted
-  rows and the same facts provider; otherwise it is `insufficient { reason }`, never a change.
+  rows, the same facts provider and no provider error, skip, omission or dropped file; otherwise it is `insufficient { reason }`, never a change.
   `pending` asks again while a facts snapshot is prepared.
-- `links` names the candidate's own `diff { task, path }` (a path its stored patch holds) and
-  `impact { task }`, only while the compared commit is the task's latest submission; an observed
-  head has no task diff.
+- `links` names the candidate's own `diff { task, head, path }` (a path its stored patch holds)
+  and `impact { task, head }`, only while the compared commit is the task's latest submission of
+  the same run; an observed head has no task diff.
 
 In the app, a recipe diagram offers **Compare: Off / Project head / Task candidate** under the
 graph. The status line names the pinned commit; changed, moved, removed, added and not-compared
