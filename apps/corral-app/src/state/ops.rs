@@ -15,6 +15,11 @@ use crate::model::{Act, ActStatus, Id};
 
 const NO_SOURCE: &str = "Not connected. Choose Preview explicitly to use sample data.";
 
+/// How long a board without a new walk is taken to show a move's outcome. corrald flushes the
+/// submitting connection right after its reply; under write contention the walk came up to
+/// 1.6 s after it in the T-2145 walks.
+const QUIET_BOARD: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// The same operation, forced or not, as one already sent. Operations that add something
 /// (a task, a comment, a reply, an artifact, usage) may be meant twice and never count.
 fn same(sent: &Act, act: &Act) -> bool {
@@ -160,9 +165,42 @@ impl AppState {
                 .with(|confirmed| confirmed.values().any(|(sent, _)| sent.op == *op))
     }
 
+    /// corrald sends no walk when the rows it would send equal what this connection already
+    /// holds, so a board that stays quiet this long after the reply, the link up, already shows
+    /// the truth: a move that never applied, or one moved back before the board looked.
+    fn release_on_quiet_board(self) {
+        let timer = stored(None::<Spawned<()>>);
+        let last = stored(None::<(usize, u64, u64)>);
+        effect(move || {
+            let waiting = self.catching_up.with(BTreeMap::len);
+            let (up, mark) = self.feed.with(|feed| {
+                (
+                    feed.link == Link::Up,
+                    (waiting, feed.board.subscriptions, feed.board.walk_rev),
+                )
+            });
+            let quiet_since = (waiting > 0 && up).then_some(mark);
+            if last.with(|last| *last == quiet_since) {
+                return;
+            }
+            let _ = last.replace(quiet_since);
+            if let Some(old) = timer.replace(None) {
+                old.cancel();
+            }
+            if quiet_since.is_some() {
+                let task = set_timeout(QUIET_BOARD, move || {
+                    self.catching_up.set(BTreeMap::new());
+                });
+                let _ = timer.replace(Some(task));
+            }
+        });
+    }
+
     /// A move that may have been applied stays under way until the board shows a walk taken
-    /// after it (`act::board_caught_up`); a stalled board keeps it so, and nothing resends it.
+    /// after it (`act::board_caught_up`), or the board stays quiet (`release_on_quiet_board`).
+    /// Nothing resends it.
     fn settle_catching_up(self) {
+        self.release_on_quiet_board();
         effect(move || {
             let caught: Vec<Id> = self.catching_up.with(|confirmed| {
                 self.feed.with(|feed| {
