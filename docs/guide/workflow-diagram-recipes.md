@@ -150,7 +150,27 @@ than interpreting the ID against a new artifact. Do not follow a replacement poi
   attribution have no candidate identity. Git source still works when the provider is pending,
   disabled, or unavailable.
 
-Task citations and the artifact list open the same graph or raw fallback. A future viewer sends
-only a stable element ID scoped to the open artifact view; Rust owns lookup, evidence, and
-navigation. The same IDs power the keyboard-accessible list. Graph rendering, evidence
-resolution, and comparison with a different revision are separate work.
+## Reading a recipe in the Corral app
+
+A task citation (`T-12:3`) and Activity › Artifacts open the same view. When corrald serves the
+artifact as `ready`, the app draws it in place of the raw text; `invalid` shows corrald's
+diagnostic over the raw text, and `not_recipe` keeps the ordinary text view.
+
+- On desktop and web, a first-party WebView draws the graph with AntV G6 bundled into the app
+  (no CDN or network; the page's Content-Security-Policy allows none). It receives only element
+  IDs, plain labels, kinds and edge geometry, never bindings, paths or the commit. A click sends
+  `{"v":1,"pick":"<id>"}`; Rust accepts it only when the open artifact's served recipe holds
+  that ID, and posts the selection back. Arbitrary HTML and Markdown artifacts never share this
+  page or its bridge.
+- Layout is computed for any recipe: edges running back against the flow (found depth first
+  from `start` in recipe order) are laid out reversed so the flow reads from its start, edges
+  between the same two nodes in either direction bow apart, and a graph larger than the view is
+  fitted while a small one keeps its size.
+- Every form shows a list of every step and link (`diagram-el-<id>`) that the keyboard reaches
+  and that shares the graph's selection. A phone, a terminal, or a WebView that cannot start
+  says so and keeps the list.
+- The inspector shows what the recipe authored (marked as unverified), the pinning commit, any
+  recorded submission, the committed source lines, and what Corral found at that commit, with
+  its basis and coverage. A `pending` entity is asked again until it settles.
+
+Comparison with a different revision is separate work.

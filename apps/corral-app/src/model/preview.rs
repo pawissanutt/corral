@@ -9,6 +9,7 @@ mod build_ops;
 mod config;
 mod controls;
 mod details;
+mod diagram;
 mod effects;
 mod engine;
 mod explorer;
@@ -157,6 +158,7 @@ fn base(now: u64, date: String, clock: String, time_zone: Option<jiff::tz::TimeZ
         ASSISTANT_V1,
         CLOSED_V1,
         corral_protocol::app::CITATIONS_V1,
+        corral_protocol::app::ARTIFACT_DIAGRAM_V1,
         DEVICE_V1,
         STREAM_TERMINAL_V1,
     ] {

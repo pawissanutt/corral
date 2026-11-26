@@ -343,6 +343,16 @@ pub(super) fn build(feed: &Feed, target: &DetailRef) -> Result<DetailBody, Strin
         DetailRef::Artifact { reference } => {
             DetailBody::Artifact(super::artifacts::content(feed, reference)?)
         }
+        DetailRef::ArtifactDiagram { reference } => {
+            DetailBody::ArtifactDiagram(super::diagram::recipe(feed, reference)?)
+        }
+        DetailRef::ArtifactDiagramElement {
+            reference,
+            sha256,
+            element,
+        } => DetailBody::ArtifactDiagramElement(super::diagram::element(
+            feed, reference, sha256, element,
+        )?),
         DetailRef::Closed { before } => {
             let mut rows: Vec<_> = records(feed)
                 .into_iter()

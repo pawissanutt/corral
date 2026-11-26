@@ -142,22 +142,45 @@ fn serve(feed: &mut Feed, target: &DetailRef, pages: usize) {
 const LIBRARY: &str = "corral";
 const LIBRARY_NOTES: &str = "# Architecture notes\n\nThe app reaches corrald only through its socket; every engine operation stays enabled and corrald decides.\n";
 
+/// The sample's workflow recipe: the guide's submit-to-land example.
+pub(super) const RECIPE: &str =
+    include_str!("../../../../../docs/examples/submit-to-land.diagram.json");
+/// The library ordinal of [`RECIPE`].
+pub(super) const RECIPE_ID: u32 = 2;
+
 /// The sample's project-owned library rows.
-fn library(feed: &Feed) -> Vec<Artifact> {
-    vec![Artifact {
+pub(super) fn library(feed: &Feed) -> Vec<Artifact> {
+    let recipe = Artifact {
         task: LIBRARY.into(),
-        id: 1,
-        sha256: "4c1b".repeat(16),
-        bytes: LIBRARY_NOTES.len() as u64,
-        kind: ArtifactKind::Reference,
-        title: "architecture-notes.md".into(),
-        at: ago(feed, 6 * super::sample::DAY),
-        by: Actor::Owner,
+        id: RECIPE_ID,
+        sha256: "5d17".repeat(16),
+        bytes: RECIPE.len() as u64,
+        kind: ArtifactKind::Report,
+        title: "Submit to land".into(),
+        at: ago(feed, 2 * super::sample::DAY),
+        by: Actor::Agent,
         project: Some(LIBRARY.into()),
         run: None,
         replaces: None,
         replaced_by: None,
-    }]
+    };
+    vec![
+        recipe,
+        Artifact {
+            task: LIBRARY.into(),
+            id: 1,
+            sha256: "4c1b".repeat(16),
+            bytes: LIBRARY_NOTES.len() as u64,
+            kind: ArtifactKind::Reference,
+            title: "architecture-notes.md".into(),
+            at: ago(feed, 6 * super::sample::DAY),
+            by: Actor::Owner,
+            project: Some(LIBRARY.into()),
+            run: None,
+            replaces: None,
+            replaced_by: None,
+        },
+    ]
 }
 
 /// The artifact `reference` names, its content made from the sample's own facts.
@@ -190,6 +213,18 @@ pub(super) fn content(feed: &Feed, reference: &str) -> Result<ArtifactPage, Stri
             .iter()
             .find(|row| Some(row.id) == key)
             .ok_or_else(|| format!("not_found: artifact {reference}"))?;
+        if key == Some(RECIPE_ID) {
+            return Ok(ArtifactPage {
+                task: task.into(),
+                key: RECIPE_ID.to_string(),
+                // Titled in words: corrald names no media type and records no format for it.
+                media_type: None,
+                source_format: None,
+                encoding: ArtifactEncoding::Text,
+                content: RECIPE.into(),
+                truncated: false,
+            });
+        }
         return Ok(ArtifactPage {
             task: task.into(),
             key: key.unwrap_or_default().to_string(),

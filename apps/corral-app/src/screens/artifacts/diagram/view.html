@@ -1,0 +1,106 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+<style>
+html{color-scheme:light dark}body{margin:0;font:13px system-ui,sans-serif;background:var(--bg);color:var(--ink);--bg:#f7f8fa;--ink:#1d2733;--rule:#c9d1db;--dot:#dfe4ea}
+@media (prefers-color-scheme:dark){body{--bg:#141b23;--ink:#eaf0f6;--rule:#3a4756;--dot:#2c3742}}
+#graph{height:calc(100vh - 37px);background:radial-gradient(circle,var(--dot) 1px,transparent 1px) 0 0/19px 19px}
+header{height:36px;display:flex;align-items:center;gap:8px;padding:0 10px;border-bottom:1px solid var(--rule)}header span{margin-right:auto;opacity:.75}
+button{color:inherit;background:transparent;border:1px solid var(--rule);border-radius:6px;padding:3px 10px;font:inherit}button:focus-visible{outline:2px solid #2aa198}
+</style>
+<header><span>Drag to pan · scroll to zoom</span><button id="fit" type="button">Fit</button></header>
+<div id="graph"></div>
+<script id="diagram-data" type="application/json"><!--DATA--></script>
+<script>/*G6-BUNDLE*/</script>
+<script>
+'use strict';
+// First-party viewer: draws the IDs and plain labels the app hands it and reports only the ID
+// of a clicked element. It never reads source, follows links or runs anything it is given.
+const VERSION = 1;
+const input = JSON.parse(document.getElementById('diagram-data').textContent);
+const ids = new Set([...input.nodes, ...input.edges].map(e => e.id));
+const notify = value => window.nsh?.postMessage(value);
+const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+const ink = dark ? '#eaf0f6' : '#1d2733';
+const card = dark ? '#202b37' : '#ffffff';
+const quiet = dark ? '#8398ad' : '#7a8896';
+const pick = dark ? '#83e2d6' : '#0f8a7e';
+const pickGround = dark ? '#23474a' : '#dcf3ef';
+const stroke = {step: quiet, decision: dark ? '#eac982' : '#b7862a', end: dark ? '#83e2d6' : '#2a8d84'};
+const host = document.getElementById('graph');
+const measure = document.createElement('canvas').getContext('2d');
+measure.font = '600 13px system-ui, sans-serif';
+// A card fits its label up to two lines; past that the label wraps within the widest card.
+const widthOf = label => Math.min(220, Math.max(92, Math.ceil(measure.measureText(label).width) + 30));
+const data = {
+  nodes: input.nodes.map(n => ({id: n.id, data: {label: n.label, kind: n.kind, start: n.start, w: widthOf(n.label)}})),
+  // A back edge is laid out from its target, so the layout's ranks follow the flow from its
+  // start; its arrow stays on its own target and its bow on its own side.
+  edges: input.edges.map(e => ({
+    id: e.id, source: e.back ? e.target : e.source, target: e.back ? e.source : e.target,
+    data: {label: e.label ?? '', kind: e.kind, bow: e.back ? -e.bow : e.bow, back: e.back},
+  })),
+};
+async function start() {
+  const graph = new G6.Graph({
+    container: host, width: host.clientWidth, height: host.clientHeight,
+    padding: 24, animation: false, zoomRange: [0.25, 2.5], data,
+    layout: {type: 'antv-dagre', rankdir: 'LR', nodesep: 46, ranksep: 84},
+    node: {
+      type: 'rect',
+      style: {
+        size: d => [d.data.w, 46], radius: d => d.data.kind === 'decision' ? 18 : 8,
+        fill: card, stroke: d => stroke[d.data.kind] ?? quiet,
+        lineWidth: d => d.data.start ? 2.4 : 1.4, lineDash: d => d.data.kind === 'end' ? [5, 3] : 0,
+        labelText: d => d.data.label, labelPlacement: 'center', labelFill: ink,
+        labelFontWeight: 600, labelFontSize: 13, labelWordWrap: true,
+        labelMaxWidth: d => d.data.w - 16, labelMaxLines: 2, labelTextOverflow: 'ellipsis',
+        cursor: 'pointer',
+      },
+      state: {selected: {fill: pickGround, stroke: pick, lineWidth: 3}},
+    },
+    edge: {
+      type: 'quadratic',
+      style: {
+        stroke: quiet, lineWidth: 1.5, increasedLineWidthForHitTesting: 10,
+        endArrow: d => !d.data.back, startArrow: d => d.data.back, endArrowSize: 8,
+        startArrowSize: 8, curveOffset: d => d.data.bow,
+        labelText: d => d.data.label, labelAutoRotate: false, labelBackground: true,
+        labelBackgroundFill: card, labelBackgroundStroke: quiet, labelBackgroundLineWidth: 1,
+        labelBackgroundRadius: 4, labelPadding: [2, 6], labelFill: ink, labelFontSize: 12,
+        labelMaxWidth: 160, labelTextOverflow: 'ellipsis', cursor: 'pointer',
+      },
+      state: {selected: {stroke: pick, lineWidth: 3, labelBackgroundFill: pickGround, labelBackgroundStroke: pick}},
+    },
+    behaviors: ['drag-canvas', 'zoom-canvas'],
+  });
+  const report = e => { if (ids.has(e.target.id)) notify(JSON.stringify({v: VERSION, pick: e.target.id})); };
+  graph.on('node:click', report);
+  graph.on('edge:click', report);
+  // Fit the graph to the view, never enlarging a small one past its own size; centred.
+  const fit = async () => {
+    await graph.fitView();
+    if (graph.getZoom() > 1) await graph.zoomTo(1);
+    await graph.fitCenter();
+  };
+  await graph.render();
+  await fit();
+  document.getElementById('fit').onclick = () => graph.fitView();
+  let selected = null;
+  addEventListener('message', event => {
+    let message;
+    try { message = JSON.parse(event.data); } catch { return; }
+    if (message?.v !== VERSION) return;
+    const next = message.selection;
+    if (next !== null && !(typeof next === 'string' && ids.has(next))) return;
+    const states = {};
+    if (selected) states[selected] = [];
+    if (next) states[next] = ['selected'];
+    selected = next;
+    graph.setElementState(states, false).catch(console.error);
+  });
+  new ResizeObserver(() => { graph.resize(host.clientWidth, host.clientHeight); fit().catch(console.error); }).observe(host);
+  notify('ready');
+}
+start().catch(error => { console.error(error); host.textContent = 'The diagram could not be drawn.'; notify('failed'); });
+</script>

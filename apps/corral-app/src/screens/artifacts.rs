@@ -10,6 +10,7 @@
 //! result), "artifacts-count", "btn-load-more", "btn-retry-artifacts", and those of `shown`.
 
 mod browser;
+mod diagram;
 mod save;
 mod shown;
 
@@ -100,6 +101,34 @@ fn keep_loaded(app: AppState, page: Memo<Page>) {
         })
     });
     crate::screens::task::keep::keep_details(app, owner, None);
+    // A shown artifact that may be a workflow recipe is checked whole by corrald, and the
+    // selected element's evidence is read at that recipe's digest.
+    let diagram_reads = computed(move || {
+        page.with(|page| {
+            page.full
+                .as_ref()
+                .or(page.preview.as_ref())
+                .map(|shown| {
+                    shown
+                        .diagram_read
+                        .iter()
+                        .cloned()
+                        .chain(
+                            shown
+                                .diagram
+                                .as_ref()
+                                .and_then(artifacts::diagram::selected_target),
+                        )
+                        .collect()
+                })
+                .unwrap_or_default()
+        })
+    });
+    crate::screens::task::keep::keep_details(
+        app,
+        diagram_reads,
+        Some(corral_protocol::app::ARTIFACT_DIAGRAM_V1),
+    );
     let shown = computed(move || {
         page.with(|page| {
             page.full

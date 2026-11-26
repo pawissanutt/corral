@@ -11,6 +11,7 @@ use super::browser::{self, Opens};
 use super::save::{self, Downloads};
 use crate::model::Form;
 use crate::model::artifacts::browser::VIEW_SOURCE;
+use crate::model::artifacts::diagram::Graph;
 use crate::model::artifacts::{
     Action, BACK, Body, Content, LOADING_CONTENT, Line, OPEN_FULL, PREVIEW_LABEL, Page, Preview,
 };
@@ -45,14 +46,15 @@ pub(super) fn preview(
     downloads: Downloads,
     opens: Opens,
 ) -> AnyElement {
-    let shown = computed(move || page.with(|page| page.preview.clone()));
+    let shown = computed(move || page.with(|page| page.preview.clone().map(bare)));
+    let graph = computed(move || page.with(|page| graph_of(page.preview.as_ref())));
     let terminal = app.form == Form::Terminal;
     view()
         .test_id("artifact-preview")
         .role(AccessibilityRole::Region)
         .label(PREVIEW_LABEL)
         .child(dynamic(move || {
-            let Some(preview) = shown.get() else {
+            let Some((preview, drawn)) = shown.get() else {
                 return view().into_element();
             };
             untracked(|| {
@@ -78,7 +80,7 @@ pub(super) fn preview(
                     .child(save::note(app, downloads, &preview.save.reference))
                     .children(html_note(app, &preview, opens))
                     .when(terminal, |part| part.child(term::blank()))
-                    .child(content(app, &preview.content));
+                    .child(body_of(app, &preview, drawn, graph));
                 measure(app, PREVIEW_MEASURE, shown.into_element())
             })
         }))
@@ -141,9 +143,10 @@ pub(super) fn full(
     downloads: Downloads,
     opens: Opens,
 ) -> AnyElement {
-    let shown = computed(move || page.with(|page| page.full.clone()));
+    let shown = computed(move || page.with(|page| page.full.clone().map(bare)));
+    let graph = computed(move || page.with(|page| graph_of(page.full.as_ref())));
     dynamic(move || {
-        let Some(preview) = shown.get() else {
+        let Some((preview, drawn)) = shown.get() else {
             return view().into_element();
         };
         untracked(|| {
@@ -177,7 +180,7 @@ pub(super) fn full(
                 .when(terminal, |part| part.child(term::blank()))
                 .child(facts)
                 .when(terminal, |part| part.child(term::blank()))
-                .child(content(app, &preview.content))
+                .child(body_of(app, &preview, drawn, graph))
                 .into_element();
             view()
                 .flex_1()
@@ -199,6 +202,32 @@ pub(super) fn full(
         })
     })
     .into_element()
+}
+
+/// The preview without its diagram, and whether it has one: a selection moving through the
+/// diagram changes only the diagram, so the page around it (and its WebView) is not rebuilt.
+fn bare(mut preview: Preview) -> (Preview, bool) {
+    let drawn = preview.diagram.take().is_some();
+    preview.diagram_read = None;
+    (preview, drawn)
+}
+
+fn graph_of(preview: Option<&Preview>) -> Option<Graph> {
+    preview.and_then(|preview| preview.diagram.clone())
+}
+
+/// A workflow recipe corrald served as one is drawn as its diagram; anything else as its content.
+fn body_of(
+    app: AppState,
+    preview: &Preview,
+    drawn: bool,
+    graph: Memo<Option<Graph>>,
+) -> AnyElement {
+    if drawn {
+        super::diagram::diagram(app, graph)
+    } else {
+        content(app, &preview.content)
+    }
 }
 
 /// The content as its kind is drawn, then what is left out of it.

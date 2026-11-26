@@ -8,6 +8,9 @@
 
 pub mod browser;
 mod content;
+pub mod diagram;
+#[cfg(test)]
+mod diagram_tests;
 pub mod download;
 pub mod mermaid;
 #[cfg(test)]
@@ -70,6 +73,9 @@ pub struct State {
     pub all: bool,
     /// The cited section the full view shows of a Markdown artifact (`4-fact-model`).
     pub section: Option<String>,
+    /// The selected element of a workflow recipe: the artifact's reference and the element's
+    /// ID, accepted only while that artifact shows and its served recipe holds the ID.
+    pub pick: Option<(String, String)>,
 }
 
 /// A move of the selection through the results.
@@ -103,6 +109,11 @@ pub enum Action {
     Cite {
         reference: String,
         section: Option<String>,
+    },
+    /// Select an element of the shown workflow recipe, from its graph or its list.
+    Pick {
+        reference: String,
+        element: String,
     },
 }
 
@@ -359,10 +370,24 @@ pub fn more(state: &State, feed: &Feed) -> Option<DetailGet> {
 
 impl State {
     pub fn act(&mut self, action: Action, feed: &Feed) -> Vec<Effect> {
-        if !matches!(action, Action::Cite { .. }) {
+        if !matches!(action, Action::Cite { .. } | Action::Pick { .. }) {
             self.section = None;
         }
         match action {
+            Action::Pick { reference, element } => {
+                let shown = match &self.full {
+                    Some(full) => Some(full.clone()),
+                    None => {
+                        let (rows, _) = visible(self, feed);
+                        selected_at(self, &rows).map(|at| rows[at].reference())
+                    }
+                };
+                if shown.as_deref() == Some(reference.as_str())
+                    && diagram::holds(feed, &reference, &element)
+                {
+                    self.pick = Some((reference, element));
+                }
+            }
             Action::Query(text) => {
                 self.query = text;
                 self.selected = None;
@@ -442,7 +467,9 @@ impl State {
 
     /// Escape: back from full size, else clear a typed filter; whether it did either.
     pub fn escape(&mut self) -> bool {
-        if self.full.take().is_some() {
+        if self.full.is_some() && self.pick.take().is_some() {
+            true
+        } else if self.full.take().is_some() {
             self.section = None;
             self.focus = self.focus.wrapping_add(1);
             true
@@ -508,7 +535,7 @@ pub struct Results {
 }
 
 /// The selected artifact: its facts, its content, and its task.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Preview {
     pub reference: String,
     /// What corrald is asked for to show it: its reference, or a cited section's.
@@ -526,6 +553,10 @@ pub struct Preview {
     pub save: Save,
     /// A standalone HTML page, which Open in browser opens and View source reads.
     pub html: bool,
+    /// The whole artifact checked as a workflow recipe, while it may be one.
+    pub diagram_read: Option<DetailRef>,
+    /// The recipe corrald served `ready`, drawn in the content's place.
+    pub diagram: Option<diagram::Graph>,
 }
 
 /// The whole artifact a download saves, and what its bytes must match.
@@ -539,7 +570,7 @@ pub struct Save {
 
 /// The finder as every form shows it: the results and the selected artifact's preview, or that
 /// artifact full size in their place.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Page {
     pub results: Results,
     pub preview: Option<Preview>,
@@ -605,7 +636,13 @@ fn row(feed: &Feed, artifact: &Artifact) -> Row {
     }
 }
 
-fn preview(feed: &Feed, artifact: &Artifact, form: Form, full: bool) -> Preview {
+fn preview(
+    feed: &Feed,
+    artifact: &Artifact,
+    form: Form,
+    full: bool,
+    pick: Option<&(String, String)>,
+) -> Preview {
     let task = Id::from(artifact.task.as_str());
     let hash = if full {
         artifact.sha256.clone()
@@ -655,7 +692,11 @@ fn preview(feed: &Feed, artifact: &Artifact, form: Form, full: bool) -> Preview 
     if let Some(by) = &artifact.replaced_by {
         facts.push(("Replaced by", by.clone()));
     }
+    let mut content = content(feed, artifact, form, full);
+    let (diagram_read, diagram) = diagram::of(feed, artifact, &mut content, pick);
     Preview {
+        diagram_read,
+        diagram,
         reference: artifact.reference(),
         read: artifact.reference(),
         title: artifact.title.clone(),
@@ -663,7 +704,7 @@ fn preview(feed: &Feed, artifact: &Artifact, form: Form, full: bool) -> Preview 
         task,
         facts,
         summary,
-        content: content(feed, artifact, form, full),
+        content,
         html: is_html(feed, artifact),
         save: Save {
             reference: artifact.reference(),
@@ -703,9 +744,12 @@ pub fn page(state: &State, feed: &Feed, form: Form) -> Page {
             Some(artifact) => (*artifact).clone(),
             None => crate::model::cite::held(feed, full, Reference::parse(full)?.task())?,
         };
-        let mut shown = preview(feed, &artifact, form, true);
+        let mut shown = preview(feed, &artifact, form, true, state.pick.as_ref());
         // corrald cuts a cited section by the engine's rules; the app shows what it serves.
         if let Some(section) = &state.section {
+            // A section is Markdown, never a whole recipe.
+            shown.diagram = None;
+            shown.diagram_read = None;
             shown.read = format!("{full}#{section}");
             let cited = content_of(feed, &artifact, &shown.read, form, true);
             let note = format!(
@@ -746,7 +790,7 @@ pub fn page(state: &State, feed: &Feed, form: Form) -> Page {
             count,
             more,
         },
-        preview: shown.map(|artifact| preview(feed, artifact, form, false)),
+        preview: shown.map(|artifact| preview(feed, artifact, form, false, state.pick.as_ref())),
         full,
         all: state.all,
     }
