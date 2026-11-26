@@ -186,8 +186,9 @@ CompareResolution, elements, selected }`.
   commit}`. The first two are resolved once; the reply's `resolved { origin, commit, candidate,
   current_candidate }` names the commit, and every later read of that comparison sends it back
   as `pinned`, so a head that moves mid-read does not change it. A pinned head must be one
-  this daemon resolved for a comparison (kept across later head moves, branch switches and
-  rewrites, until the daemon restarts), else a recent commit on the current head's first-parent
+  this daemon resolved for a comparison, including one it accepted through the fallback (kept
+  across later head moves, branch switches and rewrites; the oldest of more than 1,024 are
+  forgotten, as are all on restart), else a recent commit on the current head's first-parent
   line. A pinned candidate must be a recorded submission of any of the task's worker runs, so a
   new run or submission does not take it away. Anything else is `unavailable`. `pending` means the head is not
   observed yet; `unavailable` says why nothing can be compared (a project library artifact has
@@ -196,8 +197,8 @@ CompareResolution, elements, selected }`.
   and its `SourceChange`: `unchanged`, `changed { path }`, `moved { path, first? }` (the
   identical lines where Git's line diff places them, the single exact copy of lines the diff
   deleted, or a file Git's rename detection found), `removed` (absent at the target and not
-  renamed), `added`, or `unknown { reason }` when a side cannot be read, the bound span is not
-  in the file at the pinned commit, or Git's answer fails or exceeds its bound. Only Git objects at the two commits are compared. A read with `element`
+  renamed), `added`, or `unknown { reason }` when a side cannot be read, the whole bound span
+  is not in the file at the pinned commit, or Git's answer fails or exceeds its bound. Only Git objects at the two commits are compared. A read with `element`
   leaves `elements` empty; ask for the summary separately.
 - With `element`, `selected` carries that element at both commits: the base source and entity
   exactly as the element detail resolves them (a removed file stays readable at the base), the
@@ -208,7 +209,8 @@ CompareResolution, elements, selected }`.
   when both sides resolved with complete file reads, no failed or skipped coverage, no omitted
   rows, the same facts provider and no provider error, skip, omission or dropped file, and
   every added or removed reference's own file was read completely at the commit lacking it
-  (or deleted outright, not renamed to a file Corral does not read). Otherwise it is
+  (or deleted outright: nothing at its path, and not renamed to a file Corral does not read). A
+  provider that supplies references without reporting the files it read leaves this unknown. Otherwise it is
   `insufficient { reason }`, never a change.
   `pending` asks again while a facts snapshot is prepared.
 - `links` names the candidate's own `diff { task, head, path }` (a path its stored patch holds)
@@ -219,6 +221,8 @@ In the app, a recipe diagram offers **Compare: Off / Project head / Task candida
 graph. The status line names the pinned commit; changed, moved, removed, added and not-compared
 elements are marked on the graph and in words in the list; the inspector adds the selected
 element at the comparison commit with its links to the task's Changes diff or Impact. A link
-names the submission it was served for: Changes show that submission (the diff with the named
-file expanded, once the task has loaded) or say they now hold another and offer the current one,
-never another revision under the link's name.
+names the submission it was served for. Changes then draw only while the review, each expanded
+file's patch page (`PatchPage.head`) and each drilled Impact level name that submission, with
+that run's own summary and the named file expanded once the task has loaded; otherwise they say
+why and offer the current submission. The expectation lasts for that visit: any other navigation
+lets it go.

@@ -154,6 +154,7 @@ pub(super) fn read(
                     patch,
                     truncated,
                     candidate: None,
+                    head: None,
                 })
             }
         ),

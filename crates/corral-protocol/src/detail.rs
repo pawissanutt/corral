@@ -360,6 +360,10 @@ pub struct PatchPage {
     /// Immutable identity of the run whose stored diff is being paged.
     #[serde(default)]
     pub candidate: Option<ReviewCandidate>,
+    /// For a task's stored patch: the head of the submission it belongs to, whatever the task's
+    /// status, so a page can be told from another submission's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head: Option<String>,
 }
 
 #[cfg(test)]

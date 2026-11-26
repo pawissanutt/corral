@@ -32,6 +32,11 @@ impl AppState {
     /// Selects a live record and pushes its page: the session's, or the task's for a task, a
     /// plan and a review candidate. A page shows its record whatever the project scope is.
     pub fn open_live(&self, live: Live) {
+        // A diagram comparison's link expects a submission for one visit only; any navigation
+        // lets it go (a link sets it again after opening the task).
+        if self.impact.with_untracked(|state| state.expect.is_some()) {
+            self.impact.update(|state| state.expect = None);
+        }
         if matches!(live, Live::Session(_)) {
             self.close(Overlay::Ask);
         }

@@ -40,77 +40,134 @@ pub(super) fn view_switch(app: AppState, id: Id) -> AnyElement {
 
 fn content(app: AppState, id: Id, showing: View) -> AnyElement {
     let task = id.to_string();
-    // Without a link's expectation (set before a link opens the page) the view is as it was.
-    let linked = app.impact.with_untracked(|state| {
-        state.expect.is_some() && state.task.as_deref() == Some(task.as_str())
-    });
-    if !linked {
-        return match showing {
-            View::Diff => diff_view(app, id),
-            View::Impact => super::impact::impact(app, id),
-        };
-    }
-    // A diagram comparison's link names a submission: Changes show it or say why not.
-    let verdict = computed(move || {
-        let expect = app.impact.with(|state| {
-            state
-                .expect
-                .clone()
-                .filter(|_| state.task.as_deref() == Some(task.as_str()))
-        })?;
-        let verdict = app
-            .feed
-            .with(|feed| expected::verdict(feed, &task, showing, &expect));
-        Some((expect, verdict))
-    });
-    expand_linked(app, id.clone(), showing, verdict);
-    let refused = computed(move || match verdict.get() {
-        Some((_, Verdict::Other(why))) => Some(why),
-        _ => None,
-    });
-    let note = computed(move || match verdict.get() {
-        Some((expect, Verdict::Same)) => Some(expected::shown_note(&expect)),
-        _ => None,
+    // A link's expectation may be set after the page is built; the guard follows it.
+    let linked = computed(move || {
+        app.impact
+            .with(|state| state.expect.is_some() && state.task.as_deref() == Some(task.as_str()))
     });
     dynamic(move || {
         let id = id.clone();
-        match refused.get() {
-            Some(why) => untracked(|| refusal(app, id, why)),
-            None => untracked(|| {
-                let body = match showing {
-                    View::Diff => diff_view(app, id),
-                    View::Impact => super::impact::impact(app, id),
+        let linked = linked.get();
+        untracked(move || {
+            if linked {
+                linked_content(app, id, showing)
+            } else {
+                unlinked(app, id, showing)
+            }
+        })
+    })
+    .into_element()
+}
+
+fn unlinked(app: AppState, id: Id, showing: View) -> AnyElement {
+    match showing {
+        View::Diff => diff_view(app, id, false),
+        View::Impact => super::impact::impact(app, id),
+    }
+}
+
+/// Changes opened by a diagram comparison's link: drawn only while every detail they draw from
+/// names the linked submission; else why not, with a way to the current one at all times.
+fn linked_content(app: AppState, id: Id, showing: View) -> AnyElement {
+    let task = id.to_string();
+    // The root detail is kept loaded here, since nothing is drawn until it answers.
+    let roots = {
+        let task = task.clone();
+        computed(move || vec![expected::root(&task, showing)])
+    };
+    super::keep::keep_details(app, roots, None);
+    let verdict = {
+        let task = task.clone();
+        computed(move || {
+            let (expect, levels) = app.impact.with(|state| {
+                let expect = state
+                    .expect
+                    .clone()
+                    .filter(|_| state.task.as_deref() == Some(task.as_str()));
+                (expect, state.map.trail.clone())
+            });
+            let expect = expect?;
+            let patches: Vec<String> = app.review.with(|state| {
+                state
+                    .expanded
+                    .iter()
+                    .filter(|(at, _)| at.as_str() == task)
+                    .map(|(_, path)| path.clone())
+                    .collect()
+            });
+            let drawn = expected::Drawn {
+                patches: &patches,
+                levels: &levels,
+            };
+            let verdict = app
+                .feed
+                .with(|feed| expected::verdict(feed, &task, showing, &expect, drawn));
+            Some((expect, verdict))
+        })
+    };
+    expand_linked(app, id.clone(), showing, verdict);
+    // Drawn only once confirmed, and torn down the moment a part names another submission.
+    let state = computed(move || match verdict.get() {
+        // Let go: `content` draws the unlinked view in this one's place.
+        None => None,
+        Some((_, Verdict::Same)) => Some(Ok(true)),
+        Some((_, Verdict::Waiting)) => Some(Ok(false)),
+        Some((_, Verdict::Other(why))) => Some(Err(why)),
+    });
+    let note = computed(move || verdict.get().map(|(expect, v)| expected::note(&expect, &v)));
+    let current = {
+        let id = id.clone();
+        move || {
+            let id = id.clone();
+            button(
+                app,
+                "Show the current submission",
+                ButtonKind::Ghost,
+                "btn-changes-current",
+                move || app.impact_act(id.as_str(), Action::Expect(None)),
+            )
+        }
+    };
+    dynamic(move || {
+        let id = id.clone();
+        let current = current.clone();
+        let shown = state.get();
+        untracked(move || match shown {
+            Some(Err(why)) => view()
+                .test_id("changes-expected-refused")
+                .gap(px(8.0))
+                .child(plain(app, why))
+                .child(current())
+                .into_element(),
+            shown => {
+                let body = match (shown, showing) {
+                    (Some(Ok(true)), View::Diff) => Some(diff_view(app, id, true)),
+                    (Some(Ok(true)), View::Impact) => Some(super::impact::impact(app, id)),
+                    // Unconfirmed: nothing that could belong to another submission is drawn.
+                    _ => None,
                 };
                 view()
                     .when(showing == View::Impact, |v| {
                         v.flex_1().min_h(px(0.0)).flex_col()
                     })
-                    .child(dynamic(move || {
-                        note.get()
-                            .map(|words| dim(app, words).test_id("changes-expected").into_element())
-                    }))
-                    .child(body)
+                    .child(
+                        view()
+                            .test_id("changes-expected")
+                            .flex_row()
+                            .flex_wrap()
+                            .items_center()
+                            .gap(px(8.0))
+                            .child(dynamic(move || {
+                                note.get().map(|words| dim(app, words).into_element())
+                            }))
+                            .child(current()),
+                    )
+                    .children(body)
                     .into_element()
-            }),
-        }
+            }
+        })
     })
     .into_element()
-}
-
-/// Changes holding another submission than the link read: never shown under its name.
-fn refusal(app: AppState, id: Id, why: String) -> AnyElement {
-    view()
-        .test_id("changes-expected-refused")
-        .gap(px(8.0))
-        .child(plain(app, why))
-        .child(button(
-            app,
-            "Show the current submission",
-            ButtonKind::Ghost,
-            "btn-changes-current",
-            move || app.impact_act(id.as_str(), Action::Expect(None)),
-        ))
-        .into_element()
 }
 
 /// Opens the linked file once the linked submission shows and the task is loaded, however cold.
@@ -185,10 +242,19 @@ pub(super) fn stacked(app: AppState, id: Id) -> AnyElement {
 }
 
 /// The worker's summary and the stored diff.
-fn diff_view(app: AppState, id: Id) -> AnyElement {
+/// Linked to a submission, the summary is that submission's run's, from the review checked.
+fn diff_view(app: AppState, id: Id, linked: bool) -> AnyElement {
     let summary = {
         let id = id.clone();
-        computed(move || app.feed.with(|feed| page::summary(feed, id.as_str())))
+        computed(move || {
+            app.feed.with(|feed| {
+                if linked {
+                    expected::summary(feed, id.as_str())
+                } else {
+                    page::summary(feed, id.as_str())
+                }
+            })
+        })
     };
     let summary = dynamic(move || {
         let content = match summary.get() {

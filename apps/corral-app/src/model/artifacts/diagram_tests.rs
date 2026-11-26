@@ -340,7 +340,7 @@ fn a_comparison_reads_elements_only_at_the_commit_it_pinned() {
 
 #[test]
 fn a_comparison_link_never_shows_a_later_submission_under_its_name() {
-    use crate::model::review::impact::expected::{Expected, Verdict, verdict};
+    use crate::model::review::impact::expected::{Drawn, Expected, Verdict, verdict};
     use crate::model::review::impact::{Action as ImpactAction, State as ImpactState, View};
     use corral_protocol::detail::{DetailRef, ReviewDetail};
     let review = |head: &str| -> ReviewDetail {
@@ -374,14 +374,65 @@ fn a_comparison_link_never_shows_a_later_submission_under_its_name() {
         path: Some("src/review.rs".into()),
     };
     let mut feed = Feed::default();
-    assert_eq!(verdict(&feed, "T-1", View::Diff, &linked), Verdict::Waiting);
+    assert_eq!(
+        verdict(&feed, "T-1", View::Diff, &linked, Drawn::default()),
+        Verdict::Waiting
+    );
     serve(&mut feed, &"a".repeat(40));
-    assert_eq!(verdict(&feed, "T-1", View::Diff, &linked), Verdict::Same);
+    assert_eq!(
+        verdict(&feed, "T-1", View::Diff, &linked, Drawn::default()),
+        Verdict::Same
+    );
     // A newer submission superseded the one the comparison read.
     serve(&mut feed, &"b".repeat(40));
     assert!(matches!(
-        verdict(&feed, "T-1", View::Diff, &linked),
+        verdict(&feed, "T-1", View::Diff, &linked, Drawn::default()),
         Verdict::Other(why) if why.contains("bbbbbbbbbbbb") && why.contains("aaaaaaaaaaaa")
+    ));
+    // The review still names the linked submission, but an expanded file's page, read on its
+    // own, belongs to the newer one: the whole view is withheld.
+    serve(&mut feed, &"a".repeat(40));
+    let page = DetailRef::ReviewFile {
+        task: "T-1".into(),
+        path: "src/review.rs".into(),
+    };
+    feed.details.insert(
+        detail_key(&page),
+        DetailCache {
+            transcript_seams: Default::default(),
+            target: page,
+            pages: Vec::new(),
+            loading: false,
+            stale: false,
+            error: None,
+            merged: Some(DetailBody::ReviewFile(corral_protocol::detail::PatchPage {
+                path: "src/review.rs".into(),
+                patch: "+new".into(),
+                truncated: false,
+                candidate: None,
+                head: Some("b".repeat(40)),
+            })),
+        },
+    );
+    let patches = ["src/review.rs".to_owned()];
+    let drawn = Drawn {
+        patches: &patches,
+        levels: &[],
+    };
+    assert!(matches!(
+        verdict(&feed, "T-1", View::Diff, &linked, drawn),
+        Verdict::Other(why) if why.contains("patch for src/review.rs")
+    ));
+    // A read that failed confirms nothing.
+    let root = DetailRef::Review { task: "T-1".into() };
+    feed.details.get_mut(&detail_key(&root)).unwrap().error =
+        Some(crate::model::daemon::ClientError {
+            code: "not_found".into(),
+            message: "task has no submitted worker run".into(),
+        });
+    assert!(matches!(
+        verdict(&feed, "T-1", View::Diff, &linked, Drawn::default()),
+        Verdict::Other(_)
     ));
     let mut state = ImpactState::default();
     state.follow("T-1");

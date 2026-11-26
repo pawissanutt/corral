@@ -99,6 +99,31 @@ pub fn committed_file(repo: &Path, rev: &Revision, path: &str) -> Result<Option<
     )
 }
 
+/// Whether any tree entry is at the literal `path` in the commit: a file of any mode, a
+/// symlink, a submodule or a directory. Unlike [`committed_file`], `false` means absent.
+pub fn path_in_tree(repo: &Path, rev: &Revision, path: &str) -> Result<bool> {
+    ensure!(
+        path.len() <= MAX_PATH
+            && !path.contains('\0')
+            && !path.split('/').any(|part| matches!(part, "" | "." | "..")),
+        "expected a bounded repository-relative Git path"
+    );
+    let tree = rev.tree();
+    check_oid(tree)?;
+    let abbrev = format!("--abbrev={}", tree.len());
+    let args = [
+        "--literal-pathspecs",
+        "ls-tree",
+        "--full-tree",
+        "-z",
+        &abbrev,
+        tree,
+        "--",
+        path,
+    ];
+    Ok(!bounded_output(repo, &args, None, path.len() + 128)?.is_empty())
+}
+
 impl CommittedFile {
     /// Read a one-based inclusive span, or leading lines when no span is supplied.
     /// At most 1 MiB of blob bytes and 200 excerpt lines are accepted, and the
@@ -495,6 +520,11 @@ mod tests {
             }
         ));
         assert!(committed_file(repo, &rev, "--option").unwrap().is_some());
+        // Not a regular file is not the same as absent: a referrer replaced by a symlink or a
+        // submodule was not deleted.
+        for (path, present) in [("symlink", true), ("gitlink", true), ("missing", false)] {
+            assert_eq!(path_in_tree(repo, &rev, path).unwrap(), present, "{path}");
+        }
     }
 
     #[test]

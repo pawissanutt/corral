@@ -99,6 +99,7 @@ fn patch(path: &str, patch: &str, truncated: bool) -> PatchPage {
         patch: patch.into(),
         truncated,
         candidate: None,
+        head: None,
     }
 }
 

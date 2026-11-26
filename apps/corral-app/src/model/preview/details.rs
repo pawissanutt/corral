@@ -244,6 +244,7 @@ pub(super) fn build(feed: &Feed, target: &DetailRef) -> Result<DetailBody, Strin
                 path: path.clone(),
                 patch: patch(task, path),
                 truncated: false,
+                head: run.head_sha.clone(),
                 candidate: Some(ReviewCandidate {
                     base: run.base_sha.clone(),
                     head: run.head_sha.clone().unwrap_or_default(),

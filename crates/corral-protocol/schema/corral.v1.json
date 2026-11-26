@@ -6579,6 +6579,13 @@
             "default": null,
             "description": "Immutable identity of the run whose stored diff is being paged."
           },
+          "head": {
+            "description": "For a task's stored patch: the head of the submission it belongs to, whatever the task's\nstatus, so a page can be told from another submission's.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "patch": {
             "description": "At most 48 KiB; remaining text is fetched with DetailReply.next.",
             "type": "string"

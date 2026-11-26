@@ -102,6 +102,8 @@ pub(super) fn file(
     let (run, diff) = submission(engine, &task.id)?;
     let run = run.ok_or(NotFound("task has no submitted worker run"))?;
     let diff = diff.ok_or(NotFound("task has no stored review patch"))?;
+    // The submission this stored patch belongs to, which Review's run also names.
+    let head = run.head_sha.clone();
     // Landing can rewrite the run's base and head independently of its stored
     // patch. Do not attach a mutable or retired run's coordinates to that patch.
     let candidate = if task.status == Status::Review && engine.observed_head(&run)? == run.head_sha
@@ -114,7 +116,7 @@ pub(super) fn file(
     } else {
         None
     };
-    let etag = fingerprint(&(&query.target, &diff, &candidate))?;
+    let etag = fingerprint(&(&query.target, &diff, &candidate, &head))?;
     let patch = patch(engine, &diff)?;
     let section = sections(&patch)
         .into_iter()
@@ -134,6 +136,7 @@ pub(super) fn file(
         patch: patch[at..end].to_owned(),
         truncated,
         candidate,
+        head,
     };
     reply(query, seq, etag, DetailBody::ReviewFile(body), next)
 }

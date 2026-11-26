@@ -65,6 +65,9 @@ fn socket_diagram_compare_reports_changed_moved_and_removed_bindings_at_the_cand
     // A span past the end of a file the candidate leaves unchanged is not "unchanged".
     recipe["nodes"][0]["bindings"] =
         json!({"source":{"path":"Cargo.toml","span":{"start":999,"end":999}}});
+    // A span that starts in the file but runs past its end is not compared either.
+    recipe["edges"][1]["bindings"] =
+        json!({"source":{"path":"Cargo.toml","span":{"start":3,"end":4}}});
     let bytes = serde_json::to_vec(&recipe).unwrap();
     let artifact = engine
         .add_artifact_bytes(&id, &bytes, ArtifactKind::Report, "Submit to land")
@@ -165,6 +168,10 @@ fn socket_diagram_compare_reports_changed_moved_and_removed_bindings_at_the_cand
         })
     );
     assert_eq!(change("land"), Some(SourceChange::Removed));
+    assert!(matches!(
+        change("gate-passes"),
+        Some(SourceChange::Unknown { .. })
+    ));
     assert!(
         matches!(change("submit"), Some(SourceChange::Unknown { .. })),
         "{:?}",
@@ -228,6 +235,16 @@ fn socket_diagram_compare_reports_changed_moved_and_removed_bindings_at_the_cand
         if excerpt.commit == pinned && excerpt.path == DEPENDENT)
     );
     assert!(matches!(land.target_source, SourceResult::Missing { .. }));
+
+    let clipped = read(&query(CompareTarget::Candidate, Some("gate-passes")));
+    assert!(
+        matches!(
+            clipped.selected.as_ref().map(|s| &s.target_source),
+            Some(SourceResult::Unavailable { .. })
+        ),
+        "{:?}",
+        clipped.selected
+    );
 
     // A new worker run supersedes the candidate: the view pinned to it still reads its evidence,
     // and only the links that describe the task's current submission retire.

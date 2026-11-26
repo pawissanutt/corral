@@ -210,6 +210,8 @@ fn resolve(
                 None,
             ));
         }
+        // Resolved once, it stays this view's head after the project's head moves on.
+        shared.compared_heads.record(&subject.project, &commit);
     }
     let current_candidate = match &candidate {
         Some(candidate) => latest_submission(engine, artifact, subject)?
@@ -351,6 +353,13 @@ struct Sides<'a> {
 }
 
 impl Sides<'_> {
+    /// Whether any tree entry is at `path` on one side.
+    fn present(&self, target: bool, path: &str) -> Result<bool, ()> {
+        let rev = if target { Some(self.target) } else { self.base };
+        let rev = rev.ok_or(())?;
+        corral_facts::path_in_tree(self.repo, rev, path).map_err(|_| ())
+    }
+
     /// One blob read per object in a read, however many elements bind it.
     fn text(&mut self, file: &CommittedFile) -> Option<std::rc::Rc<str>> {
         let repo = self.repo;
@@ -490,8 +499,10 @@ fn source_change(sides: &mut Sides<'_>, request: &SourceRequest) -> (SourceChang
     let Some(before) = sides.text(&base_file) else {
         return not_compared("the committed source is unreadable as bounded UTF-8 text");
     };
-    if span.start as usize > before.lines().count() {
-        return not_compared("the bound span is not in the file at the pinned commit");
+    // The whole span, not only its start: a clipped span would compare fewer lines than are
+    // shown at the target.
+    if span.end as usize > before.lines().count() {
+        return not_compared("the bound span is not wholly in the file at the pinned commit");
     }
     if base_file.blob() == target_file.blob() {
         let change = if renamed {
@@ -666,7 +677,14 @@ fn inspect(
             location,
             added,
             removed,
-        } => match comparable_referrers(shared, sides, &subject.project, &removed, &added) {
+        } => match comparable_referrers(
+            shared,
+            sides,
+            &subject.project,
+            &base_entity,
+            &removed,
+            &added,
+        ) {
             Ok(()) => EntityChange::Changed {
                 location,
                 added,
@@ -726,9 +744,23 @@ fn comparable_referrers(
     shared: &Shared,
     sides: &mut Sides<'_>,
     project: &str,
+    base: &EntityResult,
     removed: &[DiagramRelated],
     added: &[DiagramRelated],
 ) -> Result<(), String> {
+    // Both commits were read on this same basis (`entity_change` checked it). A provider that
+    // replaced the references without reporting file reads leaves only the built-in read
+    // status, which says nothing about whether the provider read a referring file.
+    if let EntityResult::Resolved { evidence, .. } = base
+        && let Some(provider) = &evidence.provider
+        && provider.coverage.provides("references")
+        && !provider.coverage.provides("files")
+    {
+        return Err(format!(
+            "the facts provider {} supplied references without reporting which files it read",
+            provider.extension
+        ));
+    }
     let commits = [
         sides.base.map(|rev| rev.commit().to_owned()),
         Some(sides.target.commit().to_owned()),
@@ -746,16 +778,27 @@ fn comparable_referrers(
     referrers_comparable(
         removed,
         added,
-        |target, path| match sides.borrow_mut().file(target, path) {
-            Err(()) => None,
-            Ok(None) => Some(Referrer::Absent),
-            Ok(Some(_)) => {
-                facts[usize::from(target)]
-                    .as_ref()
-                    .map(|facts| match facts.file(path) {
-                        Some(file) if file.read_status == ReadStatus::Complete => Referrer::Read,
-                        _ => Referrer::Unread,
-                    })
+        |target, path| {
+            let file = sides.borrow_mut().file(target, path);
+            match file {
+                Err(()) => None,
+                // No regular file: absent only if nothing at all is there (a symlink, submodule or
+                // directory in its place was not read).
+                Ok(None) => match sides.borrow().present(target, path) {
+                    Ok(false) => Some(Referrer::Absent),
+                    Ok(true) => Some(Referrer::Unread),
+                    Err(()) => None,
+                },
+                Ok(Some(_)) => {
+                    facts[usize::from(target)]
+                        .as_ref()
+                        .map(|facts| match facts.file(path) {
+                            Some(file) if file.read_status == ReadStatus::Complete => {
+                                Referrer::Read
+                            }
+                            _ => Referrer::Unread,
+                        })
+                }
             }
         },
         |target, path| {

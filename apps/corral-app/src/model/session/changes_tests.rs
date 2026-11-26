@@ -151,6 +151,7 @@ fn a_hunk_capture_is_the_patch_text_of_that_hunk_only() {
             patch,
             truncated: false,
             candidate: None,
+            head: None,
         }),
     );
     let mut state = State::default();

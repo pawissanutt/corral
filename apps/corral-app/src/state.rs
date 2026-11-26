@@ -429,6 +429,11 @@ impl AppState {
 
     /// Shows a tab of the task page on top.
     pub fn set_task_tab(&self, tab: crate::model::nav::TaskTab) {
+        if tab != crate::model::nav::TaskTab::Changes
+            && self.impact.with_untracked(|state| state.expect.is_some())
+        {
+            self.impact.update(|state| state.expect = None);
+        }
         self.nav.update(|nav| nav.task_tab = tab);
     }
 
