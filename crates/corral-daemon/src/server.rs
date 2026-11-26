@@ -144,7 +144,7 @@ pub(super) fn serve(mut stream: UnixStream, shared: Arc<Shared>) -> Result<()> {
         let waker = welcomed.then(|| topics.waker()).flatten();
         if !crate::wake::wait(stream.as_fd(), waker.as_deref(), IDLE_SLICE)
             .context("waiting for client frame")?
-            .input
+            .read()
         {
             continue;
         }

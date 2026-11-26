@@ -56,6 +56,14 @@ pub(crate) struct Ready {
     pub(crate) woken: bool,
 }
 
+impl Ready {
+    /// Whether to read the input now. A pending wake goes first: the input may be only part
+    /// of a frame, and the page the loop was woken for would wait for the rest of it.
+    pub(crate) fn read(self) -> bool {
+        self.input && !self.woken
+    }
+}
+
 /// Waits at most `timeout` for input on `stream` or a wake of `waker`.
 pub(crate) fn wait(
     stream: BorrowedFd<'_>,
@@ -77,4 +85,23 @@ pub(crate) fn wait(
         input: !fds[0].revents().is_empty(),
         woken: waker.is_some() && !fds[1].revents().is_empty(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Input that arrived with a wake was read first. When it was the start of a frame, the
+    /// page the connection was woken for waited for the rest of it.
+    #[test]
+    fn a_wake_goes_before_input_that_is_ready_with_it() {
+        let waker = Waker::new().unwrap();
+        let (stream, mut peer) = UnixStream::pair().unwrap();
+        peer.write_all(b"start of a frame").unwrap();
+        waker.wake();
+        let ready = || wait(stream.as_fd(), Some(&waker), Duration::ZERO).unwrap();
+        assert!(!ready().read());
+        waker.clear();
+        assert!(ready().read(), "the input went with the wake");
+    }
 }

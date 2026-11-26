@@ -478,7 +478,9 @@ pub(super) fn pass(
             .map(|(scope, entry)| (Arc::clone(scope), Arc::clone(entry))),
     );
     drop(registered);
-    let mut wait = SESSION_POLL;
+    // The earliest moment a visited scope is due again: the wait is counted from the end of
+    // the pass, so the time later reads took is not waited a second time.
+    let mut next: Option<Instant> = None;
     for (scope, entry) in sources.pending.drain(..) {
         if closed() {
             break;
@@ -496,12 +498,10 @@ pub(super) fn pass(
                 due: None,
                 burst: 0,
             });
-        if let Some(early) = clock()
-            .zip(source.due)
-            .and_then(|(now, due)| due.checked_duration_since(now))
-            .filter(|early| !early.is_zero())
+        if let Some(due) = source.due
+            && clock().is_some_and(|now| now < due)
         {
-            wait = wait.min(early);
+            next = Some(next.map_or(due, |next| next.min(due)));
             continue;
         }
         let page = read(&scope, &mut source.reader);
@@ -542,8 +542,11 @@ pub(super) fn pass(
         } else {
             SESSION_POLL
         };
-        source.due = Some(now + pace);
-        wait = wait.min(pace);
+        let due = now + pace;
+        source.due = Some(due);
+        next = Some(next.map_or(due, |next| next.min(due)));
     }
-    wait
+    next.zip(clock()).map_or(SESSION_POLL, |(due, now)| {
+        due.saturating_duration_since(now).min(SESSION_POLL)
+    })
 }

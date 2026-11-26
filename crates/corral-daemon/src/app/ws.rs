@@ -104,7 +104,7 @@ impl Read for Bounded {
             // As a read slice that ran out: the caller flushes its topics and reads again. A
             // wake goes first even with the peer's bytes ready, which stay in the socket:
             // they may be only part of a frame, and the page would wait for the rest.
-            if ready.woken || !ready.input {
+            if !ready.read() {
                 return Err(io::ErrorKind::WouldBlock.into());
             }
         }

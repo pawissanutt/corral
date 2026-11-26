@@ -104,3 +104,28 @@ fn a_streaming_scope_is_read_sooner_than_a_quiet_one() {
     assert_eq!(at(SESSION_STREAM_POLL, quiet(last)), SESSION_STREAM_POLL);
     assert_eq!(at(SESSION_STREAM_LINGER, quiet(last)), SESSION_POLL);
 }
+
+/// How long until a scope was due was measured as it was visited, so the time the reads
+/// after it took was waited a second time.
+#[test]
+fn the_time_later_reads_took_is_not_waited_again() {
+    let service = service();
+    let mut sources = Sources::default();
+    let _streaming = subscribe(Arc::clone(&service), "a".into(), 7, None).unwrap();
+    let _slow = subscribe(Arc::clone(&service), "b".into(), 7, None).unwrap();
+    let now = Cell::new(Instant::now());
+    let wait = pass(
+        &service,
+        &mut sources,
+        || Some(now.get()),
+        |scope, _| {
+            if scope == "a" {
+                return Ok(page(1, 1, 1, true));
+            }
+            now.set(now.get() + SESSION_STREAM_POLL * 2);
+            Ok(quiet(0))
+        },
+        || false,
+    );
+    assert_eq!(wait, Duration::ZERO, "an overdue scope waited");
+}
