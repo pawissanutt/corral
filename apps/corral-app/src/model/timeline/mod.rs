@@ -1,16 +1,22 @@
 //! Recorded timeline plots and canvas-ready geometry. Plot times are whole minutes on the
 //! plot's own clock; horizontal coordinates include the label column.
 
+mod inspect;
 mod live;
+mod plans;
 mod scope;
 
+pub use inspect::{Inspector, Link, inspect};
 pub use live::{
     LIVE_GAPS_NOTE, Window, burnup_series, empty_gaps_line, gaps as live_gaps, plot as live_plot,
     request, window,
 };
+pub use plans::{Edge, Landing, PlanGroup};
 pub use scope::{BurnupScope, ScopeOption, burnup_request, scope_options};
 
 pub const BURNUP_SCOPE_LABEL: &str = "Burn-up scope";
+
+use std::collections::BTreeSet;
 
 use crate::model::Live;
 use crate::model::effect::{Effect, Env};
@@ -44,6 +50,10 @@ pub struct State {
     /// Active grouping option.
     pub grouping: Grouping,
     pub burnup_scope: BurnupScope,
+    /// The lane whose facts the inspector shows.
+    pub selected: Option<String>,
+    /// The plan groups folded to their header (a plan's id, or [`UNPLANNED`]).
+    pub folded: BTreeSet<String>,
 }
 impl State {
     /// Select a range without navigating away.
@@ -51,9 +61,34 @@ impl State {
         self.range = range;
         Vec::new()
     }
-    /// Select the grouping on any form.
+    /// Select the grouping on any form. Lane ids differ between the groupings, so the selection
+    /// goes with the lanes it named.
     pub fn set_grouping(&mut self, grouping: Grouping) -> Vec<Effect> {
+        if self.grouping != grouping {
+            self.selected = None;
+        }
         self.grouping = grouping;
+        Vec::new()
+    }
+    /// A press on a lane: the first selects it, a press on the selected lane opens what it
+    /// opens.
+    pub fn press(&mut self, lane: &str, opens: Live) -> Vec<Effect> {
+        if self.selected.as_deref() == Some(lane) {
+            return self.open(opens);
+        }
+        self.selected = Some(lane.to_owned());
+        Vec::new()
+    }
+    /// Leave the inspector.
+    pub fn deselect(&mut self) -> Vec<Effect> {
+        self.selected = None;
+        Vec::new()
+    }
+    /// Fold or unfold a plan group.
+    pub fn fold(&mut self, key: &str) -> Vec<Effect> {
+        if !self.folded.remove(key) {
+            self.folded.insert(key.to_owned());
+        }
         Vec::new()
     }
     pub fn set_burnup_scope(&mut self, scope: BurnupScope) -> Vec<Effect> {
@@ -153,6 +188,8 @@ pub struct PlotLane {
     pub segments: Vec<PlotSegment>,
     /// Wait summary anchored to this row rather than floating between bars.
     pub wait: Option<String>,
+    /// Said when the task started before a dependency landed: `started before T-852 landed`.
+    pub warning: Option<String>,
     pub opens: Opens,
 }
 /// Everything the chart draws, before geometry.
@@ -166,6 +203,10 @@ pub struct Plot {
     /// The pipeline's and assistants' recorded moves.
     pub auto: Vec<Marker>,
     pub lanes: Vec<PlotLane>,
+    /// The lanes' plans, in drawing order; none for a flat list.
+    pub groups: Vec<PlanGroup>,
+    /// Every dependency edge between the lanes' tasks, drawn or not.
+    pub edges: Vec<Edge>,
     pub now: Marker,
     pub accessible_label: String,
 }
@@ -199,7 +240,45 @@ pub struct PlacedLane {
     pub y: f32,
     pub segments: Vec<PlacedSegment>,
     pub wait: Option<String>,
+    pub warning: Option<String>,
+    /// The lane the inspector shows.
+    pub selected: bool,
     pub opens: Opens,
+}
+/// A plan group's header row: its words, and its summary bar from its lanes' earliest to
+/// latest activity with the landed share filled.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlacedHeader {
+    pub key: String,
+    pub id: Option<String>,
+    pub title: String,
+    pub tally: String,
+    pub folded: bool,
+    pub y: f32,
+    /// The bar's start and end x.
+    pub bar: Option<(f32, f32)>,
+    pub share: f32,
+    pub spoken: String,
+}
+/// A drawn dependency edge, from the dependency's landing to the dependent's first run: each
+/// end's x and the top of the lane it sits on.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlacedEdge {
+    pub from: (f32, f32),
+    pub to: (f32, f32),
+    pub out_of_order: bool,
+    pub label: String,
+}
+/// What the owner chose about the lanes: the one selected and the plans folded.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LaneView<'a> {
+    pub selected: Option<&'a str>,
+    pub folded: Option<&'a BTreeSet<String>>,
+}
+impl LaneView<'_> {
+    fn folded(&self, key: &str) -> bool {
+        self.folded.is_some_and(|folded| folded.contains(key))
+    }
 }
 /// An action mark with its accessibility text.
 #[derive(Debug, Clone, PartialEq)]
@@ -221,16 +300,22 @@ pub struct Layout {
     pub owner: Vec<PlacedMarker>,
     pub auto_label: (&'static str, &'static str),
     pub auto: Vec<PlacedMarker>,
-    /// Lanes after the six-unit gap under the action lanes.
+    /// Lanes after the six-unit gap under the action lanes; a folded plan's are left out.
     pub lanes: Vec<PlacedLane>,
+    /// The plan headers, each above its lanes; none for a flat list.
+    pub headers: Vec<PlacedHeader>,
+    pub header_height: f32,
+    /// The edges drawn: out-of-order ones and the selected lane's.
+    pub edges: Vec<PlacedEdge>,
     pub now: Line,
     pub accessible_label: String,
 }
 /// Lay out a plot at the given total canvas width. Phone suppresses minor tick labels and moves
 /// labels above the tracks.
-pub fn layout(plot: &Plot, width: f32, phone: bool) -> Layout {
+pub fn layout(plot: &Plot, width: f32, phone: bool, view: LaneView) -> Layout {
     let label_width = if phone { 0.0 } else { 190.0 };
     let lane_height = if phone { 46.0 } else { 34.0 };
+    let header_height = if phone { 34.0 } else { 30.0 };
     let top = 26.0;
     let plot_width = width - label_width - 10.0;
     let span = (plot.end - plot.start).max(1) as f32;
@@ -256,34 +341,84 @@ pub fn layout(plot: &Plot, width: f32, phone: bool) -> Layout {
             })
             .collect()
     };
-    let lanes = plot
-        .lanes
+    let place = |lane: &PlotLane, y: f32| PlacedLane {
+        id: lane.id.clone(),
+        title: lane.title.clone(),
+        y,
+        segments: lane
+            .segments
+            .iter()
+            .map(|s| {
+                let x1 = x(s.start);
+                PlacedSegment {
+                    x: x1,
+                    width: (x(s.end) - x1 - 1.0).max(2.0),
+                    kind: s.kind,
+                    accessible_label: s.label.clone(),
+                }
+            })
+            .collect(),
+        wait: lane.wait.clone(),
+        warning: lane.warning.clone(),
+        selected: view.selected == Some(lane.id.as_str()),
+        opens: lane.opens.clone(),
+    };
+    let mut y = top + 2.0 * lane_height + 6.0;
+    let mut lanes = Vec::with_capacity(plot.lanes.len());
+    let mut headers = Vec::with_capacity(plot.groups.len());
+    if plot.groups.is_empty() {
+        for lane in &plot.lanes {
+            lanes.push(place(lane, y));
+            y += lane_height;
+        }
+    }
+    for group in &plot.groups {
+        let folded = view.folded(&group.key);
+        headers.push(PlacedHeader {
+            key: group.key.clone(),
+            id: group.id.clone(),
+            title: group.title.clone(),
+            tally: group.tally.clone(),
+            folded,
+            y,
+            bar: group
+                .span
+                .map(|(from, to)| (x(from), x(to).max(x(from) + 2.0))),
+            share: group.share(),
+            spoken: group.spoken(),
+        });
+        y += header_height;
+        if folded {
+            continue;
+        }
+        for id in &group.lanes {
+            if let Some(lane) = plot.lanes.iter().find(|lane| lane.id == *id) {
+                lanes.push(place(lane, y));
+                y += lane_height;
+            }
+        }
+    }
+    let lane_y = |id: &str| lanes.iter().find(|lane| lane.id == id).map(|lane| lane.y);
+    let edges = plot
+        .edges
         .iter()
-        .enumerate()
-        .map(|(i, lane)| PlacedLane {
-            id: lane.id.clone(),
-            title: lane.title.clone(),
-            y: top + 2.0 * lane_height + 6.0 + i as f32 * lane_height,
-            segments: lane
-                .segments
-                .iter()
-                .map(|s| {
-                    let x1 = x(s.start);
-                    PlacedSegment {
-                        x: x1,
-                        width: (x(s.end) - x1 - 1.0).max(2.0),
-                        kind: s.kind,
-                        accessible_label: s.label.clone(),
-                    }
-                })
-                .collect(),
-            wait: lane.wait.clone(),
-            opens: lane.opens.clone(),
+        .filter(|edge| plans::edge_shown(edge, view.selected))
+        .filter_map(|edge| {
+            let to = lane_y(&edge.to)?;
+            // A dependency without a lane shown here (none in the window, or folded away)
+            // starts on its dependent's row.
+            let from = lane_y(&edge.from).unwrap_or(to);
+            Some(PlacedEdge {
+                from: (x(edge.from_at), from),
+                to: (x(edge.to_at), to),
+                out_of_order: edge.out_of_order,
+                label: edge.label.clone(),
+            })
         })
         .collect();
     Layout {
         width,
-        height: top + (2 + plot.lanes.len()) as f32 * lane_height + 6.0 + 18.0,
+        height: y + 18.0,
         label_width,
         plot_width,
         lane_height,
@@ -294,6 +429,9 @@ pub fn layout(plot: &Plot, width: f32, phone: bool) -> Layout {
         auto_label: ("Auto", "pipeline, assistants"),
         auto: place_markers(&plot.auto),
         lanes,
+        headers,
+        header_height,
+        edges,
         now: Line {
             x: x(plot.now.at),
             label: plot.now.label.clone(),

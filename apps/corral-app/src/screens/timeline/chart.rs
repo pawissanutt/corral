@@ -13,8 +13,9 @@ use nsh_core::canvas::CanvasTextAlign;
 use nsh_core::prelude::*;
 
 use super::shown::Shown;
+use super::{edges, headers};
 use crate::model::Live;
-use crate::model::timeline::{self, Burnup, BurnupSeries, Kind, Layout};
+use crate::model::timeline::{self, Burnup, BurnupSeries, Kind, LaneView, Layout};
 use crate::model::{Form, Hue};
 use crate::state::AppState;
 use crate::ui::chart::{grid, ink, mono_font, now, text_font, tip};
@@ -22,26 +23,28 @@ use crate::ui::kit::marks::{hue_fill, hue_ink};
 use crate::ui::tokens::{Token, color};
 
 /// A segment bar's height.
-const BAR: f32 = 12.0;
+pub(super) const BAR: f32 = 12.0;
 /// An action dot: the box the mockup centres it in, and its radius.
-const DOT: f32 = 10.0;
+pub(super) const DOT: f32 = 10.0;
 const DOT_RADIUS: f32 = 4.5;
 /// A dropped or reopened instant's mark, at most this far from its centre.
 const MARK_RADIUS: f32 = 4.0;
 /// A lane button's focus ring.
-const RING: f32 = 2.0;
+pub(super) const RING: f32 = 2.0;
 /// Where a desktop lane's title starts, after the mono id.
 const TITLE_X: f32 = 52.0;
+/// Room after a lane's id for its out-of-order `!`.
+const MARK_ROOM: f32 = 10.0;
 /// The phone puts the title after the id at the mockup's 7 points a character.
 const PHONE_ID_ADVANCE: f32 = 7.0;
 /// Estimated advances of the canvas fonts, to keep words inside their room (a canvas cannot
 /// measure): 11 pt mono ids, 12 pt titles, 11 pt semibold wait captions, 10.5 pt mono axis.
-const ID_ADVANCE: f32 = 6.7;
-const TITLE_ADVANCE: f32 = 6.4;
-const NOTE_ADVANCE: f32 = 6.3;
+pub(super) const ID_ADVANCE: f32 = 6.7;
+pub(super) const TITLE_ADVANCE: f32 = 6.4;
+pub(super) const NOTE_ADVANCE: f32 = 6.3;
 const AXIS_ADVANCE: f32 = 6.4;
 /// Room kept between a lane's label and the plot, and between two captions.
-const LABEL_GAP: f32 = 8.0;
+pub(super) const LABEL_GAP: f32 = 8.0;
 /// Room under the last lane for the now caption.
 const FOOT: f32 = 18.0;
 /// The legend swatch (`.legend i`).
@@ -68,13 +71,22 @@ pub fn lanes(app: AppState, data: Memo<Shown>) -> AnyElement {
     let phone = form == Form::Phone;
     let width = signal(0.0_f32);
     let plot = computed(move || data.with(|shown| shown.plot.clone()));
+    let chosen = computed(move || {
+        app.timeline
+            .with(|state| (state.selected.clone(), state.folded.clone()))
+    });
     view()
         .w_full()
         .on_layout(move |frame: &Bounds<Points>| width.set(frame.size.width.0))
         .child(dynamic(move || {
             let room = width.get();
             let plot = plot.get()?;
-            (room > 0.0).then(|| drawn_lanes(app, timeline::layout(&plot, room, phone)))
+            let (selected, folded) = chosen.get();
+            let view = LaneView {
+                selected: selected.as_deref(),
+                folded: Some(&folded),
+            };
+            (room > 0.0).then(|| drawn_lanes(app, timeline::layout(&plot, room, phone, view)))
         }))
         .into_element()
 }
@@ -151,7 +163,7 @@ pub fn burnup(app: AppState, series: BurnupSeries) -> AnyElement {
 }
 
 #[derive(Clone, Copy)]
-struct Rect {
+pub(super) struct Rect {
     x: f32,
     y: f32,
     w: f32,
@@ -159,18 +171,18 @@ struct Rect {
 }
 
 impl Rect {
-    const fn new(x: f32, y: f32, w: f32, h: f32) -> Self {
+    pub(super) const fn new(x: f32, y: f32, w: f32, h: f32) -> Self {
         Self { x, y, w, h }
     }
 
-    fn bounds(self) -> Bounds<Points> {
+    pub(super) fn bounds(self) -> Bounds<Points> {
         bounds(point(px(self.x), px(self.y)), size(px(self.w), px(self.h)))
     }
 }
 
 /// Top of a bar `height` high in the lane starting at `lane_y`: centred in the lane on desktop,
 /// under the label line on the phone.
-fn bar_top(layout: &Layout, phone: bool, lane_y: f32, height: f32) -> f32 {
+pub(super) fn bar_top(layout: &Layout, phone: bool, lane_y: f32, height: f32) -> f32 {
     if phone {
         lane_y + 18.0
     } else {
@@ -300,7 +312,7 @@ fn hatch(p: Painter, area: Rect, radius: f32, stripes: Stripes) -> Painter {
 /// A lane's mono id in ink-3 and its title in ink: beside each other in the desktop's label
 /// column, on one line above the bar on the phone.
 /// `words` cut with an ellipsis to fit `room` points at `advance` points a character.
-fn clip(words: &str, room: f32, advance: f32) -> String {
+pub(super) fn clip(words: &str, room: f32, advance: f32) -> String {
     let fits = (room / advance).floor().max(0.0) as usize;
     if words.chars().count() <= fits {
         return words.to_owned();
@@ -318,6 +330,7 @@ fn label_parts(
     phone: bool,
     (id, title): (&str, &str),
     reserve: f32,
+    marked: bool,
 ) -> (String, String, f32) {
     let right = if phone {
         layout.width - reserve
@@ -325,7 +338,8 @@ fn label_parts(
         layout.label_width - LABEL_GAP
     };
     let id = clip(id, right, if phone { PHONE_ID_ADVANCE } else { ID_ADVANCE });
-    let id_end = id.chars().count() as f32 * if phone { PHONE_ID_ADVANCE } else { ID_ADVANCE };
+    let id_end = id.chars().count() as f32 * if phone { PHONE_ID_ADVANCE } else { ID_ADVANCE }
+        + if marked { MARK_ROOM } else { 0.0 };
     let title_x = if phone {
         id_end + LABEL_GAP
     } else {
@@ -335,8 +349,9 @@ fn label_parts(
 }
 
 /// Whether a lane label is cut to fit, so its full words need a hover hint.
-fn label_cut(layout: &Layout, phone: bool, words: (&str, &str), reserve: f32) -> bool {
-    let (id, title, _) = label_parts(layout, phone, words, reserve);
+fn label_cut(layout: &Layout, phone: bool, lane: &timeline::PlacedLane, reserve: f32) -> bool {
+    let words = (lane.id.as_str(), lane.title.as_str());
+    let (id, title, _) = label_parts(layout, phone, words, reserve, lane.warning.is_some());
     id != words.0 || title != words.1
 }
 
@@ -366,15 +381,25 @@ fn lane_label(
     phone: bool,
     lane_y: f32,
     words: (&str, &str),
-    reserve: f32,
+    (reserve, marked): (f32, bool),
 ) -> Painter {
-    let (id, title, title_x) = label_parts(layout, phone, words, reserve);
+    let (id, title, title_x) = label_parts(layout, phone, words, reserve, marked);
     let baseline = label_baseline(layout, phone, lane_y);
-    p.text_align(CanvasTextAlign::Start)
+    let id_end = id.chars().count() as f32 * if phone { PHONE_ID_ADVANCE } else { ID_ADVANCE };
+    let p = p
+        .text_align(CanvasTextAlign::Start)
         .font(&mono_font(11.0))
         .fill_color(ink(Token::Ink3))
-        .fill_text(&id, 0.0, baseline)
-        .font(&text_font(400, 12.0))
+        .fill_text(&id, 0.0, baseline);
+    // Started before a dependency landed: the danger mark after the id, its words the hint.
+    let p = if marked {
+        p.font(&text_font(700, 12.0))
+            .fill_color(now(hue_ink(Hue::Fail)))
+            .fill_text("!", id_end + 3.0, baseline)
+    } else {
+        p
+    };
+    p.font(&text_font(400, 12.0))
         .fill_color(ink(Token::Ink))
         .fill_text(&title, title_x, baseline)
 }
@@ -412,7 +437,14 @@ fn paint_lanes(layout: &Layout, phone: bool) -> Painter {
         p = p.fill_text(&tick.label, x, 14.0);
     }
 
-    p = lane_label(p, layout, phone, layout.top, layout.owner_label, 0.0);
+    p = lane_label(
+        p,
+        layout,
+        phone,
+        layout.top,
+        layout.owner_label,
+        (0.0, false),
+    );
     p = dots(
         p,
         layout,
@@ -422,10 +454,22 @@ fn paint_lanes(layout: &Layout, phone: bool) -> Painter {
         now(hue_ink(Hue::You)),
     );
     let auto_y = auto_y(layout);
-    p = lane_label(p, layout, phone, auto_y, layout.auto_label, 0.0);
+    p = lane_label(p, layout, phone, auto_y, layout.auto_label, (0.0, false));
     p = dots(p, layout, phone, auto_y, &layout.auto, ink(Token::Ink3));
+    p = headers::paint(p, layout, phone);
 
     for lane in &layout.lanes {
+        // The selected lane's row is banded, as a list's selected row.
+        if lane.selected {
+            p = p
+                .fill_color(ink(Token::Sel))
+                .begin_path()
+                .round_rect(
+                    Rect::new(0.0, lane.y, layout.width, layout.lane_height).bounds(),
+                    px(4.0),
+                )
+                .fill();
+        }
         let reserve = wait_reserve(layout, phone, lane);
         p = lane_label(
             p,
@@ -433,7 +477,7 @@ fn paint_lanes(layout: &Layout, phone: bool) -> Painter {
             phone,
             lane.y,
             (lane.id.as_str(), lane.title.as_str()),
-            reserve,
+            (reserve, lane.warning.is_some()),
         );
         let top = bar_top(layout, phone, lane.y, BAR);
         // A lane's long waits belong to its row (TT-27): at the end of the phone's label line,
@@ -463,6 +507,7 @@ fn paint_lanes(layout: &Layout, phone: bool) -> Painter {
             p = bar(p, segment.kind, segment_rect(top, segment), 2.0);
         }
     }
+    p = edges::paint(p, layout, phone);
 
     let strong = ink(Token::Ink);
     let current = &layout.now;
@@ -501,10 +546,11 @@ fn dots(
     })
 }
 
-/// Opens what a lane opens: its task, or a live run's session terminal.
-fn open(app: AppState, live: &Live) {
-    let live = live.clone();
-    app.act(app.timeline, move |state, _| state.open(live));
+/// A press on a lane: selects it, or on the selected lane opens what it opens (its task, or a
+/// live run's session terminal).
+pub(super) fn press(app: AppState, lane: &str, live: &Live) {
+    let (lane, live) = (lane.to_owned(), live.clone());
+    app.act(app.timeline, move |state, _| state.press(&lane, live));
 }
 
 /// The transparent boxes over the action dots, each lane's row and every segment. A lane's row
@@ -526,9 +572,9 @@ fn hit_boxes(app: AppState, layout: &Layout) -> Vec<AnyElement> {
             ));
         }
     }
+    boxes.extend(headers::buttons(app, layout));
     for lane in &layout.lanes {
         let top = bar_top(layout, phone, lane.y, BAR);
-        let words = (lane.id.as_str(), lane.title.as_str());
         let reserve = wait_reserve(layout, phone, lane);
         let row = if phone {
             Rect::new(0.0, lane.y, layout.width, layout.lane_height)
@@ -540,9 +586,9 @@ fn hit_boxes(app: AppState, layout: &Layout) -> Vec<AnyElement> {
                 layout.lane_height,
             )
         };
-        let cut = form == Form::Desktop && label_cut(layout, phone, words, reserve);
+        let cut = form == Form::Desktop && label_cut(layout, phone, lane, reserve);
         boxes.push(row_button(app, row, lane, cut));
-        let press = Some((app, &lane.opens.live));
+        let press = Some((app, lane.id.as_str(), &lane.opens.live));
         for segment in &lane.segments {
             let area = segment_rect(top, segment);
             // An instant is a 2 pt mark; its box is a fingertip wide around it.
@@ -564,6 +610,7 @@ fn hit_boxes(app: AppState, layout: &Layout) -> Vec<AnyElement> {
             boxes.push(hit(form, area, &format!("{} {wait}", lane.id), press));
         }
     }
+    boxes.extend(edges::boxes(app, layout, phone));
     boxes
 }
 
@@ -572,12 +619,24 @@ fn hit_boxes(app: AppState, layout: &Layout) -> Vec<AnyElement> {
 fn row_button(app: AppState, area: Rect, lane: &timeline::PlacedLane, cut: bool) -> AnyElement {
     let form = app.form;
     let live = lane.opens.live.clone();
-    let hint = if cut {
-        format!("{} {} · {}", lane.id, lane.title, lane.opens.label)
-    } else {
+    let id = lane.id.clone();
+    // Selected, a press opens; otherwise it selects.
+    let verb = if lane.selected {
         lane.opens.label.clone()
+    } else {
+        format!("Select {}", lane.id)
     };
-    let spoken = format!("{}: {} {}", lane.opens.label, lane.id, lane.title);
+    let warning = lane
+        .warning
+        .as_ref()
+        .map(|words| format!(" · ! {words}"))
+        .unwrap_or_default();
+    let hint = if cut {
+        format!("{} {} · {verb}{warning}", lane.id, lane.title)
+    } else {
+        format!("{verb}{warning}")
+    };
+    let spoken = format!("{verb}: {} {}{warning}", lane.id, lane.title);
     view()
         .absolute()
         .left(px(area.x))
@@ -589,7 +648,11 @@ fn row_button(app: AppState, area: Rect, lane: &timeline::PlacedLane, cut: bool)
         .rounded(px(4.0))
         .role(AccessibilityRole::Button)
         .label(spoken)
-        .on_press(move || open(app, &live))
+        .accessibility_state(AccessibilityState {
+            selected: lane.selected,
+            ..AccessibilityState::default()
+        })
+        .on_press(move || press(app, &id, &live))
         .focus_visible(|s| {
             s.outline(px(RING))
                 .outline_color(color(Token::Focus))
@@ -599,11 +662,16 @@ fn row_button(app: AppState, area: Rect, lane: &timeline::PlacedLane, cut: bool)
         .into_element()
 }
 
-/// A box over a mark that a screen reader names and the desktop hints; with `press`, the
-/// pointer's press opens what its lane opens.
-fn hit(form: Form, area: Rect, spoken: &str, press: Option<(AppState, &Live)>) -> AnyElement {
+/// A box over a mark that a screen reader names and the desktop hints; with `pressed`, the
+/// pointer's press is a press on its lane.
+pub(super) fn hit(
+    form: Form,
+    area: Rect,
+    spoken: &str,
+    pressed: Option<(AppState, &str, &Live)>,
+) -> AnyElement {
     let spoken = SharedString::from(spoken.to_owned());
-    let press = press.map(|(app, live)| (app, live.clone()));
+    let pressed = pressed.map(|(app, lane, live)| (app, lane.to_owned(), live.clone()));
     view()
         .absolute()
         .left(px(area.x))
@@ -614,10 +682,10 @@ fn hit(form: Form, area: Rect, spoken: &str, press: Option<(AppState, &Live)>) -
         .role(AccessibilityRole::Image)
         .label(spoken.clone())
         .when(form == Form::Desktop, |v| v.tooltip(tip(spoken)))
-        .when_some(press, |v, (app, live)| {
+        .when_some(pressed, |v, (app, lane, live)| {
             v.cursor_pointer()
                 .focusable(false)
-                .on_press(move || open(app, &live))
+                .on_press(move || press(app, &lane, &live))
         })
         .into_element()
 }

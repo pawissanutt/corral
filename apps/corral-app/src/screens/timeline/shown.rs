@@ -8,7 +8,7 @@ use jiff::tz::TimeZone;
 use nsh_core::prelude::*;
 
 use crate::model::daemon::{DetailCache, Feed};
-use crate::model::timeline::{self, BurnupSeries, Gap, Plot};
+use crate::model::timeline::{self, BurnupSeries, Gap, Inspector, Plot};
 use crate::state::AppState;
 
 /// Where a recorded detail stands.
@@ -30,6 +30,8 @@ pub struct Shown {
     pub gaps: Vec<Gap>,
     /// Said when the range has no gaps worth a look.
     pub gaps_empty: Option<&'static str>,
+    /// The selected lane's facts; none while no lane shown is selected.
+    pub inspector: Option<Inspector>,
     pub burnup: Option<BurnupSeries>,
     pub burnup_status: Status,
 }
@@ -79,24 +81,27 @@ pub fn shown(app: AppState) -> Shown {
     app.feed.with(|feed| {
         let now = minute(feed);
         let window = timeline::window(state.range, now, &zone(feed));
-        let (plot, status, gaps) = match &window {
+        let (plot, status, gaps, inspector) = match &window {
             Some(window) => {
                 let cache = feed.detail(&timeline::request(&state, window));
-                let plot = cache
+                let page = cache
                     .and_then(DetailCache::body)
                     .and_then(|body| match body {
-                        DetailBody::Timeline(page) => {
-                            Some(timeline::live_plot(page, window, state.grouping, feed))
-                        }
+                        DetailBody::Timeline(page) => Some(page),
                         _ => None,
                     });
+                let plot = page.map(|page| timeline::live_plot(page, window, state.grouping, feed));
                 let gaps = plot
                     .as_ref()
                     .map(|plot| timeline::live_gaps(plot, window, feed))
                     .unwrap_or_default();
-                (plot, state_of(cache), gaps)
+                let inspector = page.zip(plot.as_ref()).and_then(|(page, plot)| {
+                    let lane = state.selected.as_deref()?;
+                    timeline::inspect(page, window, plot, lane, feed)
+                });
+                (plot, state_of(cache), gaps, inspector)
             }
-            None => (None, Status::Loading, Vec::new()),
+            None => (None, Status::Loading, Vec::new(), None),
         };
         let (burnup, burnup_status) = burnup_parts(feed, &timeline::burnup_request(&state), now);
         Shown {
@@ -107,6 +112,7 @@ pub fn shown(app: AppState) -> Shown {
             status,
             gaps_title: timeline::gaps_title(state.range),
             gaps,
+            inspector,
             burnup,
             burnup_status,
         }

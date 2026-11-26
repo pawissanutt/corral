@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     io::{Read, Seek, SeekFrom},
     mem,
 };
@@ -7,7 +7,8 @@ use std::{
 use anyhow::{Context, Result, bail, ensure};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use corral_engine::{
-    Engine, EventKind, artifacts::ArtifactFilter, events::EventFilter, store::TaskFilter,
+    Engine, Event, EventKind, Run, Store, Task, artifacts::ArtifactFilter, events::EventFilter,
+    store::TaskFilter,
 };
 use corral_protocol::detail::*;
 use jiff::Timestamp;
@@ -188,9 +189,12 @@ fn body(engine: &Engine, target: &DetailRef) -> Result<DetailBody> {
             ensure!(from < to, "invalid: timeline start must precede end");
             let mut runs = store.all_runs()?;
             runs.retain(|run| run.started < to && run.ended.is_none_or(|end| end > from));
+            let events = store.events_in_window(from, to)?;
+            let tasks = timeline_tasks(store, &runs, &events)?;
             DetailBody::Timeline(TimelinePage {
                 runs,
-                events: store.events_in_window(from, to)?,
+                events,
+                tasks,
             })
         }
         DetailRef::Burnup { scope } => DetailBody::Burnup(burnup(engine, scope)?),
@@ -214,6 +218,68 @@ fn body(engine: &Engine, target: &DetailRef) -> Result<DetailBody> {
         }
         _ => bail!("invalid: unsupported detail"),
     })
+}
+
+fn timeline_tasks(store: &Store, runs: &[Run], events: &[Event]) -> Result<Vec<TimelineTask>> {
+    fn include(tasks: &mut BTreeMap<String, TimelineTask>, task: Task) {
+        tasks.insert(
+            task.id.clone(),
+            TimelineTask {
+                id: task.id,
+                title: task.title,
+                status: task.status,
+                parent: task.parent,
+                depends_on: task.depends_on,
+                landed: None,
+            },
+        );
+    }
+
+    let ids: BTreeSet<_> = runs
+        .iter()
+        .map(|run| run.task.as_str())
+        .chain(events.iter().filter_map(|event| event.task.as_deref()))
+        .collect();
+    let mut tasks = BTreeMap::new();
+    let mut parents = BTreeSet::new();
+    for id in ids {
+        if let Some(task) = store.get_task(id)? {
+            parents.extend(task.parent.clone());
+            include(&mut tasks, task);
+        }
+    }
+    for id in parents {
+        if !tasks.contains_key(&id)
+            && let Some(parent) = store.get_task(&id)?
+        {
+            include(&mut tasks, parent);
+        }
+        for child in store.list_tasks(&TaskFilter {
+            parent: Some(id),
+            ..Default::default()
+        })? {
+            include(&mut tasks, child);
+        }
+    }
+    // Take one dependency step after filling in plans and siblings; do not expand its results.
+    let dependencies: BTreeSet<_> = tasks
+        .values()
+        .flat_map(|task| &task.depends_on)
+        .filter(|id| !tasks.contains_key(*id))
+        .cloned()
+        .collect();
+    for id in dependencies {
+        if let Some(task) = store.get_task(&id)? {
+            include(&mut tasks, task);
+        }
+    }
+    let landed = store.task_landed_times(&tasks.keys().map(String::as_str).collect::<Vec<_>>())?;
+    for (id, ts) in landed {
+        if let Some(task) = tasks.get_mut(&id) {
+            task.landed = Some(ts);
+        }
+    }
+    Ok(tasks.into_values().collect())
 }
 
 fn project_branches(engine: &Engine, query: &DetailGet, project: &str) -> Result<DetailReply> {
@@ -536,7 +602,7 @@ pub(super) fn paginate(body: &mut DetailBody, offset: usize) -> Result<Option<us
         DetailBody::SystemData(model) => paginate_fields!(model, rows),
         DetailBody::SystemLenses(model) => paginate_fields!(model, rows),
         DetailBody::SystemReview(model) => paginate_fields!(model, rows),
-        DetailBody::Timeline(model) => paginate_fields!(model, runs, events),
+        DetailBody::Timeline(model) => paginate_fields!(model, runs, events, tasks),
         DetailBody::Burnup(model) => paginate_fields!(model, events),
         DetailBody::UsageSeries(model) => paginate_fields!(model, days),
         _ => ensure!(offset == 0, "invalid: unexpected detail page token"),
@@ -774,3 +840,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "timeline_tasks_tests.rs"]
+mod timeline_tasks_tests;

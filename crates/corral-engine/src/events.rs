@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     thread,
     time::{Duration, Instant},
 };
@@ -238,6 +239,36 @@ impl Store {
                 ])
                 .context("query timeline events")?,
         )
+    }
+
+    /// Landing timestamps for the requested tasks whose latest landing was not reopened.
+    pub fn task_landed_times(&self, ids: &[&str]) -> Result<BTreeMap<String, Timestamp>> {
+        if ids.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+        // Separate lookups by kind let the task/kind/sequence index skip unrelated history.
+        let mut statement = self
+            .connection
+            .prepare_cached(
+                "SELECT ids.value, landed.ts FROM json_each(?1) AS ids
+                 JOIN events AS landed ON landed.seq = (
+                     SELECT MAX(seq) FROM events WHERE task=ids.value AND kind='landed'
+                 )
+                 WHERE landed.seq > COALESCE((
+                     SELECT MAX(seq) FROM events WHERE task=ids.value AND kind='reopened'
+                 ), 0)",
+            )
+            .context("prepare task landing timestamps")?;
+        let rows = statement
+            .query_map([encode(&ids)?], |row| {
+                Ok((row.get(0)?, row.get::<_, String>(1)?))
+            })
+            .context("query task landing timestamps")?;
+        rows.map(|row| {
+            let (id, ts) = row.context("read task landing row")?;
+            Ok((id, ts.parse().context("parse task landing timestamp")?))
+        })
+        .collect()
     }
 
     pub fn events_after(&self, filter: &EventFilter, after_seq: u64) -> Result<Vec<Event>> {

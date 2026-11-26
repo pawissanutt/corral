@@ -242,7 +242,8 @@ fn terminal_80_columns_keeps_what_needs_you_in_view() {
 
 /// The grouping switch asks the feed for the other grouping and redraws the lanes from its
 /// answer: By run draws one lane per run, which By task does not have, and a live run's lane
-/// opens its session page: T-15's headless run has no Pi host, so the page is its read-only log.
+/// opens its session page: T-15's headless run has no Pi host, so the page is its read-only log;
+/// the first press selects the lane.
 #[test]
 fn timeline_grouping_redraws_the_lanes_from_the_feed() {
     let mut app = preview(terminal_80(), &[("corral.destination", "timeline")]);
@@ -250,6 +251,9 @@ fn timeline_grouping_redraws_the_lanes_from_the_feed() {
     assert_eq!(app.screen().count("id:lane-T-15/R1").unwrap(), 0);
     app.press("id:seg-group-1").unwrap();
     app.wait_for("id:lane-T-15/R1").unwrap();
+    // The first press selects the lane and shows its inspector; the second opens it.
+    app.press("id:lane-T-15/R1").unwrap();
+    app.wait_for("id:inspector").unwrap();
     app.press("id:lane-T-15/R1").unwrap();
     app.wait_for("id:session-log").unwrap();
 }

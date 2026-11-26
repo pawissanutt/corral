@@ -747,6 +747,7 @@ version = "0.6.0"
 dependencies = [
  "base64 0.22.1",
  "corral-types",
+ "jiff 0.2.46",
  "schemars",
  "serde",
  "serde_json",

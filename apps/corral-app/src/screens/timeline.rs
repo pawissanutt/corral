@@ -8,6 +8,9 @@
 
 mod cells;
 mod chart;
+mod edges;
+mod headers;
+mod inspector;
 mod scope;
 mod shown;
 
@@ -42,7 +45,8 @@ const GAPS_MEASURE: f32 = 844.0;
 /// the legend, the compressed chart, the gaps and the burn-up stacked, in one scroll with the Ask
 /// clearance. Terminal: the head, then the sub line, legend, lanes as Cells, gaps and burn-up in
 /// one scroll. The burn-up's scope is a menu (`scope.rs`). Test ids: "page-title",
-/// "seg-range-<i>", "seg-group-<i>", "timeline-pane", "btn-burnup-scope", "seg-burnup-<scope>".
+/// "seg-range-<i>", "seg-group-<i>", "timeline-pane", "btn-burnup-scope", "seg-burnup-<scope>",
+/// "lane-<id>", "plan-<key>", "inspector" (`inspector.rs`).
 pub fn screen(app: AppState) -> AnyElement {
     shown::keep_loaded(app);
     let data = computed(move || shown::shown(app));
@@ -69,8 +73,30 @@ fn head_actions(app: AppState, page: &Head) -> Vec<AnyElement> {
     actions
 }
 
+/// The page's scrolling content beside the inspector's column, which stands there while a lane
+/// is selected and the page (`width`) has room for it.
+fn with_side(app: AppState, data: Memo<Shown>, width: Signal<f32>, main: AnyElement) -> AnyElement {
+    view()
+        .flex_1()
+        .flex_row()
+        .min_w(px(0.0))
+        .min_h(px(0.0))
+        .on_layout(move |frame: &Bounds<Points>| width.set(frame.size.width.0))
+        .child(
+            view()
+                .flex_1()
+                .flex_col()
+                .min_w(px(0.0))
+                .min_h(px(0.0))
+                .child(main),
+        )
+        .child(inspector::side(app, data, width))
+        .into_element()
+}
+
 fn desktop(app: AppState, data: Memo<Shown>) -> AnyElement {
     let page = page_head(app);
+    let width = signal(0.0_f32);
     let content = view()
         .flex_col()
         .child(status(app, data))
@@ -81,8 +107,14 @@ fn desktop(app: AppState, data: Memo<Shown>) -> AnyElement {
                 .pb(px(8.0))
                 .child(chart::lanes(app, data)),
         )
+        .child(inspector::below(app, data, width))
         .child(legend_row(app))
         .child(lower(app, data));
+    let main = pane(
+        app,
+        "timeline-pane",
+        measure(app, MEASURE_PAGE, content.into_element()),
+    );
     view()
         .flex_1()
         .flex_col()
@@ -95,11 +127,7 @@ fn desktop(app: AppState, data: Memo<Shown>) -> AnyElement {
             Some(LIVE_SUBTITLE.to_owned()),
             head_actions(app, &page),
         ))
-        .child(pane(
-            app,
-            "timeline-pane",
-            measure(app, MEASURE_PAGE, content.into_element()),
-        ))
+        .child(with_side(app, data, width, main))
         .into_element()
 }
 
@@ -124,6 +152,7 @@ fn phone(app: AppState, data: Memo<Shown>) -> AnyElement {
                 .pb(px(10.0))
                 .child(chart::lanes(app, data)),
         )
+        .child(inspector::below(app, data, signal(0.0)))
         .child(legend_row(app))
         .child(
             view()
@@ -144,12 +173,14 @@ fn phone(app: AppState, data: Memo<Shown>) -> AnyElement {
 /// The sub line goes under the head: on a grid it would push the switches off the row.
 fn terminal(app: AppState, data: Memo<Shown>) -> AnyElement {
     let page = page_head(app);
+    let width = signal(0.0_f32);
     let content = view()
         .flex_col()
         .child(text(LIVE_SUBTITLE).text_color(color(Token::Ink3)))
         .child(status(app, data))
         .child(term::blank())
         .child(cells::lanes(app, data))
+        .child(inspector::below(app, data, width))
         .child(legend_row(app))
         .child(term::blank())
         .child(burnup_section(app, data))
@@ -161,7 +192,12 @@ fn terminal(app: AppState, data: Memo<Shown>) -> AnyElement {
         .min_w(px(0.0))
         .min_h(px(0.0))
         .child(head(app, page.title, None, head_actions(app, &page)))
-        .child(body(app, "timeline-pane", content.into_element()))
+        .child(with_side(
+            app,
+            data,
+            width,
+            body(app, "timeline-pane", content.into_element()),
+        ))
         .into_element()
 }
 

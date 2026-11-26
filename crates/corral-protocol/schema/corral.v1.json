@@ -11033,11 +11033,58 @@
               "$ref": "#/components/schemas/Run"
             },
             "type": "array"
+          },
+          "tasks": {
+            "description": "The tasks the window's runs and events name, their plans, those plans' other\nchildren and the tasks any of them depend on: enough to group lanes by plan, count\na plan's landed children and draw dependency edges. Absent from an older daemon.",
+            "items": {
+              "$ref": "#/components/schemas/TimelineTask"
+            },
+            "type": "array"
           }
         },
         "required": [
           "runs",
           "events"
+        ],
+        "type": "object"
+      },
+      "TimelineTask": {
+        "description": "What the Timeline needs of one task; never its body.",
+        "properties": {
+          "depends_on": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "id": {
+            "type": "string"
+          },
+          "landed": {
+            "description": "When the task last landed, from the whole event log (not only the window), unless a\nlater `reopened` undid it. Absent when it never landed.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "parent": {
+            "description": "The plan this task belongs to.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/Status"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "status"
         ],
         "type": "object"
       },

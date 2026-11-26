@@ -8,7 +8,9 @@ use nsh_core::prelude::*;
 
 use super::shown::Shown;
 use crate::model::Hue;
-use crate::model::timeline::{self, BurnupSeries, Kind, Layout, PlacedLane};
+use crate::model::timeline::{
+    self, BurnupSeries, Kind, LaneView, Layout, PlacedHeader, PlacedLane,
+};
 use crate::state::AppState;
 use crate::ui::kit::marks::hue_ink;
 use crate::ui::term;
@@ -232,6 +234,10 @@ fn spoken<'a>((name, title): (&str, &str), parts: impl Iterator<Item = &'a str>)
 pub fn lanes(app: AppState, data: Memo<Shown>) -> AnyElement {
     let width = signal(0.0_f32);
     let plot = computed(move || data.with(|shown| shown.plot.clone()));
+    let chosen = computed(move || {
+        app.timeline
+            .with(|state| (state.selected.clone(), state.folded.clone()))
+    });
     view()
         .w_full()
         .flex_col()
@@ -239,20 +245,38 @@ pub fn lanes(app: AppState, data: Memo<Shown>) -> AnyElement {
         .child(dynamic(move || {
             let columns = (width.get() / term::cells(1.0).0).floor() as usize;
             let plot = plot.get()?;
-            (columns > 0).then(|| grid(app, timeline::layout(&plot, MODEL_WIDTH, false), columns))
+            let (selected, folded) = chosen.get();
+            let view = LaneView {
+                selected: selected.as_deref(),
+                folded: Some(&folded),
+            };
+            (columns > 0).then(|| {
+                grid(
+                    app,
+                    timeline::layout(&plot, MODEL_WIDTH, false, view),
+                    columns,
+                )
+            })
         }))
         .into_element()
 }
 
-/// A lane's row as its button (`lane-<id>`): pressing it, or Enter on it, opens what the lane
-/// opens; the focus bands it.
+/// A lane's row as its button (`lane-<id>`): pressing it, or Enter on it, selects the lane, and
+/// on the selected lane opens what the lane opens; the focus bands it blue, the selection grey.
 fn lane_button(app: AppState, lane: &PlacedLane, row: AnyElement) -> AnyElement {
     let live = lane.opens.live.clone();
+    let id = lane.id.clone();
+    let verb = if lane.selected {
+        lane.opens.label.clone()
+    } else {
+        format!("Select {}", lane.id)
+    };
     let spoken = spoken(
-        (lane.opens.label.as_str(), lane.title.as_str()),
-        lane.segments
-            .iter()
-            .map(|s| s.accessible_label.as_str())
+        (verb.as_str(), lane.title.as_str()),
+        lane.warning
+            .as_deref()
+            .into_iter()
+            .chain(lane.segments.iter().map(|s| s.accessible_label.as_str()))
             .chain(lane.wait.as_deref()),
     );
     view()
@@ -260,13 +284,91 @@ fn lane_button(app: AppState, lane: &PlacedLane, row: AnyElement) -> AnyElement 
         .cursor_pointer()
         .role(AccessibilityRole::Button)
         .label(spoken)
-        .on_press(move || {
-            let live = live.clone();
-            app.act(app.timeline, move |state, _| state.open(live));
+        .accessibility_state(AccessibilityState {
+            selected: lane.selected,
+            ..AccessibilityState::default()
         })
+        .on_press(move || super::chart::press(app, &id, &live))
+        .when(lane.selected, |v| v.bg(color(Token::Hover)))
         .focus_visible(|s| s.bg(color(Token::Sel)))
         .hover(|s| s.bg(color(Token::Hover)))
         .child(row)
+        .into_element()
+}
+
+/// A plan's header row as its button (`plan-<key>`): the caret, id and title in the label
+/// column, the summary bar over the plan's span with its landed share heavy in the landed
+/// colour, and `n/m landed` beside it. Enter or a press folds or unfolds the plan.
+fn header_row(
+    app: AppState,
+    layout: &Layout,
+    header: &PlacedHeader,
+    (label, track): (Label, usize),
+) -> AnyElement {
+    let caret = super::headers::caret(header.folded);
+    let lead = match &header.id {
+        Some(id) if label.width > label.id => vec![
+            piece(column(&format!("{caret} {id}"), label.id), Some(Ink::Quiet)),
+            piece(
+                column(&header.title, label.width - label.id),
+                Some(Ink::Hue(Hue::Neutral)),
+            )
+            .font_weight(FontWeight::BOLD),
+        ],
+        Some(id) => vec![piece(
+            column(&format!("{caret} {id}"), label.width),
+            Some(Ink::Quiet),
+        )],
+        None => vec![
+            piece(
+                column(&format!("{caret} {}", header.title), label.width),
+                Some(Ink::Hue(Hue::Neutral)),
+            )
+            .font_weight(FontWeight::BOLD),
+        ],
+    };
+    let mut cells = Track::new(track, layout);
+    if let Some((x1, x2)) = header.bar {
+        let split = x1 + (x2 - x1) * header.share;
+        cells.span(x1, x2 - x1, '─', Ink::Quiet);
+        if header.share > 0.0 {
+            cells.span(x1, (split - x1).max(1.0), '━', Ink::Hue(Hue::Ok));
+        }
+        let end = (cells.at(x2).ceil().max(0.0) as usize).min(track);
+        let before = cells.at(x1).floor().max(0.0) as usize;
+        let n = header.tally.chars().count();
+        if end + 1 + n <= track {
+            cells.write(end + 1, &header.tally, Ink::Quiet);
+        } else if before > n {
+            cells.write(before - n - 1, &header.tally, Ink::Quiet);
+        } else {
+            // A plan busy across the whole track: the tally takes the bar's last Cells, so it
+            // is never left out.
+            let start = track.saturating_sub(n + 1);
+            for cell in cells.cells.iter_mut().skip(start) {
+                *cell = None;
+            }
+            cells.write(start + 1, &header.tally, Ink::Quiet);
+        }
+    }
+    let key = header.key.clone();
+    let verb = if header.folded { "unfold" } else { "fold" };
+    view()
+        .test_id(&format!("plan-{}", header.key))
+        .cursor_pointer()
+        .role(AccessibilityRole::Button)
+        .label(format!("{} · {verb}", header.spoken))
+        .accessibility_state(AccessibilityState {
+            expanded: Some(!header.folded),
+            ..AccessibilityState::default()
+        })
+        .on_press(move || {
+            let key = key.clone();
+            app.act(app.timeline, move |state, _| state.fold(&key));
+        })
+        .focus_visible(|s| s.bg(color(Token::Sel)))
+        .hover(|s| s.bg(color(Token::Hover)))
+        .child(line(lead, &cells.cells, Voice::Hidden))
         .into_element()
 }
 
@@ -276,7 +378,7 @@ fn grid(app: AppState, layout: Layout, columns: usize) -> AnyElement {
     let longest = layout
         .lanes
         .iter()
-        .map(|lane| lane.id.chars().count() + 1)
+        .map(|lane| lane.id.chars().count() + 1 + usize::from(lane.warning.is_some()))
         .max()
         .unwrap_or(0);
     let label = if columns >= TITLES_FROM {
@@ -323,7 +425,21 @@ fn grid(app: AppState, layout: Layout, columns: usize) -> AnyElement {
         ));
     }
 
-    for lane in &layout.lanes {
+    // Headers and lanes in the order the layout stacks them.
+    let mut items: Vec<(f32, Option<&PlacedHeader>, Option<&PlacedLane>)> = layout
+        .headers
+        .iter()
+        .map(|header| (header.y, Some(header), None))
+        .chain(layout.lanes.iter().map(|lane| (lane.y, None, Some(lane))))
+        .collect();
+    items.sort_by(|a, b| a.0.total_cmp(&b.0));
+    for (_, header, lane) in items {
+        if let Some(header) = header {
+            rows.push(header_row(app, &layout, header, (label, track)));
+        }
+        let Some(lane) = lane else {
+            continue;
+        };
         let mut bars = Track::new(track, &layout);
         for segment in &lane.segments {
             bars.span(
@@ -340,11 +456,27 @@ fn grid(app: AppState, layout: Layout, columns: usize) -> AnyElement {
             notes.text(layout.label_width, words, Ink::Hue(Hue::Held));
             rows.push(line(blank(), &notes.cells, Voice::Text));
         }
-        let row = line(
-            lead(&lane.id, &lane.title, label),
-            &bars.cells,
-            Voice::Hidden,
-        );
+        let mut lead = lead(&lane.id, &lane.title, label);
+        // Started before a dependency landed: `!` in the danger colour right after the id.
+        if lane.warning.is_some() && !lead.is_empty() {
+            let width = if label.width == label.id {
+                label.width
+            } else {
+                label.id
+            };
+            let id = column(&lane.id, width.saturating_sub(1));
+            let id = id.trim_end().to_owned();
+            let pad = width.saturating_sub(id.chars().count() + 1);
+            lead.splice(
+                0..1,
+                [
+                    piece(id, Some(Ink::Quiet)),
+                    piece("!".to_owned(), Some(Ink::Hue(Hue::Fail))).font_weight(FontWeight::BOLD),
+                    piece(" ".repeat(pad), None),
+                ],
+            );
+        }
+        let row = line(lead, &bars.cells, Voice::Hidden);
         rows.push(lane_button(app, lane, row));
     }
 

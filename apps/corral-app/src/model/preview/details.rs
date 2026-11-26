@@ -257,16 +257,20 @@ pub(super) fn build(feed: &Feed, target: &DetailRef) -> Result<DetailBody, Strin
             if from >= to || *by == TimelineBy::Other {
                 return Err("invalid: timeline window".into());
             }
-            let mut runs = all_runs(&records(feed));
+            let records = records(feed);
+            let mut runs = all_runs(&records);
             runs.retain(|run| run.started < to && run.ended.is_none_or(|end| end > from));
+            let events: Vec<_> = feed
+                .changes
+                .values()
+                .filter(|event| event.ts >= from && event.ts < to)
+                .cloned()
+                .collect();
+            let tasks = super::timeline_sample::tasks(feed, &records, &runs, &events);
             DetailBody::Timeline(TimelinePage {
                 runs,
-                events: feed
-                    .changes
-                    .values()
-                    .filter(|event| event.ts >= from && event.ts < to)
-                    .cloned()
-                    .collect(),
+                events,
+                tasks,
             })
         }
         DetailRef::Burnup { scope } => DetailBody::Burnup(burnup(feed, scope)?),

@@ -14,7 +14,7 @@ use jiff::{Timestamp, ToSpan, Zoned};
 
 use super::{
     BURNUP_COUNTS, BurnupLine, BurnupSeries, Gap, Grouping, Kind, Marker, Opens, Plot, PlotLane,
-    PlotSegment, PlotTick, Range, State, TallyEntry,
+    PlotSegment, PlotTick, Range, State, TallyEntry, plans,
 };
 use crate::model::daemon::Feed;
 use crate::model::work::{age, stamp, when};
@@ -71,16 +71,16 @@ pub fn request(state: &State, window: &Window) -> DetailRef {
 
 impl Window {
     /// Whole minutes from the window's start.
-    fn minutes(&self, at: Timestamp) -> i64 {
+    pub(super) fn minutes(&self, at: Timestamp) -> i64 {
         (at.as_second() - self.from.as_second()).div_euclid(60)
     }
 
-    fn now_minutes(&self) -> i64 {
+    pub(super) fn now_minutes(&self) -> i64 {
         self.minutes(self.now)
     }
 
     /// Timeline labels use the same timestamp wording as task and session details.
-    fn clock(&self, minutes: i64, feed: &Feed) -> String {
+    pub(super) fn clock(&self, minutes: i64, feed: &Feed) -> String {
         Timestamp::from_second(self.from.as_second() + minutes * 60)
             .map(|at| when(&at.to_string(), feed))
             .unwrap_or_default()
@@ -100,7 +100,7 @@ fn weekday(local: &Zoned) -> &'static str {
     }
 }
 
-fn duration(minutes: i64) -> String {
+pub(super) fn duration(minutes: i64) -> String {
     age(
         Some(0),
         u64::try_from(minutes.saturating_mul(60)).unwrap_or(0),
@@ -118,7 +118,7 @@ fn outcome(outcome: Outcome) -> &'static str {
 }
 
 /// An event kind as words: "sent back", "review started".
-fn moved(kind: EventKind) -> String {
+pub(super) fn moved(kind: EventKind) -> String {
     kind.as_str().replace('_', " ")
 }
 
@@ -155,7 +155,7 @@ struct Clock<'a> {
 }
 
 /// A task's lane opens the task.
-fn opens_task(task: &str) -> Opens {
+pub(super) fn opens_task(task: &str) -> Opens {
     Opens {
         live: Live::Task(Id::new(task)),
         label: format!("Open {task}"),
@@ -340,13 +340,14 @@ pub fn plot(page: &TimelinePage, window: &Window, grouping: Grouping, feed: &Fee
         now,
         lanes: BTreeMap::new(),
     };
+    let tasks = plans::index(page);
     let mut events: Vec<&Event> = page.events.iter().collect();
     events.sort_by_key(|event| (event.ts, event.seq));
     match grouping {
         Grouping::ByTask => {
             for run in &page.runs {
                 clock.lane(&run.task, || {
-                    (task_title(&run.task, feed), opens_task(&run.task))
+                    (task_title(&run.task, &tasks, feed), opens_task(&run.task))
                 });
                 clock.run(&run.task, run);
             }
@@ -357,7 +358,7 @@ pub fn plot(page: &TimelinePage, window: &Window, grouping: Grouping, feed: &Fee
                 }
             }
             for (task, events) in by_task {
-                clock.lane(task, || (task_title(task, feed), opens_task(task)));
+                clock.lane(task, || (task_title(task, &tasks, feed), opens_task(task)));
                 clock.events(task, &events);
             }
         }
@@ -427,22 +428,36 @@ pub fn plot(page: &TimelinePage, window: &Window, grouping: Grouping, feed: &Fee
         ),
         Range::SevenDays => format!("Run timeline, seven days to {}", window.clock(now, feed)),
     };
+    let lanes: Vec<PlotLane> = lanes
+        .into_iter()
+        .map(|(_, id, lane)| PlotLane {
+            id,
+            title: lane.title,
+            segments: lane.segments,
+            wait: (!lane.waits.is_empty()).then(|| lane.waits.join(" · ")),
+            warning: None,
+            opens: lane.opens,
+        })
+        .collect();
+    // Plans and dependencies are tasks' facts: a lane per run keeps today's flat list.
+    let (mut lanes, groups, edges) = match grouping {
+        Grouping::ByTask => {
+            let edges = plans::edges(page, window, &lanes, &tasks, (start, now));
+            let (lanes, groups) = plans::group(lanes, &tasks);
+            (lanes, groups, edges)
+        }
+        Grouping::ByAgent => (lanes, Vec::new(), Vec::new()),
+    };
+    plans::mark_early(&mut lanes, &edges);
     Plot {
         start,
         end: now.max(start + 60),
         ticks: ticks(window, start, now),
         owner,
         auto,
-        lanes: lanes
-            .into_iter()
-            .map(|(_, id, lane)| PlotLane {
-                id,
-                title: lane.title,
-                segments: lane.segments,
-                wait: (!lane.waits.is_empty()).then(|| lane.waits.join(" · ")),
-                opens: lane.opens,
-            })
-            .collect(),
+        lanes,
+        groups,
+        edges,
         now: Marker {
             at: now,
             label: "now".into(),
@@ -451,11 +466,13 @@ pub fn plot(page: &TimelinePage, window: &Window, grouping: Grouping, feed: &Fee
     }
 }
 
-/// A task's title from the board; a closed task is not on it and keeps its id alone.
-fn task_title(task: &str, feed: &Feed) -> String {
-    feed.board
-        .task(task)
-        .map(|task| task.title().to_owned())
+/// A task's title as the reply served it, else from the board; a closed task an older daemon
+/// did not serve is not on the board and keeps its id alone.
+pub(super) fn task_title(task: &str, tasks: &plans::Tasks, feed: &Feed) -> String {
+    tasks
+        .get(task)
+        .map(|served| served.title.clone())
+        .or_else(|| feed.board.task(task).map(|task| task.title().to_owned()))
         .unwrap_or_default()
 }
 
@@ -489,9 +506,22 @@ fn ticks(window: &Window, start: i64, now: i64) -> Vec<PlotTick> {
 /// The longest recorded blocks, acceptance holds and idle stretches in the window, longest
 /// first.
 pub fn gaps(plot: &Plot, window: &Window, feed: &Feed) -> Vec<Gap> {
+    gaps_of(plot, window, feed, None)
+        .into_iter()
+        .take(GAP_LIMIT)
+        .collect()
+}
+
+/// Every gap worth a look on lane `lane`, longest first.
+pub fn lane_gaps(plot: &Plot, window: &Window, feed: &Feed, lane: &str) -> Vec<Gap> {
+    gaps_of(plot, window, feed, Some(lane))
+}
+
+fn gaps_of(plot: &Plot, window: &Window, feed: &Feed, only: Option<&str>) -> Vec<Gap> {
     let mut gaps: Vec<(i64, Gap)> = plot
         .lanes
         .iter()
+        .filter(|lane| only.is_none_or(|only| lane.id == only))
         .flat_map(|lane| lane.segments.iter().map(move |segment| (lane, segment)))
         .filter(|(_, s)| {
             matches!(s.kind, Kind::Ask | Kind::Held | Kind::Idle) && s.end - s.start >= GAP_MINUTES
@@ -520,11 +550,8 @@ pub fn gaps(plot: &Plot, window: &Window, feed: &Feed) -> Vec<Gap> {
             )
         })
         .collect();
-    gaps.sort_by(|a, b| b.0.cmp(&a.0));
-    gaps.into_iter()
-        .take(GAP_LIMIT)
-        .map(|(_, gap)| gap)
-        .collect()
+    gaps.sort_by_key(|gap| std::cmp::Reverse(gap.0));
+    gaps.into_iter().map(|(_, gap)| gap).collect()
 }
 
 /// What the gaps section says when nothing in the window waited an hour or more.

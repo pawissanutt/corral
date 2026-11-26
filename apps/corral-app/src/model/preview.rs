@@ -32,6 +32,7 @@ mod system_data;
 mod system_lenses;
 mod system_review;
 mod system_runtime;
+mod timeline_sample;
 mod workspace;
 
 use crate::model::daemon::*;

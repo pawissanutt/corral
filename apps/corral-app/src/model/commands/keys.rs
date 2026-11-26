@@ -86,6 +86,7 @@ pub fn key_legend_live(
             ("N", "build"),
             (".", "more"),
         ],
+        (Destination::Timeline, None) => vec![("Tab", "lanes"), ("Enter", "select · open · fold")],
         _ => Vec::new(),
     }
 }

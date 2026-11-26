@@ -127,6 +127,7 @@ fn runs_and_events_draw_spans_waits_and_idle_on_the_task_lane() {
                 Actor::Owner,
             ),
         ],
+        tasks: Vec::new(),
     };
     let plot = plot(&page, &window, Grouping::ByTask, &feed);
     let lane = &plot.lanes[0];
@@ -201,6 +202,7 @@ fn drops_and_reopens_are_drawn_and_each_lane_opens_its_task_or_live_session() {
                 Actor::Owner,
             ),
         ],
+        tasks: Vec::new(),
     };
     let by_task = plot(&page, &window, Grouping::ByTask, &feed);
     let dropped = by_task.lanes.iter().find(|lane| lane.id == "T-2").unwrap();
