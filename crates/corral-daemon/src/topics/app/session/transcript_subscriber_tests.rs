@@ -1,12 +1,11 @@
 use super::*;
-use corral_protocol::{detail::SessionMessage, subscription::TranscriptOp as Op};
+use corral_protocol::{
+    detail::SessionMessage,
+    subscription::{BoardCursor, TranscriptOp as Op},
+};
 
-/// A page of operations with no room for the fleet came without it, which says the session
-/// has none, and nothing sent the fleet again until something else changed.
-#[test]
-fn a_fleet_left_off_a_page_of_operations_follows_it() {
-    let mut subscriber = subscribe(service(), "pm".into(), 7, None).unwrap();
-    let entry = Arc::clone(&subscriber.watch.entry);
+/// A fleet and a message that do not fit one page together.
+fn long_fleet() -> LivePage {
     let mut source = fleet_replacement(1, 1, false);
     let message = |seq| wire::subscription::SessionAgentMessage {
         seq,
@@ -23,50 +22,89 @@ fn a_fleet_left_off_a_page_of_operations_follows_it() {
         max_parallel: 3,
     };
     source.fleet = Some(bound_fleet(fleet).unwrap());
-    lock(&entry).publish(source);
-    let next = |subscriber: &mut Subscriber| {
-        let frame = subscriber.next(7, true, false, true).unwrap().unwrap();
-        let notice: rpc::Notification<serde_json::Value> =
-            serde_json::from_slice(&frame.payload).unwrap();
-        subscriber
-            .ack(serde_json::from_value(notice.params["cursor"].clone()).unwrap())
-            .unwrap();
-        notice.params
-    };
+    source
+}
+
+fn long_put() -> Op {
+    Op::Put {
+        message: SessionMessage {
+            id: "long".into(),
+            author: "assistant".into(),
+            at: None,
+            items: vec![corral_protocol::detail::SessionItem::Text {
+                text: "w".repeat(40 * 1024),
+            }],
+            model: None,
+            stop_reason: None,
+            usage: None,
+            input: None,
+            attachments: Vec::new(),
+        },
+        before: None,
+        replaces: None,
+        open: false,
+        cut: false,
+        again: false,
+    }
+}
+
+/// The next page of a client that follows the fleet and the transcript, not yet acked.
+fn send(subscriber: &mut Subscriber) -> (serde_json::Value, BoardCursor) {
+    let frame = subscriber.next(7, true, false, true).unwrap().unwrap();
+    let notice: rpc::Notification<serde_json::Value> =
+        serde_json::from_slice(&frame.payload).unwrap();
+    let cursor = serde_json::from_value(notice.params["cursor"].clone()).unwrap();
+    (notice.params, cursor)
+}
+
+fn next(subscriber: &mut Subscriber) -> serde_json::Value {
+    let (page, cursor) = send(subscriber);
+    subscriber.ack(cursor).unwrap();
+    page
+}
+
+/// A page of operations with no room for the fleet came without it, which says the session
+/// has none, and nothing sent the fleet again until something else changed.
+#[test]
+fn a_fleet_left_off_a_page_of_operations_follows_it() {
+    let mut subscriber = subscribe(service(), "pm".into(), 7, None).unwrap();
+    let entry = Arc::clone(&subscriber.watch.entry);
+    lock(&entry).publish(long_fleet());
     let held = next(&mut subscriber)["fleet"].clone();
     assert!(held.is_object());
-    let reset = Op::Reset { older: None };
-    lock(&entry).publish_transcript(vec![
-        reset,
-        Op::Put {
-            message: SessionMessage {
-                id: "long".into(),
-                author: "assistant".into(),
-                at: None,
-                items: vec![corral_protocol::detail::SessionItem::Text {
-                    text: "w".repeat(40 * 1024),
-                }],
-                model: None,
-                stop_reason: None,
-                usage: None,
-                input: None,
-                attachments: Vec::new(),
-            },
-            before: None,
-            replaces: None,
-            open: false,
-            cut: false,
-            again: false,
-        },
-    ]);
-    let mut operations = next(&mut subscriber);
-    if operations["transcript"][0]["op"] == "reset" {
-        operations = next(&mut subscriber);
-    }
+    lock(&entry).publish_transcript(vec![Op::Reset { older: None }, long_put()]);
+    assert_eq!(next(&mut subscriber)["transcript"][0]["op"], "reset");
+    let operations = next(&mut subscriber);
     assert_eq!(operations["transcript"][0]["message"]["id"], "long");
     assert!(operations.get("fleet").is_none());
     assert_eq!(next(&mut subscriber)["fleet"], held);
     assert!(subscriber.next(7, true, false, true).unwrap().is_none());
+}
+
+/// A gap found while a large message waited its turn went out on the page of that message
+/// alone, without the fleet: across a gap a client trusts no fleet it holds, and cleared it.
+#[test]
+fn a_gap_is_told_on_a_page_that_carries_the_fleet() {
+    let mut subscriber = subscribe(service(), "pm".into(), 7, None).unwrap();
+    let entry = Arc::clone(&subscriber.watch.entry);
+    lock(&entry).publish(long_fleet());
+    let held = next(&mut subscriber)["fleet"].clone();
+    lock(&entry).publish_transcript(vec![Op::Reset { older: None }, long_put()]);
+    assert_eq!(next(&mut subscriber)["transcript"][0]["op"], "reset");
+    // The message gives way to a page of events, and the ring overflows before its ack.
+    lock(&entry).publish(page(1, 2, 2, false));
+    let (events, cursor) = send(&mut subscriber);
+    assert!(events.get("transcript").is_none());
+    lock(&entry).publish(page(1, 3, 3 + SESSION_BUFFER_EVENTS as u64, false));
+    subscriber.ack(cursor).unwrap();
+    let gap = next(&mut subscriber);
+    assert!(gap["gap"].is_object(), "{gap}");
+    assert_eq!(gap["fleet"], held);
+    assert!(gap.get("transcript").is_none());
+    assert_eq!(
+        next(&mut subscriber)["transcript"][0]["message"]["id"],
+        "long"
+    );
 }
 
 #[test]

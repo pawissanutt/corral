@@ -31,8 +31,36 @@ fn sized(op: Op) -> SizedOp {
 }
 
 impl TranscriptBuffer {
-    pub(super) fn publish(&mut self, ops: Vec<Op>) {
-        for op in ops {
+    /// `alone` has, for each `again` put of `ops` in order, the message it is of and the
+    /// record whose result was folded into it, as that record's own message.
+    pub(super) fn publish(&mut self, ops: Vec<Op>, mut alone: Vec<(String, Op)>) {
+        // Records put as their own messages here, whole.
+        let mut whole: Vec<String> = Vec::new();
+        for mut op in ops {
+            if let Op::Put { message, again, .. } = &op {
+                if *again {
+                    let own = alone.iter().position(|(of, _)| of == &message.id);
+                    let own = own.map(|at| alone.remove(at).1);
+                    // The rows are what every subscriber holds. When the call's message is
+                    // not among them, a subscriber that joined since would ignore it put
+                    // again, and no page before its messages reads the result: the result
+                    // goes as its own message, as on a history page that parts them.
+                    if !self.holds(&message.id)
+                        && let Some(own) = own
+                    {
+                        op = own;
+                        if let Op::Put { message, .. } = &op {
+                            if whole.contains(&message.id) {
+                                continue;
+                            }
+                            whole.push(message.id.clone());
+                        }
+                    }
+                } else if whole.contains(&message.id) {
+                    // What the fold left of a record that was put whole.
+                    continue;
+                }
+            }
             match &op {
                 Op::Reset {older} => {
                     self.revision += 1;
@@ -81,6 +109,12 @@ impl TranscriptBuffer {
                 }
             }
         }
+    }
+
+    fn holds(&self, id: &str) -> bool {
+        self.rows
+            .iter()
+            .any(|(row, _)| matches!(row, Op::Put { message, .. } if message.id == id))
     }
 
     fn trim(&mut self) {

@@ -483,8 +483,11 @@ itself. No client stitches the two.
   is described below. A record is sent again with the same id when it changes: a tool
   result that arrives is folded into the call's message exactly as a history page folds
   it. That `put` has `again: true`, and a client that does not hold the message ignores
-  it: the call was put before the client's messages begin, and a history page returns it,
-  with its result, in its place.
+  it. corrald puts a call's message again only while that message is in the tail every
+  subscriber was given. Once it is not, a subscriber that joined since does not hold it,
+  and no page before its messages reads the result, so the result is put as its own
+  message instead, as on a history page that parts a call from its result; the client
+  shows the two as one tool by their call id.
 - An open message (`open: true`) is the assistant message being written. Its id is
   `<session>/open/<generation>.<turn>.<ordinal>` and names no record; it has at most one
   `thinking` item followed by at most one `text` item. `append { id, part, offset, text }`
@@ -560,7 +563,8 @@ few bounded reads hold, it reads the tail again, as a `reset`. The host stamps i
 and the journal's entries with one clock, and that clock is what pairs them. A turn's
 records are the assistant entries stamped at or after its `live_turn started`, so one
 read before that event's page is counted when the turn starts, and its words are not
-opened after it.
+opened after it. Within a turn the records are told apart by their place in the journal,
+after the last one paired, so two stamped the same instant are still two.
 
 A `reset` for the journal alone (another branch, or after a read of it failed) does not
 end the turn the host is in. While the journal cannot be read corrald still follows the
@@ -581,7 +585,9 @@ An operation that does not fit beside the fleet and the state is sent on a page 
 operations alone: no events, no state, no fleet. Such a page says nothing about the
 fleet, so a client keeps the one it holds (a change to the fleet always comes with its
 `live_fleet` event or a gap), and corrald follows the page with one that carries the
-fleet without waiting for anything else to change.
+fleet without waiting for anything else to change. A gap is never told on a page of
+operations alone: across a gap a client trusts neither the fleet nor the state it holds,
+so the gap goes first, on a page that carries both.
 
 History cursors (`SessionPage.older`, `reset.older`, `put.before`) stay valid while the
 journal is appended to. They are stamped with the journal's identity, not its size or

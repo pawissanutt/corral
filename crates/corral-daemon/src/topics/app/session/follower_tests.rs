@@ -303,7 +303,10 @@ fn a_message_of_many_calls_is_carried_whole_until_it_cannot_be() -> Result<()> {
     assert_eq!((id.as_str(), cut), ("s/entry/c", true));
     assert!((1..120).contains(&count));
     let mut buffer = super::transcript_buffer::TranscriptBuffer::default();
-    buffer.publish(vec![joined.clone(), followed.clone(), last.clone()]);
+    buffer.publish(
+        vec![joined.clone(), followed.clone(), last.clone()],
+        Vec::new(),
+    );
     let tail: Vec<Op> = buffer.snapshot().into_iter().map(|(op, _)| op).collect();
     assert!(matches!(
         tail.as_slice(),
@@ -536,6 +539,170 @@ fn a_reply_recorded_before_the_tail_read_again_is_not_put_as_being_written() -> 
     Ok(())
 }
 
+/// A result folded into a call that subscribers' messages no longer begin with was put as
+/// that call again. A subscriber that joined since ignores it, and no page before its
+/// messages reads the result: it had the result by neither.
+#[test]
+fn a_result_for_a_call_before_the_tail_goes_as_its_own_message() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("journal.jsonl");
+    append(
+        &path,
+        json!({"type":"message", "id":"u", "parentId":null,"message":{"role":"user","content":"hi"}}),
+    )?;
+    append(
+        &path,
+        json!({"type":"message", "id":"a", "parentId":"u","message":{"role":"assistant","content":[{"type":"toolCall","id":"c","name":"edit","arguments":{}}]}}),
+    )?;
+    let mut follower = Follower::default();
+    let mut buffer = super::transcript_buffer::TranscriptBuffer::default();
+    let ops = follower.visit("s", &path, None, Some(&page(vec![])), None);
+    buffer.publish(ops, follower.take_alone());
+    // Enough after the call for the tail subscribers are given to begin past it.
+    let long: Vec<Value> = (0..12)
+        .map(|_| json!({"type":"text","text":"x".repeat(4000)}))
+        .collect();
+    let mut parent = "a".to_owned();
+    for n in 0..6 {
+        let id = format!("f{n}");
+        append(
+            &path,
+            json!({"type":"message", "id":id, "parentId":parent,"message":{"role":"assistant","content":long}}),
+        )?;
+        parent = id;
+    }
+    let ops = follower.visit("s", &path, None, Some(&page(vec![])), None);
+    buffer.publish(ops, follower.take_alone());
+    let ids = |buffer: &super::transcript_buffer::TranscriptBuffer| -> Vec<String> {
+        let rows = buffer.snapshot().into_iter();
+        rows.filter_map(|(op, _)| match op {
+            Op::Put { message, .. } => Some(message.id),
+            _ => None,
+        })
+        .collect()
+    };
+    assert!(!ids(&buffer).contains(&"s/entry/a".to_owned()));
+    append(
+        &path,
+        json!({"type":"message", "id":"r", "parentId":parent,"message":{"role":"toolResult","toolCallId":"c","toolName":"edit","content":"changed"}}),
+    )?;
+    let ops = follower.visit("s", &path, None, Some(&page(vec![])), None);
+    assert!(
+        matches!(ops.as_slice(), [Op::Put { message, again: true, .. }] if message.id == "s/entry/a"),
+        "{ops:?}"
+    );
+    buffer.publish(ops, follower.take_alone());
+    let Some((Op::Put { message, again, .. }, _)) = buffer.operations.back() else {
+        panic!("a put");
+    };
+    assert_eq!((message.id.as_str(), *again), ("s/entry/r", false));
+    assert!(
+        matches!(
+            message.items.as_slice(),
+            [SessionItem::ToolCall {
+                result: Some(_),
+                ..
+            }]
+        ),
+        "{message:?}"
+    );
+    assert_eq!(ids(&buffer).last().map(String::as_str), Some("s/entry/r"));
+    Ok(())
+}
+
+/// A tail that begins inside a long record is read forward from that record's start, a
+/// bounded step at a time. One step did not reach the journal's end, and what it had read
+/// was taken for the tail: the records after it came later, behind the message the host
+/// was writing.
+#[test]
+fn a_tail_read_forward_from_a_long_record_reaches_the_journals_end() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("journal.jsonl");
+    // More raw bytes than one step reads, in more items than one page holds.
+    let long: Vec<Value> = (0..60)
+        .map(|_| json!({"type":"text","text":"x".repeat(10_000)}))
+        .collect();
+    append(
+        &path,
+        json!({"type":"message", "id":"a", "parentId":null,"message":{"role":"assistant","content":long}}),
+    )?;
+    append(
+        &path,
+        json!({"type":"message", "id":"u", "parentId":"a","message":{"role":"user","content":"after"}}),
+    )?;
+    let ops = Follower::default().visit("s", &path, None, Some(&page(vec![])), None);
+    assert!(
+        matches!(ops.as_slice(), [Op::Reset { .. }, Op::Put { message: first, .. }, Op::Put { message: last, .. }]
+            if first.id == "s/entry/a" && last.id == "s/entry/u"),
+        "{:?}",
+        ops.iter()
+            .map(|op| match op {
+                Op::Put { message, cut, .. } => format!("{} cut={cut}", message.id),
+                other => format!("{other:?}"),
+            })
+            .collect::<Vec<_>>()
+    );
+    Ok(())
+}
+
+/// Records are told apart by where they are in the journal, not by their stamps alone: a
+/// reply stamped the same instant as the one before it was taken for that one, and its
+/// words stayed beside its record.
+#[test]
+fn replies_stamped_alike_each_take_their_own_message() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("journal.jsonl");
+    let entry = |id: &str, parent: &str, role: &str, second: u8| {
+        json!({"type":"message", "id":id, "parentId":parent,
+            "timestamp":format!("2026-11-18T12:00:0{second}Z"),
+            "message":{"role":role,"content":"words"}})
+    };
+    append(
+        &path,
+        json!({"type":"message", "id":"u", "parentId":null,
+            "timestamp":"2026-11-18T12:00:00Z","message":{"role":"user","content":"hi"}}),
+    )?;
+    let mut follower = Follower::default();
+    follower.visit("s", &path, None, Some(&page(vec![])), None);
+    let text = |message: u64| Kind::LiveText {
+        turn: 2,
+        message,
+        offset: 0,
+        text: "words".into(),
+    };
+    let mut started = page(vec![
+        Kind::LiveTurn {
+            turn: 2,
+            state: SessionLiveTurnState::Started,
+        },
+        text(1),
+    ]);
+    started.events[0].0.at = "2026-11-18T12:00:01Z".into();
+    follower.visit("s", &path, None, Some(&started), None);
+    let replaced = |ops: &[Op], open: &str| matches!(ops.first(), Some(Op::Put { replaces: Some(id), .. }) if id == open);
+    append(&path, entry("a", "u", "assistant", 5))?;
+    let ops = follower.visit("s", &path, None, Some(&page_after(2, vec![text(2)])), None);
+    assert!(replaced(&ops, "s/open/1.2.1"), "{ops:?}");
+    append(&path, entry("b", "a", "assistant", 5))?;
+    let ops = follower.visit("s", &path, None, Some(&page_after(3, vec![text(3)])), None);
+    assert!(replaced(&ops, "s/open/1.2.2"), "{ops:?}");
+
+    // Counted again from the tail after a read that failed: the third reply, stamped like
+    // the two before it and recorded meanwhile, is not put again as being written.
+    let missing = dir.path().join("missing.jsonl");
+    follower.visit("s", &missing, None, Some(&page_after(4, vec![])), None);
+    append(&path, entry("c", "b", "assistant", 5))?;
+    let ops = follower.visit("s", &path, None, Some(&page_after(4, vec![])), None);
+    assert!(
+        matches!(ops.first(), Some(Op::Reset { .. }))
+            && ops[1..]
+                .iter()
+                .all(|op| matches!(op, Op::Put { open: false, .. })),
+        "{ops:?}"
+    );
+    Ok(())
+}
+
 /// The tail reads a bounded number of records at a time. The last record of a turn, left
 /// for the visit after the page that starts the next turn, was counted as that turn's first
 /// and took the place of the message it was writing.
@@ -686,7 +853,7 @@ fn a_long_reply_stops_at_the_bound_its_tail_holds() -> Result<()> {
     ops.extend(follower.visit("s", &path, None, Some(&long), None));
     assert_eq!(written(&ops), OPEN_PART_BYTES - 1);
     let mut buffer = TranscriptBuffer::default();
-    buffer.publish(ops);
+    buffer.publish(ops, Vec::new());
     let snapshot: Vec<Op> = buffer.snapshot().into_iter().map(|(op, _)| op).collect();
     assert_eq!(written(&snapshot), OPEN_PART_BYTES - 1);
     Ok(())

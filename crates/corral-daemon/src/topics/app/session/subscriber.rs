@@ -324,7 +324,9 @@ impl Subscriber {
                             .events
                             .back()
                             .is_some_and(|(event, _)| event.seq > start);
-                    if has_live_page && !self.prefer_transcript {
+                    // A gap goes on a page that carries the fleet and the state: the client
+                    // trusts neither across it, so a page of operations alone never tells it.
+                    if gap.is_some() || (has_live_page && !self.prefer_transcript) {
                         self.prefer_transcript = true;
                         break;
                     }

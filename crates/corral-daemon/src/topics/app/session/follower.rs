@@ -13,7 +13,7 @@ use corral_protocol::{
 use serde::Deserialize;
 
 use super::reader::LivePage;
-use crate::views::transcript::tail::{Change, Message, Tail};
+use crate::views::transcript::tail::{Change, Message, STEPS, Tail};
 
 #[derive(Deserialize)]
 pub(super) struct HostOpen {
@@ -40,27 +40,38 @@ pub(super) struct Follower {
     open: BTreeMap<u64, Open>,
     from_start: bool,
     mark: Option<Mark>,
-    /// When the latest assistant records this follower read were written.
-    seen: VecDeque<jiff::Timestamp>,
+    /// When the turn began, or the message it was joined at: an assistant record written
+    /// before it is not one of the messages being followed.
+    began: Option<jiff::Timestamp>,
+    /// The latest assistant records this follower read, in the journal's order: when each
+    /// was written, and its message.
+    seen: VecDeque<(jiff::Timestamp, String)>,
     /// When the first message of the tail last read again was written, unless that tail
     /// was the whole journal: records before it were not read.
     held: Option<jiff::Timestamp>,
+    alone: Vec<(String, Op)>,
 }
 
 /// Where the journal's clock parts a turn's records: the assistant records stamped at
-/// `since` or later (`past`: only later) are the turn's messages after `base`. The host
-/// stamps its events and the journal's entries with one clock.
-#[derive(Clone, Copy)]
+/// `since` or later are the turn's messages after `base`. The host stamps its events and
+/// the journal's entries with one clock.
+#[derive(Clone)]
 struct Mark {
     base: u64,
     since: jiff::Timestamp,
-    past: bool,
+    /// The record the `base`th message was paired with, written at `since`. The records
+    /// after it in the journal are the later ones, whatever their stamps.
+    after: Option<String>,
 }
 
 impl Mark {
-    /// Whether a record written at `at` is one of the turn's after `base`.
-    fn counts(&self, at: jiff::Timestamp) -> bool {
-        at > self.since || (!self.past && at == self.since)
+    /// The turn's start, or the start of the message after its first `base`.
+    fn from(base: u64, since: jiff::Timestamp) -> Self {
+        Self {
+            base,
+            since,
+            after: None,
+        }
     }
 }
 
@@ -70,9 +81,6 @@ enum Journal {
 }
 
 const SEEN: usize = 64;
-/// Steps of the tail read to reach the journal's end on one visit, before it is read again
-/// as a tail instead.
-const STEPS: usize = 8;
 
 struct Open {
     id: String,
@@ -95,6 +103,13 @@ impl Follower {
         self.from_start = true;
     }
 
+    /// For each `again` put of the last visit, in order: the message it is of, and the
+    /// record whose result was folded into it as that record's own message. Subscribers
+    /// who do not hold the first are given the second.
+    pub(super) fn take_alone(&mut self) -> Vec<(String, Op)> {
+        std::mem::take(&mut self.alone)
+    }
+
     pub(super) fn visit(
         &mut self,
         id: &str,
@@ -103,6 +118,7 @@ impl Follower {
         page: Option<&LivePage>,
         seed: Option<HostOpen>,
     ) -> Vec<Op> {
+        self.alone.clear();
         let generation = page.and_then(|p| p.generation);
         let from_start = std::mem::take(&mut self.from_start);
         // Joining the host's stream. Reading the journal again alone (another branch, or a
@@ -151,6 +167,7 @@ impl Follower {
             self.pending_end = None;
             self.recorded = 0;
             self.mark = None;
+            self.began = None;
             self.open.clear();
             self.skip_through = page.map_or(0, |page| page.host_tail);
             starts.clear();
@@ -170,7 +187,7 @@ impl Follower {
                     let Some(at) = message.at.as_deref().and_then(|at| at.parse().ok()) else {
                         continue;
                     };
-                    self.see(at);
+                    self.see(at, &message.id);
                     if !join && let Some(start) = locate_start(&mut starts, Some(at), true) {
                         start.records += 1;
                     }
@@ -189,7 +206,7 @@ impl Follower {
                     // reset takes the messages being written from a reader, so those the
                     // journal does not hold yet are put again, from the words the host
                     // writes next.
-                    if let Some(mark) = self.mark
+                    if let Some(mark) = &self.mark
                         && !reaches(self.held, mark.since)
                     {
                         self.lose_turn();
@@ -222,11 +239,8 @@ impl Follower {
                 return ops;
             }
             let before = seed.message.saturating_sub(1);
-            self.mark = since.map(|since| Mark {
-                base: before,
-                since,
-                past: false,
-            });
+            self.mark = since.map(|since| Mark::from(before, since));
+            self.began = since;
             self.recorded = match since {
                 Some(_) => before,
                 None if seed.message == 0 => 0,
@@ -292,17 +306,11 @@ impl Follower {
                         .find(|start| start.turn == *turn)
                         .map_or(0, |start| start.records);
                     // Its records may have been read on an earlier visit than this page.
-                    self.mark = event.at.parse().ok().map(|since| Mark {
-                        base: 0,
-                        since,
-                        past: false,
-                    });
+                    self.began = event.at.parse().ok();
+                    self.mark = self.began.map(|since| Mark::from(0, since));
                     self.count();
                     // Or written before the tail that was read again begins.
-                    if self
-                        .mark
-                        .is_some_and(|mark| !reaches(self.held, mark.since))
-                    {
+                    if self.began.is_some_and(|began| !reaches(self.held, began)) {
                         self.lose_turn();
                     }
                 }
@@ -403,7 +411,18 @@ impl Follower {
         for change in changes {
             let (row, assistant) = match change {
                 Change::Record(row, assistant) => (row, assistant),
-                Change::Again((message, before, cut)) => {
+                Change::Again((message, before, cut), own) => {
+                    if let Some((own, before, cut)) = own.map(|own| *own) {
+                        let own = Op::Put {
+                            message: own,
+                            before,
+                            replaces: None,
+                            open: false,
+                            cut,
+                            again: false,
+                        };
+                        self.alone.push((message.id.clone(), own));
+                    }
                     ops.push(Op::Put {
                         message,
                         before,
@@ -416,25 +435,27 @@ impl Follower {
                 }
             };
             let replaces = if assistant {
-                let at: Option<jiff::Timestamp> = row
-                    .as_ref()
-                    .and_then(|(message, ..)| message.at.as_deref())
-                    .and_then(|at| at.parse().ok());
-                if let Some(at) = at {
-                    self.see(at);
+                // When the record was written, and its message.
+                let written: Option<(jiff::Timestamp, String)> =
+                    row.as_ref().and_then(|(message, ..)| {
+                        Some((message.at.as_deref()?.parse().ok()?, message.id.clone()))
+                    });
+                if let Some((at, id)) = &written {
+                    self.see(*at, id);
                 }
-                // A record written before the turn's mark is not one of its uncounted ones.
-                let earlier = self.mark.zip(at).is_some_and(|(mark, at)| !mark.counts(at));
+                let at = written.as_ref().map(|(at, _)| *at);
+                // A record written before the turn began is an earlier turn's.
+                let earlier = self.began.zip(at).is_some_and(|(began, at)| at < began);
                 if let Some(start) = locate_start(starts, at, self.turn.is_some()) {
                     start.records += 1;
                     None
                 } else if self.turn.is_some() && !earlier {
                     self.recorded += 1;
-                    if let Some(since) = at {
+                    if let Some((since, id)) = written {
                         self.mark = Some(Mark {
                             base: self.recorded,
                             since,
-                            past: true,
+                            after: Some(id),
                         });
                     }
                     self.open.remove(&self.recorded).map(|open| open.id)
@@ -459,22 +480,35 @@ impl Follower {
         }
     }
 
-    fn see(&mut self, at: jiff::Timestamp) {
+    fn see(&mut self, at: jiff::Timestamp, id: &str) {
         if self.seen.len() == SEEN {
             self.seen.pop_front();
         }
-        self.seen.push_back(at);
+        self.seen.push_back((at, id.to_owned()));
     }
 
     /// Counts the turn's records by the journal's clock. The journal and the host are
     /// read at different moments, so a record may have been read before the event that
     /// says which message it is of, or while the journal could not be followed.
     fn count(&mut self) {
-        if self.turn.is_some()
-            && let Some(mark) = self.mark
-        {
-            let records = self.seen.iter().filter(|at| mark.counts(**at)).count() as u64;
-            self.recorded = self.recorded.max(mark.base + records);
+        let Some(mark) = self.mark.as_ref().filter(|_| self.turn.is_some()) else {
+            return;
+        };
+        let paired = mark.after.as_deref();
+        let paired = paired.and_then(|id| self.seen.iter().position(|(_, seen)| seen == id));
+        let records = match (paired, &mark.after) {
+            (Some(at), _) => self.seen.len() - at - 1,
+            // The record it was paired with is no longer among the latest: later stamps.
+            (None, Some(_)) => self.seen.iter().filter(|(at, _)| *at > mark.since).count(),
+            (None, None) => self.seen.iter().filter(|(at, _)| *at >= mark.since).count(),
+        };
+        if let Some((since, id)) = self.seen.back().filter(|_| records != 0) {
+            self.recorded = self.recorded.max(mark.base + records as u64);
+            self.mark = Some(Mark {
+                base: self.recorded,
+                since: *since,
+                after: Some(id.clone()),
+            });
         }
     }
 
@@ -484,6 +518,7 @@ impl Follower {
         self.turn = None;
         self.pending_end = None;
         self.mark = None;
+        self.began = None;
         self.open.clear();
     }
 

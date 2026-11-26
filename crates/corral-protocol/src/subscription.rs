@@ -414,8 +414,9 @@ pub enum TranscriptOp {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         cut: bool,
         /// A record put before that has changed: a tool result was folded into it. A
-        /// client that does not hold the message ignores the put, since it was put before
-        /// the client's messages begin and a history page returns it in its place.
+        /// client that does not hold the message ignores the put. corrald sends it only
+        /// while every subscriber was given the message, and otherwise puts the result as
+        /// its own message.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         again: bool,
     },

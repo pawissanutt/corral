@@ -108,6 +108,8 @@ pub(super) struct LiveReader {
     journal_id: String,
     follower: Follower,
     operations: Vec<TranscriptOp>,
+    /// For the records put again among them: see `Follower::take_alone`.
+    alone: Vec<(String, TranscriptOp)>,
     open: Option<HostOpen>,
     pub(super) cursors: Cursors,
     // On loss, keep the observed cursors for restart detection, but ask for
@@ -125,6 +127,7 @@ impl Default for LiveReader {
             journal_id: String::new(),
             follower: Follower::default(),
             operations: Vec::new(),
+            alone: Vec::new(),
             open: None,
             cursors: Cursors::default(),
             replay: false,
@@ -134,14 +137,22 @@ impl Default for LiveReader {
 }
 
 impl LiveReader {
+    /// Keeps what a visit made of the journal until it is published. The follower has read
+    /// past it, so a visit whose page is not published must not lose it.
+    fn followed(&mut self, ops: Vec<TranscriptOp>) {
+        self.operations.extend(ops);
+        self.alone.extend(self.follower.take_alone());
+    }
+
     pub(super) fn read(&mut self, shared: &Shared, scope: &str) -> Result<LivePage> {
         let resolved = match crate::sessions::resolve(shared, scope) {
             Ok(resolved) => resolved,
             Err(error) => {
                 if let Some(path) = &self.journal {
-                    self.operations = self
+                    let ops = self
                         .follower
                         .visit(&self.journal_id, path, None, None, None);
+                    self.followed(ops);
                 }
                 return Err(error);
             }
@@ -176,13 +187,14 @@ impl LiveReader {
             resolved.transcript.as_ref().or(self.journal.as_ref())
         };
         if let Some(path) = path {
-            self.operations = self.follower.visit(
+            let ops = self.follower.visit(
                 &resolved.id,
                 path,
                 resolved.transcript_scope(),
                 page.as_ref().ok(),
                 self.open.take(),
             );
+            self.followed(ops);
         }
         page
     }
@@ -588,7 +600,9 @@ pub(super) fn pass(
             if buffer.users == 0 {
                 continue;
             }
-            buffer.publish_transcript(std::mem::take(&mut source.reader.operations));
+            let reader = &mut source.reader;
+            let ops = std::mem::take(&mut reader.operations);
+            buffer.publish_followed(ops, std::mem::take(&mut reader.alone));
             match page {
                 Ok(page) => buffer.publish(page),
                 Err(_) => {

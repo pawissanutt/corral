@@ -10825,7 +10825,7 @@
             "description": "The message with this id: in place of the held message with the same id, or of the\nopen message `replaces` whose record it is, or else at the end.",
             "properties": {
               "again": {
-                "description": "A record put before that has changed: a tool result was folded into it. A\nclient that does not hold the message ignores the put, since it was put before\nthe client's messages begin and a history page returns it in its place.",
+                "description": "A record put before that has changed: a tool result was folded into it. A\nclient that does not hold the message ignores the put. corrald sends it only\nwhile every subscriber was given the message, and otherwise puts the result as\nits own message.",
                 "type": "boolean"
               },
               "before": {

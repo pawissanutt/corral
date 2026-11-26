@@ -23,6 +23,9 @@ const PUT_TARGET: usize = 40 * 1024;
 const CONTINUATION_BYTES: usize = 640;
 /// A call with its result folded in, however small its preview was asked to be.
 const FOLDED_BYTES: usize = 512;
+/// Bounded steps of the tail read to reach the journal's end at once, before its last page
+/// is read instead.
+pub(crate) const STEPS: usize = 8;
 
 /// The size an item of this record is carried whole at, so that all of them fit one
 /// operation with every call's result folded in: a history page's size for a record of a
@@ -99,8 +102,9 @@ pub(crate) type Message = (SessionMessage, Option<String>, bool);
 pub(crate) enum Change {
     /// The record's message, none when it shows nothing, and whether it is an assistant's.
     Record(Option<Message>, bool),
-    /// A message of an earlier record, with this record's tool result folded into it.
-    Again(Message),
+    /// A message of an earlier record, with this record's tool result folded into it, and
+    /// this record's own message as it reads with nothing folded out of it.
+    Again(Message, Option<Box<Message>>),
 }
 
 pub(crate) struct Tail {
@@ -139,24 +143,36 @@ impl Tail {
             let newest = (tail.offset, tail.leaf.take());
             (tail.offset, tail.leaf, tail.pending) = (start, follows, true);
             let mut messages: Vec<Message> = Vec::new();
-            let changes = tail.advance(id, path, scope)?.into_iter().flatten();
             let messages_of = |change| match change {
                 Change::Record(row, _) => row,
-                Change::Again(message) => Some(message),
+                Change::Again(message, _) => Some(message),
             };
-            for message in changes.filter_map(messages_of) {
-                // A call's message comes again with each result folded in.
-                match messages.iter_mut().find(|held| held.0.id == message.0.id) {
-                    Some(held) => *held = message,
-                    None => messages.push(message),
+            // A step reads a bounded part of the journal. The messages are its tail only
+            // once the steps reach its end, as the page read backwards does.
+            let mut reached = false;
+            for _ in 0..STEPS {
+                let Some(changes) = tail.advance(id, path, scope)? else {
+                    break;
+                };
+                for message in changes.into_iter().filter_map(messages_of) {
+                    // A call's message comes again with each result folded in.
+                    match messages.iter_mut().find(|held| held.0.id == message.0.id) {
+                        Some(held) => *held = message,
+                        None => messages.push(message),
+                    }
+                }
+                if !tail.pending {
+                    reached = true;
+                    break;
                 }
             }
-            if let Some((_, before, _)) = messages.first() {
+            if reached && let Some((_, before, _)) = messages.first() {
                 return Ok((tail, before.clone(), messages));
             }
-            // The journal forks after it: the page as it was cut.
+            // The journal forks after it, or is longer than these steps read: the page as
+            // it was cut.
             (tail.offset, tail.leaf) = newest;
-            (tail.pending, tail.bytes) = (false, 0);
+            (tail.pending, tail.bytes) = (tail.offset < tail.len, 0);
             tail.rows.clear();
         }
         let mut messages = Vec::new();
@@ -266,8 +282,28 @@ impl Tail {
         if let (Some(mut selection), _) = selected {
             let before = parent.cursor(&self.stamp, start, Skipped::default());
             pair_tools(std::slice::from_mut(&mut selection));
+            let folds = changes.len();
             for item in &mut selection.1 {
                 self.fold(id, item, changes)?;
+            }
+            if changes.len() > folds {
+                // A reader whose messages begin after the call does not hold its message,
+                // and no page before them reads this record: for it, the record as it
+                // reads with nothing folded out of it.
+                let value = serde_json::from_slice(bytes).context("decoding a folded record")?;
+                let mut skip = Skipped::default();
+                let whole = select(id, value, start, end, &mut skip, &mut 2, usize::MAX)?;
+                if let (Some(whole), _) = whole {
+                    let bound = put_bound(&whole)?;
+                    let (alone, _) = render(id, whole, before.clone(), false, bound)?;
+                    if json_len(&alone)? <= PUT_BYTES {
+                        for change in &mut changes[folds..] {
+                            if let Change::Again(_, own) = change {
+                                *own = Some(Box::new((alone.clone(), before.clone(), false)));
+                            }
+                        }
+                    }
+                }
             }
             let bound = put_bound(&selection)?;
             let (mut message, mut row) = render(id, selection, before, true, bound)?;
@@ -359,11 +395,10 @@ impl Tail {
             self.bytes -= *cost;
             *cost = row.cost(message)?;
             self.bytes += *cost;
-            changes.push(Change::Again((
-                message.clone(),
-                row.before.clone(),
-                row.cut,
-            )));
+            changes.push(Change::Again(
+                (message.clone(), row.before.clone(), row.cut),
+                None,
+            ));
             break;
         }
         self.trim();
