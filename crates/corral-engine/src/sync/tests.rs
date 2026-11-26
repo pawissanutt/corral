@@ -229,6 +229,74 @@ fn only_current_unfulfilled_work_gets_native_attention() {
     assert_eq!(f.reason(&worker), None); // gate/pipeline owns the next action
 }
 
+#[cfg(unix)]
+#[test]
+fn pi_reviewer_error_does_not_mask_an_outstanding_verdict_or_failed_pickup() {
+    use std::{
+        io::{BufRead, BufReader, Write},
+        os::unix::net::UnixListener,
+        thread,
+    };
+
+    let (f, mut run) = Fixture::new(Role::Reviewer, Status::Review, true);
+    let dir = tempfile::tempdir_in("/tmp").unwrap();
+    let socket = dir.path().join("reviewer.sock");
+    let Some(SessionRef::Pi { socket: path, .. }) = &mut run.session else {
+        unreachable!("expected a Pi run");
+    };
+    *path = socket.clone();
+    f.engine.store.update_run(&run).unwrap();
+    f.event(
+        &run,
+        EventKind::ReviewStarted,
+        json!({"round": 0, "pickup": {"input_id": "board-review", "rejected": false}}),
+    );
+    let listener = UnixListener::bind(socket).unwrap();
+    let host = thread::spawn(move || {
+        for (waiting, input) in [(false, "applied"), (true, "applied"), (false, "failed")] {
+            let (mut connection, _) = listener.accept().unwrap();
+            let mut line = String::new();
+            BufReader::new(&connection).read_line(&mut line).unwrap();
+            let req: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(req["command"], "get_state");
+            writeln!(
+                connection,
+                "{}",
+                json!({
+                    "id": req["id"], "version": 2, "ok": true, "result": {
+                        "paused": false, "turn": {"open": false}, "owner_questions": [],
+                        "last_error": "Provider failed after closing the turn",
+                        "activity": {"settled": true, "busy": false, "waiting": waiting,
+                            "turn": 1, "inputs": {"board-review": {"state": input, "turn": 1}}},
+                    },
+                })
+            )
+            .unwrap();
+        }
+    });
+    let reasons = std::array::from_fn::<_, 3, _>(|_| {
+        f.engine.reconcile(&run).unwrap();
+        f.reason(&run)
+    });
+    host.join().unwrap();
+    assert!(reasons[0].as_deref().is_some_and(|reason| {
+        reason.starts_with("Reviewer settled without a verdict") && reason.contains("follow up")
+    }));
+    assert_eq!(
+        reasons[1], None,
+        "an explicit wait still suppresses attention"
+    );
+    assert!(
+        reasons[2]
+            .as_deref()
+            .is_some_and(|reason| reason.starts_with("Review request wasn’t picked up"))
+    );
+    assert_eq!(
+        f.engine.store.require_task(&run.task).unwrap().status,
+        Status::Review
+    );
+}
+
 #[test]
 fn non_pi_requires_sustained_idle_and_resets_after_progress() {
     let (f, run) = Fixture::new(Role::Worker, Status::Running, false);

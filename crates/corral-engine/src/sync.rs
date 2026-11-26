@@ -241,15 +241,19 @@ impl Engine {
         now: Timestamp,
     ) -> Result<()> {
         let pi = matches!(run.session, Some(SessionRef::Pi { .. }));
-        let idle = sample.status == Some(SessionStatus::Idle)
-            && (!pi
-                || sample.paused == Some(false)
-                    && sample
-                        .activity
-                        .as_ref()
-                        .is_some_and(|a| !a.waiting && !a.busy));
+        let quiet = if pi {
+            // Pi can report a diagnostic Blocked status after a terminal error
+            // without waiting for anyone. Its native facts govern the obligation.
+            sample.paused == Some(false)
+                && sample
+                    .activity
+                    .as_ref()
+                    .is_some_and(|a| !a.waiting && !a.busy)
+        } else {
+            sample.status == Some(SessionStatus::Idle)
+        };
         let since = run.quiet_since;
-        let quiet_since = idle.then_some(since.unwrap_or(now));
+        let quiet_since = quiet.then_some(since.unwrap_or(now));
         if quiet_since != since {
             run.quiet_since = quiet_since;
             store.update_run(run)?;
@@ -264,7 +268,7 @@ impl Engine {
             return Ok(());
         }
         let owed = run.role == Role::Worker || review_requested;
-        let reason = if !idle || !owed {
+        let reason = if !quiet || !owed {
             None
         } else if let Some(activity) = &sample.activity {
             let pickup = store.obligation_pickup(run)?;
