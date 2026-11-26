@@ -577,11 +577,44 @@ fn read_window(
         .rev()
         .filter(|(_, byte)| **byte == b'\n')
         .nth(LOG_LINES - 1)
-        .map_or(0, |(at, _)| at + 1);
+        .map_or_else(
+            || {
+                // If the byte cap split a UTF-8 scalar, leave it whole in the earlier
+                // window. Align forward to stay within the byte cap.
+                if start == 0 {
+                    0
+                } else {
+                    bytes
+                        .iter()
+                        .take(3)
+                        .take_while(|b| **b & 0xc0 == 0x80)
+                        .count()
+                }
+            },
+            |(at, _)| at + 1,
+        );
     Ok((
         start + first as u64,
         start + bytes.len() as u64,
         total,
         String::from_utf8_lossy(&bytes[first..]).into_owned(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn earlier_cursor_keeps_a_utf8_scalar_at_the_window_boundary() {
+        let mut file = tempfile::tempfile().unwrap();
+        // The default tail byte offset is two bytes into the four-byte scalar.
+        let text = format!("prefix🧪{}", "x".repeat(LOG_WINDOW as usize - 2));
+        file.write_all(text.as_bytes()).unwrap();
+        let (start, end, total, tail) = read_window(file.try_clone().unwrap(), None, None).unwrap();
+        let (head_start, head_end, _, head) = read_window(file, Some(start), None).unwrap();
+        assert_eq!((head_start, head_end, end), (0, start, total));
+        assert!(end - start <= LOG_WINDOW);
+        assert!(head + &tail == text, "paging lost the multibyte marker");
+    }
 }
