@@ -131,6 +131,27 @@ test("Codex does not replay after observed output, tool activity, cancellation, 
   }
 });
 
+for (const [code, category, dispatches] of [
+  ["invalid_image", "invalid_request", 1],
+  ["image_too_large", "invalid_request", 1],
+  ["permission_denied", "auth", 1],
+  ["novel_failure", "unknown", 2],
+] as const) {
+  test(`output-free Codex SSE ${code} dispatches ${dispatches} request(s)`, async () => {
+    let requests = 0;
+    const result = await withProviderFailures("openai-codex", streamSimple)(codexModel, normalizeContext({ messages: [] }), {
+      apiKey: codexToken, transport: "sse", maxRetries: 0,
+      fetch: async () => {
+        requests++;
+        return sse([{ type: "response.failed", response: { status: "failed", output: [], error: { code, message: "opaque" } } }]);
+      },
+    }).result();
+    expect(requests).toBe(dispatches);
+    expect((result as FailureMessage).providerFailure?.category).toBe(category);
+    expect((result as FailureMessage).providerFailure?.replayed).toBe(dispatches === 2 ? true : undefined);
+  });
+}
+
 // Unknown wording is not a hint for Pi's whole-agent retry machinery.
 test("unknown provider failures are not transient", () => {
   expect(providerErrorClass("unrecognized failure format")).toBe("unknown");

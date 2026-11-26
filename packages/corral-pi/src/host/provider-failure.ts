@@ -60,7 +60,8 @@ export function normalizeFailure(provider: ProviderId, input: FailureInput, now 
   if (input.message?.startsWith("budget_exhausted:")) category = "local_budget";
   else if (input.message?.startsWith("network_refused:")) category = "network_policy";
   else if (input.message?.startsWith("credentials_unavailable:") || input.status === 401 || input.status === 403
-      || has("authentication_failed", "authentication_error", "invalid_api_key", "invalid_token", "token_expired", "oauth_org_not_allowed", "cloud_credential_error", "account_on_hold", "verification_required")) {
+      || has("authentication_failed", "authentication_error", "invalid_api_key", "invalid_token", "token_expired", "oauth_org_not_allowed",
+        "cloud_credential_error", "account_on_hold", "verification_required", "permission_denied")) {
     category = "auth"; scope = "account";
   } else if (input.status === 402 || has("billing_error", "insufficient_quota", "credit_balance_too_low")
       || provider === "anthropic-api" && has("invalid_request_error") && typeof error.message === "string"
@@ -71,7 +72,8 @@ export function normalizeFailure(provider: ProviderId, input: FailureInput, now 
     category = "billing"; scope = "account";
   } else if (has("invalid_request", "invalid_request_error", "context_length_exceeded", "content_filter", "content_policy_violation",
       "policy_violation", "safety_violation", "max_output_tokens", "missing_required_parameter", "unsupported_parameter",
-      "unknown_parameter", "invalid_parameter", "invalid_value", "invalid_type", "unsupported_value", "invalid_json", "invalid_prompt")
+      "unknown_parameter", "invalid_parameter", "invalid_value", "invalid_type", "unsupported_value", "invalid_json", "invalid_prompt",
+      "invalid_image", "image_too_large")
       || input.sdk_subtype === "error_max_turns" || input.terminal_reason === "prompt_too_long" || input.terminal_reason === "image_error") {
     category = "invalid_request"; scope = "request";
   } else if (has("model_not_found", "not_found_error", "usage_not_included") || input.status === 404) {
