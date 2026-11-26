@@ -6,6 +6,7 @@
 
 use nsh_core::prelude::*;
 
+use crate::model::status::status_look;
 use crate::model::tasks::{self, page};
 use crate::model::work::Record;
 use crate::model::{Form, Id, Live, TaskTab};
@@ -15,7 +16,7 @@ use crate::screens::task::{ask_about, decision, keeper};
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, button};
 use crate::ui::kit::next::more_button;
-use crate::ui::kit::status::{pipeline_rows, status_word_mark};
+use crate::ui::kit::status::{look_word, pipeline_rows};
 use crate::ui::kit::table::kv;
 use crate::ui::kit::text::{mono, plain};
 use crate::ui::term;
@@ -48,9 +49,10 @@ fn header(app: AppState, id: &Id, facts: Memo<Option<tasks::TaskFacts>>) -> AnyE
     let shown = id.to_string();
     let line = computed(move || {
         facts.with(|facts| {
-            facts
-                .as_ref()
-                .map(|facts| (facts.line.status, facts.line.title.clone()))
+            facts.as_ref().map(|facts| {
+                let line = &facts.line;
+                ((line.status, line.state_word()), line.title.clone())
+            })
         })
     });
     let id = id.clone();
@@ -75,7 +77,7 @@ fn header(app: AppState, id: &Id, facts: Memo<Option<tasks::TaskFacts>>) -> AnyE
                         .flex_wrap()
                         .items_center()
                         .gap(px(8.0))
-                        .child(status_word_mark(app, status))
+                        .child(look_word(app, status_look(status.0), status.1))
                         .child(mono(app, shown))
                         .child(view().flex_1())
                         .child(open)

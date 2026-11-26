@@ -234,7 +234,11 @@ pub fn by_status(feed: &Feed, scope: &Scope) -> Result<(usize, Vec<StatusBar>), 
         feed.board
             .tasks()
             .iter()
-            .filter(|task| scope.matches(task.project()) && task.status() == status)
+            .filter(|task| {
+                scope.matches(task.project())
+                    && task.status() == status
+                    && !crate::model::tasks::plans::is_summary(task)
+            })
             .count()
     };
     let counts: Vec<(Status, usize)> = OPEN.iter().map(|&status| (status, count(status))).collect();

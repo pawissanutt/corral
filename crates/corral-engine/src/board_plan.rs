@@ -585,6 +585,18 @@ mod tests {
         assert_eq!(store.require_task("T-100")?.status, Status::Backlog);
         let error = engine.dispatch(&ordinary.id, None, None, true).unwrap_err();
         assert!(!format!("{error:#}").contains("filed board plan parent"));
+
+        // A parent closed by hand is a summary, not closed history: neither the count nor
+        // the pages hold it, so the fold never counts a row it cannot show.
+        set("T-100", Status::Dropped)?;
+        assert_eq!(store.closed_task_count()?, 2);
+        let page: Vec<_> = store
+            .closed_tasks_before(None, 10)?
+            .into_iter()
+            .map(|task| task.id)
+            .collect();
+        assert_eq!(page.len(), 2);
+        assert!(!page.contains(&"T-100".to_owned()));
         Ok(())
     }
 }

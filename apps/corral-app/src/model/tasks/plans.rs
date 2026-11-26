@@ -45,6 +45,15 @@ impl PlanState {
         }
     }
 
+    /// The state as the inspector's and the page's header name it, in place of a status.
+    pub fn word(self) -> &'static str {
+        match self {
+            PlanState::Active { .. } => "Plan active",
+            PlanState::Complete { .. } => "Plan complete",
+            PlanState::Closed { .. } => "Plan closed",
+        }
+    }
+
     /// `Plan · 2 of 5 done`, `Plan complete · 5 done`, `Plan closed · 3 done, 2 dropped`.
     pub fn phrase(self) -> String {
         match self {
@@ -183,6 +192,7 @@ mod tests {
         let plan = line(&feed, "T-1").unwrap();
         assert_eq!(plan.plan, Some(PlanState::Complete { done: 3 }));
         assert_eq!(plan.status, Status::Done);
+        assert_eq!(plan.state_word(), "Plan complete");
         let next = plan.next.unwrap();
         assert_eq!(next.label, "View plan");
         assert_eq!(
@@ -190,6 +200,12 @@ mod tests {
             crate::model::work::Press::Open(crate::model::Live::Plan(Id::from("T-1")))
         );
         assert!(summary(&feed, &Scope::All).starts_with("1 open"));
+        let (open, bars) = crate::model::home::by_status(&feed, &Scope::All).unwrap();
+        assert_eq!(open, 1);
+        assert!(
+            bars.iter()
+                .all(|bar| bar.count == usize::from(bar.status == Status::Backlog))
+        );
         assert_eq!(
             feed.board.task("T-1").unwrap().group,
             crate::model::daemon::Group::Plan
@@ -214,6 +230,7 @@ mod tests {
             })
         );
         assert_eq!(closed.status, Status::Dropped);
+        assert_eq!(closed.state_word(), "Plan closed");
         assert_eq!(closed.now, "Plan closed · 1 done, 1 dropped");
         assert_eq!(keys(&feed, &State::default())[0].0, COMPLETED_KEY);
 
@@ -242,6 +259,7 @@ mod tests {
         );
         let active = line(&feed, "T-1").unwrap();
         assert_eq!(active.status, Status::Backlog);
+        assert_eq!(active.state_word(), "Plan active");
         assert_eq!(active.now, "Plan · 1 of 2 done");
         assert_eq!(active.next.unwrap().label, "View plan");
     }

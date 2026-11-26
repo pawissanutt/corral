@@ -388,11 +388,7 @@ impl Store {
     pub fn open_project_status_counts(
         &self,
     ) -> Result<std::collections::BTreeMap<String, Vec<(Status, u64)>>> {
-        let summaries = if self.has_board_plan_receipts()? {
-            format!("AND id NOT IN ({})", crate::board_plan::FILED_PARENTS)
-        } else {
-            String::new()
-        };
+        let summaries = self.not_filed_parent()?;
         let mut statement = self
             .connection
             .prepare(&format!(
@@ -444,10 +440,23 @@ impl Store {
         .collect()
     }
 
+    /// Filed plan parents are left out: they list as plan summaries, whatever their status.
+    fn not_filed_parent(&self) -> Result<String> {
+        Ok(if self.has_board_plan_receipts()? {
+            format!("AND id NOT IN ({})", crate::board_plan::FILED_PARENTS)
+        } else {
+            String::new()
+        })
+    }
+
+    /// Closed tasks, without filed plan parents.
     pub fn closed_task_count(&self) -> Result<u64> {
         self.connection
             .query_row(
-                "SELECT count(*) FROM tasks WHERE status IN ('done','dropped')",
+                &format!(
+                    "SELECT count(*) FROM tasks WHERE status IN ('done','dropped') {}",
+                    self.not_filed_parent()?
+                ),
                 [],
                 |row| row.get::<_, i64>(0),
             )
@@ -457,18 +466,20 @@ impl Store {
     }
 
     /// Newest updated first, newest task number first on ties. Canonical UTC
-    /// timestamps compare chronologically once the trailing Z is removed.
+    /// timestamps compare chronologically once the trailing Z is removed. Filed plan
+    /// parents are left out, as in [`Self::closed_task_count`].
     pub fn closed_tasks_before(
         &self,
         before: Option<(jiff::Timestamp, u32)>,
         limit: u16,
     ) -> Result<Vec<Task>> {
-        let mut statement = self.connection.prepare_cached(
-            "SELECT document FROM tasks WHERE status IN ('done','dropped')
+        let mut statement = self.connection.prepare_cached(&format!(
+            "SELECT document FROM tasks WHERE status IN ('done','dropped') {}
              AND (?1 IS NULL OR (rtrim(json_extract(document,'$.updated'),'Z'),CAST(substr(id,3) AS INTEGER)) < (?1,?2))
              ORDER BY rtrim(json_extract(document,'$.updated'),'Z') DESC,CAST(substr(id,3) AS INTEGER) DESC
              LIMIT ?3",
-        ).context("prepare closed task page")?;
+            self.not_filed_parent()?
+        )).context("prepare closed task page")?;
         let at = before.map(|(at, _)| at.to_string());
         let at = at.as_deref().map(|at| at.trim_end_matches('Z'));
         documents(&mut statement, params![at, before.map(|(_, id)| id), limit])

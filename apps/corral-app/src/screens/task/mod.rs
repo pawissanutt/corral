@@ -24,6 +24,7 @@ pub(crate) mod parts;
 use nsh_core::prelude::*;
 
 use crate::model::review::impact::View as ChangesView;
+use crate::model::status::status_look;
 use crate::model::tasks::{self, page as task_page};
 use crate::model::work::Record;
 use crate::model::{Destination, Form, Id, Live, TaskTab};
@@ -34,7 +35,7 @@ use crate::ui::icons::Icon;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button, button_with, tab_strip_with};
 use crate::ui::kit::next::more_button;
 use crate::ui::kit::page::measure;
-use crate::ui::kit::status::status_word_mark;
+use crate::ui::kit::status::look_word;
 use crate::ui::kit::text::{dim, mono, plain};
 use crate::ui::term;
 use crate::ui::tokens::{MEASURE_RECORD, Token, color};
@@ -254,8 +255,10 @@ fn named(app: AppState, id: &Id) -> AnyElement {
     let title = {
         let id = id.clone();
         computed(move || {
-            app.feed
-                .with(|feed| tasks::line(feed, id.as_str()).map(|line| (line.status, line.title)))
+            app.feed.with(|feed| {
+                tasks::line(feed, id.as_str())
+                    .map(|line| ((line.status, line.state_word()), line.title))
+            })
         })
     };
     let shown = id.to_string();
@@ -276,7 +279,7 @@ fn named(app: AppState, id: &Id) -> AnyElement {
                 .flex_row()
                 .items_center()
                 .gap(px(8.0))
-                .children(status.map(|status| status_word_mark(app, status)))
+                .children(status.map(|(status, word)| look_word(app, status_look(status), word)))
                 .child(mono(app, shown))
                 .child(heading)
                 .into_element()

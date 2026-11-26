@@ -311,6 +311,13 @@ pub struct TaskLine {
 }
 
 impl TaskLine {
+    /// The word beside the status mark in a header: a filed plan's derived state, else the
+    /// task's status.
+    pub fn state_word(&self) -> &'static str {
+        self.plan
+            .map_or_else(|| status_word(self.status), plans::PlanState::word)
+    }
+
     /// What a screen reader hears for the row.
     pub fn spoken(&self) -> String {
         let word = if self.plan.is_some() {
