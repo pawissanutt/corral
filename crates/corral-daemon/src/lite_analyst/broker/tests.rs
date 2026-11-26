@@ -337,6 +337,7 @@ fn attach_negotiates_evidence_first_and_only_releases_terminal_poll_payload() {
                 )
                 .unwrap();
             wait.recv_timeout(Duration::from_secs(4)).unwrap();
+            rustix::net::shutdown(&evidence, rustix::net::Shutdown::Both).unwrap();
             drop(evidence);
             closed.send(()).unwrap();
             rustix::net::sockopt::set_socket_timeout(

@@ -154,6 +154,18 @@ fn descriptor_purposes_require_distinct_live_unnamed_endpoints_and_pipe_directio
     assert!(check_pipe(&work, OFlags::RDONLY).is_err());
 }
 
+fn wait_for_pipe_hangup(reader: &impl AsFd) {
+    // A concurrent fork can retain the CLOEXEC writer until exec. Wait for
+    // actual EOF, not just readable bytes, without consuming the record.
+    let mut fds = [PollFd::new(reader, PollFlags::empty())];
+    let timeout = Timespec {
+        tv_sec: BOOTSTRAP_TIMEOUT.as_secs() as _,
+        tv_nsec: BOOTSTRAP_TIMEOUT.subsec_nanos().into(),
+    };
+    poll(&mut fds, Some(&timeout)).unwrap();
+    assert!(fds[0].revents().contains(PollFlags::HUP));
+}
+
 #[test]
 fn pipe_records_require_bounded_single_lf_and_live_driver() {
     let (life, driver) = pipe().unwrap();
@@ -186,16 +198,7 @@ fn pipe_records_require_bounded_single_lf_and_live_driver() {
     assert!(expired.line(OwnedFd::from(unwritten), PIPE_MAX).is_err());
 
     drop(driver);
-    // Other tests can fork while this pipe is open. A child temporarily retains
-    // the CLOEXEC writer until exec; wait for the actual lifetime loss before
-    // checking that a simultaneously readable credential cannot bypass it.
-    let mut lifetime = [PollFd::new(&life, PollFlags::IN)];
-    let timeout = Timespec {
-        tv_sec: BOOTSTRAP_TIMEOUT.as_secs() as _,
-        tv_nsec: BOOTSTRAP_TIMEOUT.subsec_nanos().into(),
-    };
-    poll(&mut lifetime, Some(&timeout)).unwrap();
-    assert!(lifetime[0].revents().contains(PollFlags::HUP));
+    wait_for_pipe_hangup(&life);
     assert!(line(credential.as_bytes()).is_err());
 }
 
@@ -219,9 +222,7 @@ fn ready_writes_once_then_closes_and_keeps_broker_fenced() {
     resources.check_broker().unwrap();
     resources.ready(&expected, || Ok(())).unwrap();
     assert!(resources.ready(&expected, || Ok(())).is_err());
-    let mut fds = [PollFd::new(&driver_ready, PollFlags::IN)];
-    poll(&mut fds, Some(&Timespec::default())).unwrap();
-    assert!(fds[0].revents().contains(PollFlags::HUP));
+    wait_for_pipe_hangup(&driver_ready);
     let mut bytes = Vec::new();
     driver_ready.read_to_end(&mut bytes).unwrap();
     let raw = bytes.strip_suffix(b"\n").unwrap();
@@ -244,9 +245,10 @@ fn ready_writes_once_then_closes_and_keeps_broker_fenced() {
             .ready(&expected, || anyhow::bail!("work EOF before ready"))
             .is_err()
     );
+    wait_for_pipe_hangup(&driver_ready);
     let mut bytes = Vec::new();
     driver_ready.read_to_end(&mut bytes).unwrap();
     assert!(bytes.is_empty());
-    drop(peer);
+    net::shutdown(&peer, net::Shutdown::Both).unwrap();
     assert!(resources.check_broker().is_err());
 }

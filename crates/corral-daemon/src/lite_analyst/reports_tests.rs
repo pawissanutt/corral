@@ -247,7 +247,6 @@ fn fence_or_expiry_before_publication_has_no_report() {
         let (mut store, run, launch) = working(dir.path());
         let checks = Cell::new(0);
         let (work, peer, _life) = work_pair();
-        let peer = Cell::new(Some(peer));
         if cause == "cancel" {
             assert_eq!(
                 store.stop(&run, 1, FenceReason::Stopped).unwrap().state,
@@ -264,7 +263,7 @@ fn fence_or_expiry_before_publication_has_no_report() {
                     if cause == "expire" {
                         return Ok(NOW + 60_000);
                     }
-                    drop(peer.take());
+                    peer.disconnect();
                 }
                 work.check_live()?;
                 Ok(NOW)

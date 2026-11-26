@@ -15,6 +15,8 @@ const UNCERTAINTY_MS: u64 = 100;
 pub(super) struct Clock {
     wall_ms: u64,
     boot_ms: u64,
+    #[cfg(test)]
+    test_clock: bool,
 }
 
 impl Clock {
@@ -62,11 +64,18 @@ impl Clock {
             let clock = Self {
                 wall_ms: old_wall,
                 boot_ms: old_boot,
+                #[cfg(test)]
+                test_clock: false,
             };
             clock.bounds(wall_ms, boot_ms)?;
             Ok(clock)
         } else {
-            let clock = Self { wall_ms, boot_ms };
+            let clock = Self {
+                wall_ms,
+                boot_ms,
+                #[cfg(test)]
+                test_clock: false,
+            };
             clock.bounds(wall_ms, boot_ms)?;
             db.execute(
                 "INSERT INTO clock_anchor VALUES(1,?1,?2,?3)",
@@ -77,11 +86,21 @@ impl Clock {
     }
 
     #[cfg(test)]
-    pub(super) fn new() -> anyhow::Result<Self> {
-        Ok(Self {
-            wall_ms: wall_ms()?,
-            boot_ms: boot_ms()?,
-        })
+    pub(super) fn new_test() -> Self {
+        let (wall_ms, boot_ms) = test_sample();
+        Self {
+            wall_ms,
+            boot_ms,
+            test_clock: true,
+        }
+    }
+
+    fn sample(&self) -> anyhow::Result<(u64, u64)> {
+        #[cfg(test)]
+        if self.test_clock {
+            return Ok(test_sample());
+        }
+        Ok((wall_ms()?, boot_ms()?))
     }
 
     fn bounds(&self, wall: u64, boot: u64) -> anyhow::Result<(u64, u64)> {
@@ -105,11 +124,13 @@ impl Clock {
     }
 
     pub(super) fn times(&self) -> anyhow::Result<(u64, u64)> {
-        self.bounds(wall_ms()?, boot_ms()?)
+        let (wall, boot) = self.sample()?;
+        self.bounds(wall, boot)
     }
 
     pub(super) fn reserve_time(&self) -> anyhow::Result<u64> {
-        self.reserve_time_at(wall_ms()?, boot_ms()?)
+        let (wall, boot) = self.sample()?;
+        self.reserve_time_at(wall, boot)
     }
 
     fn reserve_time_at(&self, wall: u64, boot: u64) -> anyhow::Result<u64> {
@@ -139,6 +160,22 @@ fn boot_ms() -> anyhow::Result<u64> {
         .and_then(|secs| secs.checked_mul(1000))
         .and_then(|millis| millis.checked_add((ts.tv_nsec as u64) / 1_000_000))
         .context("invalid fixture boot time")
+}
+
+// Protocol fixtures share a wall/boot mapping well away from UTC midnight.
+// A single monotonic sample keeps expiry moving without host wall-clock jumps
+// or scheduler gaps between the two clock reads. Clock tests use load_at instead.
+#[cfg(test)]
+fn test_sample() -> (u64, u64) {
+    use std::{sync::OnceLock, time::Instant};
+    static ORIGIN: OnceLock<Instant> = OnceLock::new();
+    let elapsed = ORIGIN.get_or_init(Instant::now).elapsed().as_millis() as u64;
+    (1_800_000_000_000 + elapsed, elapsed)
+}
+
+#[cfg(test)]
+pub(super) fn test_wall_ms() -> u64 {
+    test_sample().0
 }
 
 #[cfg(test)]

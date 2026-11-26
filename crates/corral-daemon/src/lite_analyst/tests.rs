@@ -1,7 +1,7 @@
-use super::clock::wall_ms;
+use super::clock::test_wall_ms;
 use super::*;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use std::os::unix::net::UnixStream;
+use std::{net::Shutdown, os::unix::net::UnixStream};
 
 const VECTORS: &str = include_str!("../../../../docs/contracts/lite-analyst-v1/vectors.json");
 
@@ -43,7 +43,7 @@ pub(super) fn new_session<'a>(store: &'a mut Store, work: &'a Work) -> Session<'
     Session {
         store,
         work,
-        clock: Clock::new().unwrap(),
+        clock: Clock::new_test(),
         pending_bind: None,
         pending_fence: None,
         fixture: None,
@@ -103,7 +103,7 @@ fn fixture_vectors_and_strict_framing() {
 fn dropped_start_reply_reopen_keeps_one_intent_and_rejects_conflict() {
     let dir = state_root();
     let mut e = enrollment();
-    let wall = wall_ms().unwrap();
+    let wall = test_wall_ms();
     let params = approval(wall, "start", "Public fixture");
     let mut store = Store::enroll(dir.path(), &e, wall).unwrap();
     let (work, peer, _life) = work_pair();
@@ -130,7 +130,7 @@ fn dropped_start_reply_reopen_keeps_one_intent_and_rejects_conflict() {
     };
     let committed = session.apply(&op, received, (wall, wall));
     assert!(committed.is_ok());
-    drop(peer);
+    peer.disconnect();
     assert!(work.respond(id, committed, deadline()).is_err());
     let id = session.pending_bind.take().unwrap().id;
     assert_eq!(session.store.read(&id).unwrap().state, "admitted");
@@ -174,7 +174,7 @@ fn dropped_start_reply_reopen_keeps_one_intent_and_rejects_conflict() {
 fn launch_fence_holds_slot_until_verified_cleanup_and_hides_foreign_runs() {
     let dir = state_root();
     let mut e = enrollment();
-    let wall = wall_ms().unwrap();
+    let wall = test_wall_ms();
     let mut store = Store::enroll(dir.path(), &e, wall).unwrap();
     let start = |id| wire::params(approval(wall, id, "Public fixture")).unwrap();
     let beyond_cap = wire::params(approval(wall + 60_001, "too_late", "Public fixture")).unwrap();
@@ -237,7 +237,7 @@ fn launch_fence_holds_slot_until_verified_cleanup_and_hides_foreign_runs() {
 #[test]
 fn local_cancel_advances_while_reverse_permit_is_in_flight() {
     let dir = state_root();
-    let wall = wall_ms().unwrap();
+    let wall = test_wall_ms();
     let mut store = Store::enroll(dir.path(), &enrollment(), wall).unwrap();
     let (work, peer, _life) = work_pair();
     let mut session = new_session(&mut store, &work);
@@ -260,7 +260,7 @@ fn local_cancel_advances_while_reverse_permit_is_in_flight() {
             peer.send(&Message::Request {v:1,id:"cancel".into(),op:"cancel_investigation".into(),params:json!({"run_id":run,"generation":1}) }, deadline()).unwrap();
             let Message::Success { id: cancel, result, .. } = peer.receive_message(deadline()).unwrap() else { panic!("expected cancel result"); };
             assert_eq!((cancel.as_str(), result["state"].as_str()), ("cancel", Some("stop_requested")));
-            peer.respond(id, Ok(json!({"permit_id":"permit","expires_ms":wall_ms().unwrap()+1500,"reserve_digest":params["reserve_digest"]})), deadline()).unwrap();
+            peer.respond(id, Ok(json!({"permit_id":"permit","expires_ms":test_wall_ms()+1500,"reserve_digest":params["reserve_digest"]})), deadline()).unwrap();
             // Keep the socket alive until the deciding thread gets its reply.
             peer
         });
@@ -280,7 +280,7 @@ fn local_cancel_advances_while_reverse_permit_is_in_flight() {
 #[test]
 fn conflicting_permit_fences_bound_lite_after_local_stop_without_waiting_for_ack() {
     let dir = state_root();
-    let wall = wall_ms().unwrap();
+    let wall = test_wall_ms();
     let mut store = Store::enroll(dir.path(), &enrollment(), wall).unwrap();
     let start = wire::params(approval(wall, "conflicting_permit", "Public fixture")).unwrap();
     let run = store.start(&start, wall).unwrap().snapshot.run_id;
@@ -294,7 +294,7 @@ fn conflicting_permit_fences_bound_lite_after_local_stop_without_waiting_for_ack
             peer.respond(id, Ok(json!({"bound":true})), deadline()).unwrap();
             let Message::Request { id, op, .. } = peer.receive_message(deadline()).unwrap() else { panic!("expected reserve"); };
             assert_eq!(op, "reserve_turn");
-            peer.respond(id, Ok(json!({"permit_id":"permit","expires_ms":wall_ms().unwrap()+1500,"reserve_digest":"0".repeat(64)})), deadline()).unwrap();
+            peer.respond(id, Ok(json!({"permit_id":"permit","expires_ms":test_wall_ms()+1500,"reserve_digest":"0".repeat(64)})), deadline()).unwrap();
             let Message::Request { id, op, params, .. } = peer.receive_message(deadline()).unwrap() else { panic!("expected fence"); };
             assert_eq!(op, "fence_session");
             assert_eq!(params, json!({"run_id":run,"generation":1,"reason":"stopped"}));
@@ -329,7 +329,7 @@ fn conflicting_permit_fences_bound_lite_after_local_stop_without_waiting_for_ack
 #[test]
 fn authenticated_turn_send_is_once_and_dropped_settlement_ack_replays_only_receipt() {
     let dir = state_root();
-    let wall = wall_ms().unwrap();
+    let wall = test_wall_ms();
     let mut e = enrollment();
     let mut store = Store::enroll(dir.path(), &e, wall).unwrap();
     let start = store
@@ -348,13 +348,13 @@ fn authenticated_turn_send_is_once_and_dropped_settlement_ack_replays_only_recei
         let reply = s.spawn(move || {
             let Message::Request { id, op, params, .. } = peer.receive_message(deadline()).unwrap() else { panic!("expected reserve"); };
             assert_eq!(op, "reserve_turn");
-            peer.respond(id, Ok(json!({"permit_id":"permit","expires_ms":wall_ms().unwrap()+1500,"reserve_digest":params["reserve_digest"]})), deadline()).unwrap();
+            peer.respond(id, Ok(json!({"permit_id":"permit","expires_ms":test_wall_ms()+1500,"reserve_digest":params["reserve_digest"]})), deadline()).unwrap();
             let Message::Request { op, params: settled, .. } = peer.receive_message(deadline()).unwrap() else { panic!("expected settlement"); };
             assert_eq!(op, "settle_turn");
             assert_eq!(settled["body"]["reserve_digest"], params["reserve_digest"]);
             assert_eq!(settled["body"]["charged_microusd"], 760);
             // Lite records this exact payload, but the ACK never reaches Corral.
-            drop(peer);
+            peer.disconnect();
             settled
         });
         let (request, lease) = session
@@ -435,7 +435,7 @@ fn authenticated_turn_send_is_once_and_dropped_settlement_ack_replays_only_recei
 #[test]
 fn broker_loss_between_read_and_commit_fences_bootstrap_and_start() {
     let dir = state_root();
-    let wall = wall_ms().unwrap();
+    let wall = test_wall_ms();
     let (work, peer, _life) = work_pair();
     let (broker, bootstrap_peer) = UnixStream::pair().unwrap();
     let work = work.with_broker(broker.into());
@@ -445,7 +445,7 @@ fn broker_loss_between_read_and_commit_fences_bootstrap_and_start() {
             dir.path(),
             &e,
             |_| {
-                drop(bootstrap_peer);
+                bootstrap_peer.shutdown(Shutdown::Both).unwrap();
                 Ok(((), wall))
             },
             || work.check_live()
@@ -468,7 +468,7 @@ fn broker_loss_between_read_and_commit_fences_bootstrap_and_start() {
     )
     .unwrap();
     let start = work.receive_message(deadline()).unwrap();
-    drop(steady_peer);
+    steady_peer.shutdown(Shutdown::Both).unwrap();
     assert!(session.handle(start, deadline()).is_err());
     assert_eq!(
         session

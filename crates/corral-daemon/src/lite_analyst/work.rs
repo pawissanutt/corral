@@ -56,6 +56,13 @@ impl Work {
         self.poll(PollFlags::RDHUP, Instant::now()).map(|_| ())
     }
 
+    /// Make peer EOF observable even if a concurrent fork inherited this socket
+    /// and has not reached exec yet. Closing our descriptor alone cannot do that.
+    #[cfg(test)]
+    pub(super) fn disconnect(&self) {
+        self.socket.shutdown(std::net::Shutdown::Both).unwrap();
+    }
+
     /// While attaching, the broker adapter reads the sole expected bootstrap
     /// packet itself. Continue to watch for hangup on that descriptor.
     pub(super) fn during_broker_attach<T>(

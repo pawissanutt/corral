@@ -1,5 +1,5 @@
 use super::super::{
-    clock::wall_ms,
+    clock::test_wall_ms,
     store::Store,
     tests::{approval, deadline, enrollment, new_session, state_root, work_pair},
     wire::{Fault, Message},
@@ -39,7 +39,7 @@ fn a_forbidden_or_malformed_call_rejects_the_whole_batch_before_dispatch() {
 #[test]
 fn pi_eof_after_consumption_blocks_provider_and_settles_once_without_replay() {
     let dir = state_root();
-    let wall = wall_ms().unwrap();
+    let wall = test_wall_ms();
     let mut enrollment = enrollment();
     let mut store = Store::enroll(dir.path(), &enrollment, wall).unwrap();
     let start = wire::params(approval(wall, "pi_eof", "Public fixture")).unwrap();
@@ -69,7 +69,7 @@ fn pi_eof_after_consumption_blocks_provider_and_settles_once_without_replay() {
             peer.respond(
                 id,
                 Ok(
-                    json!({"permit_id":"test_permit", "expires_ms":wall_ms().unwrap()+4000,
+                    json!({"permit_id":"test_permit", "expires_ms":test_wall_ms()+4000,
                 "reserve_digest":params["reserve_digest"]}),
                 ),
                 deadline(),
@@ -113,7 +113,7 @@ fn pi_eof_after_consumption_blocks_provider_and_settles_once_without_replay() {
                     })
                     .unwrap();
                 assert!(consumed);
-                drop(pi);
+                pi.shutdown(std::net::Shutdown::Both).unwrap();
                 io.check_waiting()
             },
             |_| {
@@ -141,7 +141,7 @@ fn pi_eof_after_consumption_blocks_provider_and_settles_once_without_replay() {
     drop(store);
     enrollment.prior_channel_epoch = Some(enrollment.channel_epoch.clone());
     enrollment.channel_epoch = "epoch_B".into();
-    let mut store = Store::enroll(dir.path(), &enrollment, wall_ms().unwrap()).unwrap();
+    let mut store = Store::enroll(dir.path(), &enrollment, test_wall_ms()).unwrap();
     let (work, peer, _life) = work_pair();
     let mut session = new_session(&mut store, &work);
     session.replay_settlements().unwrap();
