@@ -46,20 +46,35 @@ impl NextStep {
         }
     }
 
-    /// What the button says while its operation is sent and corrald has not answered:
-    /// `Moving to Ready…`. It names the operation under way, never its outcome.
-    pub fn pending_label(&self) -> Option<String> {
-        match &self.press {
-            Press::Step { step, .. } => Some(match step {
-                Step::Move(status) => {
-                    format!("Moving to {}…", crate::model::status::status_word(*status))
-                }
-                Step::Dispatch => "Dispatching…".into(),
-                Step::Approve => "Landing…".into(),
-            }),
-            _ => None,
-        }
+    /// What the button says while it must not offer its operation again. Sent and unanswered,
+    /// it names the operation under way (`Moving to Ready…`). Answered while the board has not
+    /// caught up, it says what is known: corrald moved the task, or the outcome is unknown.
+    /// Neither claims the new status before the board shows it.
+    pub fn pending_label(&self, pending: Pending) -> Option<String> {
+        let Press::Step { step, .. } = &self.press else {
+            return None;
+        };
+        Some(match (pending, step) {
+            (Pending::Sending, Step::Move(status)) => {
+                format!("Moving to {}…", crate::model::status::status_word(*status))
+            }
+            (Pending::Sending, Step::Dispatch) => "Dispatching…".into(),
+            (Pending::Sending, Step::Approve) => "Landing…".into(),
+            (Pending::Confirmed, _) => "Done · updating the board…".into(),
+            (Pending::Unknown, _) => "Outcome unknown · checking the board…".into(),
+        })
     }
+}
+
+/// Why a step's button holds its operation back (`AppState::op_pending`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pending {
+    /// Sent; corrald has not answered.
+    Sending,
+    /// corrald applied it; the board does not show a walk taken since.
+    Confirmed,
+    /// Its reply was lost; the board does not show a walk taken since.
+    Unknown,
 }
 
 /// The test id of a record's next-step button: `next-T-12`, `next-B-k3x9`.

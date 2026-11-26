@@ -279,6 +279,7 @@ impl AppState {
                 feed.changes_older = None;
                 feed.topics.clear();
                 feed.operations.clear();
+                feed.op_fences.clear();
                 feed.uploads.clear();
             });
         }
@@ -588,6 +589,7 @@ fn trim_operations(feed: &mut Feed) {
             .map(|(id, _)| id.clone());
         if let Some(key) = key {
             feed.operations.remove(&key);
+            feed.op_fences.remove(&key);
         } else {
             break;
         }

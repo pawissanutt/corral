@@ -24,6 +24,7 @@ mod session;
 mod socket;
 #[cfg(unix)]
 mod transport;
+pub(crate) mod walks;
 #[cfg(any(target_arch = "wasm32", windows))]
 mod web;
 #[cfg(test)]

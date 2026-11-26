@@ -38,9 +38,10 @@ pub fn next_button(app: AppState, record: &str, step: &NextStep, wide: bool) -> 
     )
 }
 
-/// The step's button, which says the step is under way (`Moving to Ready…`) and takes no press
-/// from the moment it is sent until corrald answers. The outcome then shows as the task's
-/// status, a receipt or the refusal sheet.
+/// The step's button, which takes no press from the moment it is sent until the board shows a
+/// walk taken after corrald's answer, saying where it stands meanwhile (`Moving to Ready…`).
+/// A refusal or failure gives it back at once; the outcome shows as a receipt or the refusal
+/// sheet.
 fn sent_aware(
     app: AppState,
     record: &str,
@@ -49,13 +50,13 @@ fn sent_aware(
     options: ButtonOptions,
 ) -> AnyElement {
     let op = step.op();
-    let sent = computed(move || op.as_ref().is_some_and(|op| app.op_pending(op)));
+    let pending = computed(move || op.as_ref().and_then(|op| app.op_pending(op)));
     let (step, id) = (step.clone(), next_id(record));
     dynamic(move || {
-        let sent = sent.get();
-        let label = sent
-            .then(|| step.pending_label())
-            .flatten()
+        let pending = pending.get();
+        let sent = pending.is_some();
+        let label = pending
+            .and_then(|pending| step.pending_label(pending))
             .unwrap_or_else(|| step.label.clone());
         let action = step.press.clone();
         untracked(|| {

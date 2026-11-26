@@ -72,14 +72,7 @@ impl AppState {
         let mut parts = BTreeSet::new();
         let topic = match delta {
             SubDelta::Tasks { delta } => {
-                let rev = delta.cursor.rev;
-                return Ok(self.tasks(
-                    feed,
-                    (delta.epoch, rev),
-                    delta.rows,
-                    delta.left,
-                    replacement,
-                ));
+                return Ok(self.tasks(feed, delta.epoch, delta.rows, delta.left, replacement));
             }
             SubDelta::Plans { delta } => {
                 feed.update(|feed| {
@@ -275,7 +268,7 @@ impl AppState {
     pub(super) fn tasks(
         &mut self,
         feed: Signal<Feed>,
-        (epoch, rev): (u64, u64),
+        epoch: u64,
         rows: Vec<TaskRow>,
         left: Vec<String>,
         replacement: bool,
@@ -311,7 +304,7 @@ impl AppState {
                 &left,
                 replacement,
             );
-            feed.board.walked(rev, replacement);
+            feed.board.walk = crate::client::walks::completed();
             feed.topics
                 .insert(topic_key(Topic::Tasks, None), TopicState::default());
         });

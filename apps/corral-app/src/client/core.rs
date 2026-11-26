@@ -106,6 +106,7 @@ pub(super) struct Core {
 
 impl Core {
     pub(super) fn new() -> Self {
+        super::walks::connected();
         Self {
             next_id: 0,
             pending: BTreeMap::new(),
@@ -628,6 +629,9 @@ impl Core {
             return Err("daemon topic snapshot exceeds client bounds".into());
         }
         let cursor = serde_json::from_value(value["cursor"].clone()).map_err(decode)?;
+        if topic == Topic::Tasks {
+            super::walks::page(value["more"].as_bool() == Some(true));
+        }
         if value["more"].as_bool() != Some(true) {
             let replacement = batch.replacement;
             value["rows"] = Value::Array(std::mem::take(&mut batch.rows).into_values().collect());

@@ -430,63 +430,45 @@ pub fn created(feed: &Feed, key: &str) -> Option<String> {
     }
 }
 
-/// Where the board stood when a move was confirmed (or its outcome became unknown) while its
-/// task still showed another status: the board's update follows the reply, so until a walk
-/// taken after the move arrives, the task's step would offer the same move again.
+/// A move that may have changed the board while the board does not show it yet: corrald's
+/// board update follows its reply, so until a walk taken after the reply arrives, the task's
+/// step would offer the same move again. Time alone never settles it: only a board taken after
+/// the reply (`client::walks`) does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Behind {
-    /// The status the row showed.
-    pub status: Status,
-    /// The subscription and walk revision then applied. A replacement snapshot still on its
-    /// way then counts as the next subscription, none of whose walks are applied yet.
-    pub subscription: u64,
-    pub rev: u64,
+    /// A walk numbered above this was taken after the reply.
+    pub fence: u64,
+    /// Whether corrald confirmed the move; otherwise its outcome is unknown.
+    pub confirmed: bool,
 }
 
-/// The board a move may have changed but does not show yet; none for a move refused, failed
-/// before it was sent, or already shown at its target.
+/// The board a move may have changed but does not show yet; none for a move refused or failed,
+/// or one the board already shows at its target.
 pub fn board_behind(feed: &Feed, act: &Act, status: &ActStatus) -> Option<Behind> {
     let Op::Move { id, status: target } = &act.op else {
         return None;
     };
-    let shown = feed.board.task(id)?.status();
-    let maybe_applied = *status == ActStatus::Done || unknown_outcome(feed, &act.key).is_some();
-    let board = &feed.board;
-    (maybe_applied && shown != *target).then(|| {
-        if board.replacing() {
-            Behind {
-                status: shown,
-                subscription: board.subscriptions.saturating_add(1),
-                rev: 0,
-            }
-        } else {
-            Behind {
-                status: shown,
-                subscription: board.subscriptions,
-                rev: board.walk_rev,
-            }
-        }
-    })
+    if feed.board.task(id)?.status() == *target {
+        return None;
+    }
+    let confirmed = *status == ActStatus::Done;
+    if !confirmed && unknown_outcome(feed, &act.key).is_none() {
+        return None;
+    }
+    // A reply records its fence as it is handled. A lost link has none: every walk of the next
+    // connection is numbered past the board's.
+    let fence = feed
+        .op_fences
+        .get(&act.key)
+        .copied()
+        .unwrap_or(feed.board.walk);
+    Some(Behind { fence, confirmed })
 }
 
-/// Whether the board shows a walk known to be taken after the move. corrald pins one walk at
-/// a time per subscription and sends the reply before any walk it pins later: the walk after
-/// `rev` may have been pinned before the move (a snapshot in flight) and settles only if it
-/// already shows the row elsewhere; the one after that, or a later subscription's, came after.
-/// A row the board no longer holds has no step to offer again.
+/// Whether the board shows a walk taken after the reply, or no longer holds the task (whose
+/// step then cannot be offered again).
 pub fn board_caught_up(feed: &Feed, op: &Op, behind: Behind) -> bool {
-    let Some(id) = target(op) else {
-        return true;
-    };
-    let board = &feed.board;
-    let Some(task) = board.task(id) else {
-        return true;
-    };
-    if board.subscriptions != behind.subscription {
-        return board.subscriptions > behind.subscription;
-    }
-    board.walk_rev >= behind.rev.saturating_add(2)
-        || (board.walk_rev > behind.rev && task.status() != behind.status)
+    target(op).is_none_or(|id| feed.board.task(id).is_none() || feed.board.walk > behind.fence)
 }
 
 /// Why a sent operation's outcome is unknown, if it is: the request left this device but no
@@ -674,11 +656,12 @@ mod tests {
         assert!(receipt_for("offline").contains("Failed"));
     }
 
-    /// The reply came about a second before the board's update; between them the step button
-    /// offered the same move again and a press sent it twice.
+    /// The reply came up to 1.6 s before the board's update; between them the step button
+    /// offered the same move again and a press sent it twice. Only a board walk taken after
+    /// the reply settles it: one still in flight at the reply, or no walk at all, does not.
     #[test]
-    fn a_confirmed_move_stays_under_way_until_the_board_shows_it() {
-        use crate::model::daemon::{Feed, Task, bare_task, task_row};
+    fn a_move_stays_under_way_until_a_board_taken_after_its_reply() {
+        use crate::model::daemon::{ClientError, Feed, Operation, Task, bare_task, task_row};
         let row = |status| {
             Task::new(task_row(bare_task(
                 "T-1",
@@ -686,6 +669,10 @@ mod tests {
                 status,
                 jiff::Timestamp::UNIX_EPOCH,
             )))
+        };
+        let walk = |feed: &mut Feed, status, number| {
+            feed.board.apply_batch(1, vec![row(status)], &[]);
+            feed.board.walk = number;
         };
         let act = Act::with_key(
             Id::new("k"),
@@ -695,48 +682,35 @@ mod tests {
             },
             false,
         );
-        let walk = |feed: &mut Feed, status, rev, replacement| {
-            feed.board.apply_batch(1, vec![row(status)], &[]);
-            feed.board.walked(rev, replacement);
-        };
         let mut feed = Feed::default();
-        walk(&mut feed, Status::Backlog, 1, true);
+        walk(&mut feed, Status::Backlog, 1);
+        // Walk 2 was partly read when the reply was handled: its fence counts it.
+        feed.op_fences.insert(Id::new("k"), 2);
         let behind = board_behind(&feed, &act, &ActStatus::Done).expect("board still Backlog");
-        assert!(!board_caught_up(&feed, &act.op, behind));
-        // A refusal or failure before sending is never under way.
+        assert!(behind.confirmed);
+        assert!(!board_caught_up(&feed, &act.op, behind), "no new walk");
+        // A refusal or a failure before sending is never under way.
         assert_eq!(
             board_behind(&feed, &act, &ActStatus::Failed("x".into())),
             None
         );
-
-        // The next walk shows the move: settled.
-        walk(&mut feed, Status::Ready, 2, false);
+        // The walk in flight at the reply may predate the move: not fresh.
+        walk(&mut feed, Status::Backlog, 2);
+        assert!(!board_caught_up(&feed, &act.op, behind), "pre-reply walk");
+        // A walk taken after the reply is the truth, whatever it shows.
+        walk(&mut feed, Status::Backlog, 3);
         assert!(board_caught_up(&feed, &act.op, behind));
 
-        // The next walk still shows Backlog: it may have been pinned before the move (a
-        // snapshot in flight, an edit's), so the step stays under way ...
-        walk(&mut feed, Status::Backlog, 2, false);
-        assert!(!board_caught_up(&feed, &act.op, behind));
-        // ... until a walk pinned after it, which shows the truth whatever it is (moved back).
-        walk(&mut feed, Status::Backlog, 3, false);
-        assert!(board_caught_up(&feed, &act.op, behind));
-
-        // A new subscription's snapshot (after a reconnect) came after the reply.
+        // A reply lost with the link: unknown, and the next connection's first walk is fresh.
         let mut feed = Feed::default();
-        walk(&mut feed, Status::Backlog, 7, true);
-        let behind = board_behind(&feed, &act, &ActStatus::Done).expect("behind");
-        walk(&mut feed, Status::Backlog, 1, true);
-        assert!(board_caught_up(&feed, &act.op, behind));
-
-        // A submit whose reply was lost may have been applied: under way too, so a press on
-        // the stale row cannot send it again.
+        walk(&mut feed, Status::Backlog, 5);
         feed.operations.insert(
             Id::new("k"),
-            crate::model::daemon::Operation {
+            Operation {
                 method: corral_protocol::op::OP_SUBMIT.into(),
                 loading: false,
                 value: None,
-                error: Some(crate::model::daemon::ClientError {
+                error: Some(ClientError {
                     code: "disconnected".into(),
                     message: String::new(),
                 }),
@@ -744,6 +718,10 @@ mod tests {
             },
         );
         let lost = status(&feed, "k").expect("sent");
-        assert!(board_behind(&feed, &act, &lost).is_some());
+        let behind = board_behind(&feed, &act, &lost).expect("may have applied");
+        assert!(!behind.confirmed);
+        assert!(!board_caught_up(&feed, &act.op, behind));
+        walk(&mut feed, Status::Backlog, 6);
+        assert!(board_caught_up(&feed, &act.op, behind));
     }
 }
