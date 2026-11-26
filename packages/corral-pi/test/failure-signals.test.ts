@@ -1,9 +1,67 @@
 import { expect, test } from "bun:test";
 import { providerErrorClass } from "../src/host/session.ts";
-import { type FailureMessage, normalizeFailure, withProviderFailures } from "../src/host/provider-failure.ts";
+import { afterPiRetry, type FailureMessage, normalizeFailure, withProviderFailures } from "../src/host/provider-failure.ts";
+import { withSubscriptionFallback } from "../src/host/continuation.ts";
+import { Agent } from "@earendil-works/pi-agent-core";
 import { createAssistantMessageEventStream, normalizeContext, type StreamFunction } from "@earendil-works/pi-ai";
-import { getModel, isRetryableAssistantError } from "@earendil-works/pi-ai/compat";
+import { Type } from "typebox";
+import { getModel, isRetryableAssistantError, streamSimple } from "@earendil-works/pi-ai/compat";
 import { emptyOutput } from "../src/claude/events.ts";
+import { fakeCodexTransport, requestBody } from "./fixtures/auth/fake-transport.ts";
+
+const codexModel = getModel("openai-codex", "gpt-6.1-sol")!;
+const codexToken = `fixture.${Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "fixture" } })).toString("base64url")}.fixture`;
+const createdFrame = { type: "response.created", response: { id: "resp_fixture", status: "in_progress" } };
+const failedFrame = (code = "novel_failure") => ({ type: "response.failed", response: { error: { code, message: "private-upstream-text" } } });
+const sse = (frames: readonly unknown[], requestRef?: string) => new Response(
+  frames.map(frame => `data: ${JSON.stringify(frame)}\n\n`).join(""),
+  { headers: { "content-type": "text/event-stream", ...(requestRef ? { "x-request-id": requestRef } : {}) } },
+);
+
+test("an output-free Codex stream failure replays the same request once", async () => {
+  for (const final of ["success", "novel_failure", "server_error", "usage_limit_reached", "length"] as const) {
+    const wire = fakeCodexTransport();
+    const requests: unknown[] = [];
+    wire.script([{ toolCalls: [{ callId: "call_fixture", name: "earlier", arguments: {} }] }]);
+    const requestsSeen: string[] = [];
+    let payloads = 0, tools = 0;
+    const stream = withSubscriptionFallback(withProviderFailures("openai-codex", streamSimple), [{ provider: "openai-codex", model: "other" }],
+      async () => { throw new Error("Already replayed; the request must not switch models"); }, () => {});
+    const agent = new Agent({
+      initialState: { model: codexModel, tools: [{ name: "earlier", label: "Earlier tool", description: "Fixture tool",
+        parameters: Type.Object({}), async execute() { tools++; return { content: [{ type: "text", text: "already ran" }], details: {} }; } }] },
+      transport: "sse", sessionId: "same-session",
+      onPayload: payload => ({ ...(payload as object), fixture_marker: ++payloads }),
+      streamFn: (model, context, options) => stream(model, context, { ...options, apiKey: codexToken,
+        fetch: async (input, init) => {
+          requests.push(requestBody(init));
+          if (requests.length === 1) return wire.send(input, init);
+          if (requests.length === 2) return sse([createdFrame, failedFrame()]);
+          if (final === "success") return wire.send(input, init);
+          return sse([final === "length" ? { type: "response.incomplete",
+            response: { status: "incomplete", incomplete_details: { reason: "max_output_tokens" } } } : failedFrame(final)], "private-request-id");
+        },
+      }),
+    });
+    agent.subscribe(event => { if (event.type === "message_end" && event.message.role === "assistant") requestsSeen.push(event.message.stopReason); });
+    await agent.prompt("Finish after the tool.");
+    const result = agent.state.messages.findLast(message => message.role === "assistant")!;
+    expect(requests).toHaveLength(3);
+    expect(requests[2]).toEqual(requests[1]);
+    expect(JSON.stringify(requests[2])).toContain("already ran");
+    expect(tools).toBe(1);
+    expect(requestsSeen).toEqual(["toolUse", final === "success" ? "stop" : "error"]);
+    if (final === "success") expect(result.stopReason).toBe("stop");
+    else {
+      expect(isRetryableAssistantError(result)).toBe(false);
+      expect(result.errorMessage).toContain("one retry");
+      expect(result.errorMessage).toMatch(/ref [a-f0-9]{8}/);
+      if (final === "usage_limit_reached") expect(result.errorMessage).toContain("usage limit to reset");
+      if (final === "length") expect((result as FailureMessage).providerFailure?.category).toBe("invalid_request");
+      expect(JSON.stringify(result)).not.toMatch(/private-upstream-text|private-request-id/);
+    }
+  }
+});
 
 test("Codex stream failures retain safe evidence for Pi's bounded retry decision", async () => {
   const model = getModel("openai-codex", "gpt-6.1-sol")!;
@@ -32,7 +90,48 @@ test("Codex stream failures retain safe evidence for Pi's bounded retry decision
   }
 });
 
-// A failed provider turn with unknown wording must stop, not consume transient retries.
+test("Codex does not replay after observed output, tool activity, cancellation, denial, or a previous retry", async () => {
+  for (const reason of ["text", "tool", "opaque", "cancel", "policy", "quota", "invalid", "nested-auth", "pi-retry", "native-retry"] as const) {
+    const controller = new AbortController();
+    let requests = 0;
+    const options = {
+      apiKey: codexToken, transport: "sse" as const, signal: controller.signal, maxRetries: reason === "native-retry" ? 1 : 0,
+      fetch: async () => {
+        requests++;
+        if (reason === "native-retry" && requests === 1) return new Response("retry", { status: 503, headers: { "retry-after": "0" } });
+        const frames: unknown[] = [createdFrame];
+        if (reason === "text") frames.push({ type: "response.output_item.added", output_index: 0,
+          item: { type: "message", role: "assistant", content: [] } },
+        { type: "response.output_text.delta", output_index: 0, delta: "partial" });
+        if (reason === "tool") frames.push({ type: "response.output_item.added", output_index: 0,
+          item: { type: "web_search_call", status: "completed" } });
+        if (reason === "opaque") frames.push({ type: "response.new_lifecycle_event" });
+        const code = reason === "policy" ? "content_policy_violation" : reason === "quota" ? "usage_limit_reached"
+          : reason === "invalid" ? "missing_required_parameter" : undefined;
+        frames.push(reason === "nested-auth" ? { type: "error", code: "novel_failure", message: "private-upstream-text",
+          error: { code: "verification_required" } } : failedFrame(code));
+        return sse(frames);
+      },
+      onProviderStreamEvent(event: unknown) {
+        if (reason === "cancel" && (event as { type?: string }).type === "response.failed") controller.abort();
+      },
+    };
+    const stream = withProviderFailures("openai-codex", streamSimple)(codexModel, normalizeContext({ messages: [] }),
+      reason === "pi-retry" ? afterPiRetry(options) : options);
+    const result = await stream.result();
+    expect(requests).toBe(reason === "native-retry" ? 2 : 1);
+    expect(result.stopReason).toBe(reason === "cancel" ? "aborted" : "error");
+    expect((result as FailureMessage).providerFailure?.replayed).toBeUndefined();
+    expect(JSON.stringify(result)).not.toContain("private-upstream-text");
+    if (reason === "nested-auth") expect((result as FailureMessage).providerFailure?.category).toBe("auth");
+    if (reason === "text") {
+      expect((result as FailureMessage).providerFailure?.output_observed).toBe(true);
+      expect(result.errorMessage).toContain("stopped early");
+    }
+  }
+});
+
+// Unknown wording is not a hint for Pi's whole-agent retry machinery.
 test("unknown provider failures are not transient", () => {
   expect(providerErrorClass("unrecognized failure format")).toBe("unknown");
 });

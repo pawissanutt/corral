@@ -122,7 +122,7 @@ import { workerDoneTool } from "../roles/worker/tools.ts";
 import { readTranscriptPage, type TranscriptRequest, type TranscriptPage } from "./transcript-preview.ts";
 import { ManagedEffects } from "./managed-effects.ts";
 import { LocalControlPlane } from "./local.ts";
-import { failureClass, messageFailure, withProviderFailures } from "./provider-failure.ts";
+import { afterPiRetry, failureClass, messageFailure, withProviderFailures } from "./provider-failure.ts";
 import { assertApiEffort, installApiProvider } from "./api-providers.ts";
 import { withSubscriptionFallback, type FallbackCandidates } from "./continuation.ts";
 import { childFallbackPolicy, fallbackProvidersFor, hasProviderFallbacks, providerFallbackCandidates,
@@ -1186,7 +1186,7 @@ export class HostSession {
             : undefined;
       const agent = session.agent;
       const original = agent.streamFunction;
-      const projected: typeof original = (m, c, o) => original(m, imageContext(c, m), o);
+      const projected: typeof original = (m, c, o) => original(m, imageContext(c, m), session.isRecoveringModelRequest ? afterPiRetry(o) : o);
       agent.streamFunction = projected;
       if (parentFallback) {
         const calibrated: typeof original = (m, c, o) => projected(m, calibratedContext(c, host.calibration(m)), o);

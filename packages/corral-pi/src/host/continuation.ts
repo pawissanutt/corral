@@ -23,6 +23,11 @@ type SelectFallback = (candidate: FallbackSelector, signal?: AbortSignal) =>
 type StartEvent = Extract<AssistantMessageEvent, { type: "start" }>;
 type ErrorEvent = Extract<AssistantMessageEvent, { type: "error" }>;
 
+function isQuotaFallback(error: ErrorEvent["error"], provider: ProviderId): boolean {
+  const failure = messageFailure(error, provider);
+  return failure.category === "subscription_quota" && !failure.replayed;
+}
+
 /** Retry only an output-free subscription quota failure, inside the same Pi request.
  * Select preflights a candidate, returning undefined if unavailable, and commits the
  * model before returning a selection. The selected stream must resolve its own auth. */
@@ -46,7 +51,7 @@ export function withSubscriptionFallback(stream: StreamFn, candidates: FallbackC
               if (event.type === "start" && !output) { start = event; continue; }
               if (!output && event.type === "error" && event.reason === "error" && !signal?.aborted
                   && !start?.partial.content.length && !event.error.content.length && isProviderId(current.provider)
-                  && messageFailure(event.error, current.provider).category === "subscription_quota") {
+                  && isQuotaFallback(event.error, current.provider)) {
                 quota = event;
                 break;
               }

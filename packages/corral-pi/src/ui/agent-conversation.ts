@@ -1,3 +1,4 @@
+import { codexFailureCopyFromText } from "../host/codex-failure-copy.ts";
 import type { TranscriptPage, TranscriptRequest } from "../host/transcript-preview.ts";
 import { AgentHistory, RESIDENT_PAGES, type Direction, type TranscriptRead } from "./agent-history.ts";
 // One agent's conversation in the reading area, as the mock's `childHTML`: a header line (back link, name,
@@ -13,7 +14,7 @@ import { AgentHistory, RESIDENT_PAGES, type Direction, type TranscriptRead } fro
 import { ScrollView, truncateToWidth, visibleWidth, wrapTextWithAnsi, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { duration, isLive, money, sparkline, timeLabel, toneColor, type AgentRow } from "./agents-model.ts";
 import { spinner } from "./frame.ts";
-import { helperText, mailSteers, type ChatSource, type HelperChat, type MessageSpan, type Steer } from "./helper-chat.ts";
+import { helperText, mailSteers, type ChatMessage, type ChatSource, type HelperChat, type MessageSpan, type Steer } from "./helper-chat.ts";
 import { PANEL_BLUE, PANEL_ERROR, PANEL_MUTED, PANEL_TEXT, PANEL_WARNING, RESET, plainLabel } from "./panels-view.ts";
 import { assembleRecording, peerMessage, recordedLive, withLiveTail, type RecordedChat } from "./recorded-chat.ts";
 import { shiftRows } from "./selection.ts";
@@ -518,9 +519,11 @@ export class AgentConversation {
       const history = row.capabilities.transcript && this.host.read ? this.history : undefined;
       const recorded = history?.pages.length ? this.recording(history, row) : undefined;
       let chat: string[];
+      let terminalMessages: readonly ChatMessage[] | undefined;
       if (history && recorded) {
         const end = !history.newer, running = isLive(row.state);
         const messages = end && (running || this.latestAvailable) ? withLiveTail(recorded, row.conversation, this.known) : recorded.messages;
+        if (end) terminalMessages = messages;
         // A message that never reached the agent is in no recording: it follows the replies, as in the live view.
         const missed = end ? mailSteers((row.mail ?? []).filter(message => message.from !== row.id
           && (message.delivery === "undeliverable" || message.delivery === "answered_from_report")), name) : [];
@@ -542,6 +545,7 @@ export class AgentConversation {
           return at === undefined ? { text } : { text, at };
         }), ...mailSteers(row.mail ?? [], name)];
         this.chatStart = lines.length;
+        terminalMessages = row.conversation?.messages;
         chat = row.conversation ? this.host.chat.renderHelper(row.conversation, width,
           { bubble: prompt, now, ...(child || steers.length ? { steers: { label: "you → " + BOLD + this.host.color(row.hue) + row.name + UNBOLD, items: steers } } : {}) })
           : [];
@@ -566,6 +570,18 @@ export class AgentConversation {
         // A child's live wait is already its `Not started` line; its failure reads as the conversation's last word.
         // The retention note already stands under the prompt.
         if ((child && note.tone === "muted") || (note.retention && row.conversation)) continue;
+        if (note.tone === "error" && note.text.startsWith("Error: ")) {
+          const text = note.text.slice("Error: ".length);
+          const codex = codexFailureCopyFromText(text);
+          if (codex) {
+            // A helper or fleet status may echo the error already drawn below its reply. Keep the note when
+            // that reply isn't resident, but use the actionable copy there too.
+            const failed = terminalMessages?.findLast(message => message.kind === "assistant" && message.stopReason === "error");
+            if (failed?.kind === "assistant" && plainLabel(helperText(failed.errorMessage ?? "")) === text) continue;
+            lines.push("", ...say(`✗ ${codex.sentence} ${codex.step}`, PANEL_ERROR));
+            continue;
+          }
+        }
         const mark = child && row.state === "failed" && note.tone === "error" ? "✗ " : "";
         lines.push("", ...say(mark + note.text, toneColor(note.tone)));
       }

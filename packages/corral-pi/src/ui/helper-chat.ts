@@ -12,7 +12,9 @@ import {
   type TuiMouseEvent, type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
 import type { HelperMessage } from "../extensions/subagent/inspection.ts";
+import { codexFailureCopyFromText } from "../host/codex-failure-copy.ts";
 import type { AgentMail, ConversationSource } from "./agents-model.ts";
+import { presentCodexError } from "./error-copy.ts";
 import { userLabel } from "./panels-theme.ts";
 import { plainLabel, PANEL_BUBBLE, PANEL_MUTED, PANEL_TEXT, PANEL_WARNING } from "./panels-view.ts";
 import { selectionIn } from "./selection.ts";
@@ -305,12 +307,19 @@ export class HelperChat {
         const key = keyOf();
         // A recording has the agent's reasoning, drawn as the transcript draws it; a live projection never carries any.
         const component = cached?.component instanceof AssistantMessageComponent ? cached.component
-          : new AssistantMessageComponent(undefined, !message.blocks, style.markdownTheme, "", style.outputPad, transformers);
-        if (!cached || cached.key !== key) component.updateContent({
-          content: message.blocks ? message.blocks.map(block => block.type === "thinking"
-            ? { type: "thinking" as const, thinking: helperText(block.text) } : { type: "text" as const, text: helperText(block.text) })
-            : (message.textBlocks ?? [message.text]).map(text => ({ type: "text" as const, text: helperText(text) })),
-          stopReason: message.stopReason ?? "pending", errorMessage: message.errorMessage === undefined ? undefined : helperText(message.errorMessage), hasToolCalls: message.hasToolCalls }, helper.phase === "running" && message.stopReason === undefined);
+          : new AssistantMessageComponent(undefined, !message.blocks, style.markdownTheme, "", style.outputPad, transformers, undefined, undefined, presentCodexError);
+        if (!cached || cached.key !== key) {
+          const errorMessage = message.errorMessage === undefined ? undefined : helperText(message.errorMessage);
+          // Pi suppresses its assistant error when there are tools. Here those rows are drawn separately and
+          // do not carry the provider error, so keep the actionable Codex row even after a partial tool call.
+          const showCodexError = message.stopReason === "error" && codexFailureCopyFromText(errorMessage?.trim() ?? "") !== undefined;
+          component.updateContent({
+            content: message.blocks ? message.blocks.map(block => block.type === "thinking"
+              ? { type: "thinking" as const, thinking: helperText(block.text) } : { type: "text" as const, text: helperText(block.text) })
+              : (message.textBlocks ?? [message.text]).map(text => ({ type: "text" as const, text: helperText(text) })),
+            stopReason: message.stopReason ?? "pending", errorMessage, hasToolCalls: showCodexError ? false : message.hasToolCalls,
+          }, helper.phase === "running" && message.stopReason === undefined);
+        }
         cached = { component, key, source: message };
         this.cached.set(message.id, cached); append(component, message.id); lastLine = false;
         return;

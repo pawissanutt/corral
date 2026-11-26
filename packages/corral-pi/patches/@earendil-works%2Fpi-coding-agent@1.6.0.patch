@@ -30,18 +30,20 @@ index f61225f2da158f995127d6df58161937aa47afb3..790cc0849e73d4262eb97c63a0890d92
      /** Whether to dispatch extension commands and expand skill commands and prompt templates (default: true) */
      expandPromptTemplates?: boolean;
      /** Image attachments */
-@@ -221,6 +232,10 @@ export interface SessionStats {
+@@ -221,6 +232,12 @@ export interface SessionStats {
  }
  export declare class AgentSession {
      readonly agent: Agent;
 +    setQueueObserver(observer: HostQueueObserver | undefined): void;
 +    /** Whether a terminal host can hand off without racing a prompt or ongoing SDK action. */
 +    get isReadyForHandoff(): boolean;
++    /** Whether Pi is already retrying this model step, including overflow recovery. */
++    get isRecoveringModelRequest(): boolean;
 +    removeQueuedMessage(message: AgentMessage, cause?: string): boolean;
      readonly sessionManager: SessionManager;
      readonly settingsManager: SettingsManager;
      private _scopedModels;
-@@ -598,6 +613,7 @@ export declare class AgentSession {
+@@ -598,6 +615,7 @@ export declare class AgentSession {
       */
      steer(text: string, images?: ImageContent[], options?: {
          source?: InputSource;
@@ -49,7 +51,7 @@ index f61225f2da158f995127d6df58161937aa47afb3..790cc0849e73d4262eb97c63a0890d92
      }): Promise<QueuedInputDisposition>;
      /**
       * Queue a follow-up message to be processed after the agent finishes.
-@@ -609,6 +625,7 @@ export declare class AgentSession {
+@@ -609,6 +627,7 @@ export declare class AgentSession {
       */
      followUp(text: string, images?: ImageContent[], options?: {
          source?: InputSource;
@@ -57,7 +59,7 @@ index f61225f2da158f995127d6df58161937aa47afb3..790cc0849e73d4262eb97c63a0890d92
      }): Promise<QueuedInputDisposition>;
      /**
       * Internal: Queue a steering message (already expanded, no extension command check).
-@@ -664,7 +681,7 @@ export declare class AgentSession {
+@@ -664,7 +683,7 @@ export declare class AgentSession {
       * Useful for restoring to editor when user aborts.
       * @returns Object with steering and followUp arrays
       */
@@ -70,7 +72,7 @@ diff --git a/dist/core/agent-session.js b/dist/core/agent-session.js
 index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311230eae8c 100644
 --- a/dist/core/agent-session.js
 +++ b/dist/core/agent-session.js
-@@ -117,6 +117,18 @@ export class AgentSession {
+@@ -117,6 +117,21 @@ export class AgentSession {
      _idleWaitPromise;
      _resolveIdleWait;
      /** Tracks pending steering messages for UI display. Removed when delivered. */
@@ -82,6 +84,9 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
 +        return this.isIdle && !this.isBashRunning && this._promptPreflightCount === 0
 +            && !this._isEmittingAgentSettled && this._branchSummaryAbortController === undefined;
 +    }
++    get isRecoveringModelRequest() {
++        return this._retryAttempt > 0 || this._overflowRecoveryAttempted;
++    }
 +    removeQueuedMessage(message, cause) { return this.agent.removeQueuedMessage(message, cause); }
 +    _inputTag(text, images, source, mode, tag) {
 +        return tag ?? this._queueObserver?.input({ text, images, source, mode });
@@ -89,7 +94,7 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
      _steeringMessages = [];
      /** Tracks pending follow-up messages for UI display. Removed when delivered. */
      _followUpMessages = [];
-@@ -205,6 +217,18 @@ export class AgentSession {
+@@ -205,6 +220,18 @@ export class AgentSession {
      _runSystemPromptOptions;
      constructor(config) {
          this.agent = config.agent;
@@ -108,7 +113,7 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
          this.sessionManager = config.sessionManager;
          this.settingsManager = config.settingsManager;
          this._scopedModels = config.scopedModels ?? [];
-@@ -789,21 +813,7 @@ export class AgentSession {
+@@ -789,21 +816,7 @@ export class AgentSession {
          // This ensures the UI sees the updated queue state
          if (event.type === "message_start" && event.message.role === "user") {
              this._overflowRecoveryAttempted = false;
@@ -131,7 +136,7 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
              // Normalize queued images at delivery, before events and persistence see the message,
              // so they get the same resize as idle prompts with the current model's limits (#11738).
              if (this._queuedMessagesWithImages.has(event.message)) {
-@@ -1494,6 +1504,9 @@ export class AgentSession {
+@@ -1494,6 +1507,9 @@ export class AgentSession {
       * @param onStarted Called once the run's messages are prepared, before the first request.
       */
      async _startRun(trigger, onStarted) {
@@ -141,7 +146,7 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
          this._isAgentRunActive = true;
          this._agentRunAbortRequested = false;
          let messages;
-@@ -1511,7 +1524,6 @@ export class AgentSession {
+@@ -1511,7 +1527,6 @@ export class AgentSession {
          // have while idle. No run exists yet, so they cannot split a tool call from its result.
          this._flushPendingBashMessages();
          this._flushPendingCustomMessages();
@@ -149,7 +154,7 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
          // Compaction before the prompt may have scheduled a retry; the new prompt replaces it.
          this._failedResponse = undefined;
          this._recordSelection();
-@@ -1519,6 +1531,7 @@ export class AgentSession {
+@@ -1519,6 +1534,7 @@ export class AgentSession {
          // are dropped, so a tool that never registers does not stay pending.
          this._pendingToolNames.clear();
          try {
@@ -157,7 +162,7 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
              await this.agent.prompt(messages);
              while (!this._agentRunAbortRequested) {
                  if (await this._handlePostAgentRun()) {
-@@ -1702,8 +1715,28 @@ export class AgentSession {
+@@ -1702,8 +1718,28 @@ export class AgentSession {
       * @throws Error if no model selected or no API key available (when not streaming)
       */
      async prompt(text, options) {
@@ -187,7 +192,7 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
              return;
          }
          const expandPromptTemplates = options?.expandPromptTemplates ?? true;
-@@ -1731,8 +1764,13 @@ export class AgentSession {
+@@ -1731,8 +1767,13 @@ export class AgentSession {
          finally {
              this._promptPreflightCount--;
          }
@@ -203,7 +208,7 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
      }
      /**
       * Run input hooks, expand templates, queue while streaming, and validate model and auth.
-@@ -1760,10 +1798,10 @@ export class AgentSession {
+@@ -1760,10 +1801,10 @@ export class AgentSession {
                  throw new Error("Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.");
              }
              if (options.streamingBehavior === "followUp") {
@@ -216,7 +221,7 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
              }
              preflightResult?.("queued");
              return undefined;
-@@ -1842,7 +1880,18 @@ export class AgentSession {
+@@ -1842,7 +1883,18 @@ export class AgentSession {
              return text; // Return original on error
          }
      }
@@ -236,7 +241,7 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
          if (text.startsWith("/")) {
              this._throwIfExtensionCommand(text);
          }
-@@ -1852,10 +1901,10 @@ export class AgentSession {
+@@ -1852,10 +1904,10 @@ export class AgentSession {
          let expandedText = this._expandSkillCommand(processedInput.text);
          expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
          if (behavior === "steer") {
@@ -249,7 +254,7 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
          }
          return "queued";
      }
-@@ -1869,7 +1918,7 @@ export class AgentSession {
+@@ -1869,7 +1921,7 @@ export class AgentSession {
       * @throws Error if text is an extension command
       */
      async steer(text, images, options) {
@@ -258,7 +263,7 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
      }
      /**
       * Queue a follow-up message to be processed after the agent finishes.
-@@ -1880,14 +1929,12 @@ export class AgentSession {
+@@ -1880,14 +1932,12 @@ export class AgentSession {
       * @throws Error if text is an extension command
       */
      async followUp(text, images, options) {
@@ -275,7 +280,7 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
          const content = [{ type: "text", text }];
          if (images) {
              content.push(...images);
-@@ -1895,14 +1942,13 @@ export class AgentSession {
+@@ -1895,14 +1945,13 @@ export class AgentSession {
          const message = { role: "user", content, timestamp: Date.now() };
          if (images?.length)
              this._queuedMessagesWithImages.add(message);
@@ -292,7 +297,7 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
          const content = [{ type: "text", text }];
          if (images) {
              content.push(...images);
-@@ -1910,6 +1956,7 @@ export class AgentSession {
+@@ -1910,6 +1959,7 @@ export class AgentSession {
          const message = { role: "user", content, timestamp: Date.now() };
          if (images?.length)
              this._queuedMessagesWithImages.add(message);
@@ -300,7 +305,7 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
          this.agent.followUp(message);
      }
      /** Replace a queued user message's images in place with normalized ones, appending hints to its text. */
-@@ -2052,13 +2099,16 @@ export class AgentSession {
+@@ -2052,13 +2102,16 @@ export class AgentSession {
       * Useful for restoring to editor when user aborts.
       * @returns Object with steering and followUp arrays
       */
@@ -2894,11 +2899,11 @@ index cbd936501adcf0663f06ab29c1e5466207350f64..875ce674dfd49be5abcf5ef547da96a7
 +                        timestamp: Date.now(),
 +                        live: true,
 +                    });
-+                    if (presented) {
++                    if (presented && (!Array.isArray(presented) || presented.length > 0)) {
 +                        this.chatContainer.addChild(new Spacer(1));
 +                        this.chatContainer.addChild(errorRowsComponent(presented, this.toolOutputExpanded));
 +                    }
-+                    else {
++                    else if (!presented) {
 +                        this.showError(`Retry failed after ${event.attempt} attempts: ${event.finalError || "Unknown error"}`);
 +                    }
                  }
@@ -2994,16 +2999,16 @@ index cbd936501adcf0663f06ab29c1e5466207350f64..875ce674dfd49be5abcf5ef547da96a7
          }
      }
 +    /**
-+     * A turn the owner stopped, drawn by the `errorPresentation` hook: its tool calls that never ran read as not run
-+     * and the hook's one row follows them. False (nothing changed) without the hook, for a failed turn, or when the
-+     * hook declines, so the caller marks the calls failed as before.
++     * The hook can show one row after pending tools, instead of repeating the failure on each tool.
++     * False when it declines, so the caller marks the calls failed as before.
 +     */
 +    presentStoppedTools(message, components, retryAttempts, live) {
 +        const present = this.options.errorPresentation;
-+        if (!present || message.stopReason !== "aborted" || components.length === 0)
++        if (!present || (message.stopReason !== "aborted" && message.stopReason !== "error") || components.length === 0)
 +            return false;
 +        const presented = present({
-+            stopReason: "aborted",
++            stopReason: message.stopReason,
++            ...(message.providerFailure !== undefined ? { providerFailure: message.providerFailure } : {}),
 +            ...(message.errorMessage ? { errorMessage: message.errorMessage } : {}),
 +            partial: message.content.some((c) => c.type === "text" && c.text.trim()),
 +            toolCallsNotRun: components.length,
@@ -3014,7 +3019,7 @@ index cbd936501adcf0663f06ab29c1e5466207350f64..875ce674dfd49be5abcf5ef547da96a7
 +        if (!presented)
 +            return false;
 +        for (const component of components) {
-+            component.markNotRun(message.errorMessage || "Operation aborted");
++            component.markNotRun(message.stopReason === "error" ? "The request ended before this tool ran" : message.errorMessage || "Operation aborted");
 +        }
 +        this.chatContainer.addChild(new Spacer(1));
 +        this.chatContainer.addChild(errorRowsComponent(presented, this.toolOutputExpanded));

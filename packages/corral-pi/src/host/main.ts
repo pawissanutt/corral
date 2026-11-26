@@ -25,7 +25,7 @@ import { herdrLifecycle } from "./herdr.ts";
 import { serverVisible } from "./mcp-settings.ts";
 import { type AwsRoute, HostSession, authContext } from "./session.ts";
 import { guardTerminalStop } from "./terminal-stop.ts";
-import { errorPresenter } from "../ui/error-copy.ts";
+import { errorPresenter, presentCodexError } from "../ui/error-copy.ts";
 import { repaintTranscript } from "../ui/transcript-repaint.ts";
 import { presentHostNotice } from "../ui/host-notices.ts";
 import { setAgentHueSource } from "../ui/agent-hues.ts";
@@ -345,8 +345,9 @@ async function runSession(config: HostConfig, overrides: HostOverrides, events: 
     // corral resumes sessions with its own commands; Pi's `pi --session …` line would name a command that does not work here.
     ...(codeHandoff ? { onTerminalCommand: (text: string) => session.handleCodeCommand(text) } : {}),
     verbose: false, resumeHint: false, terminal: panels ? panels.wrap(physicalTerminal) : physicalTerminal,
+    errorPresentation: panels ? errorPresenter(() => session.latestStopCause()) : presentCodexError,
     ...(panels ? { tuiMode: "fullscreen" as const, readOnlyQueue: true, mainView: (transcript, presentation) => panels.mainView(transcript, presentation),
-      errorPresentation: errorPresenter(() => session.latestStopCause()), userPresentation: (text: string, bubble: (text: string) => Component, message?: unknown) =>
+      userPresentation: (text: string, bubble: (text: string) => Component, message?: unknown) =>
         presentHostNotice(text, bubble, session.deliveredByHost(message)), ...panels.presentation() } : {}),
   });
   guardTerminalStop(terminal, process.stdin);

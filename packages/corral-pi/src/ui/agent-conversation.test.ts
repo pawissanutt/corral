@@ -13,6 +13,7 @@ import { RecordingTerminal } from "../../test/support/panel-terminal.ts";
 import type { ChildSnapshot } from "../build/types.ts";
 import { toolMessageId } from "../extensions/subagent/inspection.ts";
 import type { TranscriptPage, TranscriptRow } from "../host/transcript-preview.ts";
+import { codexFailureCopy } from "../host/codex-failure-copy.ts";
 import { childRow } from "./build/fleet-rows.ts";
 
 beforeAll(() => initTheme("dark", false));
@@ -45,6 +46,23 @@ test("the returned result is shown once, and observed errors stay visible", () =
   }
   const text = stripTerminalSequences(conversation(() => appended, new HelperChat(() => undefined, "/tmp")).scroll.render(80).join("\n"));
   expect(text).toContain("OBSERVED_ERROR_VISIBLE"); expect(text).toContain("INSPECTOR_WARNING_VISIBLE");
+});
+
+test("an observed Codex failure does not repeat its assistant error in the conversation notes", () => {
+  const legacy = "openai-subscription: unknown (unknown)";
+  const copy = codexFailureCopy({ partial: true, retried: true, unknown: true, requestRef: "ab123456".repeat(8) });
+  for (const error of [legacy, `${copy.sentence} ${copy.step}`]) {
+    const messages = [{ id: "failed", kind: "assistant" as const, text: "", stopReason: "error" as const, errorMessage: error, hasToolCalls: true }];
+    for (const visible of [messages, []]) {
+      const row = rowOf(helper({ phase: "uncertain", error, messages: visible }));
+      const rows = conversation(() => row, new HelperChat(() => undefined, "/tmp")).scroll.render(120).map(line => stripTerminalSequences(line));
+      const text = rows.map(line => line.trim()).join(" ");
+      expect(text).not.toContain(legacy);
+      expect(text.match(/OpenAI subscription request failed/g)).toHaveLength(1);
+      expect(text).toContain("choose another model");
+      if (error !== legacy) expect(text).toContain("after one retry (ref ab123456)");
+    }
+  }
 });
 
 test("data control sequences are sanitized before rendering, keeping only renderer-produced controls", () => {

@@ -5,6 +5,7 @@
 // `○ stopped` row that names who stopped it when the host knows (`stopped by you`, `stopped by corral`). Presentation only: the model and the journal receive what they did before.
 import type { InteractiveModeOptions } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, wrapTextWithAnsi, type Component, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
+import { codexFailureCopy, codexFailureCopyFromText } from "../host/codex-failure-copy.ts";
 import type { ProviderFailure } from "../host/provider-failure.ts";
 import { PANEL_ERROR, PANEL_MUTED, PANEL_TEXT, RESET, plainLabel } from "./panels-view.ts";
 
@@ -164,10 +165,35 @@ function factsLine(failure: ProviderFailure): string {
 /** Who stopped a turn, as the host knows it for its latest run. */
 export type StopCause = "owner" | "host";
 
+function codexErrorCopy(input: ErrorInput, text: string, failure: ProviderFailure | undefined): ErrorCopy | undefined {
+  if (input.stopReason !== "error" || input.retryEnded) return undefined;
+  const copy = failure?.connection === "openai-subscription" && (failure.category === "unknown" || failure.replayed === true)
+    ? codexFailureCopy({ partial: input.partial || failure.output_observed === true, retried: failure.replayed === true,
+      requestRef: failure.request_ref, unknown: failure.category === "unknown", category: failure.category })
+    : failure === undefined ? codexFailureCopyFromText(text, input.partial) : undefined;
+  // Even the expanded renderer must not reveal provider bodies or unvalidated references.
+  return copy ? { kind: "failed", ...copy, raw: [] } : undefined;
+}
+
+function redundantCodexRetryEnd(input: ErrorInput): boolean {
+  // Pi's non-cancelled retry-end repeats the final error from the assistant message it just drew.
+  return input.retryEnded === true && input.stopReason === "error"
+    && codexFailureCopyFromText(input.errorMessage?.trim() ?? "") !== undefined;
+}
+
+/** Replace only targeted Codex errors, leaving other Pi copy unchanged. */
+export function presentCodexError(input: ErrorInput): Component | string[] | undefined {
+  if (redundantCodexRetryEnd(input)) return [];
+  const copy = codexErrorCopy(input, input.errorMessage?.trim() ?? "", failureOf(input.providerFailure));
+  return copy ? new ErrorRows(copy) : undefined;
+}
+
 /** The copy for one failed or stopped turn. `now` is for clock times; `cause` says who stopped it, when known. */
 export function errorCopy(input: ErrorInput, now = Date.now(), cause?: StopCause): ErrorCopy {
   const text = input.errorMessage?.trim() ?? "";
   const failure = failureOf(input.providerFailure);
+  const codex = codexErrorCopy(input, text, failure);
+  if (codex) return codex;
   const raw = [...(text ? [text] : []), ...(failure ? [factsLine(failure)] : [])];
   const retried = input.retryAttempts > 0 ? ` · after ${retryCount(input.retryAttempts)}` : "";
   if (input.stopReason === "aborted") {
@@ -247,9 +273,14 @@ export function presentError(input: ErrorInput, cause?: StopCause): Component {
  * remembered by the turn's time so the same turn drawn again in this process keeps it; a stop from an earlier
  * process has no known cause and reads `○ stopped`.
  */
-export function errorPresenter(latestStopCause: () => StopCause | undefined): (input: ErrorInput) => Component {
+export function errorPresenter(latestStopCause: () => StopCause | undefined): (input: ErrorInput) => Component | string[] | undefined {
   const causes = new Map<number, StopCause>();
   return input => {
+    if (input.stopReason === "error" && (input.retryEnded || input.toolCallsNotRun > 0)) {
+      const presented = presentCodexError(input);
+      // Only Codex failures replace Pi's normal failed-tool rows. Unrelated retry-end notices still use this hook.
+      if (presented !== undefined || input.toolCallsNotRun > 0) return presented;
+    }
     let cause = input.timestamp === undefined ? undefined : causes.get(input.timestamp);
     if (input.stopReason === "aborted" && input.live) {
       cause = latestStopCause();
