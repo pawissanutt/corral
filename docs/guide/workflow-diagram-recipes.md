@@ -126,7 +126,8 @@ than interpreting the ID against a new artifact. Do not follow a replacement poi
 - A resolved entity carries its `location` and `evidence` (System coverage and file read
   status, optional provider report and `provider_pending`). File bindings return at most 16
   inbound `file_reference` rows, with repository path, `syntax` or `resolved` basis, occurrence
-  kind, and count. `omitted` counts known rows excluded by this detail; provider skips and
+  kind, and count. The snapshot worker prepares these per-file rows so selection does not scan
+  the whole snapshot. `omitted` counts known rows excluded by this detail; provider skips and
   omissions are separately reported. An empty list does not establish absence beyond that
   coverage. A resolved definition is one observed literal provider match with valid committed
   line coordinates, not a claim of uniqueness outside provider coverage. File references are
@@ -144,8 +145,10 @@ than interpreting the ID against a new artifact. Do not follow a replacement poi
   artifact's recorded worker run submitted that exact commit. A scanned attachment is tied to
   the submission that captured it. Otherwise Corral uses the latest matching submission at
   attachment or the first later match from the same run. Later resubmissions do not reassign
-  the candidate. Attachments without run attribution have no candidate identity. Git source
-  still works when the provider is pending, disabled, or unavailable.
+  the candidate. That recorded identity remains available even if the local Git object is gone;
+  in that case requested source and entity evidence are `missing`. Attachments without run
+  attribution have no candidate identity. Git source still works when the provider is pending,
+  disabled, or unavailable.
 
 Task citations and the artifact list open the same graph or raw fallback. A future viewer sends
 only a stable element ID scoped to the open artifact view; Rust owns lookup, evidence, and

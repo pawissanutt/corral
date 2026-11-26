@@ -11,6 +11,7 @@ use super::{Job, Worker};
 use crate::system::{
     Stage, bounded_error, bounded_report,
     data::{DataKey, HistoricalFacts, HistoricalProjection, RETRY_DELAY},
+    diagram::DiagramFacts,
     provider_row_fits,
 };
 
@@ -82,7 +83,9 @@ impl Worker {
             let tree = reader.builtin_tree(&rev)?;
             let facts = match key.projection {
                 HistoricalProjection::Data => HistoricalFacts::Data(Arc::new(tree.data)),
-                HistoricalProjection::Diagram => HistoricalFacts::Diagram(Arc::new(tree)),
+                HistoricalProjection::Diagram => {
+                    HistoricalFacts::Diagram(Arc::new(DiagramFacts::new(tree)))
+                }
             };
             Ok((rev, facts))
         })();
@@ -144,16 +147,19 @@ impl Worker {
                 else {
                     return;
                 };
-                let HistoricalFacts::Diagram(tree) = facts.as_ref() else {
+                let HistoricalFacts::Diagram(facts) = facts.as_ref() else {
                     return;
                 };
-                let mut tree = (**tree).clone();
+                let mut tree = facts.tree.clone();
                 // Reuse the System extension but retain exact commit provenance.
                 let Some(report) = reader.enrich_diagram_tree(rev, &mut tree) else {
                     return;
                 };
                 let report = bounded_report(report, || Ok(()));
-                (report, HistoricalFacts::Diagram(Arc::new(tree)))
+                (
+                    report,
+                    HistoricalFacts::Diagram(Arc::new(DiagramFacts::new(tree))),
+                )
             }
         };
         self.publish(job, move |cache| {

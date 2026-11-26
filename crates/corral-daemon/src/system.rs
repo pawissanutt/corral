@@ -1,6 +1,7 @@
 //! Immutable observations for System and Review. Reads may schedule work, but
 //! the worker alone reads Git and calls providers.
 mod data;
+mod diagram;
 mod lenses;
 mod worker;
 

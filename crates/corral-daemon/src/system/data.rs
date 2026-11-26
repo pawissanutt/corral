@@ -6,9 +6,9 @@ use std::{
 };
 
 use anyhow::{Context, Result, ensure};
-use corral_facts::{DataFacts, Revision, TreeFacts};
+use corral_facts::{DataFacts, Revision};
 
-use super::{Snapshot, Stage, System};
+use super::{Snapshot, Stage, System, diagram::DiagramFacts};
 use crate::{ops::WorkerBusy, state::Shared, views::NotFound};
 
 const DATA_SNAPSHOTS: usize = 32;
@@ -32,7 +32,7 @@ pub(super) enum HistoricalProjection {
 #[derive(Clone)]
 pub(super) enum HistoricalFacts {
     Data(Arc<DataFacts>),
-    Diagram(Arc<TreeFacts>),
+    Diagram(Arc<DiagramFacts>),
 }
 
 pub(super) struct DataEntry {
@@ -64,7 +64,7 @@ impl System {
         shared: &Shared,
         project: &str,
         at: &str,
-    ) -> Result<Snapshot<TreeFacts>> {
+    ) -> Result<Snapshot<DiagramFacts>> {
         Ok(project_facts(
             self.historical_at(shared, project, at, HistoricalProjection::Diagram)?,
             |facts| match facts {

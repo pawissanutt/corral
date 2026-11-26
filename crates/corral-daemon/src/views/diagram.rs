@@ -14,8 +14,6 @@ use sha2::{Digest, Sha256};
 use super::{NotFound, citation, details, fingerprint, system};
 use crate::state::Shared;
 
-const RELATED_MAX: usize = 16;
-
 pub(super) fn read(
     shared: &Shared,
     engine: &Engine,
@@ -139,11 +137,22 @@ fn select(
     });
     let subject = recipe.subject;
     let (mut source, mut entity) = (SourceResult::NotProvided, EntityResult::NotProvided);
-    let mut candidate = None;
-    if source_request.is_some() || entity_request.is_some() || artifact.run.is_some() {
-        match pin(engine, &artifact, &subject) {
+    let scope = project_scope(engine, &artifact, &subject);
+    // Corral records are independent of Git object retention, but they must
+    // never supply candidate metadata for a recipe outside its owning project.
+    let candidate = if scope.is_ok() {
+        submission(engine, &artifact, &subject, attached_seq)?
+    } else {
+        None
+    };
+    if source_request.is_some() || entity_request.is_some() {
+        let pin = scope.and_then(|(repo, provider_enabled)| {
+            let rev =
+                resolve_local_commit(&repo, &subject.commit).map_err(|_| PinProblem::Missing)?;
+            Ok((repo, rev, provider_enabled))
+        });
+        match pin {
             Ok((repo, rev, provider_enabled)) => {
-                candidate = submission(engine, &artifact, &subject, attached_seq)?;
                 if let Some(request) = source_request {
                     source = read_source(&repo, &rev, request);
                 }
@@ -200,11 +209,11 @@ impl PinProblem {
     }
 }
 
-fn pin(
+fn project_scope(
     engine: &Engine,
     artifact: &Artifact,
     subject: &DiagramSubject,
-) -> Result<(std::path::PathBuf, Revision, bool), PinProblem> {
+) -> Result<(std::path::PathBuf, bool), PinProblem> {
     if artifact.project.as_deref() != Some(&subject.project) {
         return Err(PinProblem::OutOfScope);
     }
@@ -214,12 +223,11 @@ fn pin(
         .get(&subject.project)
         .ok_or(PinProblem::OutOfScope)?;
     let repo = engine.root.join(&project.path);
-    let rev = resolve_local_commit(&repo, &subject.commit).map_err(|_| PinProblem::Missing)?;
     let provider_enabled = engine
         .config
         .extension_for_slot(&subject.project, corral_engine::config::Slot::Facts)
         .is_some();
-    Ok((repo, rev, provider_enabled))
+    Ok((repo, provider_enabled))
 }
 
 fn submission(
@@ -312,26 +320,21 @@ fn read_entity(
     if snapshot.building {
         return EntityResult::Pending;
     }
-    let Some(tree) = snapshot
+    let Some(facts) = snapshot
         .facts
         .as_deref()
         .filter(|_| snapshot.head.as_deref() == Some(rev.commit()))
     else {
         return unavailable("system facts for the pinned commit are unavailable", None);
     };
-    let Some(file) = tree
-        .files
-        .binary_search_by(|file| file.path.cmp(path))
-        .ok()
-        .map(|index| &tree.files[index])
-    else {
+    let Some(file) = facts.file(path) else {
         return unavailable(
             "the committed file is not covered by the System snapshot",
             None,
         );
     };
     let evidence = EntityEvidence {
-        coverage: tree.coverage.clone(),
+        coverage: facts.coverage().clone(),
         provider: system::provider(snapshot.provider.as_deref()),
         read_status: file.read_status,
         provider_pending: provider_enabled && snapshot.provider.is_none(),
@@ -339,24 +342,7 @@ fn read_entity(
     if let Some(name) = name {
         return definition(file, name, evidence);
     }
-    let mut omitted = 0;
-    let mut related = Vec::new();
-    for row in tree
-        .file_references
-        .iter()
-        .filter(|row| row.to == *path && row.from != *path)
-    {
-        if related.len() == RELATED_MAX || !diagram::valid_path(&row.from) {
-            omitted += 1;
-        } else {
-            related.push(DiagramRelated::FileReference {
-                path: row.from.clone(),
-                basis: row.basis,
-                reference_kind: row.kind,
-                count: row.count,
-            });
-        }
-    }
+    let (related, omitted) = facts.inbound(path);
     EntityResult::Resolved {
         location: EntityLocation::File,
         evidence,

@@ -222,6 +222,18 @@ FACTS
         },
     );
     assert!(cached.body.is_none());
+
+    // Remove only the submitted commit from this disposable repository. The
+    // scanned artifact and its original Done event remain in the catalog.
+    let (prefix, suffix) = head.split_at(2);
+    fs::remove_file(repo.join(".git/objects").join(prefix).join(suffix)).unwrap();
+    let missing: DetailReply = client.ok(DETAIL_GET, selection(&artifact, "gate"));
+    let Some(DetailBody::ArtifactDiagramElement(missing)) = missing.body else {
+        panic!("missing element detail");
+    };
+    assert_eq!(missing.candidate, gate_off.candidate);
+    assert!(matches!(missing.source, SourceResult::Missing { .. }));
+    assert!(matches!(missing.entity, EntityResult::Missing { .. }));
 }
 
 #[test]
