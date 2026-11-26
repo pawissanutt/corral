@@ -1,6 +1,6 @@
 #![cfg(unix)]
 
-use std::{fs, os::unix::net::UnixListener, path::Path, process::Command, thread, time::Duration};
+use std::{fs, os::unix::net::UnixListener, process::Command, thread, time::Duration};
 
 use corral_engine::{Engine, NewTask, Op, Role, Run, SessionRef, Status};
 use corral_protocol::{
@@ -12,14 +12,7 @@ use serde_json::{Value, json};
 
 #[test]
 fn hook_nudges_the_daemon_and_syncs_when_the_socket_is_absent() {
-    let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .unwrap();
-    let dir = tempfile::Builder::new()
-        .prefix(".h-")
-        .tempdir_in(workspace)
-        .unwrap();
+    let dir = tempfile::Builder::new().prefix(".h-").tempdir().unwrap();
     let engine = Engine::init(dir.path(), None).unwrap();
     fs::write(
         engine.state_dir.join("corral.toml"),
