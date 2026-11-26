@@ -54,6 +54,15 @@ impl TranscriptBuffer {
                     } else if !self.trimmed.contains(&message.id) {
                         self.rows.push(entry);
                     }
+                    // A cut message is where a reader's messages start again.
+                    if let Op::Put {cut: true, before, ..} = &op
+                        && let Some(at) = self.rows.iter().position(|(row, _)| matches!(row, Op::Put { message: held, .. } if held.id == message.id))
+                    {
+                        for (row, _) in self.rows.drain(..at) {
+                            if let Op::Put {message, ..} = row { self.trimmed.push_back(message.id); }
+                        }
+                        self.older.clone_from(before);
+                    }
                     self.trim();
                 }
                 Op::Append {id, part, offset, text} => {

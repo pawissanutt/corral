@@ -140,6 +140,66 @@ fn transcript_operations_splice_replace_write_and_drop_in_order() {
     );
 }
 
+/// A cut message came again with a tool result folded in and took back the items and the
+/// messages the reader had paged to, each time.
+#[test]
+fn a_cut_message_keeps_what_was_paged_back_when_it_comes_again() {
+    let runtime = nsh_core::element::Runtime::default();
+    let _entered = runtime.enter();
+    let feed = signal(Feed::default());
+    feed.update(|f| {
+        f.capabilities.insert(SESSION_TRANSCRIPT_V1.into());
+    });
+    let mut app = AppState::new();
+    app.ready = true;
+    app.session_scopes.insert("B-1".into(), 1);
+    let get = read(&mut app, feed, None);
+    reply(
+        &mut app,
+        feed,
+        get,
+        None,
+        page("a", &[("start", &["prompt"])], Some("before-start")),
+    );
+    let last = |words: &str| {
+        let mut last = put("big", &[words], None, false);
+        if let TranscriptOp::Put { cut, .. } = &mut last {
+            *cut = true;
+        }
+        last
+    };
+    apply(
+        feed,
+        vec![
+            TranscriptOp::Reset {
+                older: Some("before-big".into()),
+            },
+            last("last"),
+        ],
+        false,
+    );
+    assert_eq!(shown(feed), [("big".into(), vec!["last".into()])]);
+    let history = read(&mut app, feed, Some("before-big"));
+    reply(
+        &mut app,
+        feed,
+        history,
+        Some("before-big"),
+        page("b", &[("start", &["prompt"]), ("big", &["first"])], None),
+    );
+    apply(feed, vec![last("last, with its result")], false);
+    assert_eq!(
+        shown(feed),
+        [
+            ("start".into(), vec!["prompt".into()]),
+            (
+                "big".into(),
+                vec!["first".into(), "last, with its result".into()]
+            )
+        ]
+    );
+}
+
 /// A long reply's record carries a preview of its words: the reply shrank to it when it
 /// ended, and grew back once the rest was read.
 #[test]

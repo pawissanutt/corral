@@ -17,6 +17,9 @@ pub(super) struct HostOpen {
     turn: u64,
     message: u64,
     ended: bool,
+    /// When `message` started, on the clock that stamps journal entries.
+    #[serde(default)]
+    message_at: Option<String>,
     text_offset: u64,
     text: String,
     thinking_offset: u64,
@@ -37,7 +40,11 @@ pub(super) struct Follower {
 
 struct Open {
     id: String,
+    at: Option<String>,
+    /// Where the words a subscriber was given start in the host's text and thinking.
     offsets: [u64; 2],
+    /// Where the host's words so far end.
+    ends: [u64; 2],
 }
 
 /// The words of one part of an open message that are carried. Past it the part stops
@@ -96,7 +103,8 @@ impl Follower {
         } else {
             None
         };
-        let reset = changes.is_none();
+        // When the newest assistant record of a tail that was read again was written.
+        let mut newest: Option<jiff::Timestamp> = None;
         let mut ops = Vec::new();
         let mut starts = page
             .into_iter()
@@ -147,11 +155,16 @@ impl Follower {
         } else {
             let (tail, older, messages) = Tail::snapshot(id, path, scope)?;
             self.tail = Some(tail);
-            self.turn = None;
-            self.pending_end = None;
-            self.recorded = 0;
-            self.open.clear();
+            newest = messages
+                .iter()
+                .rev()
+                .find(|(message, ..)| message.author == "assistant")
+                .and_then(|(message, ..)| message.at.as_deref()?.parse().ok());
             if join {
+                self.turn = None;
+                self.pending_end = None;
+                self.recorded = 0;
+                self.open.clear();
                 // What the ring still holds cannot be paired by order with records this
                 // snapshot already has: a turn's start may be pages away from its words,
                 // and the snapshot is one page of its records. The host's `open` says
@@ -176,18 +189,35 @@ impl Follower {
                 open: false,
                 cut,
             }));
+            if !join {
+                // Only the journal was read again (another branch): the turn the host is
+                // in goes on. A reset takes the messages being written from a reader, so
+                // they are put again, from the words the host writes next.
+                for open in self.open.values_mut() {
+                    open.offsets = open.ends;
+                    ops.push(put_open(&open.id, open.at.clone()));
+                }
+            }
         }
         let (Some(generation), Some(page)) = (generation, page) else {
             return Ok(ops);
         };
-        if reset && let Some(seed) = seed {
+        if join && let Some(seed) = seed {
             self.turn = Some(seed.turn);
-            self.recorded = if seed.ended {
+            // The journal was read after the host answered. The latest message's record may
+            // have reached it in between, or not yet though the message has ended: its
+            // record is the assistant entry stamped at or after the message started.
+            let started = seed.message_at.as_deref().and_then(|at| at.parse().ok());
+            let persisted = match started {
+                Some(started) => newest.is_some_and(|at: jiff::Timestamp| at >= started),
+                None => seed.ended,
+            };
+            self.recorded = if persisted {
                 seed.message
             } else {
                 seed.message.saturating_sub(1)
             };
-            if !seed.ended && seed.message != 0 {
+            if !persisted && !seed.ended && seed.message != 0 {
                 let at = page
                     .events
                     .iter()
@@ -202,13 +232,19 @@ impl Follower {
                         _ => None,
                     });
                 let open = start(id, generation, seed.turn, seed.message, at, &mut ops);
+                let offsets = [seed.text_offset, seed.thinking_offset];
+                let ends = [
+                    seed.text_offset + seed.text.len() as u64,
+                    seed.thinking_offset + seed.thinking.len() as u64,
+                ];
                 for (part, text) in [(Part::Thinking, seed.thinking), (Part::Text, seed.text)] {
                     chunks(&mut ops, &open.id, part, 0, &text);
                 }
                 self.open.insert(
                     seed.message,
                     Open {
-                        offsets: [seed.text_offset, seed.thinking_offset],
+                        offsets,
+                        ends,
                         ..open
                     },
                 );
@@ -282,7 +318,9 @@ impl Follower {
                             &mut ops,
                         )
                     });
-                    let base = open.offsets[usize::from(part == Part::Thinking)];
+                    let which = usize::from(part == Part::Thinking);
+                    let base = open.offsets[which];
+                    open.ends[which] = open.ends[which].max(*offset + text.len() as u64);
                     let overlap =
                         usize::try_from(base.saturating_sub(*offset)).unwrap_or(usize::MAX);
                     let at = offset.saturating_sub(base);
@@ -341,9 +379,19 @@ fn start(
     ops: &mut Vec<Op>,
 ) -> Open {
     let id = format!("{id}/open/{generation}.{turn}.{ordinal}");
-    ops.push(Op::Put {
+    ops.push(put_open(&id, at.clone()));
+    Open {
+        id,
+        at,
+        offsets: [0; 2],
+        ends: [0; 2],
+    }
+}
+
+fn put_open(id: &str, at: Option<String>) -> Op {
+    Op::Put {
         message: SessionMessage {
-            id: id.clone(),
+            id: id.into(),
             author: "assistant".into(),
             at,
             items: Vec::new(),
@@ -357,10 +405,6 @@ fn start(
         replaces: None,
         open: true,
         cut: false,
-    });
-    Open {
-        id,
-        offsets: [0; 2],
     }
 }
 

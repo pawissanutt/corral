@@ -504,11 +504,16 @@ instead, so that all of them fit one operation with every call's result folded i
 tail after a `reset` begins with a whole record for the same reason.
 
 Only a record that fits one operation at no preview size (more than about sixty long
-items) is cut. corrald then sends `reset` and a `put` with `cut: true` that holds the
-record's last items; its `before` resumes inside the record, and it is sent again, still
-cut, when a result is folded into it. A client drops everything it holds before a cut
-message, which is its first message again, and pages back from `before`: the earlier
-items join the message under the same id, as when a history page splits a record.
+items) is cut. corrald then sends a `put` with `cut: true` that holds the record's last
+items, as a history page would; its `before` resumes inside the record. A client drops
+everything it holds before a cut message, which is its first message again, and pages
+back from `before`: the earlier items join the message under the same id, as when a
+history page splits a record. The cut message is sent again, still cut, when a result is
+folded into it: those are the same last items, so a client that has paged back keeps the
+earlier items and the messages before them. A cut message that follows a `reset` starts
+the client's messages there again. A result that would take a message past one operation
+is not folded in: it follows as its own message, as on a history page that parts a call
+from its result.
 
 A client that was sent an item's words whole keeps them when a `put` carries a preview of
 that same item (the words begin with the preview, and the continuation's `bytes` is the
@@ -528,15 +533,23 @@ ring) it does not pair what the ring still holds: a turn's start can be pages aw
 its words, and the journal tail it has read is one page of the turn's records. It follows
 only what the host emits after the page it joined at, and the host says where the turn
 is: the `live_since` reply to a read from `seq` 0 or to a reader with a gap carries
-`open: { turn, message, ended, text_offset, text, thinking_offset, thinking }` while a
-turn is open. `message` is the ordinal of the latest assistant message (0 before the
-first) and `ended` whether it has finished, so corrald knows which ordinals the journal
-already has or will have without their words. While it is being written, `text` and
+`open: { turn, message, ended, message_at, text_offset, text, thinking_offset, thinking }`
+while a turn is open. `message` is the ordinal of the latest assistant message (0 before
+the first) and `ended` whether it has finished. corrald reads the journal after the host
+answers, so that message's record may have reached the journal in between, or may not be
+there yet though the message ended: `message_at` is when the message started, on the
+clock that stamps journal entries, and its record is the assistant entry stamped at or
+after it. corrald opens the message only when the journal it read does not hold that
+record, and counts the record when it comes. While it is being written, `text` and
 `thinking` are the tails of what was written, at those byte offsets, cut on character
 boundaries so the serialized `open` stays within 24 KiB, and within less when the reply
 also carries the fleet and the state: those come whole, and the reply with one event
 still fits the bridge's frame. A host that sends no `open` (an older one) has its words
 left out until its next turn starts; its records still arrive.
+
+A `reset` for the journal alone (another branch) does not end the turn the host is in:
+corrald puts the messages being written again after the tail, from the words the host
+writes next, and goes on pairing.
 
 Operations share the page's byte budget with its events. A subscriber's operations are a
 bounded backlog beside the buffered events; one that falls behind it is sent `reset` and

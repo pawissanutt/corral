@@ -21,6 +21,8 @@ const PUT_BYTES: usize = 48 * 1024;
 const PUT_TARGET: usize = 40 * 1024;
 /// A continuation item: a signed token naming the item and its pair.
 const CONTINUATION_BYTES: usize = 640;
+/// A call with its result folded in, however small its preview was asked to be.
+const FOLDED_BYTES: usize = 512;
 
 /// The size an item of this record is carried whole at, so that all of them fit one
 /// operation with every call's result folded in: a history page's size for a record of a
@@ -142,7 +144,7 @@ impl Tail {
             if let Some((_, before, _)) = messages.first() {
                 return Ok((tail, before.clone(), messages));
             }
-            // It cannot be carried whole, or the journal forks after it: its last items.
+            // The journal forks after it: the page as it was cut.
             (tail.offset, tail.leaf) = newest;
             (tail.pending, tail.bytes) = (false, 0);
             tail.rows.clear();
@@ -232,6 +234,7 @@ impl Tail {
         let start = self.offset;
         let end = start + bytes.len() as u64;
         let mut parent = Branch::Latest;
+        let mut branch = Branch::Latest;
         if let Some(entry) = value.get("id").and_then(Value::as_str)
             && value.get("parentId").is_some()
         {
@@ -243,6 +246,7 @@ impl Tail {
                 .as_deref()
                 .map_or(Branch::Root, |id| Branch::Parent(branch_key(id)));
             self.leaf = Some(entry.to_owned());
+            branch = Branch::Parent(branch_key(entry));
         }
         self.offset = end;
         let mut skip = Skipped::default();
@@ -253,19 +257,27 @@ impl Tail {
             let before = parent.cursor(&self.stamp, start, Skipped::default());
             pair_tools(std::slice::from_mut(&mut selection));
             for item in &mut selection.1 {
-                if !self.fold(id, item, changes)? {
-                    return Ok(false);
-                }
+                self.fold(id, item, changes)?;
             }
             let bound = put_bound(&selection)?;
-            let (message, row) = render(id, selection, before, true, bound)?;
+            let (mut message, mut row) = render(id, selection, before, true, bound)?;
             if json_len(&message)? > PUT_BYTES {
-                // More items than one operation holds at any size: a history page's cut.
-                return Ok(false);
+                // More items than one operation holds at any preview size: its last items,
+                // as a history page cuts it. A reader starts again here and pages back.
+                let value = serde_json::from_slice(bytes).context("decoding a long record")?;
+                let mut skip = Skipped::default();
+                let last = select(id, value, start, end, &mut skip, &mut 2, PAGE_BYTES)?;
+                let (Some(mut selection), _) = last else {
+                    anyhow::bail!("transcript record exceeds page budget");
+                };
+                pair_tools(std::slice::from_mut(&mut selection));
+                let inside = branch.cursor(&self.stamp, end, skip);
+                (message, row) = render(id, selection, inside, true, ITEM_BYTES)?;
+                row.cut = true;
             }
             if !message.items.is_empty() || !message.attachments.is_empty() {
                 changes.push((
-                    Some((message.clone(), row.before.clone(), false)),
+                    Some((message.clone(), row.before.clone(), row.cut)),
                     assistant,
                 ));
                 self.remember(message, row)?;
@@ -278,25 +290,26 @@ impl Tail {
         Ok(true)
     }
 
-    /// Whether the call's message still fits one operation with the result folded in.
-    fn fold(
-        &mut self,
-        id: &str,
-        item: &mut SelectedItem,
-        changes: &mut Vec<Change>,
-    ) -> Result<bool> {
+    fn fold(&mut self, id: &str, item: &mut SelectedItem, changes: &mut Vec<Change>) -> Result<()> {
         let Some(SessionItem::ToolCall {
             call_id,
             result: Some(_),
             ..
         }) = &item.value
         else {
-            return Ok(true);
+            return Ok(());
         };
         for (message, row, cost) in self.rows.iter_mut().rev() {
             let Some(index) = row.calls.iter().rposition(|call| &call.id == call_id) else {
                 continue;
             };
+            // A message that could pass one operation with this result folded in keeps its
+            // call as it is: the result follows as its own message, as on a history page
+            // that parts them.
+            let folded = row.bound.max(FOLDED_BYTES) + CONTINUATION_BYTES;
+            if json_len(message)? + folded > PUT_BYTES {
+                return Ok(());
+            }
             let Call {
                 id: call_id,
                 index,
@@ -336,13 +349,10 @@ impl Tail {
             self.bytes -= *cost;
             *cost = row.cost(message)?;
             self.bytes += *cost;
-            if json_len(message)? > PUT_BYTES {
-                return Ok(false);
-            }
             changes.push((Some((message.clone(), row.before.clone(), row.cut)), false));
             break;
         }
         self.trim();
-        Ok(true)
+        Ok(())
     }
 }

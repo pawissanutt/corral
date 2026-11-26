@@ -13,6 +13,8 @@ pub(crate) struct Mirror {
     pub identity: BTreeMap<String, String>,
     before: BTreeMap<String, Option<String>>,
     sizes: BTreeMap<String, usize>,
+    /// How many items the last cut `put` of a message held: its last ones.
+    cuts: BTreeMap<String, usize>,
     reset: Option<Option<String>>,
 }
 
@@ -57,6 +59,7 @@ pub(crate) fn apply(cache: &mut DetailCache, ops: Vec<TranscriptOp>, more: bool)
                 open,
                 cut,
             } => {
+                let fresh = mirror.reset.is_some();
                 if let Some(older) = mirror.reset.take() {
                     splice(page, mirror, Some(&message.id), older);
                     spliced = true;
@@ -68,6 +71,28 @@ pub(crate) fn apply(cache: &mut DetailCache, ops: Vec<TranscriptOp>, more: bool)
                 });
                 if let Some(at) = at {
                     keep_words(&page.messages[at], &mut message);
+                }
+                // A cut message comes again, still cut, when a result is folded into it:
+                // the same last items. The earlier ones this client paged back to stay
+                // before them, with what it holds before the message.
+                let earlier = at
+                    .filter(|_| cut && !fresh)
+                    .map(|at| &page.messages[at])
+                    .filter(|held| held.id == id)
+                    .and_then(|held| {
+                        let last = *mirror.cuts.get(&id)?;
+                        held.items.get(..held.items.len().checked_sub(last)?)
+                    })
+                    .map(<[SessionItem]>::to_vec);
+                if cut {
+                    mirror.cuts.insert(id.clone(), message.items.len());
+                } else {
+                    mirror.cuts.remove(&id);
+                }
+                let rejoined = earlier.is_some();
+                if let Some(mut items) = earlier {
+                    items.append(&mut message.items);
+                    message.items = items;
                 }
                 mirror.sizes.insert(id.clone(), size(&message));
                 if let Some(at) = at {
@@ -90,7 +115,10 @@ pub(crate) fn apply(cache: &mut DetailCache, ops: Vec<TranscriptOp>, more: bool)
                 } else if mirror.open.as_ref() == Some(&id) {
                     mirror.open = None;
                 }
-                if cut {
+                if rejoined {
+                    // Where its earlier items begin is no longer this cursor.
+                    mirror.before.remove(&id);
+                } else if cut {
                     // Only the record's last items: its earlier ones are a page back, so
                     // nothing held before it joins it. The document starts here again.
                     let at = page.messages.iter().position(|m| m.id == id).unwrap_or(0);
@@ -99,8 +127,10 @@ pub(crate) fn apply(cache: &mut DetailCache, ops: Vec<TranscriptOp>, more: bool)
                     }
                     page.older.clone_from(&before);
                     restarted = true;
+                    mirror.before.insert(id, before);
+                } else {
+                    mirror.before.insert(id, before);
                 }
-                mirror.before.insert(id, before);
             }
             TranscriptOp::Append {
                 id,
@@ -207,6 +237,7 @@ impl Mirror {
         self.identity.remove(id);
         self.before.remove(id);
         self.sizes.remove(id);
+        self.cuts.remove(id);
     }
 }
 

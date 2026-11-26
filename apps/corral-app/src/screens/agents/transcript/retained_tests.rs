@@ -120,7 +120,7 @@ fn ReplacementFixture() -> impl IntoElement {
                 author: "assistant".into(),
                 at: None,
                 items: vec![SessionItem::Text {
-                    text: "persistent words".into(),
+                    text: "persistent words about T-9".into(),
                 }],
                 model: None,
                 stop_reason: None,
@@ -184,7 +184,7 @@ fn replacing_open_message_keeps_its_text_node() {
             .find(|node| {
                 node.text
                     .as_ref()
-                    .is_some_and(|text| text.text.text == "persistent words")
+                    .is_some_and(|text| text.text.text == "persistent words about T-9")
             })
             .unwrap()
             .id
@@ -195,6 +195,8 @@ fn replacing_open_message_keeps_its_text_node() {
     app.wait_for_gone("text:▌", std::time::Duration::from_secs(2))
         .unwrap();
     assert_eq!(before, words(&mut app));
+    // What the words cite is listed once the reply has ended, beside the view they keep.
+    app.wait_for("id:cite-T-9").unwrap();
 }
 
 #[test]

@@ -57,11 +57,20 @@ pub(super) fn prose(app: AppState, words: &Prose, id: &str, live: Option<Written
         })
         .when(app.form != Form::Terminal, |block| block.mb(px(6.0)))
         .child(body)
-        .children(
-            (!words.streaming && live.is_none())
+        .children(match live {
+            // The words keep their view when the reply ends; what they cite is listed
+            // then, beside them.
+            Some(live) => Some(dynamic(move || {
+                if live.streaming.get() {
+                    return None;
+                }
+                let words = live.words.get();
+                untracked(|| cited(app, &words))
+            })),
+            None => (!words.streaming)
                 .then(|| cited(app, &words.markdown))
                 .flatten(),
-        )
+        })
         .children(state(app, &words.more, id, true))
         .into_element()
 }
