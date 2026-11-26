@@ -549,9 +549,8 @@ still fits the bridge's frame. A host that sends no `open` (an older one) has it
 left out until its next turn starts; its records still arrive.
 
 A `reset` for the journal alone (another branch, or after a read of it failed) does not
-end the turn the host is in:
-corrald puts the messages being written again after the tail, from the words the host
-writes next, and goes on pairing.
+end the turn the host is in: corrald puts the messages being written again after the
+tail, from the words the host writes next, and goes on pairing.
 
 Operations share the page's byte budget with its events. A subscriber's operations are a
 bounded backlog beside the buffered events; one that falls behind it is sent `reset` and
