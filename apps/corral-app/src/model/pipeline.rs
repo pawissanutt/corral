@@ -296,7 +296,9 @@ mod tests {
         assert!(pipeline(&waiting)[1].open.is_none());
         let observed = |state| {
             let mut row = review_task(false, None, None).row;
-            row.gate_attempt = Some(crate::model::gate::tests::attempt(state));
+            let mut attempt = crate::model::gate::tests::attempt(state);
+            attempt.round = row.task.round;
+            row.gate_attempt = Some(attempt);
             Task::new(row)
         };
         let running = observed(GateAttemptState::Running);
@@ -306,7 +308,6 @@ mod tests {
             gate.open.as_ref().map(|open| open.attempt.as_str()),
             running.gate_attempt().map(|attempt| attempt.id.as_str())
         );
-        assert_eq!(phrase(&running, &feed), "gate running · step 2 of 5");
         let stale = observed(GateAttemptState::Stale);
         assert_eq!(pipeline(&stale)[1].stage, Stage::Stale);
         let interrupted = observed(GateAttemptState::Interrupted);

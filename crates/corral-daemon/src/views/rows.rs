@@ -17,7 +17,7 @@ use corral_protocol::{
     rows::*,
     subscription::{BoardCursor, Topic},
 };
-use corral_types::{GateAttemptState, SystemRow};
+use corral_types::{GateAttempt, GateAttemptState, SystemRow};
 use serde::Serialize;
 
 use crate::state::Shared;
@@ -356,25 +356,38 @@ fn object(value: &impl Serialize) -> Result<serde_json::Map<String, serde_json::
 // see a final result committed while it probes the active runner's lock.
 pub(super) fn observe_gate_attempts(engine: &Engine, rows: &mut [TaskRow]) -> Result<()> {
     for row in rows {
-        row.gate_attempt = engine.latest_gate_attempt(&row.task.id)?;
+        row.gate_attempt = board_gate_attempt(engine, &row.task.id)?;
     }
     Ok(())
 }
 
+fn live_attempt(attempt: &GateAttempt) -> bool {
+    matches!(
+        attempt.state,
+        GateAttemptState::Running | GateAttemptState::Stale
+    )
+}
+
+fn board_gate_attempt(engine: &Engine, task: &str) -> Result<Option<GateAttempt>> {
+    let mut attempt = engine.latest_gate_attempt(task)?;
+    if let Some(live) = attempt.as_mut().filter(|attempt| live_attempt(attempt)) {
+        // Tasks are sent as complete replacement walks. Only step or lifecycle changes
+        // belong on that topic; the selected Gate detail carries heartbeat and output times.
+        live.heartbeat = None;
+        live.last_output = None;
+    }
+    Ok(attempt)
+}
+
 fn poll_attempt(row: &TaskRow) -> bool {
-    row.gate_attempt.as_ref().is_some_and(|attempt| {
-        matches!(
-            attempt.state,
-            GateAttemptState::Running | GateAttemptState::Stale
-        )
-    })
+    row.gate_attempt.as_ref().is_some_and(live_attempt)
 }
 
 fn poll_task_attempts(shared: &Shared, old: &Arc<Rows>, rows: &[TaskRow]) -> Result<Arc<Rows>> {
     let engine = shared.engine()?;
     let mut updated = None;
     for (index, row) in rows.iter().enumerate().filter(|(_, row)| poll_attempt(row)) {
-        let attempt = engine.latest_gate_attempt(&row.task.id)?;
+        let attempt = board_gate_attempt(&engine, &row.task.id)?;
         if attempt != row.gate_attempt {
             updated.get_or_insert_with(|| rows.to_vec())[index].gate_attempt = attempt;
         }

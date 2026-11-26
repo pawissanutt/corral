@@ -88,6 +88,7 @@ impl Engine {
                 vec![next_retry(id)],
             ));
         }
+        self.require_previous_gate_closed(id)?;
         let mut effects_started = false;
         let result = (|| -> Result<()> {
             let target_ref = format!("refs/heads/{target}");

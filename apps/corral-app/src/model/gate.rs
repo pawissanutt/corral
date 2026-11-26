@@ -19,9 +19,9 @@ use crate::model::session::duration;
 use crate::model::session::transcript::{Line, LineClass, line, size};
 use crate::model::status::Stage;
 
-/// How often an open Gate view re-reads a live attempt's newest window, in seconds. The read
-/// is conditional, so a quiet gate costs an unchanged reply.
+/// How often an open Gate view re-reads the selected bounded window and liveness.
 pub const POLL_SECS: u64 = 2;
+const RETRY_SECS: u64 = 5;
 /// A line longer than this is cut where it is drawn; the window bounds the bytes, not lines.
 const MAX_LINE_CHARS: usize = 2000;
 
@@ -51,19 +51,27 @@ pub fn live(attempt: &GateAttempt) -> bool {
 }
 
 /// The attempt a task's row stands for: a live one always (it is confirmed activity), a finished
-/// one only when it belongs to the task's current run.
+/// one only when its round/run are still relevant. An attempt with a result cannot replace
+/// the daemon's current-check lookup (which observes HEAD).
 pub fn current(row: &TaskRow) -> Option<&GateAttempt> {
     row.gate_attempt.as_ref().filter(|attempt| {
-        live(attempt)
-            || (row
-                .run
-                .as_ref()
-                .filter(|run| run.role == Role::Worker)
-                .is_none_or(|run| run.id == attempt.run)
-                && row
-                    .gate
-                    .as_ref()
-                    .is_none_or(|check| check.key == attempt.sha))
+        if live(attempt) {
+            return true;
+        }
+        let worker = row.run.as_ref().filter(|run| run.role == Role::Worker);
+        if attempt.round != row.task.round || worker.is_some_and(|run| run.id != attempt.run) {
+            return false;
+        }
+        match (&attempt.check, &row.gate) {
+            (Some(from_attempt), Some(current)) => {
+                from_attempt.log == current.log && from_attempt.key == current.key
+            }
+            (Some(_), None) => false,
+            (None, Some(current)) => current.key == attempt.sha,
+            (None, None) => worker
+                .and_then(|worker| worker.head_sha.as_ref())
+                .is_none_or(|head| *head == attempt.sha),
+        }
     })
 }
 
@@ -75,8 +83,7 @@ pub fn open_of(row: &TaskRow) -> Option<GateOpen> {
     })
 }
 
-/// The rail's gate mark the attempt sets: a live one is at work whatever an earlier check said;
-/// a finished one only stands where no check of the current candidate does.
+/// The rail's mark for the selected attempt, independent of an earlier result for that SHA.
 pub fn mark(attempt: &GateAttempt) -> Mark {
     match attempt.state {
         GateAttemptState::Running | GateAttemptState::Stale => Mark::Active,
@@ -181,13 +188,21 @@ fn ago(at: Option<jiff::Timestamp>, now: u64) -> String {
 /// The attempt's facts in order: command, step, elapsed, heartbeat, last output, candidate.
 pub fn facts(attempt: &GateAttempt, now: u64) -> Vec<(&'static str, String)> {
     let started = seconds(attempt.started);
-    let ended = attempt.finished.and_then(seconds).or_else(|| {
-        (attempt.state == GateAttemptState::Interrupted)
-            .then(|| attempt.heartbeat.unwrap_or(attempt.started))
-            .and_then(seconds)
-    });
-    let elapsed = match (started, ended) {
-        (Some(start), Some(end)) => Some(format!("ran {}", duration(end.saturating_sub(start)))),
+    let interrupted = attempt.state == GateAttemptState::Interrupted;
+    let ended = if interrupted {
+        attempt.heartbeat.or(Some(attempt.started))
+    } else {
+        attempt.finished
+    };
+    let elapsed = match (started, ended.and_then(seconds)) {
+        (Some(start), Some(end)) => {
+            let elapsed = duration(end.saturating_sub(start));
+            Some(if interrupted {
+                format!("at least {elapsed}")
+            } else {
+                format!("ran {elapsed}")
+            })
+        }
         (Some(start), None) if now > 0 => Some(duration(now.saturating_sub(start))),
         _ => None,
     };
@@ -259,14 +274,23 @@ pub fn attempt<'f>(feed: &'f Feed, open: &GateOpen) -> Option<&'f GateAttempt> {
 }
 
 /// Whether an open view should read the newest window again now, `last` being when it last
-/// did: while the attempt (or the window last read) is live, the link is up and no read is on
-/// its way or failed. A failed read waits for Retry rather than looping.
+/// did: while the attempt (or the window last read) is live and the link is up. Back off after
+/// an error rather than leaving an unverified Running label or losing the final result.
 pub fn due(feed: &Feed, open: &GateOpen, last: u64) -> bool {
-    if feed.link != Link::Up || feed.now < last.saturating_add(POLL_SECS) {
+    if feed.link != Link::Up {
         return false;
     }
     let cache = feed.detail(&target(open.task.as_str(), &open.attempt, None));
-    if cache.is_some_and(|cache| cache.loading || cache.error.is_some()) {
+    let error = cache.and_then(|cache| cache.error.as_ref());
+    let interval = if error.is_some() {
+        RETRY_SECS
+    } else {
+        POLL_SECS
+    };
+    if feed.now < last.saturating_add(interval)
+        || cache.is_some_and(|cache| cache.loading)
+        || error.is_some_and(|error| error.code == "not_found")
+    {
         return false;
     }
     let window_live = page(cache).is_none_or(|page| live(&page.attempt));
@@ -330,7 +354,9 @@ pub fn view(feed: &Feed, open: &GateOpen, ui: &GateUi) -> GateView {
     let online = feed.link == Link::Up;
     let task = open.task.as_str();
     let newest_target = target(task, &open.attempt, None);
-    let newest = page(feed.detail(&newest_target));
+    let newest_cache = feed.detail(&newest_target);
+    let newest = page(newest_cache);
+    let tail_failed = online && newest_cache.is_some_and(|cache| cache.error.is_some());
     let shown_target = ui.before.map_or_else(
         || newest_target.clone(),
         |before| target(task, &open.attempt, Some(before)),
@@ -368,7 +394,16 @@ pub fn view(feed: &Feed, open: &GateOpen, ui: &GateUi) -> GateView {
         sub: format!("attempt {}", open.attempt),
         standing: attempt.map_or_else(
             || (Hue::Neutral, "not read yet".to_owned()),
-            |attempt| standing(attempt, online),
+            |attempt| {
+                if tail_failed && attempt.state == GateAttemptState::Running {
+                    (
+                        Hue::Held,
+                        "◌ liveness unconfirmed: the latest read failed".to_owned(),
+                    )
+                } else {
+                    standing(attempt, online)
+                }
+            },
         ),
         facts: attempt.map_or_else(Vec::new, |attempt| facts(attempt, feed.now)),
         artifact: check

@@ -14,10 +14,11 @@ use rusqlite::params;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Actor, Check, CheckKind, CheckResult, Engine, Run, Store,
+    Actor, Check, CheckKind, CheckResult, Engine, Next, Op, Run, Store,
     artifacts::{ArtifactOwner, ArtifactTarget},
     config::EffectiveProject,
     events::EventKind,
+    refuse,
     store::encode,
 };
 
@@ -38,6 +39,14 @@ const LOG_LINES: usize = 200;
 const COMMAND_LIMIT: usize = 768;
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
 const STALE_SECONDS: i64 = 5;
+
+#[derive(Serialize, Deserialize)]
+struct StoredAttempt {
+    #[serde(flatten)]
+    attempt: GateAttempt,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    interrupted_end: Option<u64>,
+}
 
 #[derive(Clone, Serialize, Deserialize)]
 struct Progress {
@@ -68,6 +77,7 @@ impl Engine {
         let sha = corral_git::rev_sha(&run.worktree, "HEAD").context("read gate HEAD")?;
         let steps = u32::try_from(project.map_or(0, |project| project.gate.len()))
             .context("too many gate commands")?;
+        self.require_previous_gate_closed(&run.task)?;
         *effects_started = true;
         let (mut runner, mut log) = GateRunner::start(self, run, sha, round, steps)?;
         let result = (|| {
@@ -87,6 +97,31 @@ impl Engine {
                     .transaction(|store| store.finish_gate_attempt(&runner.attempt))?;
                 Err(error)
             }
+        }
+    }
+
+    pub(crate) fn require_previous_gate_closed(&self, task: &str) -> Result<()> {
+        // Settle an abandoned attempt before a retry replaces it on the board.
+        let Some(attempt) = self.latest_gate_attempt(task)? else {
+            return Ok(());
+        };
+        if attempt.check.is_some() {
+            return Ok(());
+        }
+        let Some(log) = self.open_gate_log(&attempt)? else {
+            return Ok(());
+        };
+        // In Unix the command and its descendants inherit the log's locked open file
+        // description. Do not start a retry while those writers still have it open.
+        match log.try_lock_shared() {
+            Ok(()) => Ok(()),
+            Err(TryLockError::WouldBlock) => Err(refuse(
+                "the previous gate command still holds its log; retry after it exits",
+                vec![Next::run(Op::Gate {
+                    id: task.to_owned(),
+                })],
+            )),
+            Err(TryLockError::Error(error)) => Err(error).context("probe previous gate writers"),
         }
     }
 
@@ -169,7 +204,7 @@ impl Engine {
                 "SELECT document FROM gate_attempts WHERE task=?1 ORDER BY seq DESC LIMIT 1",
                 [task],
             )?
-            .map(|attempt| self.observe_gate(attempt))
+            .map(|attempt| self.observe_gate(attempt).map(|observed| observed.attempt))
             .transpose()
     }
 
@@ -184,23 +219,23 @@ impl Engine {
         let Some(stored) = self.store.gate_attempt(task, attempt)? else {
             return Ok(None);
         };
-        let mut attempt = self.observe_gate(stored)?;
-        let mut log = self.open_gate_log(&attempt)?;
-        if log.is_none() && attempt.finished.is_none() {
-            // Completion may have removed the live file between observation and open.
-            if let Some(finished) = self.store.gate_attempt(task, &attempt.id)?
-                && finished.finished.is_some()
-            {
-                log = self.open_gate_log(&finished)?;
-                attempt = finished;
-            }
+        let mut stored = self.observe_gate(stored)?;
+        let mut log = self.open_gate_log(&stored.attempt)?;
+        // Completion may have removed the live file between observation and open.
+        if log.is_none()
+            && stored.attempt.finished.is_none()
+            && let Some(finished) = self.store.gate_attempt(task, attempt)?
+            && finished.attempt.finished.is_some()
+        {
+            log = self.open_gate_log(&finished.attempt)?;
+            stored = finished;
         }
         let (start, end, total, text) = log.map_or_else(
             || Ok((0, 0, 0, String::new())),
-            |log| read_window(log, before),
+            |log| read_window(log, before, stored.interrupted_end),
         )?;
         Ok(Some(GateAttemptPage {
-            attempt,
+            attempt: stored.attempt,
             start,
             end,
             total,
@@ -235,15 +270,16 @@ impl Engine {
             .join(id)
     }
 
-    fn observe_gate(&self, mut attempt: GateAttempt) -> Result<GateAttempt> {
+    fn observe_gate(&self, mut stored: StoredAttempt) -> Result<StoredAttempt> {
+        let attempt = &mut stored.attempt;
         if attempt.finished.is_some() {
-            return Ok(attempt);
+            return Ok(stored);
         }
         let path = self.gate_path(&attempt.task, &attempt.id);
         let alive = lease_held(&path);
         if alive != Some(true)
             && let Some(finished) = self.store.gate_attempt(&attempt.task, &attempt.id)?
-            && finished.finished.is_some()
+            && finished.attempt.finished.is_some()
         {
             // A normal exit publishes its result before releasing its lease.
             return Ok(finished);
@@ -253,28 +289,51 @@ impl Engine {
             attempt.command = progress.command;
             attempt.step = progress.step;
         }
-        attempt.last_output = File::open(path.join("output.log"))
-            .ok()
-            .as_ref()
-            .and_then(last_output);
-        let fresh = attempt.heartbeat.is_some_and(|at| {
-            Timestamp::now().as_second().saturating_sub(at.as_second()) < STALE_SECONDS
-        });
+        let log = File::open(path.join("output.log")).ok();
+        attempt.last_output = log.as_ref().and_then(last_output);
+        let now = Timestamp::now();
+        let fresh = attempt
+            .heartbeat
+            .is_some_and(|at| now.as_second().saturating_sub(at.as_second()) < STALE_SECONDS);
         attempt.state = match alive {
             Some(false) => GateAttemptState::Interrupted,
             Some(true) if fresh => GateAttemptState::Running,
             _ => GateAttemptState::Stale,
         };
-        Ok(attempt)
+        if attempt.state == GateAttemptState::Interrupted {
+            // The exact exit time is unknown. Freeze the log at observation, even if an
+            // orphaned shell still has its old output handle.
+            attempt.finished = Some(now);
+            stored.interrupted_end = Some(
+                log.and_then(|file| file.metadata().ok())
+                    .map_or(0, |m| m.len()),
+            );
+            return self.store.record_gate_interruption(stored);
+        }
+        Ok(stored)
     }
 }
 
 impl Store {
-    fn gate_attempt(&self, task: &str, id: &str) -> Result<Option<GateAttempt>> {
+    fn gate_attempt(&self, task: &str, id: &str) -> Result<Option<StoredAttempt>> {
         self.optional_document(
             "SELECT document FROM gate_attempts WHERE task=?1 AND id=?2",
             params![task, id],
         )
+    }
+
+    fn record_gate_interruption(&self, stored: StoredAttempt) -> Result<StoredAttempt> {
+        let attempt = &stored.attempt;
+        let updated = self.connection.execute(
+            "UPDATE gate_attempts SET document=?3 WHERE task=?1 AND id=?2 AND json_extract(document, '$.finished') IS NULL",
+            params![attempt.task, attempt.id, encode(&stored)?],
+        ).context("record observed gate interruption")?;
+        if updated == 0 {
+            return self
+                .gate_attempt(&attempt.task, &attempt.id)?
+                .context("gate attempt disappeared");
+        }
+        Ok(stored)
     }
 
     fn finish_gate_attempt(&self, attempt: &GateAttempt) -> Result<()> {
@@ -311,6 +370,7 @@ impl GateRunner {
         let lease = File::create(path.join("runner.lock")).context("create gate runner lease")?;
         lease.lock().context("acquire gate runner lease")?;
         let log = File::create(path.join("output.log")).context("create gate log")?;
+        log.lock().context("lock gate output for command writers")?;
         let started = Timestamp::now();
         let mut runner = Self {
             attempt: GateAttempt {
@@ -469,10 +529,14 @@ fn last_output(file: &File) -> Option<Timestamp> {
     Timestamp::try_from(metadata.modified().ok()?).ok()
 }
 
-fn read_window(mut log: File, before: Option<u64>) -> Result<(u64, u64, u64, String)> {
+fn read_window(
+    mut log: File,
+    before: Option<u64>,
+    limit: Option<u64>,
+) -> Result<(u64, u64, u64, String)> {
     let metadata = log.metadata().context("stat gate log")?;
     ensure!(metadata.is_file(), "gate log is not a regular file");
-    let total = metadata.len();
+    let total = metadata.len().min(limit.unwrap_or(u64::MAX));
     let end = before.unwrap_or(total).min(total);
     let start = end.saturating_sub(LOG_WINDOW);
     log.seek(SeekFrom::Start(start))

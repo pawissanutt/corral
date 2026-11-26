@@ -7,7 +7,7 @@ use std::{
 };
 
 const ROOT: &str = "CORRAL_TEST_GATE_ATTEMPT_ROOT";
-const WAIT: &str = "printf 'started-%s\\n' \"$MARKER\"; if test \"$PAUSE\" = yes; then i=0; until test -f \"$BARRIER\"; do i=$((i+1)); test \"$i\" -lt 200 || exit 1; sleep .05; done; fi";
+const WAIT: &str = "printf 'started-%s\\n' \"$MARKER\"; if test \"$PAUSE\" = yes; then i=0; until test -f \"$BARRIER\"; do i=$((i+1)); test \"$i\" -lt 200 || exit 1; sleep .05; done; printf 'released-%s\\n' \"$MARKER\"; fi";
 const OUTPUT: &str =
     "head -c 12000 /dev/zero | tr '\\000' x; printf '\\nfinished-%s\\n' \"$MARKER\"";
 
@@ -161,8 +161,25 @@ fn quiet_gate_retry_and_runner_exit_are_observable() {
     assert!(!runner.0.wait().unwrap().success());
     // The shell may still hold inherited stdout/stderr. Only the runner owns the lease.
     let interrupted = page(&active.attempt.id, None);
+    let premature_retry = cx.engine.gate(&task);
     fs::write(root.join("interrupted"), "release orphaned shell").unwrap();
+    assert!(as_refusal(&premature_retry.unwrap_err()).is_some());
     assert_eq!(interrupted.attempt.state, GateAttemptState::Interrupted);
+    assert!(interrupted.attempt.finished.is_some());
     assert!(interrupted.attempt.check.is_none());
+    let raw = cx
+        .engine
+        .state_dir
+        .join("runs")
+        .join(&task)
+        .join("gates")
+        .join(&active.attempt.id)
+        .join("output.log");
+    until(|| {
+        fs::read_to_string(&raw)
+            .ok()
+            .filter(|log| log.contains("released-interrupted"))
+    });
+    assert_eq!(page(&active.attempt.id, None), interrupted);
     assert_eq!(cx.events(&task, EventKind::Gate).len(), 2);
 }

@@ -295,9 +295,12 @@ review-pipeline gates and landing rechecks all register a separate attempt tied 
 worker run, commit and round. The Gate view reads a bounded tail using `detail.get`
 with a task and its attempt ID; older windows use byte offsets, not filesystem paths.
 The runner updates a heartbeat even when the log is quiet. A stale heartbeat is not
-proof of exit: if the daemon observes the runner's lease released with no result, the
-attempt is interrupted. Heartbeats and output do not enter the board event history.
-After a check commits, its retained artifact serves subsequent reads of that attempt.
+proof of exit: when the engine observes a released runner lease with no result, it
+records the interruption and freezes the visible log boundary. It refuses a retry
+while a previous command still holds its output handles. The Tasks topic
+publishes step and lifecycle changes; heartbeat and output times stay in the selected
+Gate detail, out of the board event history. After a check commits, its retained
+artifact serves subsequent reads of that attempt.
 
 See [the app guide](../../apps/corral-app/README.md#live-data) for enrolment and recovery.
 

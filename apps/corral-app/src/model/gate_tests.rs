@@ -65,6 +65,17 @@ fn the_log_catches_up_after_reconnect_without_moving_a_held_window() {
     assert_eq!(view(&feed, &open, &held).standing.0, Hue::Held);
 
     feed.link = Link::Up;
+    feed.now = 107;
+    let selector = target(open.task.as_str(), &open.attempt, None);
+    feed.details.get_mut(&detail_key(&selector)).unwrap().error =
+        Some(crate::model::daemon::ClientError {
+            code: "unavailable".to_owned(),
+            message: "temporary read failure".to_owned(),
+        });
+    assert_eq!(view(&feed, &open, &held).standing.0, Hue::Held);
+    assert!(!due(&feed, &open, 105));
+    assert!(due(&feed, &open, 102));
+
     first.attempt.state = GateAttemptState::Passed;
     first.attempt.finished = Some(jiff::Timestamp::from_second(109).unwrap());
     first.text.push_str("\nresumed");
