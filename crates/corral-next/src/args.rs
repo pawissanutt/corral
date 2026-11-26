@@ -334,6 +334,11 @@ pub(crate) enum ArtifactCommand {
         #[arg(value_name = "REF")]
         reference: String,
     },
+    /// Check the structure of a local workflow diagram without a workspace or upload.
+    ValidateDiagram {
+        #[arg(value_name = "PATH")]
+        path: PathBuf,
+    },
 }
 
 pub(crate) fn artifact_kinds() -> impl Iterator<Item = ArtifactKind> {

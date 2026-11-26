@@ -8,6 +8,7 @@ pub mod build;
 pub mod config;
 pub mod detail;
 pub mod device;
+pub mod diagram;
 pub mod frame;
 pub mod health;
 pub mod host;

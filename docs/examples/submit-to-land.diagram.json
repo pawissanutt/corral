@@ -1,0 +1,33 @@
+{
+  "schema": "corral.workflow-diagram",
+  "version": 1,
+  "subject": {
+    "project": "corral",
+    "commit": "9f9f9314d3fcdc51d67ee48ab28da910dc828d42"
+  },
+  "start": "submit",
+  "nodes": [
+    { "id": "submit", "kind": "step", "label": "Worker submits" },
+    {
+      "id": "gate",
+      "kind": "decision",
+      "label": "Gate",
+      "bindings": {
+        "source": {
+          "path": "crates/corral-engine/src/review.rs",
+          "span": { "start": 101, "end": 112 }
+        },
+        "entity": { "kind": "file", "path": "crates/corral-engine/src/review.rs" }
+      }
+    },
+    { "id": "review", "kind": "decision", "label": "Review" },
+    { "id": "land", "kind": "end", "label": "Land" }
+  ],
+  "edges": [
+    { "id": "submit-to-gate", "kind": "next", "from": "submit", "to": "gate" },
+    { "id": "gate-passes", "kind": "branch", "from": "gate", "to": "review", "label": "Pass" },
+    { "id": "gate-fails", "kind": "branch", "from": "gate", "to": "submit", "label": "Retry" },
+    { "id": "review-approves", "kind": "branch", "from": "review", "to": "land", "label": "Approve" },
+    { "id": "review-requests-changes", "kind": "branch", "from": "review", "to": "submit", "label": "New round" }
+  ]
+}

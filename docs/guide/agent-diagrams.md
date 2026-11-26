@@ -5,6 +5,9 @@ publish a diagram the owner reads in the Corral app. There is no harness-specifi
 diagram is an ordinary Markdown artifact recorded with `corral-next artifact add`, and the app
 draws its Mermaid fences itself. No HTML, JavaScript or external renderer is involved.
 
+For the separate typed workflow format, see [workflow diagram recipes](workflow-diagram-recipes.md).
+The offline recipe validator does not yet provide an evidence-backed app view.
+
 ## Workflow
 
 1. Write one Markdown file. Put each diagram in a fenced block tagged `mermaid`, and keep the

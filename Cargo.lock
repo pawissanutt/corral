@@ -605,6 +605,7 @@ dependencies = [
  "corral-engine",
  "corral-protocol",
  "jiff 0.2.46",
+ "libc",
  "serde",
  "serde_json",
  "serde_yaml_ng",

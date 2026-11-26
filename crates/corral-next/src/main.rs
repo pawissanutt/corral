@@ -1,6 +1,7 @@
 mod args;
 mod board_plan;
 mod cli;
+mod diagram;
 mod editor;
 mod ext;
 mod hook;
@@ -71,10 +72,13 @@ fn main() -> ExitCode {
         json: cli.json,
         stdout: io::stdout().lock(),
     };
-    let code = match corral_engine::pin_binary_path().and_then(|()| run(cli.command, &mut output)) {
-        Ok(code) => code,
-        Err(error) => output.report(&error),
+    let result = match cli.command {
+        Command::Artifact(ArtifactCommand::ValidateDiagram { path }) => {
+            diagram::run(&path, &mut output)
+        }
+        command => corral_engine::pin_binary_path().and_then(|()| run(command, &mut output)),
     };
+    let code = result.unwrap_or_else(|error| output.report(&error));
     ExitCode::from(if hook { 0 } else { code })
 }
 
@@ -805,5 +809,6 @@ fn artifact(engine: &Engine, out: &mut Output<'_>, command: ArtifactCommand) -> 
             .stdout
             .write_all(&engine.show_artifact(&reference)?)
             .context("write artifact contents"),
+        ArtifactCommand::ValidateDiagram { .. } => unreachable!("handled offline"),
     }
 }
