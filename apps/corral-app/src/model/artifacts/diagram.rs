@@ -476,15 +476,17 @@ fn inspect(
     let cache = feed.detail(&element_target(reference, sha256, id));
     let state = match cache {
         None => Evidence::Loading,
-        Some(cache) => match (cache.body(), &cache.error) {
-            (Some(DetailBody::ArtifactDiagramElement(detail)), _) => {
-                facts.push(("Submission", candidate(detail.candidate.as_ref())));
-                evidence(detail)
-            }
-            (_, Some(error)) => Evidence::Failed(format!(
+        // A failed read wins over the body the cache keeps from before it, so a pending answer
+        // followed by an error says so and is not asked again.
+        Some(cache) => match (&cache.error, cache.body()) {
+            (Some(error), _) => Evidence::Failed(format!(
                 "corrald could not resolve this element: {}",
                 error.message
             )),
+            (None, Some(DetailBody::ArtifactDiagramElement(detail))) => {
+                facts.push(("Submission", candidate(detail.candidate.as_ref())));
+                evidence(detail)
+            }
             _ => Evidence::Loading,
         },
     };

@@ -159,6 +159,54 @@ fn only_an_id_of_the_open_recipe_selects() {
 }
 
 #[test]
+fn a_failed_read_after_pending_says_so_and_stops_asking() {
+    use corral_protocol::detail::{
+        DiagramElementDetail, EntityResult, SelectedElement, SourceResult,
+    };
+    let mut feed = Feed::default();
+    let r = recipe(&[("go", "a", "b"), ("pass", "b", "c"), ("retry", "b", "a")]);
+    served(&mut feed, "T-1:1", r.clone());
+    let target = diagram::element_target("T-1:1", &"ab".repeat(32), "go");
+    feed.details.insert(
+        detail_key(&target),
+        DetailCache {
+            transcript_seams: Default::default(),
+            target,
+            pages: Vec::new(),
+            loading: false,
+            stale: false,
+            // The cache keeps the pending body from before the failed read.
+            error: Some(crate::model::daemon::ClientError {
+                code: "not_found".into(),
+                message: "artifact T-1:1 at that digest".into(),
+            }),
+            merged: Some(DetailBody::ArtifactDiagramElement(DiagramElementDetail {
+                reference: "T-1:1".into(),
+                sha256: "ab".repeat(32),
+                subject: r.subject.clone(),
+                candidate: None,
+                element: SelectedElement::Edge {
+                    edge: r.edges[0].clone(),
+                },
+                source: SourceResult::NotProvided,
+                entity: EntityResult::Pending,
+            })),
+        },
+    );
+    let Some(diagram::Shown::Graph(graph)) = diagram::shown(&feed, "T-1:1", Some("go")) else {
+        panic!("the recipe is served ready");
+    };
+    assert!(
+        !diagram::pending(&graph),
+        "a failed read is not asked again"
+    );
+    assert!(matches!(
+        graph.inspector.map(|i| i.state),
+        Some(diagram::Evidence::Failed(_))
+    ));
+}
+
+#[test]
 fn escape_backs_out_of_another_artifact_left_after_a_recipe_selection() {
     let mut feed = Feed::default();
     served(
@@ -199,4 +247,17 @@ fn escape_backs_out_of_another_artifact_left_after_a_recipe_selection() {
     );
     assert!(state.escape());
     assert_eq!(state.full, None, "the first Escape leaves the section");
+
+    state.act(
+        Action::Cite {
+            reference: "T-2:4".into(),
+            section: None,
+        },
+        &feed,
+    );
+    assert!(state.escape());
+    assert_eq!(
+        state.full, None,
+        "the first Escape leaves another artifact too"
+    );
 }
