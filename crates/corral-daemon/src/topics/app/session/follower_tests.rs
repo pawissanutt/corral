@@ -32,6 +32,7 @@ pub(super) fn page_after(seq: u64, events: Vec<Kind>) -> LivePage {
         next: seq + events.len() as u64,
         host_tail: seq + events.len() as u64,
         more: false,
+        journal: Vec::new(),
         gap: None,
         fleet: None,
         state: None,

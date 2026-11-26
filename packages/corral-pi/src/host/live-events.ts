@@ -1,5 +1,6 @@
 // Ephemeral chat projection only: never writes the Pi journal or the lifecycle event ring.
 import { randomUUID } from "node:crypto";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { EventLog, EVENT_MAX_BYTES, type EventPage } from "../bridge/events.ts";
 import type { FleetSnapshot } from "../build/types.ts";
@@ -51,6 +52,20 @@ const PAGE_BYTES = 56 * 1024;
 const OPEN_KEEP_BYTES = 32 * 1024;
 const OPEN_TAIL_BYTES = 8 * 1024;
 const OPEN_BYTES = 24 * 1024;
+const JOURNAL_ID_BYTES = 128;
+
+interface JournalAnchor {
+  readonly message: number;
+  readonly entry_id: string | null;
+}
+
+function startJournal(leaf: string | null): JournalAnchor | undefined {
+  // Imported journals can have IDs larger than Pi's usual short ID or UUID. Omit an
+  // unrepresentable anchor instead of sending a truncated ID or confusing it with the root.
+  if (leaf !== null && (typeof leaf !== "string" || !leaf.length || leaf.length > JOURNAL_ID_BYTES
+    || !leaf.isWellFormed() || Buffer.byteLength(leaf) > JOURNAL_ID_BYTES)) return undefined;
+  return { message: 0, entry_id: leaf };
+}
 
 /** Where the open turn is, for a reader whose cursor fell out of the ring. */
 export interface OpenTurn {
@@ -63,6 +78,8 @@ export interface OpenTurn {
    * assistant entries stamped at or after this, so a reader can tell which of them the
    * journal it reads already holds. */
   readonly message_at?: string;
+  /** The last appended reply, or the active branch leaf before the turn's first reply. */
+  readonly journal?: JournalAnchor;
   readonly text_offset: number;
   readonly text: string;
   readonly thinking_offset: number;
@@ -84,6 +101,8 @@ export class LiveEvents {
   private turn: number | undefined;
   private messageEnded = true;
   private messageAt: string | undefined;
+  private journal: JournalAnchor | undefined;
+  private assistantEnd: { reply: AssistantMessage; message: number } | undefined;
   private written = { live_text: Buffer.alloc(0), live_thinking: Buffer.alloc(0) };
   private error: string | undefined;
   private readonly toolCompletions: Record<string, unknown>[] = [];
@@ -159,6 +178,14 @@ export class LiveEvents {
     this.stateChanged();
   }
 
+  appendedAssistant(reply: AssistantMessage, entryId: string): void {
+    const ended = this.assistantEnd;
+    if (ended?.reply !== reply || this.turn === undefined) return;
+    this.assistantEnd = undefined;
+    this.journal = { message: ended.message, entry_id: entryId };
+    this.events.emit("live_entry", { journal_turn: this.turn, journal: this.journal });
+  }
+
   note(tone: HostNotice["tone"], text: string, at: number, id?: string): void {
     this.hostNotices = [...this.hostNotices.slice(-3), { id: id ?? `note-${this.noticeInstance}-${++this.noticeId}`, tone, text: utf8Prefix(text, 240),
       until: new Date(at + NOTICE_MS).toISOString() }];
@@ -219,6 +246,7 @@ export class LiveEvents {
       const thinking = tail(this.written.live_thinking, this.messageEnded ? 0 : limit);
       const open = { turn: this.turn, message: this.message, ended: this.messageEnded,
         ...(this.messageAt ? { message_at: this.messageAt } : {}),
+        ...(this.journal ? { journal: this.journal } : {}),
         text_offset: this.textOffset - this.written.live_text.length + text.skipped, text: text.text,
         thinking_offset: this.thinkingOffset - this.written.live_thinking.length + thinking.skipped,
         thinking: thinking.text };
@@ -249,7 +277,7 @@ export class LiveEvents {
   }
 
   /** Called after HostSession updates its turn sequence for this same upstream event. */
-  observe(event: AgentSessionEvent, turn: number): void {
+  observe(event: AgentSessionEvent, turn: number, startLeaf: string | null = null): void {
     switch (event.type) {
       case "agent_start":
         this.message = 0;
@@ -258,20 +286,24 @@ export class LiveEvents {
         this.turn = turn;
         this.messageEnded = true;
         this.messageAt = new Date().toISOString();
+        this.journal = startJournal(startLeaf);
+        this.assistantEnd = undefined;
         this.written = { live_text: Buffer.alloc(0), live_thinking: Buffer.alloc(0) };
         this.error = undefined;
         this.toolCompletions.length = 0;
         this.awaitingMessagePersistence = false;
         this.activity = { phase: "working", since: new Date().toISOString() };
         this.stateChanged();
-        this.events.emit("live_turn", { turn, state: "started" });
+        this.events.emit("live_turn", { turn, state: "started", ...(this.journal ? { journal: this.journal } : {}) });
         break;
       case "agent_settled":
+        this.assistantEnd = undefined;
         this.activity = undefined;
         this.stateChanged();
         // Settlement also runs after a failed message append; that is not a replay barrier.
         if (this.awaitingMessagePersistence) break;
         this.turn = undefined;
+        this.journal = undefined;
         this.events.emit("live_turn", { turn, state: "ended", aborted: event.aborted,
           ...(this.error ? { error: this.error } : {}) });
         break;
@@ -296,6 +328,8 @@ export class LiveEvents {
           this.awaitingMessagePersistence = true;
         }
         if (event.message.role === "assistant") {
+          // Pi appends this exact object after dispatching message_end to subscribers.
+          this.assistantEnd = { reply: event.message, message: this.message };
           this.messageEnded = true;
           this.written = { live_text: Buffer.alloc(0), live_thinking: Buffer.alloc(0) };
         }

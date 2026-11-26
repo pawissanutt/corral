@@ -88,11 +88,29 @@ struct HostEvent {
     at: String,
     #[serde(flatten)]
     kind: SessionLiveKind,
+    journal_turn: Option<u64>,
+    journal: Option<JournalAnchor>,
+}
+
+/// Pi bridge metadata, not part of the app's session event protocol.
+#[derive(Clone, Deserialize)]
+pub(super) struct JournalAnchor {
+    pub(super) message: u64,
+    pub(super) entry_id: Option<String>,
+}
+
+impl JournalAnchor {
+    pub(super) fn valid(&self) -> bool {
+        self.entry_id
+            .as_ref()
+            .map_or(self.message == 0, |id| !id.is_empty() && id.len() <= 128)
+    }
 }
 
 pub(super) struct LivePage {
     pub(super) generation: Option<u32>,
     pub(super) events: Vec<(SessionLiveEvent, usize)>,
+    pub(super) journal: Vec<(u64, u64, JournalAnchor)>,
     pub(super) next: u64,
     pub(super) host_tail: u64,
     pub(super) more: bool,
@@ -229,6 +247,7 @@ impl LiveReader {
             return Ok(LivePage {
                 generation: None,
                 events: Vec::new(),
+                journal: Vec::new(),
                 next: 0,
                 host_tail: 0,
                 more: false,
@@ -252,6 +271,7 @@ impl LiveReader {
                 Ok(LivePage {
                     generation: None,
                     events: Vec::new(),
+                    journal: Vec::new(),
                     next: 0,
                     host_tail: 0,
                     more: false,
@@ -315,6 +335,7 @@ impl LiveReader {
             return Ok(LivePage {
                 generation: Some(generation),
                 events: Vec::new(),
+                journal: Vec::new(),
                 next: 0,
                 host_tail: 0,
                 more: live.ring.last != 0,
@@ -335,6 +356,7 @@ impl LiveReader {
             .as_ref()
             .map_or(requested.live, |gap| gap.resumed - 1);
         let mut events = Vec::with_capacity(live.events.len());
+        let mut journal = Vec::new();
         for event in live.events {
             ensure!(
                 prior.checked_add(1) == Some(event.seq),
@@ -342,6 +364,19 @@ impl LiveReader {
             );
             prior = event.seq;
             let mut kind = event.kind;
+            if let Some(anchor) = event.journal.filter(JournalAnchor::valid) {
+                let turn = match kind {
+                    SessionLiveKind::LiveTurn {
+                        turn,
+                        state: SessionLiveTurnState::Started,
+                    } if anchor.message == 0 => Some(turn),
+                    SessionLiveKind::LiveEntry {} if anchor.message > 0 => event.journal_turn,
+                    _ => None,
+                };
+                if let Some(turn) = turn {
+                    journal.push((event.seq, turn, anchor));
+                }
+            }
             if let SessionLiveKind::LiveTool { call, .. } = &mut kind
                 && let std::borrow::Cow::Owned(key) = crate::views::transcript::tool_call_id(call)
             {
@@ -392,6 +427,7 @@ impl LiveReader {
         Ok(LivePage {
             generation: Some(generation),
             events,
+            journal,
             next: live.ring.next,
             host_tail: live.ring.last,
             more: live.more,

@@ -59,6 +59,7 @@ fn page(generation: u32, start: u64, end: u64, text: bool) -> LivePage {
                 (event, bytes)
             })
             .collect(),
+        journal: Vec::new(),
         next: end,
         host_tail: end,
         more: false,

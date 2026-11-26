@@ -12,8 +12,11 @@ use corral_protocol::{
 };
 use serde::Deserialize;
 
-use super::reader::LivePage;
-use crate::views::transcript::tail::{Change, Message, STEPS, Tail};
+use super::reader::{JournalAnchor, LivePage};
+use crate::views::transcript::tail::{Change, Message, Record, Records, STEPS, Tail};
+
+mod journal_order;
+use journal_order::{Exact, Order};
 
 #[derive(Deserialize)]
 pub(super) struct HostOpen {
@@ -23,6 +26,7 @@ pub(super) struct HostOpen {
     /// When `message` started, on the clock that stamps journal entries.
     #[serde(default)]
     message_at: Option<String>,
+    journal: Option<JournalAnchor>,
     text_offset: u64,
     text: String,
     thinking_offset: u64,
@@ -40,6 +44,8 @@ pub(super) struct Follower {
     open: BTreeMap<u64, Open>,
     from_start: bool,
     mark: Option<Mark>,
+    exact: Option<Exact>,
+    order: Order,
     /// When the turn began, or the message it was joined at: an assistant record written
     /// before it is not one of the messages being followed.
     began: Option<jiff::Timestamp>,
@@ -76,7 +82,7 @@ impl Mark {
 
 enum Journal {
     Changes(Vec<Change>),
-    Snapshot(Option<String>, Vec<Message>),
+    Snapshot(Option<String>, Vec<Message>, Records),
 }
 
 const SEEN: usize = 64;
@@ -125,7 +131,8 @@ impl Follower {
         // The host's page is followed whether or not the journal can be read: the reader
         // does not ask for it again.
         let journal = self.journal(id, path, scope, join);
-        if journal.is_err() {
+        let read_failed = journal.is_err();
+        if read_failed {
             self.tail = None;
             self.held = None;
         }
@@ -141,6 +148,7 @@ impl Follower {
                     turn,
                     at: event.at.parse().ok(),
                     records: 0,
+                    exact: None,
                 }),
                 _ => None,
             })
@@ -150,7 +158,7 @@ impl Follower {
             // already has: a turn's start may be pages away from its words. The host's
             // `open` says where the turn is, and only what it emits after this page is
             // followed.
-            if journal.is_err() {
+            if read_failed {
                 // No reset takes the messages that were being written from a reader.
                 self.drop_open(&mut ops);
             }
@@ -158,14 +166,75 @@ impl Follower {
             self.pending_end = None;
             self.recorded = 0;
             self.mark = None;
+            self.exact = None;
             self.began = None;
             self.open.clear();
             self.skip_through = page.map_or(0, |page| page.host_tail);
             starts.clear();
         }
+        // Index the actual journal order before consuming the page. An append may already
+        // be in the journal even when its notification is on a later host page.
+        let first_rank = match &journal {
+            Ok(Journal::Changes(changes)) => self.order.append(changes.iter().map(|c| &c.record)),
+            Ok(Journal::Snapshot(_, _, records)) => {
+                self.order = Order::default();
+                if let Some(exact) = &mut self.exact {
+                    exact.invalidate();
+                }
+                self.order.snapshot(records.root, &records.entries);
+                0
+            }
+            Err(_) => 0,
+        };
+        for (seq, turn, anchor) in page.into_iter().flat_map(|page| &page.journal) {
+            if *seq <= self.skip_through {
+                continue;
+            }
+            if self.turn == Some(*turn) {
+                Exact::update(&mut self.exact, anchor);
+            } else if let Some(start) = starts.iter_mut().find(|start| start.turn == *turn) {
+                Exact::update(&mut start.exact, anchor);
+            }
+        }
+        if !read_failed {
+            for exact in self
+                .exact
+                .iter_mut()
+                .chain(starts.iter_mut().filter_map(|s| s.exact.as_mut()))
+            {
+                exact.resolve(&self.order);
+            }
+        }
+        if !read_failed {
+            let mut through = self.order.rank;
+            for start in starts.iter_mut().rev() {
+                if let Some(exact) = &start.exact {
+                    start.records = exact.ordinal(through).unwrap_or(0);
+                    if let Some(before) = exact.before_turn() {
+                        through = through.min(before);
+                    }
+                }
+            }
+            if let Some(exact) = &self.exact
+                && let Some(recorded) = exact.ordinal(through)
+            {
+                self.recorded = recorded;
+            }
+        }
         match journal {
-            Ok(Journal::Changes(changes)) => self.pair(changes, &mut starts, &mut ops),
-            Ok(Journal::Snapshot(older, messages)) => {
+            Ok(Journal::Changes(changes)) => {
+                if self.exact_missing() {
+                    self.drop_open(&mut ops);
+                }
+                self.pair(
+                    changes,
+                    first_rank,
+                    &mut starts,
+                    page.map_or(&[], |page| &page.journal),
+                    &mut ops,
+                );
+            }
+            Ok(Journal::Snapshot(older, messages, _)) => {
                 self.held = older.as_ref().and_then(|_| {
                     let mut stamps = messages.iter().map(|(message, ..)| message.at.as_deref());
                     stamps.find_map(|at| at?.parse().ok())
@@ -196,7 +265,9 @@ impl Follower {
                     // reset takes the messages being written from a reader, so those the
                     // journal does not hold yet are put again, from the words the host
                     // writes next.
-                    if !self.covered() {
+                    if self.exact_missing() {
+                        self.open.clear();
+                    } else if !self.legacy_covered() {
                         self.lose_turn();
                     }
                     self.count();
@@ -211,31 +282,44 @@ impl Follower {
             Err(_) => {}
         }
         let (Some(generation), Some(page)) = (generation, page) else {
+            self.order.trim();
             return ops;
         };
         if join && let Some(seed) = seed {
             self.turn = Some(seed.turn);
-            // The journal was read after the host answered. The latest message's record may
-            // have reached it in between, and a later message's too, or not yet though the
-            // message has ended: the records of that message and of those after it are the
-            // assistant entries stamped at or after the message started (the turn, before
-            // its first message).
-            let since: Option<jiff::Timestamp> =
-                seed.message_at.as_deref().and_then(|at| at.parse().ok());
-            if since.is_some_and(|since| !reaches(self.held, since)) {
-                self.lose_turn();
-                return ops;
+            if let Some(anchor) = seed
+                .journal
+                .filter(|anchor| anchor.valid() && anchor.message <= seed.message)
+            {
+                let mut exact = Exact::new(anchor);
+                if !read_failed {
+                    exact.resolve(&self.order);
+                }
+                self.recorded = exact.ordinal(self.order.rank).unwrap_or(0);
+                self.exact = Some(exact);
+            } else {
+                // The journal was read after the host answered. The latest message's record may
+                // have reached it in between, and a later message's too, or not yet though the
+                // message has ended: the records of that message and of those after it are the
+                // assistant entries stamped at or after the message started (the turn, before
+                // its first message).
+                let since: Option<jiff::Timestamp> =
+                    seed.message_at.as_deref().and_then(|at| at.parse().ok());
+                if since.is_some_and(|since| !reaches(self.held, since)) {
+                    self.lose_turn();
+                    return ops;
+                }
+                let before = seed.message.saturating_sub(1);
+                self.mark = since.map(|since| Mark::from(before, since));
+                self.began = since;
+                self.recorded = match since {
+                    Some(_) => before,
+                    None if seed.message == 0 => 0,
+                    None => before + u64::from(seed.ended),
+                };
+                self.count();
             }
-            let before = seed.message.saturating_sub(1);
-            self.mark = since.map(|since| Mark::from(before, since));
-            self.began = since;
-            self.recorded = match since {
-                Some(_) => before,
-                None if seed.message == 0 => 0,
-                None => before + u64::from(seed.ended),
-            };
-            self.count();
-            if self.recorded < seed.message && !seed.ended {
+            if self.recorded < seed.message && !seed.ended && !self.exact_missing() {
                 let at = page
                     .events
                     .iter()
@@ -268,15 +352,19 @@ impl Follower {
                 );
             }
             // A seed describes the host's current turn, not the oldest surviving event.
+            self.order.trim();
             return ops;
         }
-        let journal_pending = self.tail.as_ref().is_some_and(Tail::has_pending_records);
+        self.order.trim();
+        let journal_pending = self.tail.as_ref().is_some_and(Tail::has_pending_records)
+            || (read_failed && self.exact.is_some());
         if !journal_pending
             && let Some(turn) = self.pending_end.take()
             && self.turn == Some(turn)
         {
             self.drop_open(&mut ops);
             self.turn = None;
+            self.exact = None;
         }
         for (event, _) in &page.events {
             if event.seq <= self.skip_through {
@@ -289,10 +377,14 @@ impl Follower {
                 } if self.turn != Some(*turn) => {
                     self.drop_open(&mut ops);
                     self.turn = Some(*turn);
-                    self.recorded = starts
-                        .iter()
-                        .find(|start| start.turn == *turn)
-                        .map_or(0, |start| start.records);
+                    let start = starts.iter_mut().find(|start| start.turn == *turn);
+                    self.recorded = start.as_ref().map_or(0, |start| start.records);
+                    self.exact = start.and_then(|start| start.exact.take());
+                    self.began = None;
+                    self.mark = None;
+                    if self.exact.is_some() {
+                        continue;
+                    }
                     // Its records may have been read on an earlier visit than this page.
                     self.began = event.at.parse().ok();
                     self.mark = self.began.map(|since| Mark::from(0, since));
@@ -311,6 +403,7 @@ impl Follower {
                     } else {
                         self.drop_open(&mut ops);
                         self.turn = None;
+                        self.exact = None;
                     }
                 }
                 SessionLiveKind::LiveText {
@@ -324,7 +417,10 @@ impl Follower {
                     message,
                     offset,
                     text,
-                } if self.turn == Some(*turn) && *message > self.recorded => {
+                } if self.turn == Some(*turn)
+                    && *message > self.recorded
+                    && !self.exact_missing() =>
+                {
                     let part = if matches!(event.kind, SessionLiveKind::LiveText { .. }) {
                         Part::Text
                     } else {
@@ -345,6 +441,11 @@ impl Follower {
                         )
                     });
                     let which = usize::from(part == Part::Thinking);
+                    // If we could not place the turn earlier, this may be the first
+                    // chunk we can carry even though the host already sent its prefix.
+                    if open.ends[which] == 0 {
+                        open.offsets[which] = *offset;
+                    }
                     let base = open.offsets[which];
                     open.ends[which] = open.ends[which].max(*offset + text.len() as u64);
                     let overlap =
@@ -389,15 +490,27 @@ impl Follower {
             }
             // Another branch, or more appended than these steps read: the tail again.
         }
-        let (tail, older, messages) = Tail::snapshot(id, path, scope)?;
+        let (tail, older, messages, records) = Tail::snapshot(id, path, scope)?;
         self.tail = Some(tail);
-        Ok(Journal::Snapshot(older, messages))
+        Ok(Journal::Snapshot(older, messages, records))
     }
 
     /// Pairs records appended to the journal with the messages being written.
-    fn pair(&mut self, changes: Vec<Change>, starts: &mut [Start], ops: &mut Vec<Op>) {
-        for Change { row, assistant } in changes {
-            let replaces = if assistant {
+    fn pair(
+        &mut self,
+        changes: Vec<Change>,
+        mut rank: u64,
+        starts: &mut [Start],
+        anchors: &[(u64, u64, JournalAnchor)],
+        ops: &mut Vec<Op>,
+    ) {
+        let skip_through = self.skip_through;
+        let anchors = anchors
+            .iter()
+            .filter(|(seq, _, anchor)| *seq > skip_through && anchor.message != 0);
+        for Change { row, record } in changes {
+            rank += u64::from(record.assistant);
+            let replaces = if record.assistant {
                 // When the record was written, and its message.
                 let written: Option<(jiff::Timestamp, String)> =
                     row.as_ref().and_then(|(message, ..)| {
@@ -409,9 +522,39 @@ impl Follower {
                 let at = written.as_ref().map(|(at, _)| *at);
                 // A record written before the turn began is an earlier turn's.
                 let earlier = self.began.zip(at).is_some_and(|(began, at)| at < began);
-                if let Some(start) = locate_start(starts, at, self.turn.is_some()) {
+                let named = record.entry_id.as_deref().and_then(|id| {
+                    anchors
+                        .clone()
+                        .find(|(_, _, anchor)| anchor.entry_id.as_deref() == Some(id))
+                });
+                if let Some((_, turn, anchor)) = named {
+                    // A name on this page binds the record directly, even if records
+                    // for multiple turns have the same stamp.
+                    if self.turn == Some(*turn) {
+                        self.open.remove(&anchor.message).map(|open| open.id)
+                    } else {
+                        None
+                    }
+                } else if starts.iter().any(|start| {
+                    start
+                        .exact
+                        .as_ref()
+                        .is_some_and(|exact| exact.includes(rank))
+                }) {
+                    None
+                } else if let Some(start) = locate_start(starts, at, self.turn.is_some()) {
                     start.records += 1;
                     None
+                } else if let Some(exact) = &self.exact {
+                    exact
+                        .ordinal(rank)
+                        .filter(|ordinal| {
+                            *ordinal != 0
+                                && !anchors.clone().any(|(_, turn, anchor)| {
+                                    self.turn == Some(*turn) && anchor.message == *ordinal
+                                })
+                        })
+                        .and_then(|ordinal| self.open.remove(&ordinal).map(|open| open.id))
                 } else if self.turn.is_some() && !earlier {
                     self.recorded += 1;
                     if let Some((since, id)) = written {
@@ -453,6 +596,9 @@ impl Follower {
     /// read at different moments, so a record may have been read before the event that
     /// says which message it is of, or while the journal could not be followed.
     fn count(&mut self) {
+        if self.exact.is_some() {
+            return;
+        }
         let Some(mark) = self.mark.as_ref().filter(|_| self.turn.is_some()) else {
             return;
         };
@@ -477,7 +623,10 @@ impl Follower {
     /// Whether the tail that was read again holds every record after the turn's mark. The
     /// record the mark was paired with says so by being among them. Its stamp alone does
     /// not: the tail may begin at a later record stamped the same instant.
-    fn covered(&self) -> bool {
+    fn legacy_covered(&self) -> bool {
+        if self.exact.is_some() {
+            return true;
+        }
         let Some(mark) = &self.mark else {
             return true;
         };
@@ -488,12 +637,17 @@ impl Follower {
         }
     }
 
+    fn exact_missing(&self) -> bool {
+        self.exact.as_ref().is_some_and(Exact::missing)
+    }
+
     /// Stops following the turn's words: which of its messages the journal holds is not
     /// known. Its records still arrive, and the next turn is followed from its start.
     fn lose_turn(&mut self) {
         self.turn = None;
         self.pending_end = None;
         self.mark = None;
+        self.exact = None;
         self.began = None;
         self.open.clear();
     }
@@ -517,6 +671,7 @@ struct Start {
     turn: u64,
     at: Option<jiff::Timestamp>,
     records: u64,
+    exact: Option<Exact>,
 }
 
 // Most visits have no new turn. If the host publishes two turns in one page, the
@@ -530,8 +685,8 @@ fn locate_start(
     let position = match at {
         Some(at) => starts
             .iter()
-            .rposition(|start| start.at.is_some_and(|start| start <= at)),
-        None if !has_current && !starts.is_empty() => Some(0),
+            .rposition(|start| start.exact.is_none() && start.at.is_some_and(|start| start <= at)),
+        None if !has_current => starts.iter().position(|start| start.exact.is_none()),
         None => None,
     }?;
     starts.get_mut(position)

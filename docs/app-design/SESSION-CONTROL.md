@@ -527,51 +527,45 @@ corrald carries at most 128 KiB of each of an open message's `thinking` and `tex
 that the part stops growing for every subscriber until the record arrives, so the tail a
 late subscriber is given and the `append`s that follow it count from the same start.
 
-corrald pairs the host's live words with journal records by order. Within a turn the
-`n`th assistant message the host streams is the `n`th assistant record the journal gains
-after the turn started; words for a message the journal already holds are not shown
-again. That holds only for a turn corrald saw start. When it joins a host's stream (its
-first read, a read from the start of the ring after the host came back, or a gap in the
-ring) it does not pair what the ring still holds: a turn's start can be pages away from
-its words, and the journal tail it has read is one page of the turn's records. It follows
-only what the host emits after the page it joined at, and the host says where the turn
-is: the `live_since` reply to a read from `seq` 0 or to a reader with a gap carries
-`open: { turn, message, ended, message_at, text_offset, text, thinking_offset, thinking }`
-while a turn is open. `message` is the ordinal of the latest assistant message (0 before
-the first) and `ended` whether it has finished. corrald reads the journal after the host
-answers, so that message's record may have reached the journal in between, or may not be
-there yet though the message ended: `message_at` is when the message started (the turn,
-before its first message), on the clock that stamps journal entries, so the records of
-that message and of any after it are the assistant entries stamped at or after it.
-corrald counts those it has read, opens the message only when it has read none, and
-counts the record when it comes. While it is being written, `text` and
-`thinking` are the tails of what was written, at those byte offsets, cut on character
-boundaries so the serialized `open` stays within 24 KiB, and within less when the reply
-also carries the fleet and the state: those come whole, and the reply with one event
-still fits the bridge's frame. A host that sends no `open` (an older one) has its words
-left out until its next turn starts; its records still arrive.
+The Pi bridge can name a journal entry with `journal: { message, entry_id }`.
+`message` is the turn's recorded assistant ordinal. At `live_turn started` it is 0,
+and `entry_id` is the active branch's leaf before the turn (or `null` at the root).
+When an assistant reply is appended successfully, the host emits `live_entry` with
+`journal_turn` and the new `journal` anchor, using the raw ID returned by the append. A
+`message_end` notification alone does not mean the record exists. These annotations
+are for corrald; they do not change the app's live event schema.
 
-corrald reads the journal and the host at different moments at every step, not only when
-it joins: the host a page at a time, and the journal to its end before it follows that
-page, so a record never follows an event the host emitted after it was written (an
-earlier turn's last record after the next turn's start). When more was appended than a
-few bounded reads hold, it reads the tail again, as a `reset`. The host stamps its events
-and the journal's entries with one clock, and that clock is what pairs them. A turn's
-records are the assistant entries stamped at or after its `live_turn started`, so one
-read before that event's page is counted when the turn starts, and its words are not
-opened after it. Within a turn the records are told apart by their place in the journal,
-after the last one paired, so two stamped the same instant are still two.
+When corrald joins (first read, replay from the start, or a gap), it follows only
+what the host emits after the page it joined at. A `live_since` reply from `seq` 0
+or across a gap carries an `open` seed while a turn is open:
+`{ turn, message, ended, journal?, message_at?, text_offset, text, thinking_offset, thinking }`.
+The seed's outer `message` is the latest assistant ordinal (0 before the first), and
+`ended` says whether it has finished writing. `journal` names the last reply actually
+appended, or the turn-start leaf if none was appended. The journal is read after the
+host answers: replies may already have been appended after the named entry. corrald
+counts the assistant entries after that ID in branch order, not by their stamps, and
+opens the seed's message only if it is still being written and not already recorded.
+The `text` and `thinking` tails start at their given byte offsets and are cut at
+character boundaries. Serialized `open` stays within 24 KiB, and shrinks when the
+reply also carries the fleet and state so that those and one event still fit the
+bridge frame. A host without `open` has its live words omitted until its next turn.
 
-A `reset` for the journal alone (another branch, or after a read of it failed) does not
-end the turn the host is in. While the journal cannot be read corrald still follows the
-host's pages, which it does not ask for again, and the reply goes on growing. When the
-journal is read again corrald counts the records that reached it meanwhile and puts
-the messages still being written after the tail, from the words the host writes next.
-The tail it reads again is one page. When that page does not hold the last record it
-paired (more was written since, whatever the stamps), or begins after the start of a
-turn whose `live_turn started` it follows only afterwards, it cannot tell which of the
-turn's messages are recorded: it leaves the rest of that turn's words out rather than
-guess, the records still arrive, and the next turn is followed from its start.
+corrald reads the journal before following each host page. It pairs assistant rows
+in journal order relative to the named entry, including records that arrive before
+the host page that reports them. A journal-only `reset` (e.g. a branch change, failed
+read, or more appends than the bounded forward reads hold) does not itself end a
+turn. corrald retains the newest anchor even if it cannot read the journal on that
+pass. On recovery it resolves that ID in the new tail, counts the replies present,
+and restores only the messages still being written, from the words the host writes
+next. If the bounded tail does not contain the named entry (or does not reach the
+root for a root anchor), corrald omits live words rather than guess; recorded rows
+still arrive, and a newer anchor that the tail holds can resume the turn.
+
+A host with no `journal` annotation keeps the timestamp fallback: corrald uses
+`live_turn started` or the seed's `message_at` (the start of the seed's message, or
+of the turn before its first message), and counts subsequent records in journal
+order. If it cannot establish that boundary on the tail it read, it leaves out the
+turn's live words and follows the next turn from its start.
 
 A scope that names no transcript any more (`quick`, once its chat has ended) is sent
 `reset` with nothing after it: the client holds no messages for it.

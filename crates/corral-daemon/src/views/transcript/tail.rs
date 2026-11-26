@@ -30,8 +30,35 @@ pub(crate) type Message = (SessionMessage, Option<String>, bool);
 pub(crate) struct Change {
     /// The record's message, none when it shows nothing.
     pub(crate) row: Option<Message>,
+    pub(crate) record: Record,
+}
+
+/// The branch order includes invisible entries, which may anchor a turn or count as replies.
+pub(crate) struct Record {
+    pub(crate) entry_id: Option<String>,
     pub(crate) assistant: bool,
 }
+
+impl From<&Value> for Record {
+    fn from(value: &Value) -> Self {
+        Self {
+            entry_id: value["id"]
+                .as_str()
+                .filter(|id| id.len() <= 128)
+                .map(str::to_owned),
+            assistant: value.pointer("/message/role").and_then(Value::as_str) == Some("assistant"),
+        }
+    }
+}
+
+pub(crate) struct Records {
+    /// The journal root can be covered even when the oldest displayed row has a
+    /// continuation cursor inside that record.
+    pub(crate) root: bool,
+    pub(crate) entries: Vec<Record>,
+}
+
+type Snapshot = (Tail, Option<String>, Vec<Message>, Records);
 
 pub(crate) struct Tail {
     journal: (u64, u64),
@@ -43,13 +70,9 @@ pub(crate) struct Tail {
 }
 
 impl Tail {
-    pub(crate) fn snapshot(
-        id: &str,
-        path: &Path,
-        scope: Option<&Path>,
-    ) -> Result<(Self, Option<String>, Vec<Message>)> {
+    pub(crate) fn snapshot(id: &str, path: &Path, scope: Option<&Path>) -> Result<Snapshot> {
         let mut file = Transcript::open(path, scope)?;
-        let (page, rows, offset, leaf, cut) = read_page(id, &mut file, None, false)?;
+        let (page, rows, offset, leaf, cut, journal) = read_page(id, &mut file, None, false)?;
         let mut tail = Self {
             journal: (file.metadata.dev(), file.metadata.ino()),
             len: file.metadata.len(),
@@ -65,6 +88,7 @@ impl Tail {
             let newest = (tail.offset, tail.leaf.take());
             (tail.offset, tail.leaf, tail.pending) = (start, follows, true);
             let mut messages = Vec::new();
+            let mut records = Vec::new();
             // A step reads a bounded part of the journal. The messages are its tail only
             // once the steps reach its end, as the page read backwards does.
             let mut reached = false;
@@ -72,14 +96,25 @@ impl Tail {
                 let Some(changes) = tail.advance(id, path, scope)? else {
                     break;
                 };
-                messages.extend(changes.into_iter().filter_map(|change| change.row));
+                for Change { row, record } in changes {
+                    messages.extend(row);
+                    records.push(record);
+                }
                 if !tail.pending {
                     reached = true;
                     break;
                 }
             }
             if reached && let Some((_, before, _)) = messages.first() {
-                return Ok((tail, before.clone(), messages));
+                return Ok((
+                    tail,
+                    before.clone(),
+                    messages,
+                    Records {
+                        root: journal.root,
+                        entries: records,
+                    },
+                ));
             }
             // The journal forks after it, or is longer than these steps read: the page as
             // it was cut.
@@ -92,7 +127,7 @@ impl Tail {
             .zip(rows)
             .map(|(message, row)| (message, row.before, row.cut))
             .collect();
-        Ok((tail, page.older, messages))
+        Ok((tail, page.older, messages, journal))
     }
 
     /// None indicates that the reader must re-snapshot. Incomplete records are retried on growth.
@@ -167,7 +202,7 @@ impl Tail {
         }
         self.offset = end;
         let mut skip = Skipped::default();
-        let assistant = value.pointer("/message/role").and_then(Value::as_str) == Some("assistant");
+        let record = Record::from(&value);
         // Every item of the record: a cut would leave out items no reader could reach.
         let selected = select(id, value, start, end, &mut skip, &mut 2, usize::MAX)?;
         if let (Some(selection), _) = selected {
@@ -189,13 +224,10 @@ impl Tail {
             }
             changes.push(Change {
                 row: Some((message, before, cut)),
-                assistant,
+                record,
             });
-        } else if assistant {
-            changes.push(Change {
-                row: None,
-                assistant: true,
-            });
+        } else if record.assistant || record.entry_id.is_some() {
+            changes.push(Change { row: None, record });
         }
         Ok(true)
     }

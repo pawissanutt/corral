@@ -305,7 +305,14 @@ struct Row {
 
 /// Where the record a page cut starts, and the entry it follows.
 type Cut = (u64, Option<String>);
-type PageRead = (Page, Vec<Row>, u64, Option<String>, Option<Cut>);
+type PageRead = (
+    Page,
+    Vec<Row>,
+    u64,
+    Option<String>,
+    Option<Cut>,
+    tail::Records,
+);
 
 fn read_page(
     id: &str,
@@ -351,6 +358,10 @@ fn read_page(
     let mut size = 2;
     let mut records = 0;
     let mut cut = None;
+    let mut journal = tail::Records {
+        root: offset == 0,
+        entries: Vec::new(),
+    };
     while records < RECORDS || pin_pending {
         if end == 0 || matches!(branch, Branch::Root) {
             break;
@@ -392,7 +403,12 @@ fn read_page(
             .get("parentId")
             .and_then(Value::as_str)
             .map(str::to_owned);
+        let record = (!pair_results).then(|| tail::Record::from(&value));
         let (selection, done) = select(id, value, start, end, &mut skip, &mut size, PAGE_BYTES)?;
+        if let Some(record) = record.filter(|_| done || selection.is_some()) {
+            journal.root = start == 0 || matches!(parent, Branch::Root);
+            journal.entries.push(record);
+        }
         if let Some(selection) = selection {
             let before = if done {
                 parent.cursor(&identity, start, Skipped::default())
@@ -435,6 +451,7 @@ fn read_page(
         "transcript preview exceeds page budget"
     );
     let older = branch.cursor(&identity, end, skip);
+    journal.entries.reverse();
     Ok((
         Page {
             messages,
@@ -445,6 +462,7 @@ fn read_page(
         offset,
         leaf,
         cut,
+        journal,
     ))
 }
 

@@ -86,26 +86,26 @@ const VISIBLE_CUSTOM = new Set([MARK_ENTRY, "corral_code_cell", "corral_code_cal
   "corral_command", "corral_command_monitor", "corral_job_control"]);
 
 /**
- * Publish only after an append succeeded, including appends performed inside the SDK or an extension. `user` is
- * told which user message it was, before `entry`.
+ * Publish only after an append succeeded, including appends performed inside the SDK or an extension.
+ * `appended` receives the exact message and the append's returned ID, before `entry` or `changed`.
  */
 export function observeTranscriptEntries(manager: SessionManager, entry: () => void, changed: () => void,
-  user?: (message: object) => void): () => void {
+  appended?: (message: Parameters<SessionManager["appendMessage"]>[0], id: string) => void): () => void {
   const { appendMessage, appendCustomEntry, appendCustomMessageEntry, appendCompaction, branchWithSummary,
     appendLabelChange, appendModelChange, appendThinkingLevelChange, appendContextEdit, appendUsage } = manager;
-  const after = <A extends unknown[], R>(method: (...args: A) => R, notify: (...args: A) => void) =>
+  const after = <A extends unknown[], R>(method: (...args: A) => R, notify: (result: R, ...args: A) => void) =>
     (...args: A): R => {
       const result = method.apply(manager, args);
-      notify(...args);
+      notify(result, ...args);
       return result;
     };
-  manager.appendMessage = after(appendMessage, message => {
-    if (message.role === "user") user?.(message);
+  manager.appendMessage = after(appendMessage, (id, message) => {
+    appended?.(message, id);
     if (message.role === "user" || message.role === "bashExecution") entry();
     else changed();
   });
-  manager.appendCustomEntry = after(appendCustomEntry, kind => { if (VISIBLE_CUSTOM.has(kind)) entry(); });
-  manager.appendCustomMessageEntry = after(appendCustomMessageEntry, (_kind, _content, display) => {
+  manager.appendCustomEntry = after(appendCustomEntry, (_id, kind) => { if (VISIBLE_CUSTOM.has(kind)) entry(); });
+  manager.appendCustomMessageEntry = after(appendCustomMessageEntry, (_id, _kind, _content, display) => {
     if (display) entry();
     else changed();
   });
@@ -116,7 +116,7 @@ export function observeTranscriptEntries(manager: SessionManager, entry: () => v
   manager.appendModelChange = after(appendModelChange, entry);
   manager.appendThinkingLevelChange = after(appendThinkingLevelChange, entry);
   manager.appendContextEdit = after(appendContextEdit, entry);
-  manager.appendUsage = after(appendUsage, kind => { if (kind === "cache_warm") entry(); else changed(); });
+  manager.appendUsage = after(appendUsage, (_id, kind) => { if (kind === "cache_warm") entry(); else changed(); });
   return () => { Object.assign(manager, { appendMessage, appendCustomEntry, appendCustomMessageEntry, appendCompaction,
     branchWithSummary, appendLabelChange, appendModelChange, appendThinkingLevelChange, appendContextEdit, appendUsage }); };
 }

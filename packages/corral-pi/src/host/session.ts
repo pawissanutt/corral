@@ -1660,7 +1660,9 @@ export class HostSession {
       // A user message is in the transcript now; an approved plan's kickoff ends its review there, and the
       // owner's own message withdraws it.
       this.planMode?.refresh();
-    }, () => this.liveEvents.stateChanged(), message => {
+    }, () => this.liveEvents.stateChanged(), (message, id) => {
+      if (message.role === "assistant") this.liveEvents.appendedAssistant(message, id);
+      if (message.role !== "user") return;
       // Only now is the input delivered for whoever waits on it: the append has succeeded.
       const arrived = this.arriving;
       if (arrived?.message !== message) return;
@@ -1745,6 +1747,8 @@ export class HostSession {
     this.panelStats = undefined;
     this.selection = session.model ? { model: `${session.model.provider}/${session.model.id}`, effort: session.thinkingLevel } : undefined;
     this.unsubscribe = session.subscribe((event) => {
+      // Capture the active branch before turnStarted() appends the Corral turn marker.
+      const startLeaf = event.type === "agent_start" ? session.sessionManager.getLeafId() : undefined;
       if (event.type === "message_end") {
         this.panelStats = undefined;
         if (event.message.role === "assistant" && event.message.stopReason !== "aborted") {
@@ -1823,7 +1827,7 @@ export class HostSession {
           ...(provider === "amazon-bedrock" || provider === "llama.cpp" ? {} : { failure }) });
       }
       if (event.type === "tool_execution_end" || event.type === "agent_settled") void this.workspaceGit.refresh();
-      this.liveEvents.observe(event, this.turn);
+      this.liveEvents.observe(event, this.turn, startLeaf);
     });
     this.options.events.emit("session_bound", { session_id: session.sessionId });
   }
