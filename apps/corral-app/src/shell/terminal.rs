@@ -248,8 +248,8 @@ fn sidebar(
 
 /// The folded sidebar: the scope's name, each place as its key with its count beside it, then
 /// Go to and Settings as their keys, the Settings sections' short names under Settings
-/// while it is selected. Activity's pages need their names, so the folded sidebar leaves them
-/// to the unfolded one (`^B`) and to Go to.
+/// while it is selected. Activity's and Insight's pages need their names, so the folded sidebar
+/// leaves them to the unfolded one (`^B`) and to Go to.
 fn rail(app: AppState, current: Memo<Area>, shown: Memo<Vec<Area>>) -> AnyElement {
     let key_row = move |area: Area| {
         atoms::nav_row(
