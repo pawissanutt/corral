@@ -190,12 +190,17 @@ fn tab_stack(nav: Nav, tab: PhoneTab) -> AnyElement {
         .child(root(nav, tab))
         .child(each(
             move || {
-                nav.stack
-                    .with(|s| s.iter().cloned().enumerate().collect::<Vec<_>>())
+                let entries = nav
+                    .stack
+                    .with(|s| s.iter().cloned().enumerate().collect::<Vec<_>>());
+                entries
+                    .into_iter()
+                    .map(|(depth, entry)| (depth, nav.key(depth, &entry), entry))
+                    .collect::<Vec<_>>()
             },
-            |item: &(usize, Entry)| nav::key_of(item.0, &item.1),
+            |item: &(usize, String, Entry)| item.1.clone(),
             move |item, _| {
-                let (depth, entry) = item.get_untracked();
+                let (depth, _, entry) = item.get_untracked();
                 pushed_page(nav, depth, entry)
             },
         ))

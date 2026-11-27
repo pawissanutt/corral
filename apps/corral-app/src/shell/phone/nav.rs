@@ -63,6 +63,10 @@ pub(super) struct Nav {
     /// browser's history is already under it, so what shows and the address are the stack up
     /// to it, while the page stays mounted until its dismissal.
     leaving: Signal<Option<usize>>,
+    /// Each depth's generation, part of its page's key: a page pushed again where one still
+    /// slides out (Forward right after Back) is a new screen, not the one going.
+    gens: Signal<Vec<u64>>,
+    last_gen: Stored<u64>,
     /// The bar each page on the stack brings, by page key, and whether it shows now.
     bars: Signal<Vec<(String, Memo<bool>)>>,
     /// The title of each page on the stack, by page key: the back label of the page above it.
@@ -85,6 +89,8 @@ impl Nav {
             tab: signal(tab),
             stack: signal(entries),
             leaving: signal(None),
+            gens: signal(Vec::new()),
+            last_gen: stored(0),
             bars: signal(Vec::new()),
             titles: signal(Vec::new()),
             drawn_from: signal(drawn),
@@ -246,8 +252,30 @@ impl Nav {
             return true;
         }
         self.leaving.set(None);
-        self.stack.update(|s| s.truncate(at));
+        // The screen going keeps its key; whatever is pushed from its depth up mounts anew.
+        let round = self.last_gen.with(|last| {
+            *last += 1;
+            *last
+        });
+        let deepest = self.stack.with_untracked(Vec::len).max(at + entries.len());
+        self.gens.update(|gens| {
+            gens.resize(gens.len().max(deepest), 0);
+            for slot in &mut gens[at..] {
+                *slot = round;
+            }
+        });
         false
+    }
+
+    /// Tracked: the key of the page `entry` at `depth`: its depth, route and generation.
+    pub fn key(self, depth: usize, entry: &Entry) -> String {
+        let round = self.gens.with(|gens| gens.get(depth).copied().unwrap_or(0));
+        let key = key_of(depth, entry);
+        if round == 0 {
+            key
+        } else {
+            format!("{key}#{round}")
+        }
     }
 
     /// Shows `tab` with `entries` over its root and makes the model's pages the same.
@@ -348,7 +376,8 @@ impl Nav {
     pub fn covered(self) -> bool {
         let top = self
             .stack
-            .with(|s| s.last().map(|e| key_of(s.len() - 1, e)));
+            .with(|s| s.last().map(|e| (s.len() - 1, e.clone())))
+            .map(|(depth, e)| self.key(depth, &e));
         let shown = self.bars.with(|bars| {
             bars.iter()
                 .map(|(key, shown)| (key.clone(), shown.get()))
@@ -360,7 +389,7 @@ impl Nav {
     /// Records what the page at `depth` brings while it is mounted: its title, for the page
     /// above it, and its bar's presence.
     pub fn register(self, depth: usize, entry: &Entry, title: &str, bar: Option<Memo<bool>>) {
-        let key = key_of(depth, entry);
+        let key = untracked(|| self.key(depth, entry));
         self.titles
             .update(|t| t.push((key.clone(), SharedString::from(title.to_owned()))));
         if let Some(shown) = bar {
@@ -379,7 +408,11 @@ impl Nav {
         let Some(below) = depth.checked_sub(1) else {
             return root;
         };
-        let Some(key) = self.stack.with(|s| s.get(below).map(|e| key_of(below, e))) else {
+        let Some(key) = self
+            .stack
+            .with(|s| s.get(below).cloned())
+            .map(|e| self.key(below, &e))
+        else {
             return root;
         };
         self.titles.with(|titles| {
