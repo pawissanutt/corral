@@ -337,12 +337,13 @@ mod tests {
             assert_eq!(Place::parse(path), place, "{path}");
         }
         for destination in Destination::INSIGHT {
-            let view = destination.system_view().map(View::slug);
+            let page = destination.system_view().map_or("history", View::slug);
             assert_eq!(
                 Place::Destination(destination).path(),
-                format!("insight/{}", view.unwrap_or_default())
+                format!("insight/{page}")
             );
         }
+        assert_eq!(Place::parse("insight/history"), page(Destination::History));
     }
 
     fn reloaded(nav: &NavState, form: Form) -> Place {

@@ -54,6 +54,7 @@ const INSIGHT: ImageAsset = asset!("icons/insight.svg");
 const RUNTIME: ImageAsset = asset!("icons/runtime.svg");
 const DATA: ImageAsset = asset!("icons/data.svg");
 const LENSES: ImageAsset = asset!("icons/lenses.svg");
+const HISTORY: ImageAsset = asset!("icons/history.svg");
 
 /// The mock's sprite (`ui.js`, `i-*`). `Ask` is the sprite's `i-chat` speech bubble.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -129,6 +130,8 @@ pub enum Icon {
     Data,
     /// Three linked states: Insight › Lenses.
     Lenses,
+    /// Commits on a line with a branch off it: Insight › Git history.
+    History,
     /// A machine with a pulse: Activity › Host performance, the daemon host.
     Host,
 }
@@ -150,6 +153,7 @@ impl Icon {
             Destination::Runtime => Icon::Runtime,
             Destination::Data => Icon::Data,
             Destination::Lenses => Icon::Lenses,
+            Destination::History => Icon::History,
             Destination::Settings => Icon::Settings,
         }
     }
@@ -217,6 +221,7 @@ impl Icon {
             Icon::Runtime => RUNTIME,
             Icon::Data => DATA,
             Icon::Lenses => LENSES,
+            Icon::History => HISTORY,
         }
     }
 }

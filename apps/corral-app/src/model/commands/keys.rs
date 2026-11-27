@@ -89,6 +89,7 @@ pub fn key_legend_live(
             (".", "more"),
         ],
         (Destination::Timeline, None) => vec![("Tab", "lanes"), ("Enter", "select · open · fold")],
+        (Destination::History, None) => vec![("Tab", "commits"), ("Enter", "select")],
         _ => Vec::new(),
     }
 }

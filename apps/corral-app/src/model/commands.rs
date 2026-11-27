@@ -644,7 +644,9 @@ pub const fn destination_key(destination: Destination) -> Option<&'static str> {
         Destination::Artifacts => Some("f"),
         Destination::Host => None,
         Destination::Structure => Some("m"),
-        Destination::Runtime | Destination::Data | Destination::Lenses => None,
+        Destination::Runtime | Destination::Data | Destination::Lenses | Destination::History => {
+            None
+        }
         Destination::Settings => Some(","),
     }
 }

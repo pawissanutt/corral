@@ -55,13 +55,15 @@ pub enum Destination {
     Data,
     /// Insight › Lenses: the project's checked state and sequence diagrams.
     Lenses,
+    /// Insight › Git history: one project's commit graph on a ref, read-only.
+    History,
     /// Settings.
     Settings,
 }
 
 impl Destination {
     /// Destinations in navigation order.
-    pub const ALL: [Destination; 13] = [
+    pub const ALL: [Destination; 14] = [
         Self::Home,
         Self::Tasks,
         Self::Sessions,
@@ -74,6 +76,7 @@ impl Destination {
         Self::Runtime,
         Self::Data,
         Self::Lenses,
+        Self::History,
         Self::Settings,
     ];
     /// Activity's pages, in the order the sidebar lists them.
@@ -84,9 +87,15 @@ impl Destination {
         Self::Artifacts,
         Self::Host,
     ];
-    /// Insight's pages, in the order the sidebar lists them: the System map's four views.
-    pub const INSIGHT: [Destination; 4] =
-        [Self::Structure, Self::Runtime, Self::Data, Self::Lenses];
+    /// Insight's pages, in the order the sidebar lists them: the System map's four views, then
+    /// Git history.
+    pub const INSIGHT: [Destination; 5] = [
+        Self::Structure,
+        Self::Runtime,
+        Self::Data,
+        Self::Lenses,
+        Self::History,
+    ];
     /// The display label.
     pub const fn label(self) -> &'static str {
         match self {
@@ -102,6 +111,7 @@ impl Destination {
             Self::Runtime => "Runtime",
             Self::Data => "Data",
             Self::Lenses => "Lenses",
+            Self::History => "Git history",
             Self::Settings => "Settings",
         }
     }
@@ -120,6 +130,7 @@ impl Destination {
             Self::Runtime => "runtime",
             Self::Data => "data",
             Self::Lenses => "lenses",
+            Self::History => "history",
             Self::Settings => "settings",
         }
     }
@@ -145,7 +156,9 @@ impl Destination {
             Self::Feed | Self::Timeline | Self::Usage | Self::Artifacts | Self::Host => {
                 Area::Activity
             }
-            Self::Structure | Self::Runtime | Self::Data | Self::Lenses => Area::Insight,
+            Self::Structure | Self::Runtime | Self::Data | Self::Lenses | Self::History => {
+                Area::Insight
+            }
             Self::Settings => Area::Settings,
         }
     }
@@ -191,7 +204,7 @@ pub enum Area {
     Sessions,
     /// Feed, Timeline, Usage, Artifacts and Host performance.
     Activity,
-    /// Structure, Runtime, Data and Lenses: one project's analysis.
+    /// Structure, Runtime, Data, Lenses and Git history: one project's analysis.
     Insight,
     Settings,
 }

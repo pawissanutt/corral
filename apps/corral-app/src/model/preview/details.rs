@@ -17,6 +17,9 @@ pub fn detail(feed: &mut Feed, target: &DetailRef, page: Option<&str>) -> Result
     match target {
         DetailRef::Artifacts { .. } => super::artifacts::list(feed, target, page),
         DetailRef::ProjectBranches { project } => project_branches(feed, target, project, page),
+        DetailRef::GitHistory { project, branch } => {
+            super::git_history::serve(feed, target, project, branch.as_deref(), page)
+        }
         DetailRef::Citation { reference } => {
             let found = super::artifacts::citation(feed, reference)?;
             put(feed, target.clone(), DetailBody::Citation(found));
@@ -86,23 +89,10 @@ fn project_branches(
     page: Option<&str>,
 ) -> Result<(), String> {
     use crate::model::daemon::{DetailCache, detail_key};
-    let row = feed
-        .projects
-        .get(project)
-        .ok_or_else(|| format!("not_found: project {project}"))?;
-    let mut branches = if project == "corral" {
-        vec!["main".to_string(), "release/0.9".to_string()]
-    } else {
-        Vec::new()
-    };
-    if project == "corral" {
-        branches.push("archive/older".into());
+    if !feed.projects.contains_key(project) {
+        return Err(format!("not_found: project {project}"));
     }
-    for branch in row.local_branches.iter().flatten() {
-        if !branches.contains(branch) {
-            branches.push(branch.clone());
-        }
-    }
+    let mut branches = sample_branches(feed, project);
     let count = match page {
         None => 1,
         Some(token) => {
@@ -148,6 +138,29 @@ fn project_branches(
         },
     );
     Ok(())
+}
+
+/// The sample project's local branches, as its branch list and its history serve them.
+pub(super) fn sample_branches(feed: &Feed, project: &str) -> Vec<String> {
+    let mut branches = if project == "corral" {
+        vec![
+            "main".to_string(),
+            "release/0.9".to_string(),
+            "archive/older".to_string(),
+        ]
+    } else {
+        Vec::new()
+    };
+    let listed = feed
+        .projects
+        .get(project)
+        .and_then(|row| row.local_branches.as_ref());
+    for branch in listed.into_iter().flatten() {
+        if !branches.contains(branch) {
+            branches.push(branch.clone());
+        }
+    }
+    branches
 }
 
 pub(super) fn branches_again(

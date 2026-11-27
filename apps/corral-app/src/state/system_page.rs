@@ -10,6 +10,11 @@ use crate::model::{Destination, Id};
 use super::AppState;
 
 impl AppState {
+    /// An action on Insight › Git history.
+    pub fn history_act(&self, action: crate::model::history::Action) {
+        self.history.update(|state| state.act(action));
+    }
+
     pub fn system_act(&self, action: Action) {
         self.system.update(|state| {
             state.act(action);

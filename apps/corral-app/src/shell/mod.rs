@@ -68,6 +68,7 @@ pub const fn page_short(page: Destination) -> &'static str {
         Destination::Runtime => "Run",
         Destination::Data => "Data",
         Destination::Lenses => "Lenses",
+        Destination::History => "History",
         page => page.label(),
     }
 }

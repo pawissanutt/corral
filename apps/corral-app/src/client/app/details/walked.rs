@@ -11,6 +11,16 @@ pub(super) fn walked(target: &DetailRef) -> bool {
         DetailRef::Artifacts { .. }
             | DetailRef::SessionJobOutput { .. }
             | DetailRef::ProjectBranches { .. }
+            | DetailRef::GitHistory { .. }
+    )
+}
+
+/// Whether a first page read without a token starts a new window rather than replaying the
+/// walked depth: a branch list, and a commit walk, whose later pages follow the first page's tip.
+pub(super) fn windowed(target: &DetailRef) -> bool {
+    matches!(
+        target,
+        DetailRef::ProjectBranches { .. } | DetailRef::GitHistory { .. }
     )
 }
 
@@ -34,11 +44,21 @@ impl AppState {
                 .unwrap_or_default()
         });
         let chain = self.detail_pages.remove(&key).unwrap_or_default();
-        // A branch refresh starts a new window, not a replay of the old walked depth.
-        if matches!(request.target, DetailRef::ProjectBranches { .. }) && request.page.is_none() {
+        // A branch refresh starts a new window, not a replay of the old walked depth. A commit
+        // walk's later pages follow its first page's tip: an unchanged first page keeps them all,
+        // a changed one (a moved ref) starts the walk again, so pages never mix two tips.
+        if windowed(&request.target) && request.page.is_none() {
+            let history = matches!(request.target, DetailRef::GitHistory { .. });
             let current = if page.body.is_some() {
                 page
             } else if let Some(kept) = saved.first().filter(|kept| kept.etag == page.etag) {
+                if history {
+                    let mut pages = saved.clone();
+                    pages[0].as_of = page.as_of;
+                    pages[0].seq = page.seq;
+                    self.publish(feed, &key, &id, &request.target, pages);
+                    return vec![];
+                }
                 DetailReply {
                     as_of: page.as_of,
                     seq: page.seq,
@@ -68,6 +88,14 @@ impl AppState {
             // than stranding the picker at the general detail cache's 256-page bound.
             if matches!(request.target, DetailRef::ProjectBranches { .. }) {
                 trim_branch_window(&mut pages);
+            }
+            // A commit walk stops at its bound; Refresh starts it again from the tip. An older
+            // page asked for before a refresh moved the tip belongs to the walk it left.
+            if matches!(request.target, DetailRef::GitHistory { .. })
+                && (pages.len() >= crate::model::history::MAX_PAGES || !joins_walk(&pages, &page))
+            {
+                self.publish(feed, &key, &id, &request.target, pages);
+                return vec![];
             }
             if self.over_budget(feed, &key, &id, &page, pages.len()) {
                 return vec![];
@@ -133,7 +161,38 @@ fn trim_branch_window(pages: &mut Vec<DetailReply>) {
     }
 }
 
+/// Whether a further commit page follows the held walk's tip: a page from another tip (asked
+/// for before a refresh moved the ref) would join two histories.
+fn joins_walk(pages: &[DetailReply], page: &DetailReply) -> bool {
+    let tip = |reply: &DetailReply| match &reply.body {
+        Some(DetailBody::GitHistory(walk)) => Some((walk.reference.clone(), walk.tip.clone())),
+        _ => None,
+    };
+    pages
+        .first()
+        .and_then(tip)
+        .is_some_and(|held| tip(page) == Some(held))
+}
+
 pub(super) fn merge_pages(pages: &[DetailReply]) -> Result<Option<DetailBody>, String> {
+    // Every page of a commit walk follows the first page's tip; a page from another tip would
+    // join two histories, so it fails the read instead.
+    if let Some(DetailBody::GitHistory(first)) = pages.first().and_then(|page| page.body.as_ref()) {
+        let mut walk = first.clone();
+        for page in &pages[1..] {
+            let Some(DetailBody::GitHistory(part)) = &page.body else {
+                return Err("Commit page kind changed.".into());
+            };
+            if part.tip != first.tip || part.reference != first.reference {
+                return Err(
+                    "A commit page came from another tip; refresh to read the history again."
+                        .into(),
+                );
+            }
+            walk.commits.extend(part.commits.iter().cloned());
+        }
+        return Ok(Some(DetailBody::GitHistory(walk)));
+    }
     if let Some(DetailBody::ProjectBranches(first)) =
         pages.first().and_then(|page| page.body.as_ref())
     {
@@ -474,5 +533,44 @@ mod tests {
         let coverage = map.provider.unwrap().coverage;
         assert_eq!(coverage.provided, provided);
         assert_eq!(coverage.not_provided, ["references"]);
+    }
+
+    /// A Load older page read before a refresh moved the ref was appended to the new walk,
+    /// joining two histories under one graph.
+    #[test]
+    fn commit_pages_merge_only_from_the_same_tip() {
+        use corral_protocol::detail::{GitCommit, GitHistoryPage};
+        let page = |tip: &str, sha: &str| DetailReply {
+            etag: format!("{tip}-{sha}"),
+            as_of: "2026-11-27T00:00:00Z".into(),
+            seq: 1,
+            next: Some("1".into()),
+            body: Some(DetailBody::GitHistory(GitHistoryPage {
+                reference: "HEAD".into(),
+                tip: Some(tip.into()),
+                skip: 0,
+                commits: vec![GitCommit {
+                    sha: sha.into(),
+                    parents: Vec::new(),
+                    subject: String::new(),
+                    author: String::new(),
+                    authored: String::new(),
+                    committed: String::new(),
+                    refs: Vec::new(),
+                    links: Vec::new(),
+                }],
+            })),
+        };
+        let walk = vec![page("a", "a")];
+        assert!(joins_walk(&walk, &page("a", "older")));
+        assert!(!joins_walk(&walk, &page("b", "older")));
+        let Some(DetailBody::GitHistory(merged)) =
+            merge_pages(&[page("a", "a"), page("a", "older")]).unwrap()
+        else {
+            panic!("history was not assembled");
+        };
+        let shas: Vec<&str> = merged.commits.iter().map(|c| c.sha.as_str()).collect();
+        assert_eq!(shas, ["a", "older"]);
+        assert!(merge_pages(&[page("a", "a"), page("b", "older")]).is_err());
     }
 }

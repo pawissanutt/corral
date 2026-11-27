@@ -220,10 +220,13 @@ pub const fn capability(destination: Destination) -> Option<&'static str> {
             Some(wire::SYSTEM_V1)
         }
         Destination::Host => Some(corral_protocol::host::HOST_V1),
-        // Artifacts are a detail of the core wire, which every corrald serves.
-        Destination::Home | Destination::Tasks | Destination::Artifacts | Destination::Settings => {
-            None
-        }
+        // Artifacts are a detail of the core wire, which every corrald serves. Git history is a
+        // detail too: a corrald that does not know it answers with an error the page shows.
+        Destination::Home
+        | Destination::Tasks
+        | Destination::Artifacts
+        | Destination::History
+        | Destination::Settings => None,
     }
 }
 

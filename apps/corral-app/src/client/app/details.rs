@@ -154,7 +154,8 @@ impl AppState {
                 return vec![];
             }
         }
-        if matches!(request.target, DetailRef::ProjectBranches { .. })
+        // A further page is asked for only from the end of the held window, once.
+        if walked::windowed(&request.target)
             && let Some(cursor) = request.page.as_deref()
         {
             let current = feed.with_untracked(|feed| {
@@ -579,7 +580,7 @@ impl AppState {
             }
             // The branch picker reads only its bounded detail window. Keeping a duplicate page
             // in each operation would grow with every More press, even after window eviction.
-            let response = if matches!(target, DetailRef::ProjectBranches { .. }) {
+            let response = if walked::windowed(target) {
                 None
             } else {
                 feed.details

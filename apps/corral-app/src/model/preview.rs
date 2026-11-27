@@ -14,6 +14,7 @@ mod effects;
 mod engine;
 mod explorer;
 mod fleet;
+mod git_history;
 mod host;
 mod parts;
 mod parts_ops;

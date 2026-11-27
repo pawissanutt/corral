@@ -74,6 +74,10 @@ fn insight_holds_the_system_views_and_opens_at_its_last_page() {
         assert_eq!(page.area(), Area::Insight);
         assert!(!Destination::ACTIVITY.contains(&page));
     }
+    // Git history is Insight's page too, though no System map view draws it.
+    assert_eq!(Destination::History.area(), Area::Insight);
+    assert!(Destination::INSIGHT.contains(&Destination::History));
+    assert_eq!(Destination::History.system_view(), None);
     let mut nav = NavState::new(Form::Desktop);
     assert!(nav.press_key('m'));
     assert_eq!(nav.destination, Destination::Structure);

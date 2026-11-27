@@ -31,6 +31,8 @@ pub mod effect;
 pub mod gate;
 /// Snapshot and health types.
 pub mod health;
+/// Insight › Git history: a project's commit graph on one ref, read-only.
+pub mod history;
 /// Home: what waits on the owner, then what is working.
 pub mod home;
 /// Host performance of the machine running corrald.

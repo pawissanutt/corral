@@ -516,6 +516,10 @@ fn refresh_details(feed: &mut Feed) {
             let _ = details::branches_again(feed, &target, project);
             continue;
         }
+        if let DetailRef::GitHistory { .. } = &target {
+            let _ = super::git_history::again(feed, &target);
+            continue;
+        }
         match details::build(feed, &target) {
             Ok(body) => put(feed, target, body),
             Err(message) => {

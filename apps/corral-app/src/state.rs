@@ -76,6 +76,8 @@ pub struct AppState {
     pub artifacts: Signal<artifacts::State>,
     /// Insight's System map: the level, pick, overlay and filter.
     pub system: Signal<system::State>,
+    /// Insight › Git history: the project followed, its ref and the selected commit.
+    pub history: Signal<crate::model::history::State>,
     /// A task page's Changes view (Diff or Impact) and the Impact's pick.
     pub impact: Signal<review::impact::State>,
     pub agents: source::StateSource<agents::State>,
@@ -257,6 +259,7 @@ impl AppState {
             usage: signal(usage::State::default()),
             artifacts: signal(artifacts::State::default()),
             system: signal(launch_system),
+            history: signal(crate::model::history::State::default()),
             impact: signal(launch_impact),
             agents: source::StateSource::new(
                 data,

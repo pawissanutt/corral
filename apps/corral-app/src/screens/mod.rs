@@ -11,6 +11,7 @@ pub mod artifacts;
 pub mod assistant;
 pub(crate) mod cites;
 pub(crate) mod gate;
+pub mod history;
 pub mod home;
 pub mod host;
 pub mod landing;
@@ -169,6 +170,7 @@ fn screen(app: AppState, destination: Destination) -> AnyElement {
         Destination::Structure | Destination::Runtime | Destination::Data | Destination::Lenses => {
             system::screen(app)
         }
+        Destination::History => history::screen(app),
         Destination::Settings => settings::screen(app),
     }
 }
