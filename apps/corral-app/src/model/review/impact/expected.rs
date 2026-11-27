@@ -48,7 +48,8 @@ pub fn root(task: &str, view: View) -> DetailRef {
 /// The submission a served detail names: a review's run, a System review's head, a patch page's.
 fn head_of(body: &DetailBody) -> Option<Option<&str>> {
     match body {
-        DetailBody::Review(review) => Some(review.run.as_ref().and_then(|r| r.head_sha.as_deref())),
+        // The stored diff's own submission, never the run's head, which a landing rewrites.
+        DetailBody::Review(review) => Some(review.head.as_deref()),
         DetailBody::SystemReview(review) => Some(Some(review.head.as_str())),
         DetailBody::ReviewFile(page) => Some(page.head.as_deref()),
         _ => None,

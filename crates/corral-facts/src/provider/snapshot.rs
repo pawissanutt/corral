@@ -26,6 +26,24 @@ impl Reply {
         unread
     }
 
+    /// Paths the provider itself reported reading completely; empty unless it provides
+    /// `files`. A built-in status kept for a path the provider left out is not one of them.
+    pub fn read_files(&self) -> BTreeSet<String> {
+        let mut read = BTreeSet::new();
+        if self.coverage.provides("files") {
+            for row in &self.rows {
+                if let Row::File { path, read: status } = row {
+                    if *status == ReadStatus::Complete {
+                        read.insert(path.clone());
+                    } else {
+                        read.remove(path);
+                    }
+                }
+            }
+        }
+        read
+    }
+
     /// Overlay a validated snapshot on the built-in structure. Git still owns
     /// the file list and the hierarchy, even when the provider supplies files.
     pub fn merge_snapshot(self, tree: &mut TreeFacts) -> ProviderCoverage {

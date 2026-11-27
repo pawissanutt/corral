@@ -1,7 +1,7 @@
 //! Immutable facts prepared by the historical snapshot worker, not by element reads.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-use corral_facts::{Coverage, FileFact, Reference, TreeFacts};
+use corral_facts::{Coverage, FileFact, ReadStatus, Reference, TreeFacts};
 use corral_protocol::{detail::DiagramRelated, diagram::valid_path};
 
 const RELATED_MAX: usize = 16;
@@ -11,12 +11,52 @@ pub(crate) struct DiagramFacts {
     // see the file lookup, coverage and bounded inbound projection below.
     pub(super) tree: TreeFacts,
     inbound: Inbound,
+    /// Files read completely by whatever produced `tree.file_references`: the built-in scan,
+    /// or a provider that supplied references and reported its own file reads. The merged
+    /// `read_status` can mix the two, so it is no evidence for the other's references.
+    referrers_read: BTreeSet<String>,
 }
 
 impl DiagramFacts {
+    /// Built-in facts: the scan that found the references read these files.
     pub(super) fn new(tree: TreeFacts) -> Self {
+        let read = tree
+            .files
+            .iter()
+            .filter(|file| file.read_status == ReadStatus::Complete)
+            .map(|file| file.path.clone())
+            .collect();
+        Self::with_referrers(tree, read)
+    }
+
+    /// A provider-enriched tree. References the provider replaced count only its own explicit
+    /// reads; references it left built-in keep the built-in scan's reads from before overlay.
+    pub(super) fn enriched(
+        &self,
+        tree: TreeFacts,
+        provider_references: bool,
+        provider_read: BTreeSet<String>,
+    ) -> Self {
+        let read = if provider_references {
+            provider_read
+        } else {
+            self.referrers_read.clone()
+        };
+        Self::with_referrers(tree, read)
+    }
+
+    fn with_referrers(tree: TreeFacts, referrers_read: BTreeSet<String>) -> Self {
         let inbound = Inbound::new(&tree.file_references);
-        Self { tree, inbound }
+        Self {
+            tree,
+            inbound,
+            referrers_read,
+        }
+    }
+
+    /// Whether the producer of these references read `path` completely.
+    pub(crate) fn referrer_read(&self, path: &str) -> bool {
+        self.referrers_read.contains(path)
     }
 
     pub(crate) fn file(&self, path: &str) -> Option<&FileFact> {
@@ -81,9 +121,57 @@ impl Inbound {
 
 #[cfg(test)]
 mod tests {
-    use corral_facts::{ReferenceBasis, ReferenceKind};
+    use corral_facts::{ModuleId, ReferenceBasis, ReferenceKind};
 
     use super::*;
+
+    fn tree(files: &[(&str, ReadStatus)]) -> TreeFacts {
+        let module = ModuleId {
+            container: String::new(),
+            path: String::new(),
+        };
+        TreeFacts {
+            files: files
+                .iter()
+                .map(|(path, read_status)| FileFact {
+                    path: (*path).into(),
+                    language: "Rust".into(),
+                    lines: 1,
+                    test: false,
+                    read_status: *read_status,
+                    container: String::new(),
+                    module: module.clone(),
+                    definitions: vec![],
+                })
+                .collect(),
+            containers: vec![],
+            modules: vec![module.clone()],
+            dependencies: vec![],
+            file_references: vec![],
+            module_references: vec![],
+            package_edges: vec![],
+            spawns: vec![],
+            runtime: Default::default(),
+            entry_points: Default::default(),
+            data: Default::default(),
+            coverage: Coverage::default(),
+        }
+    }
+
+    #[test]
+    fn referrer_reads_come_from_the_producer_of_the_references() {
+        use ReadStatus::{Complete, Unsupported};
+        let builtin = DiagramFacts::new(tree(&[("a.rs", Complete), ("b.txt", Unsupported)]));
+        assert!(builtin.referrer_read("a.rs") && !builtin.referrer_read("b.txt"));
+        // The provider replaced the references but reported no row for a.rs: the merged
+        // status still says Complete, and is no evidence the provider read it.
+        let merged = tree(&[("a.rs", Complete), ("b.txt", Complete)]);
+        let provider = builtin.enriched(merged.clone(), true, ["b.txt".to_owned()].into());
+        assert!(!provider.referrer_read("a.rs") && provider.referrer_read("b.txt"));
+        // A files-only provider's Complete does not cover the built-in references' unread file.
+        let files_only = builtin.enriched(merged, false, ["b.txt".to_owned()].into());
+        assert!(files_only.referrer_read("a.rs") && !files_only.referrer_read("b.txt"));
+    }
 
     #[test]
     fn diagram_inbound_projection_keeps_only_bounded_rows_for_each_target() {

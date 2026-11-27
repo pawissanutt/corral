@@ -189,7 +189,7 @@ fn diagram_provider_answers_do_not_cross_commits_with_the_same_tree() {
     );
     for revision in [first, second] {
         let mut tree = reader.builtin_tree(&revision).unwrap();
-        let report = reader.enrich_diagram_tree(&revision, &mut tree).unwrap();
+        let report = reader.enrich_diagram_tree(&revision, &mut tree).0.unwrap();
         assert!(report.coverage.provides("definitions"));
         assert_eq!(fixture.request()["rev"], revision.commit());
     }

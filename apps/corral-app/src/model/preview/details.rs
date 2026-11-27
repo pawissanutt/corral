@@ -403,6 +403,8 @@ fn review(feed: &Feed, task: &str) -> Result<ReviewDetail, String> {
         .cloned()
         .ok_or_else(|| format!("not_found: {task} has no completed worker run"))?;
     Ok(ReviewDetail {
+        // The sample's run is never rewritten by a landing, so its head is its submission's.
+        head: run.head_sha.clone(),
         task: task.into(),
         diff: record
             .artifacts

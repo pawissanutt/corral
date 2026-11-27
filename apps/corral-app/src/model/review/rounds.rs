@@ -335,6 +335,7 @@ mod tests {
                 checks,
                 max_rounds: 2,
                 files: vec![],
+                head: None,
             };
             let shown = Shown {
                 task: &task,

@@ -174,6 +174,7 @@ fn a_review_body_without_a_finished_run_says_so_instead_of_an_empty_diff() {
             checks: vec![],
             max_rounds: 3,
             files: vec![],
+            head: None,
         },
     );
     let state = State {

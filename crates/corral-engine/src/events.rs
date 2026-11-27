@@ -267,6 +267,33 @@ impl Store {
             .transpose()
     }
 
+    /// The submission recorded with a stored diff: `done` registers the diff and its Done event
+    /// in one transaction, so it is the run's first Done after the diff's attachment. Unlike the
+    /// run's head, a later landing does not rewrite it. None when no such event exists.
+    pub fn diff_submission(
+        &self,
+        task: &str,
+        run: &str,
+        diff: &str,
+    ) -> Result<Option<SubmittedRevision>> {
+        use rusqlite::OptionalExtension;
+        let detail: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT detail FROM events WHERE task=?1 AND run=?2 AND kind='done' AND seq > (
+                    SELECT seq FROM events WHERE task=?1 AND run=?2 AND kind='artifact'
+                    AND json_extract(detail,'$.reference')=?3 ORDER BY seq LIMIT 1
+                 ) ORDER BY seq LIMIT 1",
+                params![task, run, diff],
+                |row| row.get(0),
+            )
+            .optional()
+            .context("read the submission of a stored diff")?;
+        detail
+            .map(|detail| serde_json::from_str(&detail).context("decode diff submission"))
+            .transpose()
+    }
+
     /// The diff registered by `done` for the specified worker's last submission.
     pub fn submitted_diff_ref(&self, task: &str, run: &str) -> Result<Option<String>> {
         use rusqlite::OptionalExtension;

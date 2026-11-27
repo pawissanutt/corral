@@ -12,7 +12,7 @@ use corral_protocol::{
     detail::*,
     diagram::{DiagramSubject, EntityRequest, SourceRequest, SourceSpan, WorkflowRecipe},
 };
-use corral_types::{Artifact, ReadStatus};
+use corral_types::Artifact;
 
 use super::{
     NotFound,
@@ -457,6 +457,17 @@ fn source_change(sides: &mut Sides<'_>, request: &SourceRequest) -> (SourceChang
         (Ok(base), Ok(target)) => (base, target),
         _ => return not_compared("could not read a committed tree"),
     };
+    // The whole bound span must exist at the pinned commit before anything is said about it,
+    // removal included: a span that never existed there cannot be inspected at base. A clipped
+    // span would also compare fewer lines than are shown at the target.
+    if let (Some(base), Some(span)) = (&base_file, &request.span) {
+        let Some(before) = sides.text(base) else {
+            return not_compared("the committed source is unreadable as bounded UTF-8 text");
+        };
+        if span.end as usize > before.lines().count() {
+            return not_compared("the bound span is not wholly in the file at the pinned commit");
+        }
+    }
     let (base_file, target_file, target_path) = match (base_file, target_file) {
         (None, None) => {
             return not_compared("the bound file is not a regular committed file at either commit");
@@ -495,15 +506,6 @@ fn source_change(sides: &mut Sides<'_>, request: &SourceRequest) -> (SourceChang
         };
         return (change, At::Read(at(None)));
     };
-    // The bound lines must exist at the pinned commit before anything is said about them.
-    let Some(before) = sides.text(&base_file) else {
-        return not_compared("the committed source is unreadable as bounded UTF-8 text");
-    };
-    // The whole span, not only its start: a clipped span would compare fewer lines than are
-    // shown at the target.
-    if span.end as usize > before.lines().count() {
-        return not_compared("the bound span is not wholly in the file at the pinned commit");
-    }
     if base_file.blob() == target_file.blob() {
         let change = if renamed {
             SourceChange::Moved {
@@ -792,11 +794,14 @@ fn comparable_referrers(
                 Ok(Some(_)) => {
                     facts[usize::from(target)]
                         .as_ref()
-                        .map(|facts| match facts.file(path) {
-                            Some(file) if file.read_status == ReadStatus::Complete => {
+                        // Read by whatever produced the references, never a status the other
+                        // source left behind in the merged file row.
+                        .map(|facts| {
+                            if facts.referrer_read(path) {
                                 Referrer::Read
+                            } else {
+                                Referrer::Unread
                             }
-                            _ => Referrer::Unread,
                         })
                 }
             }

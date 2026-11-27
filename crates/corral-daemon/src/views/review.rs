@@ -53,6 +53,22 @@ pub(super) fn submitted_paths(
     Ok(Some((run, paths)))
 }
 
+/// The head of the submission a stored diff belongs to, from the Done event recorded with it.
+fn diff_head(
+    engine: &Engine,
+    task: &str,
+    run: &Run,
+    diff: Option<&Artifact>,
+) -> Result<Option<String>> {
+    let Some(diff) = diff else {
+        return Ok(None);
+    };
+    Ok(engine
+        .store
+        .diff_submission(task, &run.id, &diff.reference())?
+        .map(|submitted| submitted.sha))
+}
+
 fn patch(engine: &Engine, diff: &Artifact) -> Result<String> {
     let mut patch = String::new();
     engine
@@ -78,7 +94,9 @@ pub(super) fn detail(engine: &Engine, id: &str) -> Result<ReviewDetail> {
     } else {
         Vec::new()
     };
+    let head = diff_head(engine, &task.id, &run, diff.as_ref())?;
     Ok(ReviewDetail {
+        head,
         task: task.id,
         run: Some(run),
         diff,
@@ -102,8 +120,8 @@ pub(super) fn file(
     let (run, diff) = submission(engine, &task.id)?;
     let run = run.ok_or(NotFound("task has no submitted worker run"))?;
     let diff = diff.ok_or(NotFound("task has no stored review patch"))?;
-    // The submission this stored patch belongs to, which Review's run also names.
-    let head = run.head_sha.clone();
+    // The submission this stored patch was recorded with, not the run's mutable head.
+    let head = diff_head(engine, &task.id, &run, Some(&diff))?;
     // Landing can rewrite the run's base and head independently of its stored
     // patch. Do not attach a mutable or retired run's coordinates to that patch.
     let candidate = if task.status == Status::Review && engine.observed_head(&run)? == run.head_sha

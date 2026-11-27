@@ -239,14 +239,25 @@ impl<'a> FactsReader<'a> {
     /// Use the same snapshot extension but key its answer by the exact commit.
     /// Diagram evidence must not attribute another commit's provider answer
     /// to the pin, even when the two commits have identical trees.
-    pub fn enrich_diagram_tree(&self, rev: &Revision, tree: &mut TreeFacts) -> Option<FactsReport> {
-        self.ask(
+    /// Also returns the paths the provider itself reported reading completely, so evidence
+    /// from its references is not credited to a built-in read status it left in place.
+    pub fn enrich_diagram_tree(
+        &self,
+        rev: &Revision,
+        tree: &mut TreeFacts,
+    ) -> (Option<FactsReport>, BTreeSet<String>) {
+        let mut read = BTreeSet::new();
+        let report = self.ask(
             rev,
             None,
             SNAPSHOT_WANT,
             ProviderMode::ExactSnapshot,
-            |reply| Ok(reply.merge_snapshot(tree)),
-        )
+            |reply| {
+                read = reply.read_files();
+                Ok(reply.merge_snapshot(tree))
+            },
+        );
+        (report, read)
     }
 
     /// Enrich only the historical data view; reuse the shared snapshot reply cache.

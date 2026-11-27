@@ -24,6 +24,10 @@ pub struct ReviewDetail {
     pub checks: Vec<Check>,
     pub max_rounds: u32,
     pub files: Vec<ReviewFile>,
+    /// The submission `diff` was recorded with, from its Done event; unlike `run.head_sha`,
+    /// never rewritten by a landing. Absent when that association cannot be established.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

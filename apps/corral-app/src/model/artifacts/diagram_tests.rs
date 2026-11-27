@@ -345,11 +345,13 @@ fn a_comparison_link_never_shows_a_later_submission_under_its_name() {
     use corral_protocol::detail::{DetailRef, ReviewDetail};
     let review = |head: &str| -> ReviewDetail {
         serde_json::from_value(serde_json::json!({
-            "task": "T-1", "diff": null, "checks": [], "max_rounds": 3, "files": [],
+            "task": "T-1", "diff": null, "checks": [], "max_rounds": 3, "files": [], "head": head,
             "run": {
                 "id": "R2", "task": "T-1", "role": "worker", "profile": "p", "harness": "pi",
                 "worktree": "/w", "branch": "corral/T-1", "base": "main",
-                "base_sha": "0".repeat(40), "started": "2026-01-01T00:00:00Z", "head_sha": head
+                "base_sha": "0".repeat(40), "started": "2026-01-01T00:00:00Z",
+                // A landing rewrote the run's head; the stored diff's submission is `head`.
+                "head_sha": "f".repeat(40)
             }
         }))
         .expect("a review detail")

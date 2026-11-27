@@ -68,6 +68,9 @@ fn socket_diagram_compare_reports_changed_moved_and_removed_bindings_at_the_cand
     // A span that starts in the file but runs past its end is not compared either.
     recipe["edges"][1]["bindings"] =
         json!({"source":{"path":"Cargo.toml","span":{"start":3,"end":4}}});
+    // Nor is a span that never existed in a file the candidate deletes: not "removed".
+    recipe["edges"][2]["bindings"] =
+        json!({"source":{"path":DEPENDENT,"span":{"start":999,"end":999}}});
     let bytes = serde_json::to_vec(&recipe).unwrap();
     let artifact = engine
         .add_artifact_bytes(&id, &bytes, ArtifactKind::Report, "Submit to land")
@@ -172,6 +175,10 @@ fn socket_diagram_compare_reports_changed_moved_and_removed_bindings_at_the_cand
         change("gate-passes"),
         Some(SourceChange::Unknown { .. })
     ));
+    assert!(matches!(
+        change("gate-fails"),
+        Some(SourceChange::Unknown { .. })
+    ));
     assert!(
         matches!(change("submit"), Some(SourceChange::Unknown { .. })),
         "{:?}",
@@ -245,6 +252,36 @@ fn socket_diagram_compare_reports_changed_moved_and_removed_bindings_at_the_cand
         "{:?}",
         clipped.selected
     );
+
+    // A landing rewrites the run's head but not its stored patch: Review and the patch page
+    // still attest the submission the patch was recorded with.
+    let mut landed = engine.store.get_run(&id, &run.id).unwrap().unwrap();
+    landed.head_sha = Some("f".repeat(candidate.len()));
+    engine.store.update_run(&landed).unwrap();
+    let detail = |target: DetailRef| -> DetailBody {
+        let mut reviewer =
+            Client::connect_with(&socket, vec![corral_protocol::app::REVIEW_V1.into()]);
+        let reply: DetailReply = reviewer.ok(
+            DETAIL_GET,
+            DetailGet {
+                target,
+                etag: None,
+                page: None,
+            },
+        );
+        reply.body.unwrap()
+    };
+    let DetailBody::Review(review) = detail(DetailRef::Review { task: id.clone() }) else {
+        panic!("review detail");
+    };
+    assert_eq!(review.head.as_deref(), Some(candidate.as_str()));
+    let DetailBody::ReviewFile(page) = detail(DetailRef::ReviewFile {
+        task: id.clone(),
+        path: ANCHOR.into(),
+    }) else {
+        panic!("patch page");
+    };
+    assert_eq!(page.head.as_deref(), Some(candidate.as_str()));
 
     // A new worker run supersedes the candidate: the view pinned to it still reads its evidence,
     // and only the links that describe the task's current submission retire.

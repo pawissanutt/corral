@@ -152,14 +152,14 @@ impl Worker {
                 };
                 let mut tree = facts.tree.clone();
                 // Reuse the System extension but retain exact commit provenance.
-                let Some(report) = reader.enrich_diagram_tree(rev, &mut tree) else {
+                let (report, provider_read) = reader.enrich_diagram_tree(rev, &mut tree);
+                let Some(report) = report else {
                     return;
                 };
+                let enriched =
+                    facts.enriched(tree, report.coverage.provides("references"), provider_read);
                 let report = bounded_report(report, || Ok(()));
-                (
-                    report,
-                    HistoricalFacts::Diagram(Arc::new(DiagramFacts::new(tree))),
-                )
+                (report, HistoricalFacts::Diagram(Arc::new(enriched)))
             }
         };
         self.publish(job, move |cache| {

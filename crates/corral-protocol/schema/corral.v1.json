@@ -7678,6 +7678,13 @@
             },
             "type": "array"
           },
+          "head": {
+            "description": "The submission `diff` was recorded with, from its Done event; unlike `run.head_sha`,\nnever rewritten by a landing. Absent when that association cannot be established.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "max_rounds": {
             "format": "uint32",
             "minimum": 0,
