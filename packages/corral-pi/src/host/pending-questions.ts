@@ -185,7 +185,9 @@ export class PendingQuestions {
   /** Runs on host startup and whenever the owner reopens /questions. */
   async recover(): Promise<void> {
     this.expire();
-    await Promise.all(this.list().filter(q => q.status === "answered").map(q => this.send(q.id)));
+    // Let in-flight refusals settle before retrying, rather than coalescing with the failed attempt.
+    await Promise.allSettled([...this.sending.values()]);
+    for (const q of this.list()) if (q.status === "answered") await this.send(q.id);
   }
   private send(id: string): Promise<void> {
     const running = this.sending.get(id);

@@ -49,6 +49,28 @@ test("owner approval is isolated from model approval and is not delivered to the
   questions.close();
 });
 
+test("question recovery retries an in-flight refusal before admitting answers sequentially", async () => {
+  const first = Promise.withResolvers<boolean>();
+  let calls = 0, active = 0, maxActive = 0;
+  const questions = new PendingQuestions({ session: () => "recovery", append() {}, entries: () => [], changed() {},
+    async deliver() {
+      active++; maxActive = Math.max(maxActive, active);
+      const result = ++calls === 1 ? await first.promise : true;
+      active--; return result;
+    } });
+  const choice = [{ question: "Which?", options: ["yes", "no"] }];
+  const a = questions.ask("a", choice, "ask_user"), b = questions.ask("b", choice, "ask_user");
+  const answering = questions.answer(a.id, [{ option: "yes" }]);
+  const recovering = questions.recover();
+  first.resolve(false);
+  await answering;
+  await questions.answer(b.id, [{ option: "yes" }]);
+  await recovering;
+  expect(calls).toBe(3);
+  expect(maxActive).toBe(1);
+  questions.close();
+});
+
 test("owner shell obeys configured deny rules before executing", async () => {
   const fx = await codeHost("assistant", { extend: pi => installToolControls(pi, {
     rules: { allow: [], ask: [], deny: ["touch *"], default: "allow" },

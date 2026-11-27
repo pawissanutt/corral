@@ -1966,7 +1966,11 @@ export class HostSession {
     this.remoteShellRunning = true;
     this.liveEvents.stateChanged();
     try { return await run(); }
-    finally { this.remoteShellRunning = false; this.liveEvents.stateChanged(); }
+    finally {
+      this.remoteShellRunning = false;
+      this.liveEvents.stateChanged();
+      void this.ownerQuestions?.recover().catch(error => this.options.events.emit("question_delivery_failed", { error: String(error) }));
+    }
   }
 
   installRemoteParts(): void {
@@ -2697,11 +2701,11 @@ export class HostSession {
       last_seq: this.options.events.last,
       model: session.model ? clipText(`${session.model.provider}/${session.model.id}`.toWellFormed(), 512) : null,
       owner_questions_total: questions.length,
-      owner_questions: questions.slice(0, PENDING_MAX).map(({ id, questions: prompts, status }) => ({
+      owner_questions: questions.slice(0, PENDING_MAX).map(({ id, questions: prompts, status, tool }) => ({
         // The original `answer` command takes one choice. Use cards for multi-question records.
         ...(prompts.length === 1 && /^[A-Za-z0-9._:-]{1,160}$/.test(id) ? { id } : {}),
         // Rust decodes Unicode scalar values, not isolated UTF-16 code units.
-        question: clipText(prompts[0]!.question.toWellFormed(), 512), status,
+        question: tool === "owner_bash" ? "Owner shell approval" : clipText(prompts[0]!.question.toWellFormed(), 512), status,
       })),
     };
   }
