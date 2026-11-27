@@ -126,7 +126,8 @@ async function runSession(config: HostConfig, overrides: HostOverrides, events: 
   const workerLaunch = config.identity.role === "worker" && launch ? { ...launch, effort: config.effort } : undefined;
   const modules = await loadModules(assets, config.identity.role, provider);
   // A worker's child profiles join the session's routes like fallbacks; its own model stays bound.
-  const childProfiles = config.identity.role === "worker" && config.capabilities?.enabled.includes("fleet")
+  const childProfiles = config.identity.role === "worker"
+    && config.capabilities?.enabled.some(capability => capability === "fleet" || capability === "subagents")
     ? readBuildProfiles(config.root) : undefined;
   const childProviders = childProfileProviders(config.identity.role, workerLaunch?.provider ?? provider, childProfiles);
   const profileChoices = (childProfiles ?? []).flatMap(profile => {

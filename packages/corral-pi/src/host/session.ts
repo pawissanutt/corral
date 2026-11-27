@@ -785,6 +785,7 @@ export class HostSession {
         // A bound worker's launch cwd is authoritative, including reruns and adopted checkouts.
         buildWorktree: options.identity.role === "worker" && !!options.identity.task,
         assetRoot: options.modules.assetRoot, agentDir: options.agentDir, bound: true, allowedKinds: settings.allowedKinds,
+        requireTaskProfile: options.identity.role === "worker",
         maxTurns: settings.maxTurns, timeoutSecs: settings.timeoutSecs,
         ...(auxiliary.explore ? { research: { settings: auxiliary.explore } } : {}),
         hostedTools: childHosted,

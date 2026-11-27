@@ -161,6 +161,7 @@ test("bound worker task slices finish their local lifecycle before collection", 
     const events = new EventLog();
     const client = new CorralClient({ corral: writeFakeEngine(repo).path, root: repo, cwd, identity });
     host = await HostSession.create({ sdk, identity, cwd, agentDir: join(cwd, "agent"), model: "gpt-6.1-sol",
+      childProfiles: [{ name: "fixture", model: "openai-codex/gpt-6.1-sol" }],
       modules: { ...modules, role: workerRole(PACKAGE_ROOT) }, ui: "plain", client, events, network,
       capabilities: { catalog: 7, digest: "a".repeat(64), preset: "full", enabled: ["fleet"] },
       guidance: { projectText: false, settings: {} },
@@ -174,7 +175,7 @@ test("bound worker task slices finish their local lifecycle before collection", 
     });
     fixtureTransport().script([
       { match: "slice lifecycle", toolCalls: [{ callId: "slice-task", name: "task", arguments: {
-        agents: [{ id: "slice-one", kind: "slice", title: "One slice", brief: "slice child brief", owns: ["owned.txt"] }],
+        agents: [{ id: "slice-one", kind: "slice", title: "One slice", brief: "slice child brief", owns: ["owned.txt"], profile: "fixture" }],
       } }] },
       { match: "slice lifecycle", toolCalls: [{ callId: "slice-wait", name: "agent_wait", arguments: { ids: ["slice-one"] } }] },
       { match: "slice child brief", toolCalls: [{ callId: "slice-write", name: "write", arguments: {

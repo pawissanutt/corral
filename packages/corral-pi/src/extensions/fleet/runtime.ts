@@ -4,6 +4,7 @@ import { join, relative, resolve, sep } from "node:path";
 import type * as Sdk from "@earendil-works/pi-coding-agent";
 import type { ModelRuntime, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { isProviderId } from "../../auth/providers.ts";
+import { assertApiEffort } from "../../host/api-providers.ts";
 import { AGENT_JOURNAL_MAX, AGENT_MESSAGE_MAX, AGENT_SEND_BUDGET, MAX_CHILDREN_PER_CALL, MAX_PARALLEL_LIMIT,
   type AgentMessage, type BuildProfile, type ChildKind, type ChildQuestion, type ChildSnapshot, type ChildSpec,
   type FleetControl, type FleetSnapshot, type MessageOutcome, type RosterEntry } from "../../build/types.ts";
@@ -16,7 +17,7 @@ import type { HelperInspection } from "../subagent/inspection.ts";
 
 import { createSdkRunner, type ChildHandle, type ChildRunner } from "./child.ts";
 import type { FallbackSettings } from "../../host/fallback-settings.ts";
-import { resolveModel, resolveProfiles, type ResolvedModel } from "./profiles.ts";
+import { childThinking, resolveModel, resolveProfiles, resolveTaskProfile, type ResolvedModel } from "./profiles.ts";
 import { validateWriterWave } from "./writer-wave.ts";
 import { formatChildReport } from "./tools.ts";
 /** The runtime needs no build exit, board, launcher or Git metadata. */
@@ -42,6 +43,8 @@ export interface FleetOptions {
   readonly now?: () => number;
   readonly runner?: ChildRunner;
   readonly allowedKinds?: readonly ChildKind[];
+  /** Worker `task` requires an explicit configured profile; standalone Explore does not. */
+  readonly requireTaskProfile?: boolean;
   readonly bound?: boolean;
   readonly parentLoadout?: readonly string[];
   readonly writeRefusal?: (path: string) => string | undefined;
@@ -81,6 +84,7 @@ interface Entry {
   readonly maxTurns?: number;
   readonly deadlineAt?: number;
   readonly serviceTier?: "priority";
+  readonly noFallback: boolean;
   timer?: ReturnType<typeof setTimeout>;
   prepared: boolean;
   admitted?: boolean;
@@ -136,6 +140,31 @@ export class FleetRuntime implements FleetControl {
     this.choices = resolveProfiles({ ...options.context.settings, exitPolicy: "none" }, options.parent);
     this.now = options.now ?? Date.now;
     this.runner = options.runner ?? createSdkRunner(options);
+  }
+
+  get requireTaskProfile(): boolean { return this.options.requireTaskProfile === true; }
+
+  private workerTaskModel(spec: ChildSpec, kind: ChildKind): ResolvedModel {
+    const profiles = this.options.context.settings.profiles;
+    try {
+      const choice = resolveTaskProfile(spec.profile, profiles, this.options.approved);
+      const model = this.options.models.getModel(choice.provider, choice.model);
+      if (!model) throw new Error(`Model ${choice.provider}/${choice.model} is unavailable in this session`);
+      childThinking(choice.effort);
+      assertApiEffort(model, choice.effort);
+      if (kind === "explore" && this.options.research?.settings.service_tier === "priority" && choice.provider !== "openai-codex") {
+        throw new Error("Explore priority service tier requires the openai-codex provider");
+      }
+      return choice;
+    } catch (error) {
+      const others = profiles.filter(profile => profile.name.trim() && profile.name !== "default" && profile.name !== spec.profile)
+        .map(profile => JSON.stringify(profile.name));
+      const reason = error instanceof Error ? error.message : String(error);
+      const selected = typeof spec.profile === "string" && spec.profile.trim() ? ` profile ${JSON.stringify(spec.profile)}` : "";
+      const advice = others.length ? `Choose a usable configured profile (other names: ${others.join(", ")}), or continue inline.`
+        : "Continue inline if no configured profile can be used.";
+      throw new Error(`Child ${spec.id}${selected}: ${reason}. ${advice}`);
+    }
   }
 
   private path(path: string): string {
@@ -360,6 +389,7 @@ export class FleetRuntime implements FleetControl {
     if (specs.length > MAX_CHILDREN_PER_CALL) throw new Error(`A task call supports at most ${MAX_CHILDREN_PER_CALL} children`);
     const batch = new Map<string, ChildSpec>();
     const models = new Map<string, ResolvedModel>();
+    const workerTask = this.requireTaskProfile && execution === undefined;
     for (const spec of specs) {
       if (!/^[a-z][a-z0-9-]{0,31}$/.test(spec.id)) throw new Error(`Invalid child id: ${spec.id}`);
       if (this.entries.has(spec.id) || batch.has(spec.id)) throw new Error(`Duplicate child id: ${spec.id}`);
@@ -374,7 +404,7 @@ export class FleetRuntime implements FleetControl {
       }
       if (["parent", "all", "owner"].includes(spec.id)) throw new Error(`Reserved child id: ${spec.id}`);
       batch.set(spec.id, spec);
-      models.set(spec.id, resolveModel(spec.profile, this.choices, this.options.approved));
+      models.set(spec.id, workerTask ? this.workerTaskModel(spec, kind) : resolveModel(spec.profile, this.choices, this.options.approved));
     }
     for (const spec of specs) for (const id of spec.after ?? []) {
       if (!batch.has(id) && !this.entries.has(id)) throw new Error(`Child ${spec.id} has unknown dependency: ${id}`);
@@ -415,7 +445,7 @@ export class FleetRuntime implements FleetControl {
         request: execution?.request ?? randomUUID(),
         research,
         maxTurns, deadlineAt: timeoutSecs === undefined ? undefined : this.now() + timeoutSecs * 1000,
-        serviceTier: researchSettings?.service_tier === "priority" ? "priority" : undefined, prepared: false, started: false,
+        serviceTier: researchSettings?.service_tier === "priority" ? "priority" : undefined, noFallback: workerTask, prepared: false, started: false,
         complete: false, collected: execution?.blocking ?? false, collectors: 0, delivered: false, sent: 0, inbox: [],
         value: { id: spec.id, kind: spec.kind, call, title: spec.title, brief: spec.brief, owns: spec.owns, after: spec.after, profile: model.profile,
           model: `${model.provider}/${model.model}`, effort: model.effort, state: "queued", createdAt: at, edits: [], steers: [], steeredAt: [], usage: { input: 0, output: 0, turns: 0 }, pulse: [], history: " ".repeat(Math.min(239, bucket)) + "q", messages: [] } };
@@ -568,7 +598,7 @@ export class FleetRuntime implements FleetControl {
         entry.handle = this.runner.run(entry.spec, entry.model, {
           onImageSaved: path => { noteEdit(path); this.touch(entry, true); },
           execution: { sessionFile: entry.value.sessionFile!, sessionId: entry.request, maxTurns: entry.maxTurns, deadlineAt: entry.deadlineAt,
-            research: entry.research, serviceTier: entry.serviceTier },
+            research: entry.research, serviceTier: entry.serviceTier, noFallback: entry.noFallback },
           onEvent: event => {
             if (!live(entry)) return;
             entry.history.observe(entry.spec.id, event);
@@ -614,7 +644,9 @@ export class FleetRuntime implements FleetControl {
         entry.researchReport = result.researchReport;
         entry.truncated = result.truncated ?? result.report.length > 32768;
         if (live(entry)) {
-          const failed = entry.value.kind === "review" && !entry.value.verdict ? "Review ended without a verdict" : result.failed;
+          const failed = entry.noFallback && result.failed
+            ? `Child ${entry.spec.id} profile ${JSON.stringify(entry.model.profile)}: ${result.failed}. Choose another usable configured profile, or continue inline.`
+            : entry.value.kind === "review" && !entry.value.verdict ? "Review ended without a verdict" : result.failed;
           this.finish(entry, failed ? "failed" : "done", failed, result.report);
         }
         else entry.value.report = result.report.slice(0, 32768);

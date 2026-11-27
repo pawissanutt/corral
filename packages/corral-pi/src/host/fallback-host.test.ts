@@ -242,7 +242,10 @@ test("fleet child fallback switches when children = true without forwarding prio
 test("worker keeps fallback-only providers out of fleet child launch allowlist and model picker", async () => {
   const f = fixture('[fallback]\nchildren = false\n[fallback.providers]\nopenai-codex = ["openai"]\n');
   try {
-    const { host } = await f.start("run", [], { capabilities: true });
+    const { host } = await f.start("run", [], {
+      capabilities: true,
+      childProfiles: [{ name: "subscription", model: "openai-codex/gpt-6.1-sol" }],
+    });
     f.subscription.script([
       {
         toolCalls: [{
@@ -255,18 +258,18 @@ test("worker keeps fallback-only providers out of fleet child launch allowlist a
     ]);
     await host.session.prompt("Try launching openai child");
     const badResult = host.session.messages.find(message => message.role === "toolResult");
-    expect(JSON.stringify(badResult)).toContain("Child model provider is not approved: openai");
+    expect(JSON.stringify(badResult)).toContain("Use a named child profile");
     expect(f.api.requests).toBe(0);
 
     const childHeld = Promise.withResolvers<void>();
     const releaseChild = Promise.withResolvers<void>();
     f.subscription.script([
       {
-        match: "Launch default child",
+        match: "Launch subscription child",
         toolCalls: [{
           callId: "call-ok",
           name: "task",
-          arguments: { agents: [{ id: "ok", title: "OK", brief: "Stay subscription", owns: ["b.ts"] }] },
+          arguments: { agents: [{ id: "ok", title: "OK", brief: "Stay subscription", owns: ["b.ts"], profile: "subscription" }] },
         }],
       },
       {
@@ -279,7 +282,7 @@ test("worker keeps fallback-only providers out of fleet child launch allowlist a
       },
       { text: "Launched ok child" },
     ]);
-    const promptPromise = host.session.prompt("Launch default child and inspect picker");
+    const promptPromise = host.session.prompt("Launch subscription child and inspect picker");
     await childHeld.promise;
     host.installRemoteParts();
     const childDetail = host.remoteRegistry.get("child")?.({ child: "ok" }) as { models: readonly string[] } | undefined;
@@ -323,8 +326,9 @@ test("worker with configured paid child profile approves that child provider", a
 
 test("worker restarts preserve the parent's fallback and model changes without moving children to the API", async () => {
   const f = fixture('[fallback.providers]\nopenai-codex = ["openai"]\n');
+  const childProfiles: readonly BuildProfile[] = [{ name: "subscription", model: "openai-codex/gpt-6.1-sol" }];
   try {
-    const { host, config } = await f.start("run", [], { capabilities: true });
+    const { host, config } = await f.start("run", [], { capabilities: true, childProfiles });
     const transcript = host.session.sessionFile!;
     await host.selectRemoteModel("openai-codex/gpt-6.2-sol");
     f.subscription.script([quota]);
@@ -333,24 +337,24 @@ test("worker restarts preserve the parent's fallback and model changes without m
     expect(host.session.getLastAssistantText()).toBe("Fallback on 6.2");
     expect(host.state().model).toBe("openai/gpt-6.2-sol");
 
-    const resumed = (await f.start("run", [], { capabilities: true, resume: transcript })).host;
+    const resumed = (await f.start("run", [], { capabilities: true, childProfiles, resume: transcript })).host;
     expect(resumed.state().model).toBe("openai/gpt-6.2-sol");
     f.api.script([
       { toolCalls: [{ callId: "paid", name: "task", arguments: {
         agents: [{ id: "paid", title: "Paid child", brief: "Must not launch", owns: [], profile: "openai/gpt-6.2-sol" }],
       } }] },
       { toolCalls: [{ callId: "start", name: "task", arguments: {
-        agents: [{ id: "child", title: "Default child", brief: "Use the original worker profile", owns: [] }],
+        agents: [{ id: "child", title: "Subscription child", brief: "Use the named subscription profile", owns: [], profile: "subscription" }],
       } }] },
       { toolCalls: [{ callId: "wait", name: "agent_wait", arguments: { ids: ["child"] } }] },
       { text: "Parent finished" },
     ]);
     f.subscription.script([{ text: "Subscription child finished" }]);
-    await resumed.session.prompt("Launch the default child after restart");
+    await resumed.session.prompt("Launch the named child after restart");
     expect(resumed.session.getLastAssistantText()).toBe("Parent finished");
-    expect(f.subscription.prompts.at(-1)).toContain("Use the original worker profile");
+    expect(f.subscription.prompts.at(-1)).toContain("Use the named subscription profile");
     const toolResults = resumed.session.messages.filter(message => message.role === "toolResult");
-    expect(JSON.stringify(toolResults)).toContain("Child model provider is not approved: openai");
+    expect(JSON.stringify(toolResults)).toContain("Use a named child profile");
     expect(f.api.requests).toBe(5); // The initial fallback and four parent requests; no paid child request.
 
     await resumed.selectRemoteModel("openai/gpt-5.4");

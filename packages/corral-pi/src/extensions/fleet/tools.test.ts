@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { Check } from "typebox/value";
 import type { ChildSpec } from "../../build/types.ts";
 import type { FleetRuntime } from "./runtime.ts";
 import { fleetTools } from "./tools.ts";
@@ -11,7 +12,7 @@ test("roles without child permission retain only communication tools", () => {
   expect(fleetTools(runtime).map(tool => tool.name)).toEqual(["task", "agent_message", "agent_roster", "agent_wait", "agent_cancel"]);
 });
 
-test("task filters its schema and rejects disallowed kinds before starting any child", async () => {
+test("task filters its schema, rejects disallowed kinds, and keeps Build profiles optional", async () => {
   const calls: ChildSpec[][] = [];
   const runtime = { async start(_id: string, agents: ChildSpec[]) { calls.push(agents); return []; } } as unknown as FleetRuntime;
   const task = fleetTools(runtime, ["explore"]).find(tool => tool.name === "task")!;
@@ -26,4 +27,6 @@ test("task filters its schema and rejects disallowed kinds before starting any c
   const defaultTask = fleetTools(runtime).find(tool => tool.name === "task")!;
   await defaultTask.execute("call", { agents: [spec] }, undefined, undefined, {} as never);
   expect(calls[1]![0]!.kind).toBe("slice");
+  const buildTask = fleetTools(runtime, undefined, undefined, "build").find(tool => tool.name === "task")!;
+  expect(Check(buildTask.parameters, { agents: [spec] })).toBeTrue();
 });

@@ -24,7 +24,7 @@ import { ANSWER_FORMAT, CODE_METHOD, DEPTH_GUIDANCE, GAP_CHECK_MAX_MS, GAP_CHECK
   type ResearchOptions, type ResearchReport } from "../subagent/research.ts";
 import { projectOrientation } from "../subagent/orientation.ts";
 import type { FleetContext } from "./runtime.ts";
-import type { ResolvedModel } from "./profiles.ts";
+import { childThinking, type ResolvedModel } from "./profiles.ts";
 import { Type } from "typebox";
 import { agentCommunicationTools, type AgentCommunication } from "./tools.ts";
 
@@ -47,6 +47,7 @@ export interface ChildHooks extends AgentCommunication {
     deadlineAt?: number;
     research?: ResearchOptions;
     serviceTier?: "priority";
+    noFallback?: boolean;
   };
   onEvent(event: HelperEvent): void;
   onToolStart(name: string, args: unknown): void;
@@ -269,12 +270,6 @@ function reviewCommand(command: string): boolean {
     && readOnlyGit(words.slice(1)));
 }
 
-function thinking(effort?: string): ThinkingLevel {
-  if (effort === undefined) return "off";
-  if (!["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(effort)) throw new Error(`Unknown child effort: ${effort}`);
-  return effort as ThinkingLevel;
-}
-
 export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
   return { run(spec, initialModel, hooks, signal) {
     const { sdk } = options;
@@ -286,8 +281,9 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
     const maxTurns = budget?.maxTurns ?? execution?.maxTurns;
     // A requested depth is a thinking floor; a stronger profile effort is kept.
     const effort = kind === "explore" ? execution?.research?.effort ?? spec.effort ?? "standard" : undefined;
-    const thinkingFloor = budget?.thinkingLevel ?? (effort ? researchBudget({ effort }, 1).thinkingLevel : undefined);
-    const level = (configured?: string) => strongerThinking(thinkingFloor, thinking(configured)) as ThinkingLevel;
+    const thinkingFloor = execution?.noFallback ? undefined
+      : budget?.thinkingLevel ?? (effort ? researchBudget({ effort }, 1).thinkingLevel : undefined);
+    const level = (configured?: string) => strongerThinking(thinkingFloor, childThinking(configured)) as ThinkingLevel;
     const communication = agentCommunicationTools(hooks);
     const parent = options.parentLoadout ?? [];
     // Build slices and reviewers can inherit managed Bash. Track their launches, not every job in the parent runtime.
@@ -494,7 +490,7 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
                 + (options.buildReport && kind === "slice" ? " Report interface deviations, blockers and any unmet acceptance checks." : "") } });
         ({ session } = await sdk.createAgentSessionFromServices({ services, sessionManager: sdk.SessionManager.open(file), model,
           tools: [...allowed], thinkingLevel, scopedModels: [{ model, thinkingLevel }] }));
-        const childFallback = childFallbackPolicy(options.fallbackPolicy);
+        const childFallback = childFallbackPolicy(options.fallbackPolicy, execution?.noFallback);
         const baseStream = withChildBaseCalibration(session.agent.streamFunction, options.assetRoot);
         session.agent.streamFunction = baseStream;
         if (kind === "explore" || childFallback) {
@@ -607,7 +603,7 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
       async steer(text) { await ready; if (complete) throw new Error("Child is no longer running"); await session!.steer(text); },
       async setModel(provider, model, effort, serviceTier) {
         if (!options.models.getModel(provider, model)) throw new Error(`model_unavailable: ${provider}/${model}`);
-        thinking(effort);
+        childThinking(effort);
         await ready;
         if (complete) throw new Error("Child is no longer running");
         const choice = { profile: `${provider}/${model}`, provider, model, effort, serviceTier };

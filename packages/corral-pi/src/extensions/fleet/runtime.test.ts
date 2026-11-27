@@ -5,9 +5,11 @@ import { join } from "node:path";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type * as Sdk from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { AGENT_JOURNAL_MAX, AGENT_MESSAGE_MAX, AGENT_SEND_BUDGET, MAX_CHILDREN_PER_CALL, MAX_PARALLEL_LIMIT, type BuildContext, type ChildSnapshot, type ChildSpec } from "../../build/types.ts";
+import { Check } from "typebox/value";
+import { AGENT_JOURNAL_MAX, AGENT_MESSAGE_MAX, AGENT_SEND_BUDGET, MAX_CHILDREN_PER_CALL, MAX_PARALLEL_LIMIT, type BuildContext, type BuildProfile, type ChildSnapshot, type ChildSpec } from "../../build/types.ts";
 import { FleetRuntime, type FleetOptions } from "./runtime.ts";
 import type { ChildHandle, ChildHooks, ChildRunner } from "./child.ts";
+import type { ResolvedModel } from "./profiles.ts";
 import { fleetTools, formatChildReport } from "./tools.ts";
 import { RetainedChildren } from "../../host/retained-children.ts";
 interface ChildToolDetails { readonly children: readonly ChildSnapshot[] }
@@ -94,11 +96,11 @@ test("build text deltas do not recompute session usage, while turns and tool eve
 });
 
 class FakeRunner implements ChildRunner {
-  readonly children = new Map<string, { hooks: ChildHooks; steers: string[]; prompt: string; finish(result: { report: string; failed?: string }): void }>();
-  run(spec: ChildSpec, _model: unknown, hooks: ChildHooks, signal: AbortSignal): ChildHandle {
+  readonly children = new Map<string, { model: ResolvedModel; hooks: ChildHooks; steers: string[]; prompt: string; finish(result: { report: string; failed?: string }): void }>();
+  run(spec: ChildSpec, model: ResolvedModel, hooks: ChildHooks, signal: AbortSignal): ChildHandle {
     const done = Promise.withResolvers<{ report: string; failed?: string }>();
     const steers: string[] = [];
-    this.children.set(spec.id, { hooks, steers, prompt: hooks.openingPrompt(), finish: done.resolve });
+    this.children.set(spec.id, { model, hooks, steers, prompt: hooks.openingPrompt(), finish: done.resolve });
     signal.addEventListener("abort", () => done.resolve({ report: `Cancelled ${spec.id}` }), { once: true });
     return { done: done.promise, usage: () => ({ input: 1, output: 2, turns: 3 }),
       async steer(text) { steers.push(text); }, async setModel() { return "applied"; } };
@@ -117,6 +119,89 @@ function fixture(maxParallel = 3, options: Partial<FleetOptions> = {}) {
   return { runtime, runner, delivered };
 }
 async function flush(): Promise<void> { for (let turn = 0; turn < 12; turn++) await Promise.resolve(); }
+
+const writer = { name: "writer", model: "openai/child-only", effort: "high" };
+const parentModel = { provider: "openai-codex", model: "parent", effort: "low" };
+function workerFixture(extraProfiles: readonly BuildProfile[] = []) {
+  const records: Record<string, unknown>[] = [];
+  const catalog = [
+    { provider: "openai", id: "child-only", reasoning: true },
+    { provider: "openai", id: "plain-child", reasoning: false },
+    { provider: "anthropic-api", id: "child", reasoning: false },
+    { provider: parentModel.provider, id: parentModel.model, reasoning: true },
+  ];
+  const { runtime, runner } = fixture(3, {
+    requireTaskProfile: true, allowedKinds: ["slice", "explore", "review"],
+    approved: [parentModel.provider, "openai"], parent: parentModel,
+    models: { getModel: (provider: string, id: string) => catalog.find(model => model.provider === provider && model.id === id) } as unknown as ModelRuntime,
+    context: { dir: "/private", session: { worktree: "/repo", name: "Worker" },
+      settings: { maxParallel: 3, profiles: [writer, ...extraProfiles] } },
+    async record(payload) {
+      records.push(payload);
+      return { session_file: `/private/${payload.request}.jsonl`, session_id: payload.request };
+    },
+  });
+  const task = fleetTools(runtime).find(tool => tool.name === "task")!;
+  return { runtime, runner, task, records };
+}
+
+test("Worker task requires a profile in the schema and starts on the selected model and effort", async () => {
+  const { runtime, runner, task } = workerFixture();
+  try {
+    const child = spec("valid", { profile: writer.name });
+    expect(Check(task.parameters, { agents: [child] })).toBeTrue();
+    expect(Check(task.parameters, { agents: [spec("missing")] })).toBeFalse();
+    expect(Check(task.parameters, { agents: [child, spec("missing")] })).toBeFalse();
+    await task.execute("run", { agents: [child] }, undefined, undefined, {} as never);
+    await flush();
+    expect(runner.children.get(child.id)?.model).toMatchObject({ profile: writer.name, provider: "openai", model: "child-only", effort: "high" });
+  } finally { await runtime.close(); }
+});
+
+test("Worker task rejects non-explicit profiles and does not admit a valid sibling of an invalid one", async () => {
+  const { runtime, runner, task, records } = workerFixture([{ name: "default", model: writer.model }]);
+  const execute = (agents: ChildSpec[]) => task.execute("run", { agents }, undefined, undefined, {} as never);
+  try {
+    for (const profile of [undefined, "", " \t ", "default", "unknown", writer.model]) {
+      const child = profile === undefined ? spec("invalid") : spec("invalid", { profile });
+      await expect(execute([child])).rejects.toThrow(/profile/i);
+    }
+    await expect(execute([spec("valid", { profile: writer.name }), spec("invalid", { profile: "unknown" })])).rejects.toThrow(/unknown/i);
+    expect(runtime.snapshot().children).toHaveLength(0);
+    expect(records).toHaveLength(0);
+    expect(runner.children.size).toBe(0);
+  } finally { await runtime.close(); }
+});
+
+test("Worker task names unusable profiles and offers another configured choice or inline work", async () => {
+  const { runtime, runner, task, records } = workerFixture([
+    { name: "blocked-route", model: "anthropic-api/child" },
+    { name: "missing-model", model: "openai/missing" },
+    { name: "unsupported-effort", model: "openai/plain-child", effort: "high" },
+    { name: "unsupported-subscription-effort", model: "openai-codex/parent", effort: "max" },
+  ]);
+  try {
+    for (const profile of ["blocked-route", "missing-model", "unsupported-effort", "unsupported-subscription-effort"]) {
+      await expect(task.execute("run", { agents: [spec("invalid", { profile })] }, undefined, undefined, {} as never))
+        .rejects.toThrow(new RegExp(`(?=.*${profile})(?=.*${writer.name})(?=.*inline)`, "is"));
+    }
+    expect(runtime.snapshot().children).toHaveLength(0);
+    expect(records).toHaveLength(0);
+    expect(runner.children.size).toBe(0);
+  } finally { await runtime.close(); }
+});
+
+test("Worker review preserves a provider failure when no verdict was returned", async () => {
+  const { runtime, runner } = workerFixture();
+  try {
+    await runtime.start("call", [spec("review", { kind: "review", profile: writer.name })]);
+    await flush();
+    runner.finish("review", "subscription_quota");
+    const [child] = await runtime.wait(["review"]);
+    expect(child?.state).toBe("failed");
+    expect(child?.error).toMatch(/writer.*subscription_quota.*configured profile.*inline/i);
+  } finally { await runtime.close(); }
+});
 
 test("bound children commit lifecycle in order and shutdown finishes the canonical running child", async () => {
   const records: Record<string, unknown>[] = [];

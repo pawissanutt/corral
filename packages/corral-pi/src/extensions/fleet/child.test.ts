@@ -242,6 +242,18 @@ test("a research preset is a thinking floor and never lowers a stronger profile 
   }
 });
 
+test("Worker task Explore uses the selected profile effort instead of a research floor", async () => {
+  const f = fixture();
+  try {
+    const hooks = { ...f.hooks, execution: { ...f.hooks.execution!, noFallback: true, research: {} } };
+    const run = createSdkRunner({ ...f.options, bound: true }).run(
+      { id: "explore", title: "Explore", brief: "Read the code", owns: [], kind: "explore", effort: "deep" },
+      { profile: "fixture", provider: "openai-codex", model: "fixture", effort: "off" }, hooks, new AbortController().signal);
+    await run.done;
+    expect(f.level).toBe("off");
+  } finally { f.cleanup(); }
+});
+
 test("a failed gap check keeps the first answer instead of failing the explore child", async () => {
   const f = fixture();
   f.body(async () => {

@@ -26,13 +26,14 @@ export function kickoff(context: RoleContext): string | undefined {
     + `\`"$CORRAL" gate ${identity.task ?? "<task>"}\` in bash. Use ask_user for owner questions.`;
 }
 
-/** The named models a worker's `task` children may use; absent when none are configured. */
+/** The named models a worker's `task` children may use. */
 export function childProfilesContract(context: RoleContext): string {
-  const profiles = context.childProfiles ?? [];
-  if (!profiles.length) return "";
+  const profiles = (context.childProfiles ?? []).filter(profile => profile.name !== "default" && !profile.name.includes("/"));
+  if (!profiles.length) return "\n\n## Child profiles\n\nNo child profiles are configured. Continue inline rather than delegating with `task`.";
   return ["", "", "## Child profiles", "",
-    "Pass `profile` to `task` to choose a child's model. Omit it, or pass `default`, for your own model. "
-      + "API-backed providers are billed per request; choose them only when the work needs that model.",
+    "Every `task` child requires a configured named `profile`; do not omit it or use `default`. "
+      + "If no configured profile can be used, continue inline. API-backed providers are billed per request; "
+      + "choose them only when the work needs that model.",
     "", ...profiles.map(profile =>
       `- ${profile.name}: ${profile.model}${profile.effort ? ` (effort ${profile.effort})` : ""}`
         + `${profile.description ? `; ${profile.description}` : ""}`)].join("\n");

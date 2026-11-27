@@ -42,10 +42,13 @@ export function fleetTools(runtime: FleetRuntime, allowedKinds: readonly ChildKi
   guidance: "generic" | "build" = "generic", proactive = false): ToolDefinition[] {
   const communication = agentCommunicationTools({ message: (to, text, options) => runtime.message("parent", to, text, options), roster: () => runtime.rosterText() });
   if (!allowedKinds.length) return communication;
+  const workerTask = runtime.requireTaskProfile;
+  const workerProfile = "Choose a configured named profile for each child; do not use default or a raw provider/model. Continue inline if none can be used.";
   return [
     {
       name: "task", label: "Delegate work",
       description: "Delegate independent slices, read-only exploration or independent review in this shared worktree. Give each child a complete brief and owned paths; no conversation is inherited. "
+        + (workerTask ? `${workerProfile} ` : "")
         + `At most ${MAX_CHILDREN_PER_CALL} children per call; concurrency follows the configured cap and ready children run FIFO. Use after for successful dependencies. `
         + "Returns ids and states immediately. Reports arrive as messages; agent_wait can collect them explicitly. Children cannot delegate or write Git state.",
       promptSnippet: "Start independent implementation, exploration or review children without blocking",
@@ -57,7 +60,8 @@ export function fleetTools(runtime: FleetRuntime, allowedKinds: readonly ChildKi
           "Keep useful separate work for yourself. Use after only for real dependencies, and unique lowercase ids for the entire session.",
         ] : [
           "Use task for substantial independent implementation, not trivial edits. Give children non-overlapping owned files, the full requirements and expected checks; they inherit none of your conversation.",
-          "Keep useful separate work for yourself. Use after only for real dependencies, and unique lowercase ids for the entire session. Choose a configured profile or an approved provider/model.",
+          "Keep useful separate work for yourself. Use after only for real dependencies, and unique lowercase ids for the entire session. "
+            + (workerTask ? workerProfile : "Choose a configured profile or an approved provider/model."),
         ]),
         ...(allowedKinds.includes("explore") ? ["Explore children accept effort quick, standard (default) or deep. Check each explore report's tool-call count: a broad question answered with few calls deserves verification or a deep retry."] : []),
         "Collect and reconcile every child report and outside-ownership edit before claiming completion. Do not run shared checks while children are still editing. Children grant no review or board authority.",
@@ -67,9 +71,10 @@ export function fleetTools(runtime: FleetRuntime, allowedKinds: readonly ChildKi
         kind: Type.Optional(Type.Union(allowedKinds.map(kind => Type.Literal(kind)))),
         brief: Type.String({ minLength: 1, maxLength: 32768 }), owns: Type.Array(Type.String()),
         ...(guidance === "build" ? { accept: Type.Optional(Type.String({ maxLength: 2000 })) } : {}),
-        profile: Type.Optional(Type.String()), after: Type.Optional(Type.Array(Type.String())),
+        profile: workerTask ? Type.String({ description: workerProfile }) : Type.Optional(Type.String()),
+        after: Type.Optional(Type.Array(Type.String())),
         ...(allowedKinds.includes("explore") ? { effort: Type.Optional(Type.Union([Type.Literal("quick"), Type.Literal("standard"), Type.Literal("deep")],
-          { description: "Explore only: research depth; a thinking floor that never lowers the profile's effort" })) } : {}),
+          { description: workerTask ? "Explore only: research depth; thinking effort comes from the selected profile" : "Explore only: research depth; a thinking floor that never lowers the profile's effort" })) } : {}),
       }, { additionalProperties: false }), { minItems: 1, maxItems: MAX_CHILDREN_PER_CALL }) }, { additionalProperties: false }),
       async execute(id, params: { agents: ChildSpec[]; context?: string }, signal) {
         const agents = params.agents.map(agent => {

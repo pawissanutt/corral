@@ -13,13 +13,14 @@ import { FleetRuntime } from "./runtime.ts";
 type ResearchResult = Awaited<ChildHandle["done"]>;
 interface ResearchCall { spec: ChildSpec; model: ResolvedModel; hooks: ChildHooks }
 const settings: ExploreSettings = { max_parallel: 3, model: null, max_turns: 12, timeout_secs: 30 };
-function fixture(execute: (call: ResearchCall, signal: AbortSignal) => Promise<ResearchResult>, explore = settings, provider = "openai-codex") {
+function fixture(execute: (call: ResearchCall, signal: AbortSignal) => Promise<ResearchResult>, explore = settings,
+  provider = "openai-codex", requireTaskProfile = false) {
   const records: Record<string, unknown>[] = [];
   const calls: ResearchCall[] = [];
   const runtime = new FleetRuntime({ sdk: {} as typeof Sdk, models: {} as ModelRuntime,
     approved: [provider], parent: { provider, model: "normal" }, agentDir: "/unused", localTools: [],
     context: { dir: "/private", session: { worktree: "/repo", name: "parent" }, settings: { maxParallel: explore.max_parallel, profiles: [] } },
-    allowedKinds: ["explore"], research: { settings: explore },
+    allowedKinds: ["explore"], research: { settings: explore }, requireTaskProfile,
     changed() {}, deliverToParent() { throw new Error("Blocking research must not be redelivered"); },
     async record(payload) {
       records.push(payload);
@@ -145,7 +146,7 @@ test("workspace Explore model applies only to standalone calls on the configured
   if (!explore) throw new Error("Explore is disabled");
   const answer = async (): Promise<ResearchResult> => ({ report: "answer" });
   const codex = fixture(answer, explore);
-  const anthropic = fixture(answer, explore, "anthropic");
+  const anthropic = fixture(answer, explore, "anthropic", true); // Standalone Worker explore does not use task's profile policy.
   try {
     await codex.runtime.explore("standalone", "research");
     await codex.runtime.start("task", [{ id: "named", kind: "explore", title: "Research", brief: "research", owns: [] }]);

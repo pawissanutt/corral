@@ -257,13 +257,12 @@ assignment and `--corral` for the engine executable. Direct launches can select 
 model with `--model <provider>/<model>` and reasoning effort with `--effort`.
 Use `--headless` for socket input without a terminal.
 
-A task worker starts on its configured profile's model. Its `task` children default
-to that profile even if the parent falls back and restarts. Children can also choose
-`[build.profiles.<name>]` entries in `.corral-next/pi.toml`, the same profiles Build
-sessions use. The worker loads the logins those profiles name, including metered API
-providers, and its prompt lists them. A profile whose provider you are not logged in to
-is refused when a child selects it. A worker launched on `llama.cpp` never loads a cloud
-login for its children.
+A task worker starts on its configured profile's model. Each `task` child must select a
+configured, non-`default` `[build.profiles.<name>]` entry in `.corral-next/pi.toml`, the
+same profiles Build sessions use; it does not inherit the parent's model. The worker loads
+the logins those profiles name, including metered API providers, and its prompt lists them.
+An unusable profile is refused; choose another configured profile or continue inline.
+A worker launched on `llama.cpp` never loads a cloud login for its children.
 For daemon chat, configure a Pi profile or harness and put `corral-pi` on the daemon's
 `PATH`; chat does not require automatic dispatch or landing.
 
@@ -397,7 +396,7 @@ switches, add `[fallback.providers]` to `.corral-next/pi.toml`:
 
 ```toml
 [fallback]
-children = false # set true to also allow task/build children and subagents to spill over
+children = false # set true to allow Build children and standalone subagents to spill over
 
 [fallback.providers]
 openai-codex = ["openai"]
@@ -407,9 +406,9 @@ anthropic = ["anthropic-api"]
 When a subscription model hits quota before any output, Pi resolves `<target>/<model>` from
 `[fallback.providers]` in order, skips unavailable entries, announces the switch, and answers
 the same request on the next usable model. Restart restores the parent's selected
-fallback and subsequent model changes on that provider. Worker helpers keep their
-configured defaults; `children = true` lets them fall back on their own quota failures.
-Chat and Build owners can switch providers again with `/model`.
+fallback and subsequent model changes on that provider. Worker `task` children use their
+selected profile without fallback even when `children = true`; choose another profile or
+continue inline on failure. Chat and Build owners can switch providers again with `/model`.
 
 For a per-profile override in `.corral-next/corral.toml` (or per-launch flags on `run`,
 `chat` or `build`), set `fallback = ["<provider>/<model>", ...]` (or repeat `--fallback`) to
