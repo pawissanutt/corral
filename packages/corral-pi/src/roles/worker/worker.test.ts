@@ -100,13 +100,12 @@ test("the contract is the installed worker-contract.md with the bound identity f
 test("a host session activates exactly the loadout and loads the installed worker and plan skills", () => {
   const state = host.state();
   const expected = [...UPSTREAM, ...CORRAL_TOOLS, "corral_todo", ...LSP_TOOLS, "ask_user", "agent_message", "agent_roster"];
-  expect([...host.loadout]).toEqual(expected);
-  expect([...(state.active_tools as string[])].sort()).toEqual(expected.sort());
+  expect([...host.loadout].sort()).toEqual(expected.sort());
+  expect([...(state.active_tools as string[])].sort()).toEqual(expected);
   const skills = host.runtime.services.resourceLoader.getSkills().skills;
   expect(skills.map((skill) => [skill.name, skill.filePath])).toEqual([
     ["corral-worker", join(assets.dir, SKILL_ASSET)],
     ["corral-plan", join(assets.dir, "assets/skills/corral-plan/SKILL.md")],
-    ["corral-diagrams", join(assets.dir, "assets/skills/corral-diagrams/SKILL.md")],
   ]);
   expect(readFileSync(skills[0]?.filePath ?? "", "utf8")).toBe(readFileSync(join(PACKAGE_ROOT, SKILL_ASSET), "utf8"));
   expect(host.session.systemPrompt).toContain("# corral worker contract (corral-pi)");

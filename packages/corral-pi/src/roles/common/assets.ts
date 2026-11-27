@@ -12,8 +12,9 @@ export const DIAGRAM_SKILL_ASSET = "assets/skills/corral-diagrams/SKILL.md";
 
 export const CODING_SKILL_NAMES = ["debugging", "frontend", "git-master", "programming", "simplify-and-cleanup", "visual-qa"] as const;
 
-export function codingSkillPaths(root: string): string[] {
-  return CODING_SKILL_NAMES.map(name => assetPath(root, `assets/skills/${name}/SKILL.md`));
+export function builtinSkillPaths(root: string): string[] {
+  return [assetPath(root, DIAGRAM_SKILL_ASSET),
+    ...CODING_SKILL_NAMES.map(name => assetPath(root, `assets/skills/${name}/SKILL.md`))];
 }
 
 export class RoleAssetMissing extends Error {

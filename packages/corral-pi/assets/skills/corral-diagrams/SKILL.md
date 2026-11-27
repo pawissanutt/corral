@@ -1,6 +1,6 @@
 ---
 name: corral-diagrams
-description: Publish Markdown/Mermaid or evidence-backed workflow diagrams as Corral artifacts from any agent harness. Use when asked to create or share a diagram in Corral.
+description: Publish Markdown/Mermaid or evidence-backed workflow diagrams as Corral artifacts, or author repository lenses for Corral App Insight. Use when asked to create, share or maintain a diagram or lens in Corral.
 ---
 
 # Publish a Corral diagram

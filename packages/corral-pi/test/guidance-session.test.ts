@@ -170,8 +170,8 @@ test("every role loads home skills, trusted project text and templates, never am
       // Then home and repository Agent Skills, both template sets and the workspace and project
       // context files load in ancestor order; the worker keeps its packaged role skill; and no
       // ~/.pi, project .pi or out-of-workspace resource is loaded.
-      const roleSkills = role === "worker" ? ["corral-diagrams", "corral-plan", "corral-worker"] : role === "reviewer" ? ["corral-plan"] : [];
-      expect(found.skills).toEqual([...roleSkills, ...CODING_SKILL_NAMES, "home-skill", "repo-skill"].sort());
+      const roleSkills = role === "worker" ? ["corral-plan", "corral-worker"] : role === "reviewer" ? ["corral-plan"] : [];
+      expect(found.skills).toEqual([...roleSkills, "corral-diagrams", ...CODING_SKILL_NAMES, "home-skill", "repo-skill"].sort());
       expect(found.prompts).toEqual(["home-review", "repo-prompt"]);
       expect(found.context).toEqual([join(root, "AGENTS.md"), join(cwd, "AGENTS.md")]);
       expect(found.extensions.some((path) => path.includes(".pi"))).toBeFalse();
@@ -192,7 +192,7 @@ test("every role loads home skills, trusted project text and templates, never am
     expect([text.skills, text.prompts, text.context]).toEqual([["corral-diagrams", "corral-plan", "corral-worker", ...CODING_SKILL_NAMES, "home-skill"].sort(), ["home-review"], []]);
     for (const host of [strict.host, older.host]) {
       const found = loaded(host);
-      expect([found.skills, found.prompts, found.context]).toEqual([["corral-diagrams", "corral-plan", "corral-worker"], [], []]);
+      expect([found.skills, found.prompts, found.context]).toEqual([["corral-plan", "corral-worker"], [], []]);
       expect((host.state().guidance as { export: boolean }).export).toBeFalse();
     }
   } finally {
@@ -231,16 +231,19 @@ test("a standard worker loads and invokes all six installed coding skills with a
   }
 }, 120_000);
 
-test("Build invokes installed debugging guidance ahead of a trusted project impostor", async () => {
+test("Build invokes bundled skills ahead of a trusted project impostor", async () => {
   const repo = join(work, "build-repo");
   mkdirSync(join(repo, ".git"), { recursive: true });
   skill(join(repo, ".agents/skills"), "debugging", "PROJECT-DEBUGGING-IMPOSTOR");
   skill(join(repo, ".agents/skills"), "build-project-skill");
   const { capabilities, guidance } = workspaceSettings(root, "build", undefined, {});
-  const started = await start("build", capabilities.enabled, guidance, { cwd: repo, capabilities });
+  // This fixture has no persisted Build session to checkpoint.
+  const started = await start("build", capabilities.enabled.filter(name => name !== "checkpoints"), guidance, { cwd: repo });
   try {
     await bind(started);
-    expect(loaded(started.host).skills).toEqual(["build-project-skill", ...CODING_SKILL_NAMES].sort());
+    expect(loaded(started.host).skills).toEqual(["build-project-skill", "corral-diagrams", ...CODING_SKILL_NAMES].sort());
+    await turn(started, "/skill:corral-diagrams");
+    expect(userTexts(started.host).some(text => text.startsWith('<skill name="corral-diagrams"'))).toBeTrue();
     const installed = join(assets.dir, "assets/skills/debugging/SKILL.md");
     const body = readFileSync(installed, "utf8").replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "").trim();
     expect(body).not.toBe("");
@@ -432,13 +435,13 @@ test("workspace skill policy applies to new runtimes and hides disabled winners 
   }
   skill(join(project, ".agents/skills"), "explicit-skill", "PROJECT-EXPLICIT-IMPOSTOR");
   skill(join(project, ".agents/skills"), "project-policy-skill");
-  put(settings, '[skills]\nuser_dirs = ["~/explicit-skills"]\ndisabled = ["debugging", "project-policy-skill", "corral-worker", "0b101", "merge-name"]\n');
+  put(settings, '[skills]\nuser_dirs = ["~/explicit-skills"]\ndisabled = ["debugging", "corral-diagrams", "project-policy-skill", "corral-worker", "0b101", "merge-name"]\n');
   const { capabilities, guidance } = workspaceSettings(root, "worker");
   const old = await start("worker", capabilities.enabled, guidance, { cwd: project, capabilities });
   try {
     await bind(old);
     expect(loaded(old.host).skills).toEqual([
-      "corral-worker", "corral-plan", "corral-diagrams", "explicit-skill", ...CODING_SKILL_NAMES.filter(name => name !== "debugging"),
+      "corral-worker", "corral-plan", "explicit-skill", ...CODING_SKILL_NAMES.filter(name => name !== "debugging"),
     ].sort());
     expect(old.host.session.systemPrompt).not.toContain("<name>debugging</name>");
     expect(old.host.session.systemPrompt).not.toContain("<name>project-policy-skill</name>");
@@ -458,11 +461,12 @@ test("workspace skill policy applies to new runtimes and hides disabled winners 
       await bind(next);
       await bind(restricted);
       expect(loaded(next.host).skills).toContain("debugging");
+      expect(loaded(next.host).skills).toContain("corral-diagrams");
       expect(loaded(next.host).skills).toContain("explicit-skill");
       expect(loaded(next.host).skills).toContain("0b101");
       expect(loaded(next.host).skills).toContain("merge-name");
       expect(loaded(next.host).skills).not.toContain("project-policy-skill");
-      expect(loaded(restricted.host).skills).toEqual(["corral-diagrams", "corral-plan", "corral-worker"]);
+      expect(loaded(restricted.host).skills).toEqual(["corral-plan", "corral-worker"]);
     } finally {
       next.host.session.dispose();
       restricted.host.session.dispose();

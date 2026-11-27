@@ -8,7 +8,8 @@ draws its Mermaid fences itself. No HTML, JavaScript or external renderer is inv
 For the separate typed workflow format, see [workflow diagram recipes](workflow-diagram-recipes.md).
 The app can inspect evidence for typed recipes; the offline validator checks structure only.
 The portable skill at `packages/corral-pi/assets/skills/corral-diagrams/SKILL.md` is bundled
-with corral-pi workers and can also be installed as a skill directory by external harnesses.
+with all skills-enabled Corral Pi roles and can be switched off in **Settings → Configuration → Skills**.
+External harnesses can install it as a skill directory.
 
 ## Workflow
 

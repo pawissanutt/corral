@@ -45,12 +45,12 @@ macro_rules! shipped {
 }
 const SHIPPED: &[(&str, bool, &str, &str)] = &[
     asset!("corral-plan", true),
-    asset!("corral-diagrams", true),
     shipped!(
         "corral-worker",
         true,
         "src/roles/worker/skills/corral-worker/SKILL.md"
     ),
+    asset!("corral-diagrams", false),
     asset!("debugging", false),
     asset!("frontend", false),
     asset!("git-master", false),
@@ -836,12 +836,12 @@ mod tests {
                 .any(|s| s.name == "corral-worker" && s.enabled && s.required)
         );
         assert!(toggle(root, request("corral-worker", &before.revision)).is_err());
-        let after = toggle(root, request("programming", &before.revision))?;
+        let after = toggle(root, request("corral-diagrams", &before.revision))?;
         assert!(
             after
                 .skills
                 .iter()
-                .any(|s| s.name == "programming" && !s.enabled)
+                .any(|s| s.name == "corral-diagrams" && !s.enabled && !s.required)
         );
         assert!(toggle(root, request("Team-Notes", &before.revision)).is_err());
         assert!(toggle(root, request("unknown", &after.revision)).is_err());

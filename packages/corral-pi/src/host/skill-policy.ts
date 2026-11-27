@@ -3,7 +3,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import type { LoadSkillsResult } from "@earendil-works/pi-coding-agent";
 
-import { DIAGRAM_SKILL_ASSET, PLAN_SKILL_ASSET, WORKER_SKILL_ASSET } from "../roles/common/assets.ts";
+import { PLAN_SKILL_ASSET, WORKER_SKILL_ASSET } from "../roles/common/assets.ts";
 import { readPiSettings } from "./pi-settings-file.ts";
 
 export interface SkillPolicy {
@@ -81,7 +81,7 @@ export function explicitSkillPaths(roots: readonly string[]): string[] {
 
 /** Pi resolves precedence first; filtering the winner here never revives a shadowed copy. */
 export function applySkillPolicy(result: LoadSkillsResult, policy: SkillPolicy, assetRoot?: string): LoadSkillsResult {
-  const required = new Set(assetRoot === undefined ? [] : [WORKER_SKILL_ASSET, PLAN_SKILL_ASSET, DIAGRAM_SKILL_ASSET]
+  const required = new Set(assetRoot === undefined ? [] : [WORKER_SKILL_ASSET, PLAN_SKILL_ASSET]
     .map(path => resolve(assetRoot, path)));
   const skills = result.skills.filter(skill => !policy.disabled.has(skill.name) || required.has(skill.filePath));
   // Suppress only collisions for names we deliberately hid, not malformed-file warnings

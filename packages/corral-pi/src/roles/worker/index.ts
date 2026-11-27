@@ -2,7 +2,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import type { CorralToolSpec, RoleContext, RoleModule, UpstreamTool } from "../types.ts";
-import { assetPath, assetRoot, DIAGRAM_SKILL_ASSET, PLAN_SKILL_ASSET, WORKER_SKILL_ASSET, readAsset, renderContract } from "../common/assets.ts";
+import { assetPath, assetRoot, PLAN_SKILL_ASSET, WORKER_SKILL_ASSET, readAsset, renderContract } from "../common/assets.ts";
 import { askUserContract } from "../common/ask-user.ts";
 import { sendOnce } from "../common/kickoff.ts";
 import { artifactTool } from "../common/tools.ts";
@@ -67,8 +67,7 @@ export function workerRole(root: string, lsp: Omit<LspToolkitOptions, "root"> = 
     extend(pi: ExtensionAPI, context: RoleContext) {
       const skill = assetPath(root, SKILL_ASSET);
       const plan = assetPath(root, PLAN_SKILL_ASSET);
-      const diagram = assetPath(root, DIAGRAM_SKILL_ASSET);
-      pi.on("resources_discover", () => ({ skillPaths: [skill, plan, diagram] }));
+      pi.on("resources_discover", () => ({ skillPaths: [skill, plan] }));
       pi.on("session_shutdown", () => toolkit(context).shutdown());
       pi.on("session_start", () => {
         const lspEnabled = !context.capabilities || context.capabilities.catalog < 5

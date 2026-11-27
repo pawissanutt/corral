@@ -16,10 +16,10 @@ package's locked dependencies (`bun install --frozen-lockfile`).
 
 ## Built-in coding skills
 
-Build, worker, assistant and reviewer sessions with skills enabled include `debugging`,
-`frontend`, `git-master`, `programming`, `simplify-and-cleanup` and `visual-qa` on a fresh
-install. Type `/skill:debugging` to load that skill explicitly, optionally followed by the
-problem to investigate. No separate skill install or global configuration is required.
+Pi sessions with skills enabled include `corral-diagrams`, `debugging`, `frontend`,
+`git-master`, `programming`, `simplify-and-cleanup` and `visual-qa` on a fresh install.
+Type `/skill:corral-diagrams` to load the diagram and repository lens guidance explicitly,
+optionally followed by a description of the diagram. No separate install is required.
 
 A skill supplies guidance, not permission: a read-only reviewer can use `frontend` to
 assess a change, but loading it does not grant editing tools. A user or project skill

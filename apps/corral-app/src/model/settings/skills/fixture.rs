@@ -26,6 +26,7 @@ impl Fixture {
             });
         };
         for name in [
+            "corral-diagrams",
             "debugging",
             "programming",
             "git-master",
@@ -35,7 +36,7 @@ impl Fixture {
         ] {
             add(name, Builtin, "/preview/bundled/skills");
         }
-        for name in ["corral-plan", "corral-diagrams", "corral-worker"] {
+        for name in ["corral-plan", "corral-worker"] {
             add(name, Role, "/preview/bundled/roles");
         }
         add("notes", User, "/preview/configured/skills");
