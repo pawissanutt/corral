@@ -11,9 +11,12 @@ import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { EventLog } from "../src/bridge/events.ts";
 import type { CapabilityGuidance } from "../src/capabilities/guidance.ts";
 import { selectGuidance } from "../src/capabilities/guidance.ts";
+import { INSTALL_FILES } from "../src/host/compiled.ts";
+import { workspaceSettings } from "../src/host/config.ts";
 import { type LoadedModules, loadModules } from "../src/host/modules.ts";
 import { guardedFetch, restrictEnvironment } from "../src/host/restrict.ts";
 import { HostSession } from "../src/host/session.ts";
+import { CODING_SKILL_NAMES } from "../src/roles/common/assets.ts";
 import type { CapabilitySet, HostIdentity, Role } from "../src/roles/types.ts";
 import { CorralClient, sha256Hex } from "../src/tools/corral.ts";
 import { fakeCodexTransport, type FakeTransport } from "./fixtures/auth/fake-transport.ts";
@@ -94,6 +97,7 @@ interface Started {
 
 interface Layout {
   readonly catalog?: number;
+  readonly capabilities?: CapabilitySet;
   readonly cwd?: string;
   readonly home?: string;
 }
@@ -112,8 +116,8 @@ async function start(role: Role, enabled: readonly string[], guidance?: Capabili
   const client = new CorralClient({ corral: corral.path, root, cwd: cwdForSession, identity: roleIdentity });
   const host = await HostSession.create({
     sdk, identity: roleIdentity, cwd: cwdForSession, agentDir: join(dir, "agent"), model: "gpt-6.1-sol",
-    capabilities: { ...snapshot(enabled), catalog: layout.catalog ?? 1 }, ...(guidance ? { guidance } : {}), root, home: layout.home ?? home,
-    exportDir: join(dir, "sessions", "exports"),
+    capabilities: layout.capabilities ?? { ...snapshot(enabled), catalog: layout.catalog ?? 1 }, ...(guidance ? { guidance } : {}), root, home: layout.home ?? home,
+    exportDir: join(dir, "sessions", "exports"), runtimeDir: dir,
     modules, client, events, network, sessionManager: sdk.SessionManager.create(cwdForSession, join(dir, "sessions")),
   });
   return { host, corral, events, transport };
@@ -167,7 +171,7 @@ test("every role loads home skills, trusted project text and templates, never am
       // context files load in ancestor order; the worker keeps its packaged role skill; and no
       // ~/.pi, project .pi or out-of-workspace resource is loaded.
       const roleSkills = role === "worker" ? ["corral-diagrams", "corral-plan", "corral-worker"] : role === "reviewer" ? ["corral-plan"] : [];
-      expect(found.skills).toEqual([...roleSkills, "home-skill", "repo-skill"].sort());
+      expect(found.skills).toEqual([...roleSkills, ...CODING_SKILL_NAMES, "home-skill", "repo-skill"].sort());
       expect(found.prompts).toEqual(["home-review", "repo-prompt"]);
       expect(found.context).toEqual([join(root, "AGENTS.md"), join(cwd, "AGENTS.md")]);
       expect(found.extensions.some((path) => path.includes(".pi"))).toBeFalse();
@@ -181,11 +185,11 @@ test("every role loads home skills, trusted project text and templates, never am
   // And without trust only home text loads; strict and an older corral load only the role skill.
   const untrusted = await start("worker", STANDARD, { settings: HOME_DIRS, projectText: false });
   const strict = await start("worker", ["todo", "compaction"], { settings: {}, projectText: true });
-  const older = await start("worker", ["todo"]);
+  const older = await start("worker", STANDARD);
   try {
     for (const { host } of [untrusted, strict, older]) await host.session.bindExtensions({});
     const text = loaded(untrusted.host);
-    expect([text.skills, text.prompts, text.context]).toEqual([["corral-diagrams", "corral-plan", "corral-worker", "home-skill"], ["home-review"], []]);
+    expect([text.skills, text.prompts, text.context]).toEqual([["corral-diagrams", "corral-plan", "corral-worker", ...CODING_SKILL_NAMES, "home-skill"].sort(), ["home-review"], []]);
     for (const host of [strict.host, older.host]) {
       const found = loaded(host);
       expect([found.skills, found.prompts, found.context]).toEqual([["corral-diagrams", "corral-plan", "corral-worker"], [], []]);
@@ -196,45 +200,66 @@ test("every role loads home skills, trusted project text and templates, never am
   }
 }, 120_000);
 
-test("Pi pack lists and loads all six skills in a standard worker without OmO roots", async () => {
-  const packHome = join(work, "pack-home");
-  const pack = join(packHome, ".corral/skills/corral-pi");
-  const names = ["frontend", "visual-qa", "programming", "debugging", "git-master", "simplify-and-cleanup"];
-  cpSync(join(PACKAGE_ROOT, "../../crates/corral-ops/assets/skills/corral-pi"), pack, { recursive: true });
-  const started = await start("worker", STANDARD, {
-    settings: { skills: { user_dirs: ["~/.agents/skills", "~/.corral/skills/corral-pi"] } },
-    projectText: false,
-  }, { home: packHome });
+test("a standard worker loads and invokes all six installed coding skills with an empty home", async () => {
+  const packHome = mkdtempSync(join(work, "pack-home-"));
+  const started = await start("worker", STANDARD, { settings: {}, projectText: false }, { home: packHome });
   try {
     await bind(started);
     const resources = started.host.runtime.services.resourceLoader.getSkills();
     expect(resources.diagnostics).toEqual([]);
-    expect(loaded(started.host).skills).toEqual(["corral-diagrams", "corral-plan", "corral-worker", ...names].sort());
+    expect(loaded(started.host).skills).toEqual(["corral-diagrams", "corral-plan", "corral-worker", ...CODING_SKILL_NAMES].sort());
     await turn(started, "/skill:corral-diagrams");
     expect(userTexts(started.host).some((text) => text.includes('<skill name="corral-diagrams"'))).toBeTrue();
     const tools = new Set(started.host.session.getActiveToolNames());
-    for (const name of names) {
+    for (const name of CODING_SKILL_NAMES) {
       const found = resources.skills.find((item) => item.name === name);
       expect(found).toBeDefined();
       if (!found) throw new Error(`missing skill ${name}`);
-      expect(found.filePath).toBe(join(pack, name, "SKILL.md"));
+      expect(found.filePath).toBe(join(assets.dir, "assets/skills", name, "SKILL.md"));
       // Load through the same explicit skill command a new session offers the owner.
       await turn(started, `/skill:${name}`);
       expect(userTexts(started.host).some((text) => text.includes(`<skill name="${name}"`))).toBeTrue();
       const text = readFileSync(found.filePath, "utf8");
-      // Pack convention: allowed-tools declares every tool, and bare inline identifiers or
-      // call-shaped expressions denote tools. Shell commands have arguments inside backticks.
-      // Validate against the actual standard worker registry, not a hand-maintained allowlist.
-      const declared = text.match(/^allowed-tools: (.+)$/m)?.[1]?.split(/\s+/) ?? [];
+      // Check declared tools against the real registry; prose backticks can name other skills.
+      const frontmatter = text.split(/^---\s*$/m)[1];
+      const declared = frontmatter?.match(/^allowed-tools: (.+)$/m)?.[1]?.split(/\s+/) ?? [];
       expect(declared.length).toBeGreaterThan(0);
-      const mentioned = [...text.matchAll(/`([a-z_][\w.-]*)`|\b([a-z_][\w.]*)\(/g)]
-        .map((match) => match[1] ?? match[2]).filter((item) => item !== undefined);
-      for (const tool of [...declared, ...mentioned]) expect(tools.has(tool)).toBeTrue();
+      for (const tool of declared) expect(tools.has(tool)).toBeTrue();
     }
   } finally {
     started.host.session.dispose();
   }
 }, 120_000);
+
+test("Build invokes installed debugging guidance ahead of a trusted project impostor", async () => {
+  const repo = join(work, "build-repo");
+  mkdirSync(join(repo, ".git"), { recursive: true });
+  skill(join(repo, ".agents/skills"), "debugging", "PROJECT-DEBUGGING-IMPOSTOR");
+  skill(join(repo, ".agents/skills"), "build-project-skill");
+  const { capabilities, guidance } = workspaceSettings(root, "build", undefined, {});
+  const started = await start("build", capabilities.enabled, guidance, { cwd: repo, capabilities });
+  try {
+    await bind(started);
+    expect(loaded(started.host).skills).toEqual(["build-project-skill", ...CODING_SKILL_NAMES].sort());
+    const installed = join(assets.dir, "assets/skills/debugging/SKILL.md");
+    const body = readFileSync(installed, "utf8").replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "").trim();
+    expect(body).not.toBe("");
+    await turn(started, "/skill:debugging");
+    const expansion = userTexts(started.host).find((text) => text.startsWith('<skill name="debugging"')) ?? "";
+    expect(expansion).toContain(`location="${installed}"`);
+    expect(expansion).toContain(`${body}\n</skill>`);
+    expect(expansion).not.toContain("PROJECT-DEBUGGING-IMPOSTOR");
+  } finally {
+    started.host.session.dispose();
+  }
+}, 120_000);
+
+test("compiled installs embed the canonical coding skill bytes", () => {
+  for (const name of CODING_SKILL_NAMES) {
+    const relative = `assets/skills/${name}/SKILL.md`;
+    expect(Buffer.from(INSTALL_FILES[relative] ?? "", "utf8")).toEqual(readFileSync(join(PACKAGE_ROOT, relative)));
+  }
+});
 
 test("home and repository skills never replace the role's packaged skill, before or after reload", async () => {
   // Given a home and a trusted repository that each ship an impostor corral-worker skill:
