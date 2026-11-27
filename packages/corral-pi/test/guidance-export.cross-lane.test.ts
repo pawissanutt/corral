@@ -131,8 +131,9 @@ test("a dispatched worker keeps its role skill, loads trusted guidance and expan
     const pack = ["frontend", "visual-qa", "programming", "debugging", "git-master", "simplify-and-cleanup"];
     expect(Object.keys(skills).sort()).toEqual(["corral-diagrams", "corral-plan", "corral-worker", "xl-home", "xl-skill", ...pack].sort());
     for (const name of pack) {
-      expect(skills[name]).toBe(join(process.env.HOME ?? "", ".corral/skills/corral-pi", name, "SKILL.md"));
-      const installed = readFileSync(skills[name]!, "utf8");
+      expect(skills[name]).toBe(join(install!.dir, "assets/skills", name, "SKILL.md"));
+      expect(readFileSync(skills[name]!, "utf8")).not.toContain("<!-- corral-skill:");
+      const installed = readFileSync(join(process.env.HOME ?? "", ".corral/skills/corral-pi", name, "SKILL.md"), "utf8");
       expect(installed).toMatch(new RegExp(`<!-- corral-skill: ${name} version=\\S+ sha256=[a-f0-9]{64} -->`));
     }
     console.log(`PI-PACK-DISPATCH ${JSON.stringify(Object.fromEntries(pack.map((name) => [name, skills[name]])))}`);
