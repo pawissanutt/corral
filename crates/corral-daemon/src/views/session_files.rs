@@ -1,10 +1,17 @@
 //! Local, read-only worktree views; no shell, Git command, host RPC or static file routes.
 use anyhow::{Result, ensure};
 use corral_engine::Engine;
-use corral_protocol::detail::{DetailBody, DetailGet, DetailRef, DetailReply};
+use corral_protocol::detail::{
+    DetailBody, DetailGet, DetailRef, DetailReply, SESSION_FILE_SEARCH_LIMIT_MAX,
+    SESSION_FILE_SEARCH_QUERY_MAX_BYTES,
+};
 
 use super::{details, fingerprint};
 use crate::state::Shared;
+
+#[cfg(target_os = "linux")]
+#[path = "session_file_search.rs"]
+mod search;
 
 pub(super) fn read(
     shared: &Shared,
@@ -16,6 +23,7 @@ pub(super) fn read(
         DetailRef::SessionFiles { .. }
             | DetailRef::SessionFile { .. }
             | DetailRef::SessionFileChunk { .. }
+            | DetailRef::SessionFileSearch { .. }
     ) {
         return Ok(None);
     }
@@ -27,6 +35,18 @@ pub(super) fn read(
         ensure!(
             query.etag.is_none(),
             "invalid: chunks do not accept an etag"
+        );
+    }
+    if let DetailRef::SessionFileSearch { query, limit, .. } = &query.target {
+        ensure!(
+            (1..=SESSION_FILE_SEARCH_LIMIT_MAX).contains(limit),
+            "invalid: file search limit must be 1..={SESSION_FILE_SEARCH_LIMIT_MAX}"
+        );
+        ensure!(
+            !query.is_empty()
+                && query.len() <= SESSION_FILE_SEARCH_QUERY_MAX_BYTES
+                && !query.chars().any(char::is_control),
+            "invalid: file search query is empty, too long or contains control characters"
         );
     }
     let body = platform_read(shared, engine, &query.target)?;
@@ -83,14 +103,14 @@ mod linux {
     };
 
     const BYTES: usize = 32 * 1024;
-    const PATH_BYTES: usize = 1024;
+    pub(super) const PATH_BYTES: usize = 1024;
     const SCAN: usize = 4096;
     const ROWS: usize = 200;
     const LIST_BYTES: usize = 40 * 1024;
-    const DIR: OFlags = OFlags::RDONLY
+    pub(super) const DIR: OFlags = OFlags::RDONLY
         .union(OFlags::DIRECTORY)
         .union(OFlags::CLOEXEC);
-    const CONFINED: ResolveFlags = ResolveFlags::BENEATH
+    pub(super) const CONFINED: ResolveFlags = ResolveFlags::BENEATH
         .union(ResolveFlags::NO_SYMLINKS)
         .union(ResolveFlags::NO_XDEV);
 
@@ -110,6 +130,12 @@ mod linux {
                 validate_path(path, false)?;
                 preview(&checkout_root(shared, engine, id)?, path).map(DetailBody::SessionFile)
             }
+            DetailRef::SessionFileSearch { id, query, limit } => search::read(
+                &checkout_root(shared, engine, id)?,
+                query,
+                usize::from(*limit),
+            )
+            .map(DetailBody::SessionFileSearch),
             DetailRef::SessionFileChunk {
                 id,
                 path,
@@ -141,7 +167,7 @@ mod linux {
         openat2(root(repo)?, local, DIR, Mode::empty(), CONFINED).map_err(|_| missing.into())
     }
 
-    fn visible(name: &str) -> bool {
+    pub(super) fn visible(name: &str) -> bool {
         // Repository internals and daemon state are never served, even by direct selector.
         !name.is_empty()
             && name.len() <= 255

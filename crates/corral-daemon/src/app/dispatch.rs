@@ -85,7 +85,12 @@ pub(crate) fn welcome(shared: &Shared, hello: wire::Hello) -> wire::Welcome {
                             | app::SYSTEM_DATA_V1
                     )
                     || cfg!(target_os = "linux")
-                        && matches!(cap.as_str(), app::SESSION_FILES_V1 | app::SESSION_HTML_V1)
+                        && matches!(
+                            cap.as_str(),
+                            app::SESSION_FILES_V1
+                                | app::SESSION_HTML_V1
+                                | app::SESSION_FILE_SEARCH_V1
+                        )
                     || chat
                         && matches!(
                             cap.as_str(),
@@ -309,6 +314,7 @@ pub(crate) fn serve(
                 DetailRef::SessionFiles { .. }
                     | DetailRef::SessionFile { .. }
                     | DetailRef::SessionFileChunk { .. }
+                    | DetailRef::SessionFileSearch { .. }
             ) && matches!(peer, Peer::Tcp(_))
             {
                 device_id()?;

@@ -146,6 +146,15 @@ pub enum DetailRef {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         filter: Option<String>,
     },
+    /// `session.file_search.v1`: fuzzy file paths in the session's dedicated worktree, no pagination.
+    SessionFileSearch {
+        id: String,
+        /// Nonempty UTF-8 text, at most `SESSION_FILE_SEARCH_QUERY_MAX_BYTES` bytes, no controls.
+        query: String,
+        /// Maximum result count, from 1 to `SESSION_FILE_SEARCH_LIMIT_MAX` inclusive.
+        #[schemars(range(min = 1, max = SESSION_FILE_SEARCH_LIMIT_MAX))]
+        limit: u16,
+    },
     /// The current regular file at a worktree-relative path, not a diff or committed blob.
     SessionFile {
         id: String,
@@ -323,6 +332,7 @@ pub enum DetailBody {
     SessionChanges(SessionChanges),
     SessionChangeFile(PatchPage),
     SessionFiles(SessionFiles),
+    SessionFileSearch(SessionFileSearch),
     SessionFile(SessionFile),
     SessionFileChunk(SessionFileChunk),
     SessionUsage(SessionUsage),

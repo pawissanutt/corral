@@ -135,6 +135,13 @@ impl AppState {
         // to those before, rather than all of them being fetched and merged up front.
         let walked = walked(&request.target);
         let session = matches!(request.target, DetailRef::Session { .. });
+        if matches!(request.target, DetailRef::SessionFileSearch { .. })
+            && feed.with_untracked(Feed::file_search_loading)
+        {
+            // Do not queue more scans behind the one already on the connection. The
+            // composer's reactive fetch will ask for the latest draft once it settles.
+            return vec![];
+        }
         if session
             && (self.detail_latest.contains(&key)
                 || (!latest_only && self.detail_inflight.contains_key(&key)))
@@ -179,16 +186,24 @@ impl AppState {
                     .map(|page| page.etag.clone())
             });
         }
-        // One page of a paged list is shown at a time, so a new page retires its siblings.
+        // A new page retires its list's siblings. A new mention query retires older
+        // searches in this composer, without disturbing another session's composer.
         let paged = walked || matches!(&request.target, DetailRef::Closed { .. });
-        let mut retired = if paged {
+        let search = match &request.target {
+            DetailRef::SessionFileSearch { id, .. } => Some(id),
+            _ => None,
+        };
+        let mut retired = if paged || search.is_some() {
             let list = std::mem::discriminant(&request.target);
             feed.with_untracked(|feed| {
                 feed.details
                     .iter()
                     .filter(|(cached_key, cache)| {
                         cached_key.as_str() != key.as_str()
-                            && std::mem::discriminant(&cache.target) == list
+                            && match &cache.target {
+                                DetailRef::SessionFileSearch { id, .. } => search == Some(id),
+                                other => paged && std::mem::discriminant(other) == list,
+                            }
                     })
                     .map(|(cached_key, _)| (cached_key.clone(), None))
                     .collect::<Vec<_>>()
@@ -210,8 +225,7 @@ impl AppState {
                     operation.value = None;
                     operation.error = Some(ClientError {
                         code: "superseded".into(),
-                        message: "A different page of this list replaced this detail request."
-                            .into(),
+                        message: "A newer page or search replaced this detail request.".into(),
                     });
                 }
             }
@@ -651,10 +665,26 @@ impl AppState {
         }
     }
 
+    pub(super) fn forget_file_searches(&mut self, feed: Signal<Feed>) {
+        let keys = feed.with_untracked(|feed| {
+            feed.details
+                .iter()
+                .filter(|(_, cache)| matches!(cache.target, DetailRef::SessionFileSearch { .. }))
+                .map(|(key, _)| key.clone())
+                .collect::<Vec<_>>()
+        });
+        for key in keys {
+            self.evict_detail(feed, &key);
+        }
+    }
+
     pub(super) fn refresh_details(&mut self, feed: Signal<Feed>) -> Vec<Outgoing> {
         let targets = feed.with_untracked(|feed| {
             feed.details
                 .values()
+                // The composer asks for searches; a reconnect or unrelated operation must
+                // not rescan old queries, possibly for closed pickers.
+                .filter(|cache| !matches!(cache.target, DetailRef::SessionFileSearch { .. }))
                 .map(|cache| cache.target.clone())
                 .collect::<Vec<_>>()
         });

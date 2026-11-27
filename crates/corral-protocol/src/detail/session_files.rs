@@ -1,4 +1,4 @@
-//! Read-only worktree browser projections. No absolute host paths are sent.
+//! Read-only worktree browser and search projections. No absolute host paths are sent.
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -6,6 +6,16 @@ use serde::{Deserialize, Serialize};
 pub const SESSION_HTML_MAX_BYTES: u64 = 64 * 1024 * 1024;
 /// Decoded bytes per chunk; leaves room for base64 and the RPC envelope within CONTROL.
 pub const SESSION_HTML_CHUNK_BYTES: usize = 32 * 1024;
+pub const SESSION_FILE_SEARCH_LIMIT_MAX: u16 = 32;
+pub const SESSION_FILE_SEARCH_QUERY_MAX_BYTES: usize = 128;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SessionFileSearch {
+    /// Ranked regular-file paths, relative to the worktree root with `/` separators.
+    pub paths: Vec<String>,
+    /// A scan or response bound was reached, so matching paths may be missing.
+    pub truncated: bool,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SessionFiles {

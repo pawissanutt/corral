@@ -78,6 +78,7 @@ pub(super) const CAPS: &[&str] = &[
     SESSION_STATE_V1,
     SESSION_TRANSCRIPT_V1,
     SESSION_FILES_V1,
+    SESSION_FILE_SEARCH_V1,
     SESSION_HTML_V1,
     BUILD_V1,
 ];
@@ -204,6 +205,7 @@ impl AppState {
             feed.link = Link::Connecting;
             feed.capabilities = welcome.caps.iter().cloned().collect();
         });
+        self.forget_file_searches(feed);
     }
     pub fn disconnected(&mut self, feed: Signal<Feed>) {
         self.interrupt_html();

@@ -257,6 +257,8 @@ impl AppState {
                             DetailRef::Session { id } | DetailRef::Terminal { id } => {
                                 self.session_pinned(id)
                             }
+                            // The pending search is the composer's single-flight marker.
+                            DetailRef::SessionFileSearch { .. } => cache.loading,
                             _ => false,
                         })
             }

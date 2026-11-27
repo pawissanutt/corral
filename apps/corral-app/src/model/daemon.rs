@@ -243,6 +243,12 @@ impl Feed {
         self.details.get(&detail_key(target))
     }
 
+    pub fn file_search_loading(&self) -> bool {
+        self.details.values().any(|cache| {
+            cache.loading && matches!(cache.target, DetailRef::SessionFileSearch { .. })
+        })
+    }
+
     pub fn settle_session(&mut self, target: &DetailRef, reread: Option<u64>) {
         if !self.capable(corral_protocol::app::SESSION_TRANSCRIPT_V1)
             && let DetailRef::Session { id } = target

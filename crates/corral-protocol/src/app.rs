@@ -22,6 +22,8 @@ pub const SESSION_STATE_V1: &str = "session.state.v1";
 pub const SESSION_TRANSCRIPT_V1: &str = "session.transcript.v1";
 /// Bounded read-only listing and file previews inside a session's dedicated checkout.
 pub const SESSION_FILES_V1: &str = "session.files.v1";
+/// Bounded fuzzy path search inside a session's dedicated checkout.
+pub const SESSION_FILE_SEARCH_V1: &str = "session.file_search.v1";
 /// Chunked reads of standalone HTML inside a session's dedicated checkout.
 pub const SESSION_HTML_V1: &str = "session.html.v1";
 pub const SYSTEM_V1: &str = "system.v1";
