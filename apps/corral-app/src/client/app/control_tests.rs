@@ -5,8 +5,8 @@ use crate::model::hue::Hue;
 /// The native and paired drivers consult `handles` before delivering an operation reply.
 /// A missing route leaves an enrolled device stuck on Reading even though corrald answered.
 #[test]
-fn pi_hosted_tools_routes_preference_replies_to_the_waiting_form() {
-    for method in [PI_HOSTED_TOOLS, PI_HOSTED_TOOL_MODELS, PI_STARTUP] {
+fn pi_settings_methods_route_replies_to_the_waiting_form() {
+    for method in [PI_HOSTED_TOOLS, PI_HOSTED_TOOL_MODELS, PI_APP_STARTUP] {
         assert!(handles(&Event::Reply {
             method,
             tag: Some("settings-read".into()),

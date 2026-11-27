@@ -25,10 +25,11 @@ otherwise Pi detects the project from the checkout when possible. `--profile <na
 chooses a build profile. `--model [<provider>/]<id>`, `--provider <id>`,
 `--effort <level>`, `--aws-profile <name>`, `--aws-region <region>` and repeated
 `--fallback <provider>/<model>` select the model route; see [corral-pi](corral-pi.md).
-If you don't choose a model or profile, Build uses the startup model saved in
-Corral Pi's `/settings`. If that model is missing or unavailable, an interactive
-launch asks before creating a session or worktree. Resuming keeps the recorded
-model.
+Without a model override, a new app-managed Build uses the **Build default** in
+app Settings (see [defaults for app launches](corral-pi.md#defaults-for-app-launches)).
+A terminal Build instead uses the startup model saved in Corral Pi's `/settings`.
+If that model is missing or unavailable, an interactive terminal launch asks before
+creating a session or worktree. Resuming keeps the recorded model.
 
 `--headless` runs without the terminal interface; non-interactive launches are
 headless by default. A new headless Build needs a usable saved default, a profile

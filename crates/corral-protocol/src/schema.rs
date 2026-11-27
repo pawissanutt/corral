@@ -145,6 +145,12 @@ fn document() -> Value {
             false,
             &common,
         ),
+        method::<config::PiAppStartupRequest, config::PiAppStartupConfig>(
+            &mut generator,
+            config::PI_APP_STARTUP,
+            false,
+            &common,
+        ),
         method::<config::PiSkillsRequest, config::PiSkillsCatalog>(
             &mut generator,
             config::PI_SKILLS,

@@ -10,7 +10,7 @@ use std::{
 
 use anyhow::{Context, Result, bail, ensure};
 use corral_engine::{
-    Config, Runner, refuse,
+    Config, Runner, pi_startup, refuse,
     runner::pi::{self, ChatLaunch, Client, PiRunner},
 };
 use corral_protocol::{
@@ -247,8 +247,11 @@ pub(crate) fn resolve(shared: &Shared, scope: &str) -> Result<sessions::Session>
 /// Built-ins alone are not an opt-in. A Pi harness override or any named Pi
 /// profile in corral.toml enables owner chat, independent of automation.
 pub(crate) fn configured(shared: &Shared) -> Result<bool> {
-    let text = crate::config::get(shared)?.toml;
-    let doc: toml::Table = toml::from_str(&text).context("parse chat configuration")?;
+    configured_toml(&crate::config::get(shared)?.toml)
+}
+
+pub(crate) fn configured_toml(text: &str) -> Result<bool> {
+    let doc: toml::Table = toml::from_str(text).context("parse chat configuration")?;
     Ok(doc
         .get("harnesses")
         .and_then(toml::Value::as_table)
@@ -284,7 +287,7 @@ fn owner_config(shared: &Shared, scope: &str) -> Result<Config> {
     config(shared)
 }
 
-fn config(shared: &Shared) -> Result<Config> {
+pub(crate) fn config(shared: &Shared) -> Result<Config> {
     if !configured(shared)? {
         return Err(refuse(
             "chat requires a configured Pi harness or profile in corral.toml",
@@ -294,7 +297,7 @@ fn config(shared: &Shared) -> Result<Config> {
     load_config(shared)
 }
 
-fn profile<'a>(
+pub(crate) fn profile<'a>(
     config: &'a Config,
     name: &str,
 ) -> Result<(
@@ -318,7 +321,7 @@ fn profile<'a>(
     Ok((harness, profile))
 }
 
-fn default_profile(config: &Config) -> &str {
+fn legacy_default_profile(config: &Config) -> &str {
     let is_pi = |name: &str| config.profiles.get(name).is_some_and(|p| p.harness == "pi");
     if let Some(name) = config
         .defaults
@@ -343,6 +346,20 @@ fn default_profile(config: &Config) -> &str {
             })
             .map_or("pi", |(name, _)| name.as_str())
     }
+}
+
+fn saved_default_profile<'a>(shared: &Shared, config: &'a Config) -> Option<&'a str> {
+    let name = pi_startup::read_ask_profile(shared.root()).ok().flatten()?;
+    // A deleted or repurposed profile must not strand new conversations.
+    profile(config, &name).ok()?;
+    config
+        .profiles
+        .get_key_value(&name)
+        .map(|(name, _)| name.as_str())
+}
+
+pub(crate) fn default_profile<'a>(shared: &Shared, config: &'a Config) -> &'a str {
+    saved_default_profile(shared, config).unwrap_or_else(|| legacy_default_profile(config))
 }
 
 fn create(
@@ -391,19 +408,21 @@ fn current(shared: &Shared, config: &Config, scope: &str) -> Result<Chat> {
             "automation chat ended; the rule will allocate a new chat when it fires",
             vec![],
         )),
-        // A thread started after End answers with the configured default, not the ended
-        // chat's profile: the app shows the default for a new thread, and inheriting kept
-        // every later thread on whatever model one earlier chat had been switched to.
+        // End starts a new thread, so its profile comes from the workspace, not the ended chat.
         Some(chat) => create(
             shared,
             chat.meta.quick,
             chat.meta.task,
-            default_profile(config).into(),
+            default_profile(shared, config).into(),
             None,
         ),
-        None if scope == QUICK_THREAD => {
-            create(shared, true, None, default_profile(config).into(), None)
-        }
+        None if scope == QUICK_THREAD => create(
+            shared,
+            true,
+            None,
+            default_profile(shared, config).into(),
+            None,
+        ),
         None => Err(NotFound("chat session not found").into()),
     }
 }
@@ -612,7 +631,7 @@ pub(crate) fn session(shared: &Shared, operation: AssistantSessionOp) -> Result<
                 .lock()
                 .unwrap_or_else(|error| error.into_inner());
             let config = config(shared)?;
-            let choice = choice.unwrap_or_else(|| default_profile(&config).into());
+            let choice = choice.unwrap_or_else(|| default_profile(shared, &config).into());
             profile(&config, &choice)?;
             let chat = create(shared, false, task, choice, None)?;
             chat.start(shared, &config)?;

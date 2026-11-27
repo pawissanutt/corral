@@ -116,9 +116,10 @@ pub enum ClientRequest {
         request_id: String,
         request: corral_protocol::config::PiHostedToolModelsRequest,
     },
-    PiStartup {
+    /// The app-managed Ask/Chat and Build startup defaults (`config.pi_app_startup`).
+    PiAppStartup {
         request_id: String,
-        request: corral_protocol::config::PiStartupRequest,
+        request: corral_protocol::config::PiAppStartupRequest,
     },
     /// Owner input to a session (`session.send`), kept in this device's outbox until corrald
     /// answered it; its command id is its input id and the key its reply is read under.

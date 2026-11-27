@@ -245,15 +245,25 @@ fn read(shared: &Shared, topic: Topic, builds: bool) -> Result<Rows> {
 
 fn settings(shared: &Shared) -> Result<Rows> {
     let document = crate::config::get(shared)?;
-    let (config, problem, extensions, automations) = match Config::parse(&document.toml) {
-        Ok(parsed) => (
-            object(&parsed)?,
-            None,
-            extensions(shared, &parsed),
-            automations(shared, &parsed),
-        ),
-        Err(problem) => (Default::default(), Some(problem), Vec::new(), Vec::new()),
-    };
+    let (config, problem, extensions, automations, ask_chat_profile) =
+        match Config::parse(&document.toml) {
+            Ok(parsed) => (
+                object(&parsed)?,
+                None,
+                extensions(shared, &parsed),
+                automations(shared, &parsed),
+                crate::assistant::configured_toml(&document.toml)
+                    .unwrap_or(false)
+                    .then(|| crate::assistant::default_profile(shared, &parsed).to_owned()),
+            ),
+            Err(problem) => (
+                Default::default(),
+                Some(problem),
+                Vec::new(),
+                Vec::new(),
+                None,
+            ),
+        };
     let built_in = Config::default();
     let (harness_facts, pi_config) = shared.harness_inventory.facts(document.revision.as_deref());
     let mut row = SettingsSnapshot {
@@ -267,9 +277,13 @@ fn settings(shared: &Shared) -> Result<Rows> {
         problem,
         harness_facts,
         pi_config,
+        ask_chat_profile,
         extensions,
         automations,
     };
+    if row.ask_chat_profile.is_some() && super::json_len(&row)? > super::REPLY_MAX {
+        row.ask_chat_profile = None;
+    }
     // Extra health data must not displace the editable settings or existing observations.
     if !row.automations.is_empty() && super::json_len(&row)? > super::REPLY_MAX {
         row.automations.clear();

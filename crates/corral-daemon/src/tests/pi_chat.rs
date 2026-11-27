@@ -253,19 +253,7 @@ fn chat_fixture() -> (Fixture, Placement) {
         assert!(command.get_envs().any(|(key, value)| {
             key == "CORRAL_ACTOR" && value.is_some_and(|value| value == "assistant")
         }));
-        let host = Host::start(
-            PathBuf::from(args[4]),
-            dir.file_name().unwrap().to_str().unwrap().into(),
-            "assistant",
-            dir,
-            Script::default(),
-        );
-        fs::write(
-            dir.join("session.json"),
-            json!({"pid": PID, "sessionFile": host.transcript}).to_string(),
-        )
-        .unwrap();
-        Some(host)
+        Some(chat_host(PathBuf::from(args[4]), dir))
     });
     let runner = placement.clone();
     let fixture = Fixture::with_runner(Arc::new(move || Box::new(runner.clone())));
@@ -285,6 +273,229 @@ auto_land = false
     )
     .unwrap();
     (fixture, placement)
+}
+
+fn chat_host(socket: PathBuf, dir: &Path) -> Host {
+    let host = Host::start(
+        socket,
+        dir.file_name().unwrap().to_str().unwrap().into(),
+        "assistant",
+        dir,
+        Script::default(),
+    );
+    fs::write(
+        dir.join("session.json"),
+        json!({"pid": PID, "sessionFile": host.transcript}).to_string(),
+    )
+    .unwrap();
+    host
+}
+
+#[test]
+fn app_startup_defaults_route_new_chats_without_retargeting_existing_sessions_or_board() {
+    use wire::config::{PI_APP_STARTUP, PiAppStartupConfig};
+    use wire::rows::AssistantRow;
+
+    let route = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let launches = Arc::clone(&route);
+    let placement = Placement::new(move |command, dir| {
+        let args: Vec<_> = command.get_args().collect();
+        let flag = |name| {
+            args.windows(2).find(|args| args[0] == name).unwrap()[1]
+                .to_str()
+                .unwrap()
+                .to_owned()
+        };
+        launches
+            .lock()
+            .unwrap()
+            .push((flag("--model"), flag("--effort")));
+        Some(chat_host(PathBuf::from(flag("--socket")), dir))
+    });
+    let fixture = Fixture::with_runner(Arc::new(move || Box::new(placement.clone())));
+    Fixture::init_repository(&fixture);
+    let state = fixture.root().join(crate::STATE_DIR);
+    let config = r#"
+[defaults]
+profile = 'pi-sol'
+[profiles.pi-sol]
+harness = 'pi'
+model = 'openai-codex/example'
+effort = 'medium'
+[profiles.pi-sol-high]
+harness = 'pi'
+model = 'openai-codex/example'
+effort = 'high'
+[projects.demo]
+path = 'repo'
+reviewer = 'pi-sol'
+"#;
+    let legacy_build = "openai/terminal-model";
+    fs::write(
+        state.join("pi.toml"),
+        format!("[startup]\nmodel = '{legacy_build}' # keep\n[other]\nuntouched = true\n"),
+    )
+    .unwrap();
+    let path = fixture.unix_server();
+    let mut owner = Client::connect(&path);
+    let select = |revision: &str, selection: Value| json!({"change":{"revision":revision,"selection":selection}});
+    let initial: PiAppStartupConfig = owner.ok(PI_APP_STARTUP, json!({}));
+    // The engine has a built-in Pi profile, but owner chat has not been enabled here.
+    let rejected = owner
+        .call(
+            PI_APP_STARTUP,
+            select(
+                &initial.revision,
+                json!({"kind":"ask_profile","profile":"pi"}),
+            ),
+        )
+        .unwrap_err();
+    assert_eq!(rejected.code, rpc::ErrorCode::InvalidParams);
+    fs::write(state.join("corral.toml"), config).unwrap();
+    let task = owner.new_task("board routes", Vec::new());
+    let board_routes = || {
+        let engine = fixture.shared().engine().unwrap();
+        let task = engine.store.require_task(&task).unwrap();
+        (
+            engine.config.resolve_profile(&task, None).unwrap(),
+            engine.config.effective_project("demo").unwrap().reviewer,
+        )
+    };
+    let original_board_routes = board_routes();
+    let cache = crate::views::RowCache::default();
+    let shown = || {
+        let rows = cache.get(fixture.shared(), Topic::Settings).unwrap();
+        let crate::views::Rows::Settings(rows) = rows.as_ref() else {
+            panic!("expected Settings");
+        };
+        rows[0].ask_chat_profile.clone()
+    };
+    let last_route = |effort: &str| {
+        assert_eq!(
+            route.lock().unwrap().last().unwrap(),
+            &("openai-codex/example".into(), effort.into())
+        );
+    };
+    let initial: PiAppStartupConfig = owner.ok(PI_APP_STARTUP, json!({}));
+    assert_eq!(initial.ask_profile, None);
+    assert_eq!(initial.build_model.as_deref(), Some(legacy_build));
+    assert!(initial.build_inherited);
+    assert_eq!(shown().as_deref(), Some("pi-sol"));
+    owner.ok::<()>(ASSISTANT_WARM, json!({"thread":QUICK_THREAD}));
+    last_route("medium");
+
+    let rejected = owner
+        .call(
+            PI_APP_STARTUP,
+            select(
+                &initial.revision,
+                json!({"kind":"ask_profile","profile":"generic"}),
+            ),
+        )
+        .unwrap_err();
+    assert_eq!(rejected.code, rpc::ErrorCode::InvalidParams);
+    let ask: PiAppStartupConfig = owner.ok(
+        PI_APP_STARTUP,
+        select(
+            &initial.revision,
+            json!({"kind":"ask_profile","profile":"pi-sol-high"}),
+        ),
+    );
+    assert_eq!(ask.ask_profile.as_deref(), Some("pi-sol-high"));
+    assert_eq!(ask.build_model.as_deref(), Some(legacy_build));
+    assert!(ask.build_inherited);
+    assert_eq!(shown().as_deref(), Some("pi-sol-high"));
+    assert_eq!(board_routes(), original_board_routes);
+
+    owner.ok::<()>(ASSISTANT_WARM, json!({"thread":QUICK_THREAD}));
+    assert_eq!(route.lock().unwrap().len(), 1);
+    owner.ok::<Value>(SESSION_TERMINATE, json!({"id":"A-1"}));
+    owner.ok::<Value>(SESSION_RELAUNCH, json!({"id":"A-1"}));
+    last_route("medium");
+    owner.ok::<AssistantRow>(
+        ASSISTANT_SESSION,
+        AssistantSessionOp::End {
+            session: "A-1".into(),
+        },
+    );
+    let sent: SessionSent = owner.ok(SESSION_SEND, quick_send("fresh", "new quick chat"));
+    assert_ne!(sent.session, "A-1");
+    last_route("high");
+
+    let build: PiAppStartupConfig = owner.ok(
+        PI_APP_STARTUP,
+        select(
+            &ask.revision,
+            json!({"kind":"build_model","model":"openai/build-only"}),
+        ),
+    );
+    assert_eq!(build.build_model.as_deref(), Some("openai/build-only"));
+    assert_eq!(build.ask_profile, ask.ask_profile);
+    assert_eq!(board_routes(), original_board_routes);
+    let readback: PiAppStartupConfig = owner.ok(PI_APP_STARTUP, json!({}));
+    assert_eq!(readback, build);
+    let pi = fs::read_to_string(state.join("pi.toml")).unwrap();
+    assert!(pi.contains("model = 'openai/terminal-model' # keep"));
+    assert!(pi.contains("untouched = true"));
+    assert_eq!(
+        fs::read_to_string(state.join("corral.toml")).unwrap(),
+        config
+    );
+
+    let named: AssistantRow = owner.ok(
+        ASSISTANT_SESSION,
+        AssistantSessionOp::New {
+            task: None,
+            profile: None,
+        },
+    );
+    assert_eq!(named.profile.as_deref(), Some("pi-sol-high"));
+    last_route("high");
+    let explicit: AssistantRow = owner.ok(
+        ASSISTANT_SESSION,
+        AssistantSessionOp::New {
+            task: None,
+            profile: Some("pi-sol".into()),
+        },
+    );
+    assert_eq!(explicit.profile.as_deref(), Some("pi-sol"));
+    last_route("medium");
+    let picked: AssistantRow = owner.ok(
+        ASSISTANT_SESSION,
+        AssistantSessionOp::SetProfile {
+            thread: named.id,
+            profile: "pi-sol".into(),
+        },
+    );
+    assert_eq!(picked.profile.as_deref(), Some("pi-sol"));
+    last_route("medium");
+
+    let clear_build: PiAppStartupConfig = owner.ok(
+        PI_APP_STARTUP,
+        select(&build.revision, json!({"kind":"build_model","model":null})),
+    );
+    assert_eq!(clear_build.build_model, None);
+    assert!(!clear_build.build_inherited);
+    assert_eq!(clear_build.ask_profile, ask.ask_profile);
+    let clear_ask: PiAppStartupConfig = owner.ok(
+        PI_APP_STARTUP,
+        select(
+            &clear_build.revision,
+            json!({"kind":"ask_profile","profile":null}),
+        ),
+    );
+    assert_eq!(clear_ask.ask_profile, None);
+    assert_eq!(clear_ask.build_model, None);
+    assert_eq!(shown().as_deref(), Some("pi-sol"));
+    owner.ok::<AssistantRow>(
+        ASSISTANT_SESSION,
+        AssistantSessionOp::End {
+            session: sent.session.clone(),
+        },
+    );
+    let next: SessionSent = owner.ok(SESSION_SEND, quick_send("cleared", "new quick chat"));
+    assert_ne!(next.session, sent.session);
+    last_route("medium");
 }
 
 fn quick_send(cmd: &str, text: &str) -> SessionSend {

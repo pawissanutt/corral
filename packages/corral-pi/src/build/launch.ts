@@ -98,9 +98,18 @@ export function parseBuildFlags(argv: readonly string[], assets: string, env = p
     throw new Error("Daemon Code requires a Git checkout in a Corral workspace");
   }
   if (managed && flags.model === undefined && flags.provider === undefined) {
-    const saved = (raw.startup as { model?: unknown } | undefined)?.model;
-    if (saved !== undefined) {
-      if (typeof saved !== "string" || !qualifiedModel(saved)) throw new Error(".corral-next/pi.toml: startup.model must be a known <provider>/<model>");
+    const startup = raw.startup as { model?: unknown; build_model?: unknown } | undefined;
+    const dedicated = !trustedCode && startup?.build_model !== undefined;
+    const saved = dedicated ? startup?.build_model : startup?.model;
+    if (saved !== undefined && !(dedicated && saved === "")) {
+      const key = dedicated ? "build_model" : "model";
+      const choice = typeof saved === "string" ? qualifiedModel(saved) : undefined;
+      if (typeof saved !== "string" || !choice) {
+        throw new Error(`.corral-next/pi.toml: startup.${key} must be a known <provider>/<model>`);
+      }
+      if (dedicated && (Buffer.byteLength(saved, "utf8") > 256 || choice.provider === "llama.cpp" || choice.provider === "amazon-bedrock")) {
+        throw new Error(".corral-next/pi.toml: startup.build_model must be a supported Build provider/model of at most 256 bytes");
+      }
       flags.model = saved;
     }
   }

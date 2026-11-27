@@ -156,9 +156,25 @@ There is no built-in choice. In headless mode, pass `--model <provider>/<id>` or
 use a Build profile with a model when there is no usable default. Bare Builds
 outside a Corral workspace have a separate personal startup default.
 
-In the Corral app, open **Settings → Configuration → Harnesses → Pi** to edit
-this same setting on the connected workspace. Use **Save startup model** to
-save it separately from `corral.toml` changes. Clear the field and save to reset.
+### Defaults for app launches
+
+In the Corral app, open **Settings → Configuration → Harnesses → Pi**:
+
+- **Ask and Chat default** selects a Pi profile from `corral.toml`, including its
+  model and effort. It applies to new app Ask threads and named chats, not to
+  existing chats or an explicit profile choice. Clearing it restores the former
+  Pi profile selection (the workspace's board default if it uses Pi, otherwise
+  the Pi fallback).
+- **Build default (app-managed)** selects a provider/model for new app Builds
+  started without a model override. A saved Build default can use `openai-codex`,
+  `openai`, `anthropic`, or `anthropic-api`. Until set, it inherits the terminal
+  startup model as before. Clearing and saving uses the daemon-managed Build's
+  built-in route; use the New Build sheet to choose a model for a single launch.
+
+Each Save changes only its own setting in `.corral-next/pi.toml`: `[startup].ask_profile`
+for Ask/Chat or `[startup].build_model` for Build (an empty string means a cleared
+Build override; remove the key to inherit `[startup].model` again). Neither setting
+changes terminal launches, Code, board worker/reviewer routing, or existing sessions.
 
 ### Model for standalone Explore
 

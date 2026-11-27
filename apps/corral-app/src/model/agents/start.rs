@@ -400,7 +400,11 @@ pub fn form(state: &Start, feed: &Feed, filter: &ProjectFilter) -> Option<NewBui
     .then(|| "Another live session uses this checkout. Its edits may overlap yours.".into());
     let mut model_choices = vec![choice(
         "seg-build-model-default".into(),
-        "Project default",
+        if code {
+            "Project default"
+        } else {
+            "Workspace Build default"
+        },
         state.model == ModelPick::Route,
         StartAction::Model(ModelPick::Route),
     )];

@@ -45,22 +45,46 @@ pub fn models(feed: &Feed) -> Vec<ModelChoice> {
         .collect()
 }
 
-/// The model a new chat answers with, as corrald picks its profile: the default profile when it
-/// runs on the chat host's harness, else the first such profile. None when that profile names no
-/// model (its harness decides) or the settings are not served.
-pub fn configured_model(feed: &Feed) -> Option<String> {
+/// The profile a new chat starts on: the one corrald reports it resolved
+/// (`SettingsSnapshot.ask_chat_profile`, which also covers the saved Ask/Chat startup default),
+/// as long as the configuration still lists it as a chat profile. A daemon that reports none
+/// is read as before: the default profile when it runs on the chat host's harness, else the
+/// first such profile.
+pub fn configured_profile(feed: &Feed) -> Option<String> {
     let models = models(feed);
-    let default = feed
-        .settings
-        .as_ref()
-        .and_then(|settings| settings.config.get("defaults"))
+    let settings = feed.settings.as_ref()?;
+    if let Some(name) = settings.ask_chat_profile.as_deref()
+        && models.iter().any(|model| model.name == name)
+    {
+        return Some(name.to_owned());
+    }
+    let default = settings
+        .config
+        .get("defaults")
         .and_then(|defaults| defaults.get("profile"))
         .and_then(serde_json::Value::as_str);
-    let chosen = default
+    default
         .and_then(|name| models.iter().find(|model| model.name == name))
-        .or_else(|| models.first())?;
-    let model = feed.settings.as_ref()?.config["profiles"][&chosen.name]["model"].as_str()?;
-    Some(model.to_owned())
+        .or_else(|| models.first())
+        .map(|model| model.name.clone())
+}
+
+fn configured_text(feed: &Feed, key: &str) -> Option<String> {
+    let name = configured_profile(feed)?;
+    let value = feed.settings.as_ref()?.config["profiles"][&name][key].as_str()?;
+    Some(value.to_owned())
+}
+
+/// The model a new chat answers with. None when that profile names no model (its harness
+/// decides) or the settings are not served. Only a chat that does not exist yet reads this; a
+/// running or resumed chat reports its own.
+pub fn configured_model(feed: &Feed) -> Option<String> {
+    configured_text(feed, "model")
+}
+
+/// The effort a new chat starts with, from the same profile. None when it names none.
+pub fn configured_effort(feed: &Feed) -> Option<String> {
+    configured_text(feed, "effort")
 }
 
 /// The chat row of a scope: the current quick chat's for `quick`, else the session's.

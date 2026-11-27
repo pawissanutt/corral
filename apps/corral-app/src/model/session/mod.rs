@@ -86,6 +86,8 @@ mod queue_tests;
 #[cfg(test)]
 mod sidebar_tests;
 #[cfg(test)]
+mod startup_tests;
+#[cfg(test)]
 mod tabs_tests;
 #[cfg(test)]
 mod task_tests;
@@ -655,7 +657,7 @@ impl<'a> Cx<'a> {
             .or_else(|| self.row.and_then(|row| row.model.clone()))
             .or_else(|| self.run.and_then(|row| row.run.model.clone()))
             .or_else(|| {
-                self.new_thread()
+                self.quick_startup_known()
                     .then(|| crate::model::assistant::configured_model(self.feed))
                     .flatten()
             })
@@ -666,11 +668,34 @@ impl<'a> Cx<'a> {
         self.id.as_str() == crate::model::assistant::QUICK && self.row.is_none()
     }
 
+    fn quick_startup_known(&self) -> bool {
+        // Older daemons may copy an ended chat's profile into its replacement. Only
+        // show the startup default after End when the daemon reports it explicitly.
+        self.new_thread()
+            && (self
+                .feed
+                .settings
+                .as_ref()
+                .is_some_and(|settings| settings.ask_chat_profile.is_some())
+                || !self
+                    .feed
+                    .assistants
+                    .values()
+                    .any(|row| row.kind == corral_protocol::rows::AssistantKind::Quick))
+    }
+
     pub fn effort(&self) -> Option<String> {
         self.state
             .and_then(|state| state.effort.clone())
             .or_else(|| self.row.and_then(|row| row.effort.clone()))
             .or_else(|| self.run.and_then(|row| row.run.effort.clone()))
+            .or_else(|| {
+                // A chat that does not exist yet starts on the configured profile's effort;
+                // every existing session reports its own above.
+                self.quick_startup_known()
+                    .then(|| crate::model::assistant::configured_effort(self.feed))
+                    .flatten()
+            })
     }
 
     /// The run controls that apply now.

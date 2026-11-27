@@ -68,6 +68,7 @@ pub(crate) fn welcome(shared: &Shared, hello: wire::Hello) -> wire::Welcome {
                         | wire::SETTINGS_V1
                         | wire::AUTOMATION_V1
                         | settings::PI_STARTUP_V1
+                        | settings::PI_APP_STARTUP_V1
                         | settings::PI_HOSTED_TOOLS_V1
                         | settings::PI_SKILLS_V1
                         | settings::PI_HOSTED_TOOL_MODELS_V1
@@ -249,6 +250,9 @@ pub(crate) fn serve(
         settings::CONFIG_PUT => answer!(Ok(config::put(shared, decode(params)?)?)),
         settings::PI_STARTUP => {
             answer!(config::pi_startup::handle(shared.root(), decode(params)?).map_err(invalid))
+        }
+        settings::PI_APP_STARTUP => {
+            answer!(config::pi_startup::handle_app(shared, decode(params)?).map_err(invalid))
         }
         settings::PI_HOSTED_TOOLS => answer!({
             // Serde's error can echo an unexpected field name; keep this API value-free.

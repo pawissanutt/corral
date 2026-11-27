@@ -234,6 +234,9 @@ pub struct SettingsSnapshot {
     /// Only the workspace Pi file location and its configured child profile selections.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pi_config: Option<PiConfigFacts>,
+    /// Effective profile for new daemon-managed Ask/Chat sessions, not board dispatch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ask_chat_profile: Option<String>,
     /// Each configured extension in name order; empty on a parse error.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub extensions: Vec<ExtensionHealth>,

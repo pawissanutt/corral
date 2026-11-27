@@ -9,6 +9,8 @@ pub const CONFIG_GET: &str = "config.get";
 pub const CONFIG_PUT: &str = "config.put";
 pub const PI_STARTUP_V1: &str = "config.pi_startup.v1";
 pub const PI_STARTUP: &str = "config.pi_startup";
+pub const PI_APP_STARTUP_V1: &str = "config.pi_app_startup.v1";
+pub const PI_APP_STARTUP: &str = "config.pi_app_startup";
 pub const PI_HOSTED_TOOLS_V1: &str = "config.pi_hosted_tools.v1";
 pub const PI_HOSTED_TOOLS: &str = "config.pi_hosted_tools";
 pub const PI_HOSTED_TOOL_MODELS_V1: &str = "config.pi_hosted_tool_models.v1";
@@ -45,6 +47,53 @@ pub struct PiStartupChange {
 pub struct PiStartupConfig {
     pub revision: String,
     pub model: Option<String>,
+}
+
+/// Read the app-managed startup settings or change just one of them.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PiAppStartupRequest {
+    pub change: Option<PiAppStartupChange>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PiAppStartupChange {
+    pub revision: String,
+    pub selection: PiAppStartupSelection,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PiAppStartupSelection {
+    /// Null restores the legacy app Ask/Chat profile resolution.
+    #[schemars(extend("required" = ["kind", "profile"]))]
+    AskProfile {
+        #[serde(deserialize_with = "Deserialize::deserialize")]
+        profile: Option<String>,
+    },
+    /// Null selects no saved Build model, even if the legacy shared model is set.
+    #[schemars(extend("required" = ["kind", "model"]))]
+    BuildModel {
+        #[serde(deserialize_with = "Deserialize::deserialize")]
+        model: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PiAppStartupConfig {
+    pub revision: String,
+    /// The saved app Ask/Chat profile, if set.
+    pub ask_profile: Option<String>,
+    /// The effective saved Build model (including the legacy shared model if inherited).
+    pub build_model: Option<String>,
+    /// No app Build override has been saved; the terminal preference still applies.
+    pub build_inherited: bool,
+    /// A malformed saved value affects its own setting only and is never echoed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ask_problem: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_problem: Option<String>,
 }
 
 /// Read or replace both hosted tool overrides without exposing raw Pi TOML.

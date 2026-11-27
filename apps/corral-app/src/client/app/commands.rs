@@ -154,13 +154,13 @@ impl AppState {
                 corral_protocol::config::PI_HOSTED_TOOL_MODELS,
                 value(request),
             ),
-            ClientRequest::PiStartup {
+            ClientRequest::PiAppStartup {
                 request_id,
                 request,
             } => self.operation(
                 feed,
                 request_id,
-                corral_protocol::config::PI_STARTUP,
+                corral_protocol::config::PI_APP_STARTUP,
                 value(request),
             ),
             ClientRequest::Detail {

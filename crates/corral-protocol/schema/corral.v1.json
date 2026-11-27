@@ -6869,6 +6869,128 @@
         "type": "object",
         "x-rust-type": "corral_types::PendingReviewVerdict"
       },
+      "PiAppStartupChange": {
+        "additionalProperties": false,
+        "properties": {
+          "revision": {
+            "type": "string"
+          },
+          "selection": {
+            "$ref": "#/components/schemas/PiAppStartupSelection"
+          }
+        },
+        "required": [
+          "revision",
+          "selection"
+        ],
+        "type": "object"
+      },
+      "PiAppStartupConfig": {
+        "properties": {
+          "ask_problem": {
+            "description": "A malformed saved value affects its own setting only and is never echoed.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ask_profile": {
+            "description": "The saved app Ask/Chat profile, if set.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "build_inherited": {
+            "description": "No app Build override has been saved; the terminal preference still applies.",
+            "type": "boolean"
+          },
+          "build_model": {
+            "description": "The effective saved Build model (including the legacy shared model if inherited).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "build_problem": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "revision",
+          "build_inherited"
+        ],
+        "type": "object"
+      },
+      "PiAppStartupRequest": {
+        "additionalProperties": false,
+        "description": "Read the app-managed startup settings or change just one of them.",
+        "properties": {
+          "change": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PiAppStartupChange"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "PiAppStartupSelection": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "description": "Null restores the legacy app Ask/Chat profile resolution.",
+            "properties": {
+              "kind": {
+                "const": "ask_profile",
+                "type": "string"
+              },
+              "profile": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "kind",
+              "profile"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Null selects no saved Build model, even if the legacy shared model is set.",
+            "properties": {
+              "kind": {
+                "const": "build_model",
+                "type": "string"
+              },
+              "model": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "kind",
+              "model"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "PiChildProfile": {
         "properties": {
           "effort": {
@@ -11421,6 +11543,13 @@
       },
       "SettingsSnapshot": {
         "properties": {
+          "ask_chat_profile": {
+            "description": "Effective profile for new daemon-managed Ask/Chat sessions, not board dispatch.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "automations": {
             "default": [],
             "description": "Scheduler health for configured rules in name order.",
@@ -13896,6 +14025,49 @@
       "x-notification": false,
       "x-params-schema": {
         "$ref": "#/components/schemas/PiStartupRequest"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "unauthenticated",
+          "message": "unauthenticated"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
+    },
+    {
+      "name": "config.pi_app_startup",
+      "params": [
+        {
+          "name": "change",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PiAppStartupChange"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/PiAppStartupConfig"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/PiAppStartupRequest"
       },
       "x-wire-errors": [
         {

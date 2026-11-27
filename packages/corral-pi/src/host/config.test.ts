@@ -102,6 +102,57 @@ test("startup model input stays separate from explicit choices and managed launc
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test("daemon Build has an independent startup model with explicit clear and override precedence", () => {
+  const root = mkdtempSync(join(tmpdir(), "corral-build-startup-"));
+  try {
+    const settings = join(root, ".corral-next");
+    mkdirSync(settings);
+    writeFileSync(join(settings, "corral.toml"), '[profiles.demo]\nharness = "pi"\nmodel = "anthropic/profile"\n');
+    const path = join(settings, "pi.toml");
+    const env = { CORRAL_NEXT_ROOT: root, CORRAL_PI_MANAGED_BUILD: "1" };
+    const managed = (command: "build" | "code", ...flags: string[]) =>
+      parseBuildFlags(["--headless", "--id", "B-managed", ...flags], "/assets", env,
+        command === "code" ? process.cwd() : root, command).launch;
+    const write = (value: string) => writeFileSync(path, `[startup]\nmodel = "openai-codex/legacy"\n${value}\n`);
+
+    write('build_model = "anthropic/dedicated"');
+    expect(managed("build", "--effort", "high", "--fallback", "openai/backup")).toMatchObject({
+      provider: "anthropic", model: "anthropic/dedicated", effort: "high",
+      fallback: [{ provider: "openai", model: "backup" }],
+    });
+    expect(managed("code").model).toBe("openai-codex/legacy");
+    expect(parseRunFlags("chat", [], "/assets", env, root).startupModel).toBe("openai-codex/legacy");
+    expect(parseBuildFlags([], "/assets", env, root).launch.model).toBeUndefined();
+    expect(managed("build", "--model", "openai/explicit").model).toBe("openai/explicit");
+    expect(managed("build", "--profile", "demo").model).toBe("anthropic/profile");
+
+    write('build_model = ""');
+    expect(managed("build")).toMatchObject({ provider: "openai-codex", model: "gpt-6.1-sol" });
+    expect(managed("code").model).toBe("openai-codex/legacy");
+    write('build_model = 123');
+    expect(() => managed("build")).toThrow("startup.build_model");
+    expect(managed("build", "--model", "openai/explicit").model).toBe("openai/explicit");
+    expect(managed("build", "--provider", "anthropic").provider).toBe("anthropic");
+    expect(managed("build", "--profile", "demo").model).toBe("anthropic/profile");
+    expect(managed("code").model).toBe("openai-codex/legacy");
+    expect(() => parseBuildFlags(["--resume", "B-existing"], "/assets", env, root)).not.toThrow();
+    expect(() => parseRunFlags("chat", [], "/assets", env, root)).not.toThrow();
+    expect(() => parseBuildFlags([], "/assets", env, root)).not.toThrow();
+    write(`build_model = "openai/${"é".repeat(124)}x"`); // 256 UTF-8 bytes
+    expect(managed("build").model).toBe(`openai/${"é".repeat(124)}x`);
+    write(`build_model = "openai/${"é".repeat(125)}"`);
+    expect(() => managed("build")).toThrow("startup.build_model");
+    for (const selector of ["unknown/model", "llama.cpp/local", "amazon-bedrock/unbound"]) {
+      write(`build_model = "${selector}"`);
+      expect(() => managed("build")).toThrow("startup.build_model");
+    }
+    writeFileSync(path, '[startup]\nmodel = ""\nbuild_model = "anthropic/dedicated"\n');
+    expect(managed("build").model).toBe("anthropic/dedicated");
+    writeFileSync(path, '[startup]\nmodel = ""\n');
+    expect(() => managed("build")).toThrow("startup.model");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test("Build launch and child profiles use provider-qualified models and preserve fallback order", () => {
   const dir = mkdtempSync(join(tmpdir(), "corral-profile-fallback-"));
   try {

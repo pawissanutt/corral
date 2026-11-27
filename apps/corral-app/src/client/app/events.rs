@@ -329,7 +329,7 @@ impl AppState {
             | CONFIG_PUT
             | PI_HOSTED_TOOLS
             | PI_HOSTED_TOOL_MODELS
-            | PI_STARTUP
+            | PI_APP_STARTUP
             | PI_SKILLS
             | PI_SKILL_GET
             | PI_SKILL_PUT
