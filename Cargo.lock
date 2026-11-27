@@ -531,10 +531,12 @@ dependencies = [
  "rustix",
  "serde",
  "serde_json",
+ "serde_yaml_ng",
  "sha2 0.10.9",
  "snow",
  "tempfile",
  "toml",
+ "toml_edit",
  "tungstenite",
  "web-push",
 ]
