@@ -427,10 +427,12 @@ test("workspace skill policy applies to new runtimes and hides disabled winners 
   mkdirSync(join(project, ".git"), { recursive: true });
   skill(explicit, "explicit-skill", "EXPLICIT-POLICY-TEXT");
   skill(explicit, "debugging", "USER-DEBUGGING-IMPOSTOR");
-  cpSync(join(PACKAGE_ROOT, "test/fixtures/skills/team"), join(explicit, "team"), { recursive: true });
+  for (const dir of ["team", "merge-name"]) {
+    cpSync(join(PACKAGE_ROOT, "test/fixtures/skills", dir), join(explicit, dir), { recursive: true });
+  }
   skill(join(project, ".agents/skills"), "explicit-skill", "PROJECT-EXPLICIT-IMPOSTOR");
   skill(join(project, ".agents/skills"), "project-policy-skill");
-  put(settings, '[skills]\nuser_dirs = ["~/explicit-skills"]\ndisabled = ["debugging", "project-policy-skill", "corral-worker", "0b101"]\n');
+  put(settings, '[skills]\nuser_dirs = ["~/explicit-skills"]\ndisabled = ["debugging", "project-policy-skill", "corral-worker", "0b101", "merge-name"]\n');
   const { capabilities, guidance } = workspaceSettings(root, "worker");
   const old = await start("worker", capabilities.enabled, guidance, { cwd: project, capabilities });
   try {
@@ -458,6 +460,7 @@ test("workspace skill policy applies to new runtimes and hides disabled winners 
       expect(loaded(next.host).skills).toContain("debugging");
       expect(loaded(next.host).skills).toContain("explicit-skill");
       expect(loaded(next.host).skills).toContain("0b101");
+      expect(loaded(next.host).skills).toContain("merge-name");
       expect(loaded(next.host).skills).not.toContain("project-policy-skill");
       expect(loaded(restricted.host).skills).toEqual(["corral-diagrams", "corral-plan", "corral-worker"]);
     } finally {

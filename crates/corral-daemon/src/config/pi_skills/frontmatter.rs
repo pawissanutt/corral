@@ -40,14 +40,14 @@ fn is_string(text: &str, style: ScalarStyle, tag: Option<&Tag>) -> Option<bool> 
                 "binary" => return Some(false),
                 // Timestamp validation is outside core. Fail closed rather
                 // than treating malformed explicitly tagged dates as strings.
-                "timestamp" => return None,
-                _ => return Some(true),
+                "str" => return Some(true),
+                "merge" if text == "<<" => return Some(false),
+                _ => return None,
             };
             !patterns.matches(text).matched(index)
         }
-        // Explicit string, non-specific and unrecognized tags bypass implicit
-        // resolution, as do quoted and block scalars without explicit tags.
-        None => tag.is_some() || style != ScalarStyle::Plain || !patterns.is_match(text),
+        None if tag.is_some() => return None, // unsupported extension
+        None => style != ScalarStyle::Plain || !patterns.is_match(text),
     })
 }
 
@@ -92,7 +92,7 @@ fn fields(yaml: &str) -> Option<(Scalar, Scalar)> {
     let mut next = || events.next()?.ok().map(|(event, _)| event);
     if !matches!(next()?, Event::StreamStart)
         || !matches!(next()?, Event::DocumentStart(_))
-        || !matches!(next()?, Event::MappingStart(_, _))
+        || !matches!(next()?, Event::MappingStart(_, None))
     {
         return None;
     }
@@ -105,17 +105,15 @@ fn fields(yaml: &str) -> Option<(Scalar, Scalar)> {
         if matches!(event, Event::MappingEnd) {
             break;
         }
-        let key = scalar_node(event, &mut next, &mut anchors)?;
-        let value = scalar_node(next()?, &mut next, &mut anchors)?;
-        if let Some(key) = key {
-            match key.as_ref() {
-                "name" => name = value,
-                "description" => description = value,
-                _ => {}
-            }
-            if !keys.insert(key) {
-                return None;
-            }
+        let key = node(event, &mut next, &mut anchors, 1)??;
+        let value = node(next()?, &mut next, &mut anchors, 1)?;
+        match key.as_ref() {
+            "name" => name = value,
+            "description" => description = value,
+            _ => {}
+        }
+        if !keys.insert(key) {
+            return None;
         }
     }
     if !matches!(next()?, Event::DocumentEnd) || !matches!(next()?, Event::StreamEnd) {
@@ -124,47 +122,52 @@ fn fields(yaml: &str) -> Option<(Scalar, Scalar)> {
     Some((name, description))
 }
 
-fn scalar_node<'a>(
-    mut event: Event<'a>,
+// Validate every nested map before trusting a document. Only scalar string keys and
+// scalar aliases are supported; do not build/expand aliased collection trees.
+fn node<'a>(
+    event: Event<'a>,
     next: &mut impl FnMut() -> Option<Event<'a>>,
-    anchors: &mut HashMap<usize, Arc<str>>,
+    anchors: &mut HashMap<usize, Scalar>,
+    depth: usize,
 ) -> Option<Scalar> {
-    // Drain collections without constructing a tree or expanding collection
-    // aliases. Scalar aliases share the original string allocation.
-    let mut depth = 0usize;
-    loop {
-        match event {
-            Event::Scalar(text, style, anchor, tag) => {
-                let value = ((depth == 0 || anchor != 0)
-                    && is_string(&text, style, tag.as_deref())?)
-                .then(|| Arc::<str>::from(text.as_ref()));
-                if let Some(text) = value.as_ref().filter(|_| anchor != 0) {
-                    anchors.insert(anchor, Arc::clone(text));
-                }
-                if depth == 0 {
-                    return Some(value);
-                }
+    if depth > 64 {
+        return None;
+    }
+    match event {
+        Event::Scalar(text, style, anchor, tag) => {
+            let value =
+                is_string(&text, style, tag.as_deref())?.then(|| Arc::<str>::from(text.as_ref()));
+            if anchor != 0 {
+                anchors.insert(anchor, value.clone());
             }
-            Event::Alias(anchor) => {
-                if depth == 0 {
-                    return Some(anchors.get(&anchor).cloned());
+            Some(value)
+        }
+        Event::Alias(anchor) => anchors.get(&anchor).cloned(),
+        Event::MappingStart(_, None) => {
+            let mut keys = HashSet::new();
+            loop {
+                let key = next()?;
+                if matches!(key, Event::MappingEnd) {
+                    break;
                 }
-            }
-            Event::MappingStart(_, _) | Event::SequenceStart(_, _) => {
-                depth += 1;
-                if depth > 64 {
+                if !keys.insert(node(key, next, anchors, depth + 1)??) {
                     return None;
                 }
+                node(next()?, next, anchors, depth + 1)?;
             }
-            Event::MappingEnd | Event::SequenceEnd if depth > 0 => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(None);
-                }
-            }
-            _ => return None,
+            Some(None)
         }
-        event = next()?;
+        Event::SequenceStart(_, None) => {
+            loop {
+                let item = next()?;
+                if matches!(item, Event::SequenceEnd) {
+                    break;
+                }
+                node(item, next, anchors, depth + 1)?;
+            }
+            Some(None)
+        }
+        _ => None,
     }
 }
 

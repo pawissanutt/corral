@@ -608,6 +608,10 @@ mod tests {
         fs::create_dir_all(skills.join("team"))?;
         let path = skills.join("team/SKILL.md");
         fs::write(&path, SKILL)?;
+        const MERGE: &str =
+            include_str!("../../../../packages/corral-pi/test/fixtures/skills/merge-name/SKILL.md");
+        fs::create_dir(skills.join("merge-name"))?;
+        fs::write(skills.join("merge-name/SKILL.md"), MERGE)?;
         fs::write(
             state.join("pi.toml"),
             format!(
@@ -616,6 +620,8 @@ mod tests {
             ),
         )?;
         let before = catalog(root, PiSkillsRequest { project: None })?;
+        assert!(before.skills.iter().any(|r| r.name == "merge-name"));
+        assert!(!before.skills.iter().any(|r| r.name == "<<"));
         let row = before.skills.iter().find(|r| r.name == "0b101").unwrap();
         let detail = get(
             root,
@@ -631,6 +637,12 @@ mod tests {
             text,
         };
         assert!(put(root, put_req(SKILL.replace("name: 0b101", "name: team"))).is_err());
+        let duplicate = SKILL.replace(
+            "description:",
+            "metadata: {version: 1, version: 2}\ndescription:",
+        );
+        assert!(put(root, put_req(duplicate)).is_err());
+        assert_eq!(fs::read_to_string(&path)?, SKILL);
         put(root, put_req(format!("{SKILL}\nUpdated.")))?;
         toggle(
             root,
