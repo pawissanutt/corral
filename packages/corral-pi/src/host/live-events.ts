@@ -376,6 +376,20 @@ export class LiveEvents {
         this.events.emit("live_queue", { steer: event.steering.length, follow_up: event.followUp.length });
         this.stateChanged();
         break;
+      case "auto_retry_start": {
+        const now = Date.now();
+        const summary = event.errorMessage.replace(/\s+/g, " ").trim();
+        const phase = `Retrying (attempt ${event.attempt}/${event.maxAttempts})${summary ? ` · ${summary}` : ""}`;
+        this.activity = { phase: utf8Prefix(phase, 96), since: new Date(now).toISOString(),
+          ...(Number.isFinite(event.delayMs) && event.delayMs >= 0 && now + event.delayMs <= 8.64e15
+            ? { retry_at: new Date(now + event.delayMs).toISOString() } : {}) };
+        this.stateChanged();
+        break;
+      }
+      case "auto_retry_end":
+        if (this.activity?.phase.startsWith("Retrying")) this.activity = undefined;
+        this.stateChanged();
+        break;
       case "compaction_start":
         this.activity = { phase: "compacting", since: new Date().toISOString() };
         this.stateChanged();

@@ -7,6 +7,13 @@
             "description": "At most 96 bytes.",
             "type": "string"
           },
+          "retry_at": {
+            "description": "When a retry's backoff ends, if known.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "since": {
             "type": "string"
           }

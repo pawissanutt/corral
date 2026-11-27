@@ -3,7 +3,7 @@
 //! few seconds after a turn ends, how it ended. Nothing is synthesised: without a phase from the
 //! host an open turn says `working`, and a closed one says nothing.
 
-use corral_protocol::session_state::SessionState;
+use corral_protocol::session_state::{Activity, SessionState};
 
 use crate::model::daemon::Feed;
 use crate::model::hue::Hue;
@@ -47,7 +47,9 @@ fn since(at: Option<&str>, feed: &Feed) -> Option<u64> {
 /// retries, the worker's colour otherwise.
 fn tone(phase: &str) -> (Hue, Option<&'static str>, bool) {
     let lower = phase.to_ascii_lowercase();
-    if lower.contains("waiting for you") || lower.contains("needs you") {
+    if lower.starts_with("retrying") {
+        (Hue::Held, Some("!"), false)
+    } else if lower.contains("waiting for you") || lower.contains("needs you") {
         (Hue::You, Some("▲"), false)
     } else if lower.starts_with("no data") || lower.contains("retrying") || lower.contains("stall")
     {
@@ -55,6 +57,25 @@ fn tone(phase: &str) -> (Hue, Option<&'static str>, bool) {
     } else {
         (Hue::Worker, None, true)
     }
+}
+
+/// Seconds until the host's next retry, from its optional `retry_at` stamp: bounded at zero once
+/// the moment passes, none when the host gave no stamp, it does not parse, or the clock is unknown.
+fn retry_in(activity: &Activity, feed: &Feed) -> Option<u64> {
+    let at = crate::model::agents::unix(activity.retry_at.as_deref()?)?;
+    (feed.now > 0).then(|| at.saturating_sub(feed.now))
+}
+
+/// The host's phase, its held tone, and the retry countdown when the host stamped one. The phase
+/// text (the error and attempt) stays the host's; the countdown is appended to it.
+fn shown(activity: &Activity, feed: &Feed) -> (String, Hue, Option<&'static str>, bool) {
+    let (mut hue, mut glyph, mut spinner) = tone(&activity.phase);
+    let mut phase = activity.phase.clone();
+    if let Some(left) = retry_in(activity, feed) {
+        (hue, glyph, spinner) = (Hue::Held, Some("!"), false);
+        phase = format!("{phase} · retry in {}", duration(left));
+    }
+    (phase, hue, glyph, spinner)
 }
 
 /// The phase for narrow places: its last word after `running`, else its first two words.
@@ -75,8 +96,14 @@ pub fn line(
     let open = state.is_some_and(|state| state.open) || live.is_some_and(|live| live.open);
     if open {
         let activity = state.and_then(|state| state.activity.as_ref());
-        let phase = activity.map_or("working", |activity| activity.phase.as_str());
-        let (hue, glyph, spinner) = tone(phase);
+        let base = activity.map_or("working", |activity| activity.phase.as_str());
+        let (phase, hue, glyph, spinner) = match activity {
+            Some(activity) => shown(activity, feed),
+            None => {
+                let (hue, glyph, spinner) = tone(base);
+                (base.to_owned(), hue, glyph, spinner)
+            }
+        };
         let started = live
             .and_then(|live| live.started_at.as_deref())
             .or(activity.map(|activity| activity.since.as_str()));
@@ -87,17 +114,17 @@ pub fn line(
             phase: if spinner {
                 format!("Working · {phase}")
             } else {
-                phase.to_owned()
+                phase
             },
-            short: short(phase),
+            short: short(base),
             elapsed: since(started, feed).map(duration),
         });
     }
     // Work the host reports with no turn open (compaction, idle or after a turn): its phase
     // alone, as the host says it.
     if let Some(activity) = state.and_then(|state| state.activity.as_ref()) {
-        let (hue, glyph, spinner) = tone(&activity.phase);
-        let mut letters = activity.phase.chars();
+        let (shown_phase, hue, glyph, spinner) = shown(activity, feed);
+        let mut letters = shown_phase.chars();
         let phase: String = letters
             .next()
             .map(|first| first.to_uppercase().chain(letters).collect())
@@ -140,8 +167,6 @@ pub fn line(
 
 #[cfg(test)]
 mod tests {
-    use corral_protocol::session_state::Activity;
-
     use super::*;
 
     /// Compaction runs outside any turn (a manual `/compact` while idle, or after a turn ends).
@@ -154,6 +179,7 @@ mod tests {
             activity: Some(Activity {
                 phase: "compacting".into(),
                 since: "2026-01-01T00:00:00Z".into(),
+                retry_at: None,
             }),
             ..SessionState::default()
         };
@@ -161,5 +187,61 @@ mod tests {
             .expect("compaction with no open turn is shown");
         assert!(line.spinner);
         assert_eq!(line.short, "compacting");
+    }
+
+    fn retrying(retry_at: Option<&str>) -> SessionState {
+        SessionState {
+            open: true,
+            activity: Some(Activity {
+                phase: "retrying after 529 (attempt 2/5)".into(),
+                since: "2026-01-01T00:00:00Z".into(),
+                retry_at: retry_at.map(str::to_owned),
+            }),
+            ..SessionState::default()
+        }
+    }
+
+    fn at(now: &str) -> Feed {
+        Feed {
+            now: crate::model::agents::unix(now).expect("a valid stamp"),
+            ..Feed::default()
+        }
+    }
+
+    /// A retrying host may stamp when the next attempt is due. The indicator keeps the host's
+    /// held tone and its error and attempt text, counts down from `feed.now`, never goes below
+    /// zero, and shows no countdown when the host gave no stamp or the clock is unknown.
+    #[test]
+    fn a_retrying_session_counts_down_to_the_next_attempt_and_holds() {
+        let state = retrying(Some("2026-01-01T00:01:10Z"));
+
+        let early = line(Some(&state), None, &at("2026-01-01T00:00:00Z")).expect("shown");
+        assert_eq!(early.hue, Hue::Held);
+        assert_eq!(early.glyph, Some("!"));
+        assert!(!early.spinner);
+        assert_eq!(
+            early.phase,
+            "retrying after 529 (attempt 2/5) · retry in 1m 10s"
+        );
+
+        let later = line(Some(&state), None, &at("2026-01-01T00:01:00Z")).expect("shown");
+        assert_eq!(
+            later.phase,
+            "retrying after 529 (attempt 2/5) · retry in 10s"
+        );
+        assert_eq!(later.hue, Hue::Held);
+
+        let past = line(Some(&state), None, &at("2026-01-01T00:02:00Z")).expect("shown");
+        assert_eq!(past.phase, "retrying after 529 (attempt 2/5) · retry in 0s");
+        assert_eq!(past.hue, Hue::Held);
+
+        let unknown = line(Some(&state), None, &Feed::default()).expect("shown");
+        assert_eq!(unknown.phase, "retrying after 529 (attempt 2/5)");
+        assert_eq!(unknown.hue, Hue::Held);
+
+        let absent = line(Some(&retrying(None)), None, &at("2026-01-01T00:00:00Z")).expect("shown");
+        assert_eq!(absent.phase, "retrying after 529 (attempt 2/5)");
+        assert_eq!(absent.hue, Hue::Held);
+        assert_eq!(absent.short, early.short);
     }
 }

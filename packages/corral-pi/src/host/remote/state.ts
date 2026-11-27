@@ -10,7 +10,7 @@ import type { RemoteRegistry } from "./registry.ts";
 export const LIVE_STATE_BYTES = 12 * 1024;
 
 export interface Counts { live: number; waiting: number; total: number }
-export interface Activity { phase: string; since: string }
+export interface Activity { phase: string; since: string; retry_at?: string }
 export interface CardBrief { id: string; kind: string; title: string; child?: string; expires_at?: string }
 export interface HostNotice { id: string; tone: string; text: string; until?: string }
 export interface UsageBrief {

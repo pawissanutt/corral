@@ -286,6 +286,7 @@ fn state(feed: &Feed, id: &str, host: &Host) -> SessionState {
         activity: host.busy().then(|| Activity {
             phase: "writing".into(),
             since: stamp(feed.now),
+            retry_at: None,
         }),
         model,
         effort: row.and_then(|row| row.effort.clone()),

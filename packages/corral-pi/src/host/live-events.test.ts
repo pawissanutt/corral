@@ -8,6 +8,7 @@ import { EVENT_MAX_BYTES, EventLog } from "../bridge/events.ts";
 import { EVENT_PAGE_BYTES } from "../bridge/protocol.ts";
 import { LiveEvents } from "./live-events.ts";
 import { MARK_ENTRY, observeTranscriptEntries } from "./transcript-marks.ts";
+import { nextEvent } from "../../test/support/wait.ts";
 
 const message: AssistantMessage = {
   role: "assistant", content: [], api: "openai-responses", provider: "openai", model: "fixture",
@@ -23,6 +24,28 @@ function delta(live: LiveEvents, text: string): void {
   live.observe({ type: "message_update", message,
     assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: text, partial: message } }, 7);
 }
+
+test("retry activity reaches session state and clears on retry end", async () => {
+  const live = new LiveEvents();
+  try {
+    live.bindState(() => ({ parts: {}, state: { activity: live.activity, queue: [], cards: [] } as never }));
+    const cursor = live.events.last;
+    const started = nextEvent(live.events, event => event.kind === "live_state", 2000);
+    live.observe({ type: "auto_retry_start", attempt: 2, maxAttempts: 3, delayMs: 4000,
+      errorMessage: "429 rate limit\ntry again" }, 7);
+    await started;
+    const page = live.since(cursor, EVENT_PAGE_BYTES);
+    const activity = page.state?.activity;
+    expect(activity?.phase).toBe("Retrying (attempt 2/3) · 429 rate limit try again");
+    expect(Date.parse(activity!.retry_at!) - Date.parse(activity!.since)).toBe(4000);
+    const ended = nextEvent(live.events, event => event.kind === "live_state", 2000);
+    live.observe({ type: "auto_retry_end", success: true, attempt: 2 }, 7);
+    await ended;
+    const cleared = live.since(page.next, EVENT_PAGE_BYTES);
+    expect(cleared.state).toBeDefined();
+    expect(cleared.state?.activity).toBeUndefined();
+  } finally { live.close(); }
+});
 
 test("host notice IDs are unique across host instances", () => {
   const first = new LiveEvents(), second = new LiveEvents();

@@ -69,6 +69,9 @@ pub struct Activity {
     /// At most 96 bytes.
     pub phase: String,
     pub since: String,
+    /// When a retry's backoff ends, if known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
