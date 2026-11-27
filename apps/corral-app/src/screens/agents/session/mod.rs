@@ -25,6 +25,7 @@ mod events;
 mod exit;
 mod files;
 mod header;
+mod mention_menu;
 mod pager;
 mod plan;
 mod plan_review;
@@ -37,6 +38,7 @@ mod task;
 mod usage;
 
 pub(crate) use files::{HtmlStop, html_target};
+pub(crate) use mention_menu::mention_menu;
 pub(in crate::screens::agents) use header::popup;
 
 use corral_protocol::detail::DetailRef;

@@ -4,7 +4,12 @@
 //! command id is the input id the host and the transcript keep (`echo`). A capability the host
 //! declares unavailable shows its control muted with the host's reason; one it does not declare
 //! is not drawn. While the dock asks for the owner's reason or answer, Enter gives it instead.
+//! A draft starting with `!` is a shell command the host runs for the owner (`!!`: its output
+//! stays out of the agent's context), muted with why where the host does not run them; ↑ ↓ walk
+//! the session's earlier owner messages (`prompt_history`); a last word starting with `@` opens
+//! the file mention popup (`mention`).
 
+use corral_protocol::session_host::SessionAction;
 use corral_protocol::session_state::SendPolicy;
 
 use crate::model::agents::Control;
@@ -14,6 +19,8 @@ use crate::model::hue::Hue;
 use super::activity::{self, ActivityLine};
 use super::dock::Compose;
 use super::echo::{self, EchoState};
+use super::mention::{self, MentionMenu};
+use super::prompt_history::{self, HistoryKeys};
 use super::{Action, Can, Cx, Host, SessionRole};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -34,6 +41,76 @@ pub struct SessionComposer {
     pub stop: Option<StopButton>,
     /// The key line under the field: `⏎ steer  esc stop  Alt+⏎ queue`.
     pub keys: Vec<(&'static str, &'static str)>,
+    /// While the draft is a `!command`: Enter runs it on the host instead of sending it.
+    pub shell: Option<ShellMode>,
+    /// What ↑ and ↓ do in the field: walk this session's earlier owner messages.
+    pub history: HistoryKeys,
+    /// The `@` file mention popup while the draft's last word is a mention.
+    pub mention: Option<MentionMenu>,
+}
+
+/// `shell · output goes to the agent` (`!command`) or `shell · not in context` (`!!command`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ShellMode {
+    pub hint: &'static str,
+    /// Why the host cannot run it now; Enter then does nothing.
+    pub unavailable: Option<String>,
+    /// What Enter runs; none while the command is empty.
+    pub run: Option<Action>,
+}
+
+/// The host action a `!command` draft runs: `!!` keeps its output out of the agent's context.
+/// None when the draft is no shell command or names none.
+pub fn shell_action(draft: &str) -> Option<SessionAction> {
+    let rest = draft.trim().strip_prefix('!')?;
+    let (command, exclude_from_context) = match rest.strip_prefix('!') {
+        Some(command) => (command, true),
+        None => (rest, false),
+    };
+    let command = command.trim();
+    (!command.is_empty()).then(|| SessionAction::Shell {
+        command: command.to_owned(),
+        exclude_from_context,
+    })
+}
+
+/// Shell mode for the draft of `cx`, with why the host cannot run it, as the catalog says of a
+/// host action it does not serve.
+fn shell(cx: &Cx<'_>, refused: Option<&String>) -> Option<ShellMode> {
+    let draft = cx.ui.draft.trim_start();
+    if !draft.starts_with('!') || cx.ui.dock.compose.is_some() {
+        return None;
+    }
+    let unavailable = refused.cloned().or_else(|| match cx.can("shell") {
+        Can::Absent => Some("this session's host does not run owner shell commands".into()),
+        Can::Unavailable(why) => Some(why),
+        Can::Yes | Can::Unknown => match cx.host {
+            Host::NotRunning | Host::Ended => Some("the host is not running".into()),
+            Host::Unreachable => Some("corrald cannot reach the host".into()),
+            Host::Running | Host::Unknown => None,
+        },
+    });
+    let run = shell_action(draft).map(|_| Action::Shell {
+        session: cx.id.clone(),
+        text: draft.to_owned(),
+    });
+    Some(ShellMode {
+        hint: if draft.starts_with("!!") {
+            "shell · not in context"
+        } else {
+            "shell · output goes to the agent"
+        },
+        unavailable,
+        run,
+    })
+}
+
+/// Whether the `/` menu may be open over the draft: a one-line `/` command not closed on.
+fn slash_typed(cx: &Cx<'_>) -> bool {
+    let draft = &cx.ui.draft;
+    draft.starts_with('/')
+        && !draft.contains('\n')
+        && cx.ui.picker.slash_closed.as_deref() != Some(draft.as_str())
 }
 
 /// `Message → parent · last input queued`; `Message → land on main · your reason` (Held) while
@@ -318,8 +395,20 @@ pub fn composer(cx: &Cx<'_>) -> Option<SessionComposer> {
     let refused = refusal(cx);
     let child = cx.ui.to.is_some();
     let compose = cx.ui.dock.compose.as_ref();
-    let (send, queue) = match compose {
-        Some(mode) => {
+    let unreachable = (cx.env.conn.refuses() || cx.feed.link != Link::Up)
+        .then(|| "corrald is unreachable".to_owned());
+    let shell = shell(cx, unreachable.as_ref());
+    let (send, queue) = match (compose, &shell) {
+        (None, Some(shell)) => {
+            let run = SendButton {
+                id: "btn-send",
+                label: "Run",
+                policy: SendPolicy::Steer,
+                unavailable: shell.unavailable.clone(),
+            };
+            (run, None)
+        }
+        (Some(mode), _) => {
             let send = SendButton {
                 id: "btn-send",
                 label: match mode {
@@ -331,7 +420,7 @@ pub fn composer(cx: &Cx<'_>) -> Option<SessionComposer> {
             };
             (send, None)
         }
-        None if working => {
+        (None, None) if working => {
             let steer = SendButton {
                 id: "btn-steer",
                 label: "Steer",
@@ -353,7 +442,7 @@ pub fn composer(cx: &Cx<'_>) -> Option<SessionComposer> {
             });
             (steer, queue)
         }
-        None => {
+        (None, None) => {
             let send = SendButton {
                 id: "btn-send",
                 label: "Send",
@@ -428,7 +517,12 @@ pub fn composer(cx: &Cx<'_>) -> Option<SessionComposer> {
             super::keys::legend(super::Focus::Composer, super::Tab::Chat, working),
         ),
     };
+    let mention = mention::menu(cx);
+    let menus = cx.ui.picker.open.is_some() || slash_typed(cx) || mention.is_some();
     Some(SessionComposer {
+        shell,
+        history: prompt_history::keys(cx, menus),
+        mention,
         title: ComposerTitle {
             lead: "Message",
             to,
@@ -447,4 +541,52 @@ pub fn composer(cx: &Cx<'_>) -> Option<SessionComposer> {
         queue,
         stop,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use corral_protocol::session_host::SessionActionRequest;
+
+    use super::*;
+    use crate::model::Id;
+    use crate::model::daemon::Feed;
+    use crate::model::effect::Effect;
+    use crate::model::session::State;
+
+    /// `!!ls` went to the agent as a message, so a command the owner meant to keep out of the
+    /// agent's context was put in it.
+    #[test]
+    fn double_bang_runs_the_shell_command_kept_out_of_context() {
+        let id = Id::from("B-1");
+        let mut state = State::default();
+        let effects = state.act(
+            Action::Shell {
+                session: id.clone(),
+                text: "!!ls -la".into(),
+            },
+            &Feed::default(),
+        );
+        let sent: Vec<&SessionAction> = effects
+            .iter()
+            .filter_map(|effect| match effect {
+                Effect::SessionAction {
+                    request: SessionActionRequest { action, .. },
+                    ..
+                } => Some(action),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            sent,
+            [&SessionAction::Shell {
+                command: "ls -la".into(),
+                exclude_from_context: true,
+            }]
+        );
+        assert!(
+            !effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::SessionSend { .. }))
+        );
+    }
 }

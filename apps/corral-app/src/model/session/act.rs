@@ -80,6 +80,19 @@ pub enum Action {
         /// What a refusal puts back in the draft instead of `text`, when the composer made it.
         restore: Option<String>,
     },
+    /// Run the draft `!command` (`!!command`: kept out of the agent's context) as the owner's
+    /// shell command on the host; its reply becomes a notice.
+    Shell {
+        session: Id,
+        text: String,
+    },
+    /// Put the owner's message before (`older`) or after the recalled one in the draft.
+    Recall {
+        session: Id,
+        older: bool,
+    },
+    /// The `@` file mention popup.
+    Mention(super::MentionAction),
     /// The next message goes to this child, or to the session's own agent.
     Receiver {
         session: Id,
@@ -259,10 +272,19 @@ impl State {
             Action::Watch { session, on } => vec![Effect::Watch { session, on }],
             Action::Draft { session, text } => {
                 let ui = self.ui_mut(&session);
+                if text.is_empty() {
+                    ui.recall = None;
+                }
                 ui.draft = text;
                 ui.picker.slash_at = 0;
+                ui.mention.at = 0;
                 Vec::new()
             }
+            Action::Shell { session, text } => self.shell(session, &text, feed),
+            Action::Recall { session, older } => {
+                super::prompt_history::recall(self, &session, older, feed)
+            }
+            Action::Mention(action) => super::mention::act(self, action, feed),
             Action::Send {
                 session,
                 text,
@@ -382,7 +404,7 @@ impl State {
         chats: &assistant::State,
         feed: &Feed,
     ) -> Vec<Effect> {
-        if let Action::Send { session, .. } = &action
+        if let Action::Send { session, .. } | Action::Shell { session, .. } = &action
             && self.input_block(session, ask, chats, feed).is_some()
         {
             return Vec::new();
@@ -454,6 +476,7 @@ impl State {
             told: false,
         });
         ui.draft.clear();
+        ui.recall = None;
         vec![Effect::SessionSend {
             key: key.clone(),
             send: SessionSend {
@@ -466,6 +489,25 @@ impl State {
                 attachments,
             },
         }]
+    }
+
+    /// Runs the draft's `!command` on the host, as the `/compact` row runs its action, and
+    /// clears the draft; an empty command leaves it as it is.
+    fn shell(&mut self, session: Id, text: &str, feed: &Feed) -> Vec<Effect> {
+        let Some(action) = super::composer::shell_action(text) else {
+            return Vec::new();
+        };
+        let ui = self.ui_mut(&session);
+        ui.draft.clear();
+        ui.recall = None;
+        self.act(
+            Action::Command(super::CommandAction::Host {
+                session,
+                action,
+                what: "Shell command",
+            }),
+            feed,
+        )
     }
 
     /// The send `key` to `session` never left this device, for this reason.

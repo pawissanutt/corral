@@ -8,7 +8,10 @@
 //! (`→ a2 · answer`), Enter gives the text instead, and an empty one is the model's to refuse
 //! with what is missing. Text pasted into the field goes in as it was copied; images and files
 //! are staged for the message while the session takes attachments. While the draft is a `/`
-//! command the page's command menu matches, Enter runs that command instead. A control the host
+//! command the page's command menu matches, Enter runs that command instead; while it ends in an
+//! `@` mention, the file popup over the field takes ↑ ↓, Enter, Tab and Esc; while it is a
+//! `!command`, Run sends it to the host as a shell command; in an empty draft ↑ ↓ walk the
+//! session's earlier owner messages. A control the host
 //! cannot run now is dimmed with its reason under the bar. The keys are listed in the page's ⋯
 //! menu, not under the composer. The draft lives in the session's UI state, so it survives tab
 //! switches and leaving the page; the field takes the keys back whenever the page gives them to
@@ -25,6 +28,7 @@ use corral_protocol::session_state::SendPolicy;
 use crate::model::hue::Hue;
 use crate::model::session::{Action, SendButton, SendMode, SessionComposer, StopButton};
 use crate::model::{Form, Id};
+use crate::screens::agents::mention_menu;
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
 use crate::ui::kit::marks::{hue_ink, mark};
@@ -33,6 +37,7 @@ use crate::ui::tokens::{FONT_TEXT, Token, color};
 
 use super::{Ask, Attach};
 
+mod phone;
 mod receiver;
 
 /// The field's test id.
@@ -56,6 +61,13 @@ fn send(
     ask: Option<Ask>,
     attach: Attach,
 ) {
+    // A `!command` runs on the host instead, its text as typed: no chips, no attachments.
+    if let Some(shell) = composer.with_untracked(|c| c.as_ref().and_then(|c| c.shell.clone())) {
+        if let (None, Some(run)) = (shell.unavailable, shell.run) {
+            app.session_input(run, ask.is_some());
+        }
+        return;
+    }
     let ready = composer.with_untracked(|composer| {
         let composer = composer.as_ref()?;
         let button = std::iter::once(&composer.send)
@@ -201,6 +213,13 @@ fn build(
         // A field that goes while it has the focus leaves no Escape to take.
         cleanup(move || app.docked_field.set(None));
     }
+    // ↑ ↓, Tab and Esc are the history's or the `@` popup's only while the field has the keys.
+    let typing = signal(false);
+    entry.on_focus_in(move || typing.set(true));
+    entry.on_focus_out(move || typing.set(false));
+    let typing = computed(move || typing.get());
+    history_keys(app, composer, typing, ask.is_some());
+    let mention = mention_menu(app, composer, entry, typing, ask.is_some());
     let field = field(
         app,
         id.clone(),
@@ -212,9 +231,46 @@ fn build(
         docked,
     );
     match form {
-        Form::Phone => phone(app, id, composer, field, ask, attach),
-        Form::Desktop | Form::Terminal => frame(app, id, composer, field, ask, attach),
+        Form::Phone => phone::phone(app, id, composer, field, mention, ask, attach),
+        Form::Desktop | Form::Terminal => frame(app, id, composer, field, mention, ask, attach),
     }
+}
+
+/// ↑ and ↓ walk this session's earlier owner messages while the composer says they do (the
+/// draft empty or still the entry recalled, nothing else taking them) and the field has the
+/// keys; otherwise they move the caret as usual.
+fn history_keys(
+    app: AppState,
+    composer: Memo<Option<SessionComposer>>,
+    typing: Memo<bool>,
+    ask: bool,
+) {
+    let keys = computed(move || {
+        composer.with(|c| c.as_ref().map(|c| c.history.clone()).unwrap_or_default())
+    });
+    effect(move || {
+        if !app.binds_keys() || !typing.get() {
+            return;
+        }
+        let keys = keys.get();
+        untracked(|| {
+            for (key, action) in [("up", keys.older), ("down", keys.newer)] {
+                let Some(action) = action else {
+                    continue;
+                };
+                on_key_with(
+                    key,
+                    KeyOptions {
+                        when: When::Always,
+                        ..KeyOptions::default()
+                    },
+                    move |_| {
+                        app.session_input(action.clone(), ask);
+                    },
+                );
+            }
+        });
+    });
 }
 
 /// The draft field: multiline, Enter sends with the send button's policy (or runs the matched
@@ -259,6 +315,14 @@ fn field(
         .on_submit(move |_: &str| {
             // Nor in a side pane set aside, hidden over the page: the draft stays as it is.
             if !app.field_acts() {
+                return;
+            }
+            let mention = composer.with_untracked(|c| {
+                c.as_ref()
+                    .and_then(|c| c.mention.as_ref()?.chosen().cloned())
+            });
+            if let Some(pick) = mention {
+                app.session_input(pick, ask.is_some());
                 return;
             }
             if let Some(actions) = command.get_untracked() {
@@ -340,15 +404,20 @@ fn small(form: Form, words: impl Into<String>, ink: AdaptiveColor) -> Text {
     }
 }
 
-/// What the field's placeholder does not say: the receiver while Enter gives a reason or an
-/// answer, in its tone, and the newest send's standing while it is current (`last input
-/// queued`). Nothing otherwise.
+/// What the field's placeholder does not say: shell mode while the draft is a `!command`
+/// (`shell · not in context`), the receiver while Enter gives a reason or an answer, in its
+/// tone, and the newest send's standing while it is current (`last input queued`). Nothing
+/// otherwise.
 fn standing(app: AppState, composer: Memo<Option<SessionComposer>>) -> AnyElement {
     let form = app.form;
     let shown = computed(move || {
         composer.with(|c| {
-            let title = &c.as_ref()?.title;
-            let to = (title.hue != Hue::Neutral).then(|| (title.to.clone(), title.hue));
+            let c = c.as_ref()?;
+            let title = &c.title;
+            let to = match &c.shell {
+                Some(shell) => Some((shell.hint.to_owned(), Hue::Corral)),
+                None => (title.hue != Hue::Neutral).then(|| (title.to.clone(), title.hue)),
+            };
             (to.is_some() || title.last.is_some()).then(|| (to, title.last.clone()))
         })
     });
@@ -603,6 +672,7 @@ fn frame(
     id: Id,
     composer: Memo<Option<SessionComposer>>,
     field: AnyElement,
+    mention: AnyElement,
     ask: Option<Ask>,
     attach: Attach,
 ) -> AnyElement {
@@ -610,6 +680,7 @@ fn frame(
         return view()
             .test_id("session-composer")
             .flex_none()
+            .child(mention)
             .child(term::hrule())
             .child(
                 view()
@@ -629,6 +700,7 @@ fn frame(
         .pt(px(8.0))
         .pb(px(8.0))
         .gap(px(6.0))
+        .child(mention)
         .child(super::above(app, &id, ask, attach))
         .child(
             view()
@@ -646,140 +718,6 @@ fn frame(
                         .child(super::attach_field(app, &id)),
                 ),
         )
-        .child(reasons(app, composer))
-        .into_element()
-}
-
-/// The phone's line over the field, only while it has something to say: what the placeholder
-/// does not, then the working indicator and Stop.
-fn phone_line(app: AppState, composer: Memo<Option<SessionComposer>>) -> AnyElement {
-    let noted = computed(move || {
-        composer.with(|c| {
-            c.as_ref().is_some_and(|c| {
-                c.title.hue != Hue::Neutral
-                    || c.title.last.is_some()
-                    || c.activity.is_some()
-                    || c.stop.is_some()
-            })
-        })
-    });
-    when(
-        move || noted.get(),
-        move || {
-            untracked(|| {
-                view()
-                    .flex_row()
-                    .items_center()
-                    .gap(px(6.0))
-                    .child(standing(app, composer))
-                    .child(view().flex_1().min_w(px(0.0)))
-                    .child(working(app, composer))
-                    .into_element()
-            })
-        },
-    )
-    .into_element()
-}
-
-/// The phone: while the agent works, Steer now | After this turn decides what the button does;
-/// the field and the button in one row; the button stops the turn while the agent works and the
-/// draft is empty.
-fn phone(
-    app: AppState,
-    id: Id,
-    composer: Memo<Option<SessionComposer>>,
-    field: AnyElement,
-    ask: Option<Ask>,
-    attach: Attach,
-) -> AnyElement {
-    let after = signal(false);
-    let working = computed(move || {
-        composer.with(|c| c.as_ref().is_some_and(|c| c.mode == SendMode::Working))
-    });
-    let queues = computed(move || composer.with(|c| c.as_ref().is_some_and(|c| c.queue.is_some())));
-    let choice = dynamic(move || {
-        (working.get() && queues.get()).then(|| {
-            untracked(|| {
-                crate::ui::kit::button::seg(
-                    app,
-                    &[(false, "Steer now"), (true, "After this turn")],
-                    move || after.get(),
-                    move |value| after.set(value),
-                    "seg-send-when",
-                )
-            })
-        })
-    });
-    let action = computed(move || {
-        composer.with(|c| {
-            let c = c.as_ref()?;
-            if c.mode == SendMode::Working && c.draft.trim().is_empty() {
-                return c.stop.clone().map(Err);
-            }
-            Some(Ok(c.send.unavailable.is_some()))
-        })
-    });
-    let id_for_button = id.clone();
-    let button = dynamic(move || {
-        action.get().map(|action| {
-            let id = id_for_button.clone();
-            untracked(|| match action {
-                Err(stop) => {
-                    let press = stop.action.clone();
-                    button_with(
-                        app,
-                        "■",
-                        ButtonKind::Ghost,
-                        ButtonOptions {
-                            danger: true,
-                            ..ButtonOptions::default()
-                        },
-                        "btn-stop",
-                        move || act(app, press.clone()),
-                    )
-                }
-                Ok(dimmed) => button_with(
-                    app,
-                    "↑",
-                    ButtonKind::Primary,
-                    ButtonOptions {
-                        disabled: dimmed,
-                        ..ButtonOptions::default()
-                    },
-                    "btn-send",
-                    move || {
-                        let policy = if after.get_untracked() && working.get_untracked() {
-                            SendPolicy::FollowUp
-                        } else {
-                            composer
-                                .with_untracked(|c| c.as_ref().map(|c| c.send.policy))
-                                .unwrap_or(SendPolicy::Steer)
-                        };
-                        send(app, &id, composer, policy, ask, attach);
-                    },
-                ),
-            })
-        })
-    });
-    view()
-        .test_id("session-composer")
-        .flex_none()
-        .px(px(12.0))
-        .pt(px(6.0))
-        .gap(px(6.0))
-        .child(super::above(app, &id, ask, attach))
-        .child(phone_line(app, composer))
-        .child(choice)
-        .child(
-            view()
-                .flex_row()
-                .items_end()
-                .gap(px(8.0))
-                .child(super::phone_plus(app, &id, attach))
-                .child(field)
-                .child(button),
-        )
-        .child(bar(app, id, composer, ask, attach))
         .child(reasons(app, composer))
         .into_element()
 }

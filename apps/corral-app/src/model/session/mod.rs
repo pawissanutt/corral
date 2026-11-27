@@ -43,9 +43,11 @@ mod header;
 mod keys;
 mod land;
 mod log;
+mod mention;
 mod notices;
 mod plan;
 mod plan_review;
+mod prompt_history;
 mod proof;
 mod questions;
 mod queue;
@@ -108,7 +110,7 @@ pub use changes_diff::{FileDiff, HunkView, Pinned};
 pub use choice::{ChoiceCard, ChoiceOption};
 pub use composer::{
     ComposerTitle, EffortControl, HostBar, ModelPill, ReceiverChoice, ReceiverPill, SendButton,
-    SendMode, SessionComposer, StopButton, composer, host_bar,
+    SendMode, SessionComposer, ShellMode, StopButton, composer, host_bar,
 };
 pub use dialog::{DecisionCard, DecisionKind, OPEN_GUARD_MS};
 pub use dock::{
@@ -133,12 +135,14 @@ pub use header::{
 pub use keys::{KeyAction, KeyBinding, WEB_RESERVED, bound, keys, legend, legend_of, press};
 pub use land::{CandidateView, GateLog};
 pub use log::{SessionLog, ended_run, log};
+pub use mention::{MentionAction, MentionMenu, MentionRow};
 pub use notices::{Notice, RecentNotices, Ring, recent};
 pub use plan::{
     HistoryLine, Ledger, LedgerStep, PlanAction, PlanTab, PlanUi, StepRow,
     StepState as PlanStepState, ledger, plan_tab,
 };
 pub use plan_review::{PlanDoc, PlanReview, compact, compact_in_place};
+pub use prompt_history::HistoryKeys;
 pub use proof::{ProofAction, ProofTab, ProofUi, proof_tab};
 pub use questions::{
     AnswerCard, AnswerTab, QuestionDock, QuestionLine, QuestionView, Review, ReviewRow,
@@ -295,6 +299,10 @@ pub struct Ui {
     /// Every thinking block is hidden (`Alt+H`).
     pub hide_thinking: bool,
     pub draft: String,
+    /// The owner message ↑ put in the draft, newest first; none for a draft of the owner's own.
+    pub recall: Option<usize>,
+    /// The `@` file mention popup's highlight and the text Esc closed it on.
+    pub mention: mention::MentionUi,
     /// The child the next message goes to; none for the session's own agent.
     pub to: Option<String>,
     /// The Agents tab's selected child.
@@ -333,6 +341,8 @@ impl Ui {
         expanded: BTreeSet::new(),
         hide_thinking: false,
         draft: String::new(),
+        recall: None,
+        mention: mention::MentionUi::EMPTY,
         to: None,
         agent: None,
         echoes: Vec::new(),
@@ -829,6 +839,7 @@ pub fn page(feed: &Feed, state: &State, id: &Id, env: Env) -> SessionPage {
     fetches.extend(dock::fetch(&cx));
     fetches.extend(dock::probe(&cx));
     fetches.extend(actions::fetches(&cx));
+    fetches.extend(mention::fetch(&cx));
     fetches.extend(board::record_fetches(&cx));
     fetches.extend(match &body {
         Body::Usage(_) => usage::fetches(&cx),
