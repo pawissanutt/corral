@@ -962,11 +962,6 @@ export class NativePanels implements PanelSurface {
                 owner.workbench.notice("Only the parent takes queued follow-ups", "warning"); return;
               }
             }
-            // A message sent from another view returns to Chat, so its reply and any refusal notice show.
-            if (owner.workbench.view !== "conversation" && this.getText().trim()
-                && keys.getKeys("tui.input.submit").some(key => matchesKey(data, key))) {
-              owner.workbench.setView("conversation"); owner.workbench.focused = false;
-            }
             // Pi holds a draft submitted during compaction as text only and sends it later; its images would be lost.
             if (owner.options.compacting?.() && owner.stagedImages.count > 0 && new RegExp(IMAGE_MARKER.source).test(this.getText())
                 && keys.getKeys("tui.input.submit").concat(keys.getKeys("app.message.followUp")).some(key => matchesKey(data, key))) {
@@ -1095,9 +1090,7 @@ export class NativePanels implements PanelSurface {
       this.build?.sync();
       this.refresh();
     });
-    // Input from any source (editor, bridge submit_input, extensions) shows its turn in Chat.
     pi.on("input", event => {
-      if (this.workbench.view !== "conversation") { this.workbench.setView("conversation"); this.workbench.focused = false; this.refresh(); }
       // The owner's staged images go with the message they are marked in (a prompt, a steer or a follow-up).
       if (event.source !== "interactive" || this.stagedImages.count === 0) return { action: "continue" as const };
       const taken = this.stagedImages.take(event.text, this.draftText());

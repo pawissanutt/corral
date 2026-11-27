@@ -170,6 +170,7 @@ function shell(columns: number, rows: number, build: Build, extra: Partial<Panel
     widgetsAbove: installed.dock, editor: installed.editor, footer: installed.footer, mainView: transcript => panels.mainView(transcript) });
   return {
     panels, terminal, asked, answers, sent, toasts, ...installed,
+    input: (event: { source: "interactive" | "extension"; text: string }) => handlers.get("input")?.(event, { mode: "tui", ui }),
     // Laid out twice: the rail takes the height the first layout gave it.
     frame: (): LayoutFrame => { renderLayoutFrame(main.root, terminal.columns, rows, () => {}); return renderLayoutFrame(main.root, terminal.columns, rows, () => {}); },
     stop() { terminal.stop(); panels.dispose(); },
@@ -265,6 +266,24 @@ test("the composer is a rounded box with its title in the top border, `›` befo
       expect(top + 7).toBe(rows);
     } finally { h.stop(); }
   }
+});
+
+test("submitted messages and extension input leave the selected view open", () => {
+  const h = shell(140, 46, fakeBuild(work)), submitted: string[] = [];
+  h.editor.onSubmit = text => { submitted.push(text); h.input({ source: "interactive", text }); };
+  try {
+    h.panels.handleInput(KEY.f10);
+    expect(h.input({ source: "extension", text: "Background update" })).toEqual({ action: "continue" });
+    expect(h.panels.workbench.view).toBe("plan");
+    expect(h.panels.workbench.focused).toBeTrue();
+    h.panels.handleInput("\t");
+    h.editor.setText("Keep working"); h.editor.handleInput(KEY.enter);
+    expect(submitted).toEqual(["Keep working"]);
+    expect(h.panels.workbench.view).toBe("plan");
+    expect(h.panels.workbench.focused).toBeFalse();
+    expect(h.panels.handleInput(KEY.f9)).toBeTrue();
+    expect(h.panels.workbench.view).toBe("conversation");
+  } finally { h.stop(); }
 });
 
 test("Alt+T then Enter steers the child and clears the composer; a refusal keeps the text; /finish still reaches Pi", async () => {
