@@ -175,39 +175,41 @@ impl AppState {
         })
     }
 
-    /// An unknown outcome waits for a later Tasks subscription, which nothing else may bring:
-    /// whenever the link is up and one is held, Tasks is closed and opened again in order, once
-    /// per board position: a refresh that did not get through (corrald busy) is asked again at
-    /// the next walk, and one that did brings a later subscription, which releases the move.
-    /// Only the move is held back; nothing resends it.
-    fn refresh_for_unknown(self) {
+    /// A held move waits for a Tasks subscription opened after its answer, which corrald does
+    /// not send on its own (it sends no walk when the rows are unchanged). Whenever the link is
+    /// up and a move is held behind the board, Tasks is closed and opened again in order, once
+    /// per board batch: one that did not get through (corrald busy) is asked again at the next
+    /// batch, and one that did brings the subscription that releases the move. Only the move
+    /// is held back; nothing resends it.
+    fn refresh_while_held(self) {
         let asked = stored(None::<(u64, u64)>);
         effect(move || {
-            let (up, position) = self
-                .feed
-                .with(|feed| (feed.link == Link::Up, feed.board.walk));
-            // A hold the board already passed is about to settle: no refresh for it.
-            let held = self.catching_up.with(|waiting| {
-                waiting
-                    .values()
-                    .any(|(_, behind)| !behind.confirmed && position <= behind.fence)
+            let (up, board) = self.feed.with(|feed| {
+                (
+                    feed.link == Link::Up,
+                    (feed.board.subscription, feed.board.batches),
+                )
             });
+            // A hold the board already passed is about to settle: no refresh for it.
+            let held = self
+                .catching_up
+                .with(|waiting| waiting.values().any(|(_, behind)| board.0 <= behind.fence));
             if !held || !up || untracked(|| self.fixture()) {
                 return;
             }
-            if asked.with(|asked| *asked == Some(position)) {
+            if asked.with(|asked| *asked == Some(board)) {
                 return;
             }
-            let _ = asked.replace(Some(position));
+            let _ = asked.replace(Some(board));
             _ = requests::send(requests::ClientRequest::RefreshTasks);
         });
     }
 
-    /// A move that may have been applied stays under way until the board shows a walk taken
-    /// after its reply (`act::board_caught_up`). A stalled board keeps it waiting; nothing
-    /// resends it.
+    /// A move that may have been applied stays under way until the board comes from a Tasks
+    /// subscription opened after its answer (`act::board_caught_up`). A stalled board keeps it
+    /// waiting; nothing resends it.
     fn settle_catching_up(self) {
-        self.refresh_for_unknown();
+        self.refresh_while_held();
         effect(move || {
             let caught: Vec<Id> = self.catching_up.with(|confirmed| {
                 self.feed.with(|feed| {
@@ -374,10 +376,13 @@ impl AppState {
                 return;
             }
             untracked(move || {
+                // The sample preview applies an operation to its board at once.
                 let opens = crate::client::walks::opens();
+                let preview = self.fixture();
                 let behind: Vec<(Act, act::Behind)> = self.feed.with(|feed| {
                     settled
                         .iter()
+                        .filter(|_| !preview)
                         .filter_map(|(act, status)| {
                             act::board_behind(feed, act, status, opens)
                                 .map(|from| (act.clone(), from))

@@ -18,7 +18,11 @@ impl AppState {
             }
             // One round of the views for a page, however many times applying it writes the
             // feed: a session's live pages arrive many times a second.
-            Event::Rows { delta, replacement } => batch(|| self.rows(feed, delta, replacement)),
+            Event::Rows {
+                delta,
+                replacement,
+                subscription,
+            } => batch(|| self.rows_from(feed, delta, replacement, subscription)),
             Event::TopicError {
                 topic,
                 scope,
@@ -129,13 +133,6 @@ impl AppState {
             self.changes_inflight = false;
         }
         let id = tag.or_else(|| params["cmd_id"].as_str().map(str::to_owned));
-        if matches!(method, OP_SUBMIT | OP_RESULT)
-            && let Some(id) = &id
-        {
-            // Read while this reply is handled: a board walk past it was taken after it.
-            let fence = crate::client::walks::fence();
-            feed.update(|feed| _ = feed.op_fences.insert(Id::from(id.as_str()), fence));
-        }
         // A successful End is authoritative before the Assistant subscription catches up.
         let mut ended = None;
         let outcome = outcome.and_then(|result| {

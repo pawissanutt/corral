@@ -34,6 +34,9 @@ pub(super) enum Event {
     Rows {
         delta: SubDelta,
         replacement: bool,
+        /// For Tasks: the subscription the batch belongs to, numbered when its open was
+        /// admitted (`walks::opened`).
+        subscription: Option<u64>,
     },
     Reset {
         topic: Topic,
@@ -105,6 +108,8 @@ pub(super) struct Core {
     deferred_opens: BTreeMap<String, (u64, Frame, SubOpen)>,
     adjacent_reset: Option<(Topic, Option<String>)>,
     reset_errors: BTreeMap<String, u8>,
+    /// The Tasks subscription whose pages are being read (`walks`).
+    tasks_subscription: u64,
 }
 
 impl Core {
@@ -119,6 +124,7 @@ impl Core {
             deferred_opens: BTreeMap::new(),
             adjacent_reset: None,
             reset_errors: BTreeMap::new(),
+            tasks_subscription: 0,
         }
     }
 
@@ -602,7 +608,11 @@ impl Core {
             batch.replacement = false;
             batch.bytes = 0;
             let delta = serde_json::from_value(value).map_err(decode)?;
-            self.events.push_back(Event::Rows { delta, replacement });
+            self.events.push_back(Event::Rows {
+                delta,
+                replacement,
+                subscription: None,
+            });
             return self.request(
                 wire::SUB_ACK,
                 serde_json::to_value(SubAck {
@@ -632,15 +642,13 @@ impl Core {
             return Err("daemon topic snapshot exceeds client bounds".into());
         }
         let cursor = serde_json::from_value(value["cursor"].clone()).map_err(decode)?;
-        if topic == Topic::Tasks {
-            // A replacement batch starts once the open is admitted, after a close is answered
-            // or a reset retired the old subscriber: its first page is the new subscription's.
-            if batch.replacement
-                && let Some(subscription) = batch.subscription.take()
-            {
-                super::walks::subscribed(subscription);
-            }
-            super::walks::page(value["more"].as_bool() == Some(true));
+        // A replacement batch starts once the open is admitted, after a close is answered or a
+        // reset retired the old subscriber: its first page is the new subscription's.
+        if topic == Topic::Tasks
+            && batch.replacement
+            && let Some(subscription) = batch.subscription.take()
+        {
+            self.tasks_subscription = subscription;
         }
         if value["more"].as_bool() != Some(true) {
             let replacement = batch.replacement;
@@ -654,7 +662,11 @@ impl Core {
             batch.bytes = 0;
             batch.replacement = false;
             let delta: SubDelta = serde_json::from_value(value).map_err(decode)?;
-            self.events.push_back(Event::Rows { delta, replacement });
+            self.events.push_back(Event::Rows {
+                delta,
+                replacement,
+                subscription: (topic == Topic::Tasks).then_some(self.tasks_subscription),
+            });
         }
         self.request(
             wire::SUB_ACK,

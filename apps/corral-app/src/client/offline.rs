@@ -346,6 +346,7 @@ fn apply_event(snapshot: &mut Snapshot, event: &Event) -> bool {
         Event::Rows {
             delta: SubDelta::Tasks { delta },
             replacement,
+            ..
         } if !delta.more => apply_topic(
             &mut snapshot.tasks,
             delta.epoch,
@@ -357,6 +358,7 @@ fn apply_event(snapshot: &mut Snapshot, event: &Event) -> bool {
         Event::Rows {
             delta: SubDelta::Plans { delta },
             replacement,
+            ..
         } if !delta.more => apply_topic(
             &mut snapshot.plans,
             delta.epoch,
@@ -368,6 +370,7 @@ fn apply_event(snapshot: &mut Snapshot, event: &Event) -> bool {
         Event::Rows {
             delta: SubDelta::Projects { delta },
             replacement,
+            ..
         } if !delta.more => apply_topic(
             &mut snapshot.projects,
             delta.epoch,

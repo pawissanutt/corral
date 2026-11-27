@@ -61,18 +61,31 @@ fn apply<T: Keyed + PartialEq>(
     changed
 }
 impl AppState {
+    #[cfg(test)]
     pub(super) fn rows(
         &mut self,
         feed: Signal<Feed>,
         delta: SubDelta,
         replacement: bool,
     ) -> Result<Vec<Outgoing>, String> {
+        self.rows_from(feed, delta, replacement, None)
+    }
+
+    /// `rows` with the Tasks subscription the core tagged the batch with (`client::walks`).
+    pub(super) fn rows_from(
+        &mut self,
+        feed: Signal<Feed>,
+        delta: SubDelta,
+        replacement: bool,
+        subscription: Option<u64>,
+    ) -> Result<Vec<Outgoing>, String> {
         let mut changed = BTreeSet::new();
         let mut scope_key = None;
         let mut parts = BTreeSet::new();
         let topic = match delta {
             SubDelta::Tasks { delta } => {
-                return Ok(self.tasks(feed, delta.epoch, delta.rows, delta.left, replacement));
+                let batch = (delta.epoch, subscription);
+                return Ok(self.tasks(feed, batch, delta.rows, delta.left, replacement));
             }
             SubDelta::Plans { delta } => {
                 feed.update(|feed| {
@@ -268,7 +281,7 @@ impl AppState {
     pub(super) fn tasks(
         &mut self,
         feed: Signal<Feed>,
-        epoch: u64,
+        (epoch, subscription): (u64, Option<u64>),
         rows: Vec<TaskRow>,
         left: Vec<String>,
         replacement: bool,
@@ -304,7 +317,10 @@ impl AppState {
                 &left,
                 replacement,
             );
-            feed.board.walk = crate::client::walks::completed();
+            if let Some(subscription) = subscription {
+                feed.board.subscription = subscription;
+            }
+            feed.board.batches = feed.board.batches.wrapping_add(1);
             feed.topics
                 .insert(topic_key(Topic::Tasks, None), TopicState::default());
         });

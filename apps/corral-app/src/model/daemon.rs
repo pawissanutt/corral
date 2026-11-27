@@ -188,8 +188,6 @@ pub struct Feed {
     pub live: BTreeMap<Id, crate::model::session::transcript::LiveSession>,
     pub commands: BTreeMap<Id, CommandState>,
     pub operations: BTreeMap<Id, Operation>,
-    /// The Tasks walk number each operation's last reply was handled at (`client::walks`).
-    pub op_fences: BTreeMap<Id, (u64, u64)>,
     /// Upload metadata only; file bytes never enter the model or persistent storage.
     pub uploads: BTreeMap<Id, UploadState>,
     pub changes: BTreeMap<u64, Event>,

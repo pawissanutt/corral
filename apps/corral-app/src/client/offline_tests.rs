@@ -57,6 +57,7 @@ fn delta<T>(epoch: u64, rows: Vec<T>, left: Vec<String>, more: bool) -> RowsDelt
 
 fn tasks(epoch: u64, rows: Vec<corral_types::Task>, left: Vec<String>, replacement: bool) -> Event {
     Event::Rows {
+        subscription: None,
         replacement,
         delta: SubDelta::Tasks {
             delta: delta(
@@ -80,6 +81,7 @@ fn plans(ids: &[&str], left: Vec<String>, replacement: bool, more: bool) -> Even
         })
         .collect();
     Event::Rows {
+        subscription: None,
         replacement,
         delta: SubDelta::Plans {
             delta: delta(7, rows, left, more),

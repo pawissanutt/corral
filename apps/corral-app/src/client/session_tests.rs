@@ -146,6 +146,7 @@ fn tasks(session: &mut Session) -> TasksPage {
             Event::Rows {
                 delta: wire::subscription::SubDelta::Tasks { delta },
                 replacement,
+                ..
             } => return (delta.epoch, delta.rows, delta.left, replacement),
             Event::Health(_)
             | Event::Reply { .. }
@@ -350,6 +351,7 @@ fn a_reopened_scope_does_not_ack_or_publish_the_retired_page() {
             Event::Rows {
                 delta: wire::subscription::SubDelta::Session { scope, cursor, .. },
                 replacement,
+                ..
             } => {
                 assert_eq!(scope, "quick");
                 assert_eq!(cursor.rev, 156);

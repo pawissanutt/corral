@@ -40,7 +40,7 @@ fn terminal_captures_ack_their_scope_and_reopen_only_after_the_close_barrier() {
     for scope in ["session-a", "session-b"] {
         core.receive(frame(capture(scope, 1)), 1).unwrap();
         assert!(matches!(core.next_event(), Some(Event::Rows {
-            delta: SubDelta::Terminal { scope: received, snapshot: Some(_), .. }, replacement: true
+            delta: SubDelta::Terminal { scope: received, snapshot: Some(_), .. }, replacement: true, ..
         }) if received == scope));
         let ack = outgoing(&mut core);
         assert_eq!(ack["method"], wire::SUB_ACK);
