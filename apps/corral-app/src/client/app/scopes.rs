@@ -21,6 +21,11 @@ impl AppState {
             state.stale = true;
             state.error = None;
         });
+        // A bare reopen of Tasks could take an old subscriber's late pages for the new one's
+        // (`client::walks`), releasing a held move on a board taken before it.
+        if topic == Topic::Tasks {
+            return self.refresh_tasks();
+        }
         vec![open(topic, scope)]
     }
 

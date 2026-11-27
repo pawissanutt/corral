@@ -445,14 +445,14 @@ pub struct Behind {
 }
 
 /// The board a move may have changed but does not show yet; none for a move refused or failed
-/// before it left, for a task the board did not hold, or for a reply without a fence (the
-/// sample preview, which applies its operations to the board at once). `opens` is the number
+/// before it left, or for a reply without a fence (the sample preview, which applies its
+/// operations to the board at once). A task the board does not hold is fenced too: an older
+/// walk may bring its row back. `opens` is the number
 /// of the last Tasks open admitted (`client::walks::opens`).
 pub fn board_behind(feed: &Feed, act: &Act, status: &ActStatus, opens: u64) -> Option<Behind> {
-    let Op::Move { id, .. } = &act.op else {
+    let Op::Move { .. } = &act.op else {
         return None;
     };
-    feed.board.task(id)?;
     if *status == ActStatus::Done {
         // Even a row already at the target may be older than the move: another device can
         // move the task back in a walk pinned before this reply.

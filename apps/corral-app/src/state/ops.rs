@@ -177,24 +177,28 @@ impl AppState {
 
     /// An unknown outcome waits for a later Tasks subscription, which nothing else may bring:
     /// whenever the link is up and one is held, Tasks is closed and opened again in order, once
-    /// per board subscription (a refresh that brings none is not repeated until the board moves
-    /// on, as a reconnect does). Only the move is held back; nothing resends it.
+    /// per board position: a refresh that did not get through (corrald busy) is asked again at
+    /// the next walk, and one that did brings a later subscription, which releases the move.
+    /// Only the move is held back; nothing resends it.
     fn refresh_for_unknown(self) {
-        let asked = stored(None::<u64>);
+        let asked = stored(None::<(u64, u64)>);
         effect(move || {
-            let held = self
-                .catching_up
-                .with(|waiting| waiting.values().any(|(_, behind)| !behind.confirmed));
-            let (up, subscription) = self
+            let (up, position) = self
                 .feed
-                .with(|feed| (feed.link == Link::Up, feed.board.walk.0));
+                .with(|feed| (feed.link == Link::Up, feed.board.walk));
+            // A hold the board already passed is about to settle: no refresh for it.
+            let held = self.catching_up.with(|waiting| {
+                waiting
+                    .values()
+                    .any(|(_, behind)| !behind.confirmed && position <= behind.fence)
+            });
             if !held || !up || untracked(|| self.fixture()) {
                 return;
             }
-            if asked.with(|asked| *asked == Some(subscription)) {
+            if asked.with(|asked| *asked == Some(position)) {
                 return;
             }
-            let _ = asked.replace(Some(subscription));
+            let _ = asked.replace(Some(position));
             _ = requests::send(requests::ClientRequest::RefreshTasks);
         });
     }
