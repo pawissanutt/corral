@@ -471,17 +471,46 @@ impl Engine {
         if task.blocked.as_ref() == Some(&blocked) {
             return Ok(());
         }
+        let mut detail = serde_json::to_value(&blocked).context("encode blocked event")?;
+        if matches!(
+            blocked.reason.as_str(),
+            crate::pipeline::GATE_FAILED | crate::pipeline::PIPELINE_FAILED
+        ) {
+            // Pin the submission whose review was interrupted, not the last head
+            // ever submitted by a worker that may already be back in rework.
+            let sha: Option<String> = match task.status {
+                Status::Review => store.connection.query_row(
+                    "SELECT (SELECT json_extract(detail,'$.sha') FROM events WHERE task=?1 AND kind='done' ORDER BY seq DESC LIMIT 1)",
+                    [&task.id], |row| row.get(0),
+                ).context("read interrupted submission")?,
+                Status::Blocked => store.interrupted_submission(&task.id)?,
+                _ => None,
+            };
+            if let Some(sha) = sha {
+                detail["interrupted_submission"] = json!(sha);
+            }
+        }
         self.event(
             store,
             Some(&task.id),
             run,
             EventKind::Blocked,
             actor,
-            serde_json::to_value(&blocked).context("encode blocked event")?,
+            detail,
         )?;
         set_lifecycle(task, Status::Blocked);
         task.blocked = Some(blocked);
         store.update_task(task)
+    }
+}
+
+impl Store {
+    // Missing on legacy blocks: require resubmission rather than inferring Review.
+    pub(crate) fn interrupted_submission(&self, id: &str) -> Result<Option<String>> {
+        self.connection.query_row(
+            "SELECT (SELECT json_extract(detail,'$.interrupted_submission') FROM events WHERE task=?1 AND kind='blocked' ORDER BY seq DESC LIMIT 1)",
+            [id], |row| row.get(0),
+        ).context("read blocked review candidate")
     }
 }
 

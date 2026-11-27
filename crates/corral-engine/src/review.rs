@@ -123,12 +123,18 @@ impl Engine {
                         self.store.transaction(|store| {
                             let mut current = store.require_task(id)?;
                             if current.blocked == task.blocked {
-                                let status = if run.head_sha.is_some() {
+                                let interrupted = store.interrupted_submission(id)?;
+                                let status = if interrupted.as_deref() == Some(check.key.as_str()) {
                                     Status::Review
                                 } else {
                                     Status::Running
                                 };
                                 set_lifecycle(&mut current, status);
+                                if status == Status::Running && let Some(previous) = interrupted {
+                                    current.attention = Some(format!(
+                                        "Gate checked {} but review was for {previous}. Submit the updated candidate with done.", check.key
+                                    ));
+                                }
                                 store.update_task(&current)?;
                                 self.event(
                                     store,

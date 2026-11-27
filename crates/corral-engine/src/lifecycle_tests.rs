@@ -775,28 +775,7 @@ fn dispatch_recovers_checkout_and_run_files_after_launch_error() {
     assert_eq!(cx.apply(next.op.clone(), false).run.unwrap().id, "R1");
 }
 
-#[test]
-fn gate_spawn_failure_blocks_and_a_repaired_gate_resumes_review() {
-    let mut cx = Fixture::new(&[]);
-    cx.engine.pipeline = PipelineMode::Off;
-    let id = cx.backlog("run a gate that cannot spawn");
-    cx.dispatch(&id);
-    cx.done(&id);
-    cx.project().gate = vec!["invalid\0argument".into()];
-    let op = Op::Gate { id: id.clone() };
-    let failure = cx.engine.apply(op.clone(), false).unwrap_err();
-    assert!(format!("{failure:#}").contains("run gate line"));
-    let blocked = cx.task(&id).blocked.unwrap();
-    assert_eq!(blocked.reason, "gate failed");
-    assert!(blocked.detail.unwrap().contains("run gate line"));
-    assert_eq!(blocked.next, vec![crate::Next::run(op.clone())]);
-    assert_eq!(
-        cx.events(&id, EventKind::Error)[0].detail["operation"],
-        "gate"
-    );
-    cx.project().gate = vec!["true".into()];
-    assert_eq!(cx.apply(op, false).task.unwrap().status, Status::Review);
-}
+mod gate_recovery;
 
 #[test]
 fn fast_forward_refused_by_git_blocks_and_can_be_retried() {
