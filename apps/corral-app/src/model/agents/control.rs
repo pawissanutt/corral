@@ -216,13 +216,31 @@ fn run_controls(row: &AgentRow, kind: Kind) -> Vec<Control> {
 /// else `None` inside when it can now, or `Some(why)` when it is served but not now.
 pub fn rewind_can(feed: &Feed, session: &str) -> Option<Option<String>> {
     let state = feed.live.get(session)?.state.as_ref()?;
-    let capability = state.can.iter().find(|capability| capability.id == "rewind")?;
+    let capability = state
+        .can
+        .iter()
+        .find(|capability| capability.id == "rewind")?;
     Some(capability.unavailable.clone())
 }
 
 /// Whether the host can rewind this session now.
 pub fn rewind_offered(feed: &Feed, session: &str) -> bool {
     matches!(rewind_can(feed, session), Some(None))
+}
+
+/// Why the host refuses a rewind now, as its state says: its reason while rewind is served but
+/// not now, or that it does not rewind when it declares its capabilities without it. A host that
+/// declares nothing is not refused here; corrald and the host answer the request.
+pub fn rewind_blocked(feed: &Feed, session: &str) -> Option<String> {
+    let state = feed.live.get(session)?.state.as_ref()?;
+    match state
+        .can
+        .iter()
+        .find(|capability| capability.id == "rewind")
+    {
+        Some(capability) => capability.unavailable.clone(),
+        None => (!state.can.is_empty()).then(|| "this session's host does not rewind".to_owned()),
+    }
 }
 
 /// A chat's or a build's controls, with Rewind… before Terminate when its host serves it.

@@ -330,8 +330,16 @@ impl State {
                 Vec::new()
             }
             Action::Control { session, control } => {
-                if control == Control::Rewinds {
+                if matches!(control, Control::Rewinds | Control::Rewind(_)) {
                     self.ui_mut(&session).rewind_armed = None;
+                    if let Some(why) = crate::model::agents::rewind_blocked(feed, session.as_str())
+                    {
+                        let note = format!("Cannot rewind: {why}");
+                        self.ui_mut(&session)
+                            .notices
+                            .push(Hue::Held, note, feed.now);
+                        return Vec::new();
+                    }
                 }
                 vec![Effect::Control {
                     session,
@@ -343,7 +351,8 @@ impl State {
             Action::ArmRewind(session) => {
                 let ui = self.ui_mut(&session);
                 ui.rewind_armed = Some(feed.now);
-                ui.notices.push(Hue::Neutral, "Esc again to rewind", feed.now);
+                ui.notices
+                    .push(Hue::Neutral, "Esc again to rewind", feed.now);
                 Vec::new()
             }
             Action::SelectAgent { session, child } => {
@@ -465,10 +474,19 @@ impl State {
         if text.is_empty() && attachments.is_empty() {
             return Vec::new();
         }
-        // `/rewind [n]` is the host's own command: the sheet opens here instead of a send.
-        if let Some(turn) = super::keys::rewind_typed(&text)
-            && crate::model::agents::rewind_offered(feed, session.as_str())
-        {
+        // `/rewind [n]` is the host's own command, which Pi would run without the confirmation
+        // asked here: the sheet opens instead of a send, and while the host has not said it can
+        // rewind now the draft stays here with why.
+        if let Some(turn) = super::keys::rewind_typed(&text) {
+            if !crate::model::agents::rewind_offered(feed, session.as_str()) {
+                let why = crate::model::agents::rewind_blocked(feed, session.as_str())
+                    .unwrap_or_else(|| "this session's host has not said it can rewind".into());
+                let note = format!("Cannot rewind: {why}");
+                self.ui_mut(&session)
+                    .notices
+                    .push(Hue::Held, note, feed.now);
+                return Vec::new();
+            }
             let ui = self.ui_mut(&session);
             ui.draft.clear();
             ui.recall = None;

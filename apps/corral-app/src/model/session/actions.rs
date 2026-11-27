@@ -430,15 +430,9 @@ fn display(cx: &Cx<'_>) -> ActionGroup {
     }
 }
 
-/// Why Rewind… cannot run, read as `agents::rewind_can` reads the host's `rewind` declaration:
-/// its reason while it is served but not now, and, as for any host action, why when a host that
-/// declares its capabilities leaves it out. A host that declares nothing is not refused here.
+/// Why Rewind… cannot run: the one reading the reducer also applies before it asks.
 fn rewinds_blocked(cx: &Cx<'_>) -> Option<String> {
-    match crate::model::agents::rewind_can(cx.feed, cx.id.as_str()) {
-        Some(why) => why,
-        None => matches!(cx.can("rewind"), Can::Absent)
-            .then(|| "this session's host does not rewind".to_owned()),
-    }
+    crate::model::agents::rewind_blocked(cx.feed, cx.id.as_str())
 }
 
 fn run(cx: &Cx<'_>) -> ActionGroup {

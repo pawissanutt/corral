@@ -154,8 +154,7 @@ fn search<'q>(feed: &Feed, whole: &DetailRef, query: &'q str) -> Option<&'q str>
 /// Whether the popup is the composer's now: not while the dock takes the text as a reason or an
 /// answer, whose Enter gives it.
 fn offered(cx: &Cx<'_>) -> bool {
-    cx.ui.dock.compose.is_none()
-        && cx.ui.mention.closed.as_deref() != Some(cx.ui.draft.as_str())
+    cx.ui.dock.compose.is_none() && cx.ui.mention.closed.as_deref() != Some(cx.ui.draft.as_str())
 }
 
 fn served<'f>(feed: &'f Feed, target: &DetailRef) -> Option<&'f SessionFiles> {
@@ -233,6 +232,13 @@ pub fn menu(cx: &Cx<'_>) -> Option<MentionMenu> {
         .map(|query| listing(cx.id, folder, Some(query)))
         .filter(|target| served(cx.feed, target).is_some());
     let filtered = searched.is_some();
+    // corrald matches substrings only, so its search adds the names the cut listing left out
+    // while the listing keeps the looser local matches.
+    let held = if filtered {
+        served(cx.feed, &whole)
+    } else {
+        None
+    };
     let target = searched.unwrap_or(whole);
     let Some(listing) = served(cx.feed, &target) else {
         menu.note = Some(match ReadState::of(cx.feed.detail(&target), cx.feed) {
@@ -241,10 +247,12 @@ pub fn menu(cx: &Cx<'_>) -> Option<MentionMenu> {
         });
         return Some(menu);
     };
-    let mut ranked: Vec<(u8, &str, bool)> = listing
-        .entries
-        .iter()
-        .filter(|entry| entry.name != ".git")
+    let mut seen = std::collections::HashSet::new();
+    let mut ranked: Vec<(u8, &str, bool)> = held
+        .into_iter()
+        .flat_map(|held| held.entries.iter())
+        .chain(listing.entries.iter())
+        .filter(|entry| entry.name != ".git" && seen.insert(entry.name.as_str()))
         .filter_map(|entry| {
             rank(&entry.name, &query).map(|rank| (rank, entry.name.as_str(), entry.directory))
         })
@@ -288,9 +296,15 @@ pub fn menu(cx: &Cx<'_>) -> Option<MentionMenu> {
         .enumerate()
         .map(|(offset, (_, name, directory))| {
             let text = if *directory {
-                format!("{before}{}", mention(&format!("{shown_folder}{name}/"), true))
+                format!(
+                    "{before}{}",
+                    mention(&format!("{shown_folder}{name}/"), true)
+                )
             } else {
-                format!("{before}{} ", mention(&format!("{shown_folder}{name}"), false))
+                format!(
+                    "{before}{} ",
+                    mention(&format!("{shown_folder}{name}"), false)
+                )
             };
             MentionRow {
                 id: format!("mention-{}", first + offset),

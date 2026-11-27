@@ -159,3 +159,28 @@ fn no_session_key_shadows_a_browser_reserved_key_on_the_web() {
     );
     assert!(bound(Form::Phone, true).is_empty());
 }
+
+/// A typed `/rewind 3` that the app did not open went to the host as text, where Pi's own
+/// `/rewind` command restores the turn without the confirmation asked here; and the menu's
+/// rewind asked the host while it said it could not rewind now.
+#[test]
+fn a_rewind_the_host_has_not_offered_never_leaves_the_app() {
+    let send = |session: &Id| Action::Send {
+        session: session.clone(),
+        text: "/rewind 3".into(),
+        policy: corral_protocol::session_state::SendPolicy::Steer,
+        attachments: Vec::new(),
+        restore: None,
+    };
+    let (id, feed, _) = worker_run(Some("no checkpoint yet"));
+    let mut state = State::default();
+    assert!(state.act(send(&id), &feed).is_empty());
+    let menu = Action::Control {
+        session: id.clone(),
+        control: Control::Rewind(3),
+    };
+    assert!(state.act(menu, &feed).is_empty());
+    let (id, mut feed, _) = worker_run(None);
+    feed.live.remove(&id);
+    assert!(State::default().act(send(&id), &feed).is_empty());
+}

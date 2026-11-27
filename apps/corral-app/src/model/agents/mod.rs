@@ -27,7 +27,8 @@ pub mod switcher;
 
 pub use control::{
     Control, ControlAsk, Kind, RewindPoint, RewindSheet, ask, control_label, control_verbs,
-    controls, kind, rewind_can, rewind_offered, rewind_sheet, status as control_status,
+    controls, kind, rewind_blocked, rewind_can, rewind_offered, rewind_sheet,
+    status as control_status,
 };
 pub use lines::{SessionLine, removable, session_line, session_lines};
 pub(crate) use live::{briefed_question, clock, placement, unix};

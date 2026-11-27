@@ -38,8 +38,8 @@ mod task;
 mod usage;
 
 pub(crate) use files::{HtmlStop, html_target};
-pub(crate) use mention_menu::mention_menu;
 pub(in crate::screens::agents) use header::popup;
+pub(crate) use mention_menu::mention_menu;
 
 use corral_protocol::detail::DetailRef;
 use nsh_core::desktop::WindowAttributes;

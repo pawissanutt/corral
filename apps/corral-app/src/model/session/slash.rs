@@ -114,7 +114,11 @@ fn rank(command: &str, description: &str, name: &str, args: bool) -> Option<u8> 
     if command.starts_with(name) {
         return Some(0);
     }
-    if command.split(':').skip(1).any(|part| part.starts_with(name)) {
+    if command
+        .split(':')
+        .skip(1)
+        .any(|part| part.starts_with(name))
+    {
         return Some(1);
     }
     if name.chars().count() < 2 {
@@ -223,8 +227,9 @@ pub fn slash(cx: &Cx<'_>, catalog: &SessionActions) -> Option<SlashMenu> {
                 },
                 what,
             }),
-            // Read as the send reads it, so Enter here and Enter on the closed menu agree; text
-            // that is no rewind is not this row's and goes to the host as typed.
+            // Read as the send reads it, so Enter here and Enter on the closed menu agree; a
+            // prefix without arguments (`/`, `/rew`) lists the turns, and arguments that are no
+            // rewind are not this row's and go to the host as typed.
             (
                 Action::Control {
                     session,
@@ -236,6 +241,7 @@ pub fn slash(cx: &Cx<'_>, catalog: &SessionActions) -> Option<SlashMenu> {
                     session: session.clone(),
                     control: turn.map_or(Control::Rewinds, Control::Rewind),
                 },
+                None if !argued => found.action.clone(),
                 None => continue,
             },
             (action, _) => action.clone(),
@@ -334,11 +340,11 @@ mod tests {
     use corral_protocol::detail::{SessionCommands, SlashCommand};
 
     use super::*;
+    use crate::model::Id;
     use crate::model::daemon::{DetailCache, Feed, detail_key};
     use crate::model::health::daemon_env;
     use crate::model::nav::Form;
     use crate::model::session::{Facts, SessionRole, Ui, actions};
-    use crate::model::Id;
 
     fn skill(name: &str) -> SlashCommand {
         SlashCommand {
