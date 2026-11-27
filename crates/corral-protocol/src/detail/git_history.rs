@@ -22,6 +22,9 @@ pub struct GitHistoryPage {
     pub skip: u64,
     /// At most `GIT_HISTORY_PAGE` commits.
     pub commits: Vec<GitCommit>,
+    /// The ref listing hit its bound, so any commit may lack some of its labels.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub refs_incomplete: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -40,9 +43,19 @@ pub struct GitCommit {
     /// Local branches (`main`), tags (`tag: v1`) and `HEAD` that point at this commit.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub refs: Vec<String>,
+    /// Ref labels at this commit beyond those listed (at most 16 are).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub refs_omitted: u64,
     /// What Corral recorded about exactly this commit in this project; empty when nothing.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<GitCommitLink>,
+    /// Such records beyond those listed (at most 16 are).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub links_omitted: u64,
+}
+
+fn is_zero(count: &u64) -> bool {
+    *count == 0
 }
 
 /// One run record naming this exact commit. It proves what `relation` says, never that the

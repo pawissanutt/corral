@@ -12,8 +12,6 @@ use corral_protocol::detail::{
 
 use super::{NotFound, REPLY_MAX, details::reply_page, fingerprint, json_len};
 
-/// Links kept per commit; a commit is named by a handful of runs at most.
-const LINKS_MAX: usize = 16;
 /// Characters of a task title a link carries.
 const TITLE_MAX: usize = 200;
 /// Deepest walk a page token may ask for.
@@ -45,6 +43,7 @@ pub(super) fn read(
         tip: history.tip,
         skip: skip as u64,
         commits: history.commits.into_iter().map(commit).collect(),
+        refs_incomplete: history.refs_incomplete,
     };
     let mut more = history.more;
     // Leave room for the envelope; drop the oldest commits of the page, never skip any.
@@ -112,7 +111,9 @@ fn commit(commit: corral_engine::git_history::HistoryCommit) -> GitCommit {
         authored: git.authored,
         committed: git.committed,
         refs: commit.refs,
-        links: commit.links.into_iter().take(LINKS_MAX).map(link).collect(),
+        refs_omitted: commit.refs_omitted,
+        links: commit.links.into_iter().map(link).collect(),
+        links_omitted: commit.links_omitted,
     }
 }
 

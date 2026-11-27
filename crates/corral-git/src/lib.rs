@@ -7,10 +7,11 @@ use anyhow::{Context, Result, bail};
 
 mod command_lease;
 pub use command_lease::{CommandLease, InheritedCommandLeases, inherit_command_leases};
+mod bounded;
 #[cfg(test)]
 mod contract_tests;
 mod graph;
-pub use graph::{GraphCommit, log_page, ref_labels, resolve_tip};
+pub use graph::{GraphCommit, LABELS_MAX, RefLabels, log_page, ref_labels, resolve_tip};
 mod history;
 mod memo;
 mod objects;

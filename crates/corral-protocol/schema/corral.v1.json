@@ -5368,6 +5368,12 @@
             },
             "type": "array"
           },
+          "links_omitted": {
+            "description": "Such records beyond those listed (at most 16 are).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "parents": {
             "description": "Every parent's full commit ID in Git's order (first parent first). A parent need not\nbe on this page: it is further down the walk, never a root.",
             "items": {
@@ -5381,6 +5387,12 @@
               "type": "string"
             },
             "type": "array"
+          },
+          "refs_omitted": {
+            "description": "Ref labels at this commit beyond those listed (at most 16 are).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
           },
           "sha": {
             "description": "Full commit ID.",
@@ -5445,6 +5457,10 @@
           "reference": {
             "description": "The fully qualified ref read (`refs/heads/main`), or `HEAD` for the project checkout's.",
             "type": "string"
+          },
+          "refs_incomplete": {
+            "description": "The ref listing hit its bound, so any commit may lack some of its labels.",
+            "type": "boolean"
           },
           "skip": {
             "description": "Commits already walked before this page.",

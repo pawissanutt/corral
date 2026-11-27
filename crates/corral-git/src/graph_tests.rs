@@ -66,7 +66,9 @@ fn pages_follow_git_ancestry_across_a_merge() {
             .is_some_and(|c| c.sha == root && c.parents.is_empty())
     );
 
-    let labels = ref_labels(repo, &walked.iter().map(|c| c.sha.clone()).collect()).unwrap();
+    let labels = ref_labels(repo, &walked.iter().map(|c| c.sha.clone()).collect())
+        .unwrap()
+        .labels;
     assert_eq!(labels[&merge], ["HEAD", "main"]);
     assert_eq!(labels[&side], ["feature"]);
     assert_eq!(labels[&main], ["tag: v1"]);
@@ -95,4 +97,45 @@ fn shallow_boundary_keeps_its_real_parent() {
     let page = log_page(&clone, &tip, 0, 10).unwrap();
     assert_eq!(page.len(), 1);
     assert_eq!(page[0].parents, [root]);
+}
+
+fn fixture(repo: &Path) {
+    crate::git(repo, &["init", "-q", "-b", "main"]).unwrap();
+    crate::git(repo, &["config", "user.name", "Fixture"]).unwrap();
+    crate::git(repo, &["config", "user.email", "fixture@example.test"]).unwrap();
+}
+
+/// A graft hiding a commit's parent makes `git log` report it as a root; the page walks the
+/// recorded parents instead.
+#[test]
+fn a_graft_does_not_turn_a_child_into_a_root() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    fixture(repo);
+    let parent = commit(repo, "parent");
+    let child = commit(repo, "child");
+    std::fs::write(repo.join(".git/info/grafts"), format!("{child}\n")).unwrap();
+    let page = log_page(repo, &child, 0, 10).unwrap();
+    let walked: Vec<_> = page
+        .iter()
+        .map(|c| (c.sha.clone(), c.parents.clone()))
+        .collect();
+    assert_eq!(walked, [(child, vec![parent.clone()]), (parent, vec![])]);
+}
+
+/// A commit with more refs than a page keeps still shows the first ones and counts the rest.
+#[test]
+fn labels_past_the_cap_are_counted_not_dropped() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    fixture(repo);
+    let tip = commit(repo, "tip");
+    for n in 0..20 {
+        crate::git(repo, &["branch", &format!("b{n:02}")]).unwrap();
+    }
+    let found = ref_labels(repo, &BTreeSet::from([tip.clone()])).unwrap();
+    assert_eq!(found.labels[&tip].len(), LABELS_MAX);
+    // HEAD, main and 20 branches.
+    assert_eq!(found.omitted[&tip], 22 - LABELS_MAX as u64);
+    assert!(!found.incomplete);
 }
