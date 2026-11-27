@@ -269,7 +269,9 @@ impl Nav {
             *last
         });
         self.gens.update(|gens| {
-            gens.resize(gens.len().max(at + 1), 0);
+            // Depths past the vector inherit its last round (`key`): extending keeps theirs.
+            let inherited = gens.last().copied().unwrap_or(0);
+            gens.resize(gens.len().max(at + 1), inherited);
             for slot in &mut gens[at..] {
                 *slot = round;
             }
@@ -370,12 +372,12 @@ impl Nav {
             }
             return;
         }
-        let Some((pages, config)) = self.stack.with_untracked(|s| {
-            (s.len() > depth).then(|| {
-                let leaving = &s[depth..];
-                let config = leaving.contains(&Entry::Section(SettingsSection::Config));
-                (pages_of(leaving).len(), config)
-            })
+        // A page above still sliding out left the model already: only those shown go now.
+        let visible = self.visible();
+        let Some((pages, config)) = (self.stack.with_untracked(Vec::len) > depth).then(|| {
+            let going = visible.get(depth..).unwrap_or_default();
+            let config = going.contains(&Entry::Section(SettingsSection::Config));
+            (pages_of(going).len(), config)
         }) else {
             return;
         };
@@ -506,7 +508,9 @@ impl Nav {
             untracked(|| {
                 page_scroll().set(PageScroll::default());
                 if !grew {
-                    self.drawn_from.set(len);
+                    // What a page still sliding out uncovered stays drawn.
+                    let shown = self.leaving.get_untracked().map_or(len, |at| at.min(len));
+                    self.drawn_from.set(shown);
                     return;
                 }
                 self.drawn_from.set(len - 1);
