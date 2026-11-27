@@ -344,6 +344,36 @@ test("chat rewinds its saved conversation without touching a Git checkout", asyn
   } finally { await fx.close(); }
 });
 
+test("build checkpoints and rescues refuse flags that hide worktree changes without modifying the index", () => {
+  const work = mkdtempSync(join(tmpdir(), "corral-build-checkpoint-flags-"));
+  try {
+    const buildBranch = "build/flags", cwd = worktree(work, buildBranch);
+    const file = join(cwd, "tracked");
+    const index = git(cwd, "rev-parse", "--path-format=absolute", "--git-path", "index");
+    const snapshots = new Checkpoints({ git: { cwd, buildBranch }, id: "B-flags", record: () => undefined });
+    const checkpoint = snapshots.capture("start", 1);
+    const { commit, head } = checkpoint;
+    if (!commit || !head) throw new Error(checkpoint.error ?? "missing checkpoint");
+    const refs = () => git(cwd, "for-each-ref", "refs/worktree/corral/checkpoints", "refs/corral/rescue/B-flags");
+    const saved = refs();
+    for (const flag of ["assume-unchanged", "skip-worktree"]) {
+      git(cwd, "update-index", `--${flag}`, "--", "tracked");
+      const originalIndex = readFileSync(index);
+      writeFileSync(file, "not in HEAD\n");
+      const entry = snapshots.capture("start", 2);
+      expect(entry.commit).toBeUndefined();
+      expect(entry.error).toContain(flag);
+      expect(() => snapshots.restore({ ...checkpoint, commit, head })).toThrow(flag);
+      expect(readFileSync(index)).toEqual(originalIndex);
+      expect(readFileSync(file, "utf8")).toBe("not in HEAD\n");
+      expect(git(cwd, "rev-parse", "HEAD")).toBe(head);
+      expect(refs()).toBe(saved);
+      git(cwd, "update-index", `--no-${flag}`, "--", "tracked");
+      git(cwd, "restore", "--", "tracked");
+    }
+  } finally { rmSync(work, { recursive: true, force: true }); }
+});
+
 test("a failed snapshot is recorded with its error and never throws into the turn", () => {
   // An unborn repository has no HEAD even when TMPDIR sits inside another Git worktree.
   const work = mkdtempSync(join(tmpdir(), "corral-pi-checkpoints-"));

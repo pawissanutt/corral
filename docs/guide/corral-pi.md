@@ -424,8 +424,10 @@ was enabled are not available for rewind.
   or change the build checkout from another process during a turn or rewind;
   Git updates the index and `HEAD` separately, so external changes cannot be
   treated as one atomic operation. Checkpoint refs are scoped to the worktree
-  and session id. Rewind refuses if restoring a checkpoint would overwrite
-  ignored files that were not saved.
+  and session id. Checkpointing and rewind refuse if the index has
+  `assume-unchanged` or `skip-worktree` entries that could hide file changes.
+  Rewind also refuses if restoring a checkpoint would overwrite ignored files
+  that were not saved.
 - **Chat, `build --here`, and builds outside Git:** rewind only the conversation.
   Files, branches and the Git index are untouched, and no rescue ref is created.
   The separate in-place `corral-pi code` mode does not offer rewind.

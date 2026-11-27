@@ -10,6 +10,7 @@ import { execFileSync } from "node:child_process";
 export const CHECKPOINT_ENTRY = "corral_checkpoint";
 const GIT_TIMEOUT_MS = 120_000;
 const ERROR_MAX_CHARS = 512;
+const BUILD_INDEX_LIST_MAX_BYTES = 16 * 1024 * 1024;
 const IDENTITY = {
   GIT_AUTHOR_NAME: "corral checkpoint", GIT_AUTHOR_EMAIL: "corral@localhost",
   GIT_COMMITTER_NAME: "corral checkpoint", GIT_COMMITTER_EMAIL: "corral@localhost",
@@ -56,10 +57,11 @@ export class Checkpoints {
 
   get conversationOnly(): boolean { return this.host.git === undefined; }
 
-  private git(args: readonly string[], env: Record<string, string> = {}, raw = false): string {
+  private git(args: readonly string[], env: Record<string, string> = {}, raw = false, maxBuffer?: number): string {
     if (!this.host.git) throw new Error("this checkpoint has no Git worktree");
     const result = execFileSync("git", ["-C", this.host.git.cwd, ...args], {
       env: { ...process.env, ...env }, stdio: ["ignore", "pipe", "pipe"], timeout: GIT_TIMEOUT_MS, encoding: "utf8",
+      ...(maxBuffer === undefined ? {} : { maxBuffer }),
     });
     return raw ? result : result.trim();
   }
@@ -210,6 +212,12 @@ export class Checkpoints {
         .some(name => existsSync(join(gitDir, name)))) throw new Error("finish or abort the in-progress Git operation before rewinding the build");
       const stat = lstatSync(index, { throwIfNoEntry: false });
       if (stat && !stat.isFile()) throw new Error("build rewind needs a regular Git index");
+      // A copy inherits flags that can make `git add -A` silently reuse stale blobs.
+      // `ls-files -v` lowercases assume-unchanged tags and uses S for skip-worktree.
+      const entries = this.git(["ls-files", "-v", "--sparse", "-z"], {}, true, BUILD_INDEX_LIST_MAX_BYTES);
+      if (/(?:^|\0)[a-zS] /.test(entries)) {
+        throw new Error("build checkpoint or rewind refused: clear assume-unchanged or skip-worktree flags and try again");
+      }
       return use(requireLock, (shadow, moveBranch) => {
         if (stat) fchmodSync(fd, stat.mode & 0o777);
         writeFileSync(fd, readFileSync(shadow));
