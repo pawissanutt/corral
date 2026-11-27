@@ -28,7 +28,9 @@ with the same name does not replace the built-in one.
 Use **Settings → Configuration → Skills** in the app to read a skill or change its
 availability. Switches apply by name to new Pi sessions throughout this workspace;
 turning off `debugging` does not expose a shadowed project copy. Required role
-procedures cannot be switched off. Built-in text is read-only.
+procedures cannot be switched off. If a custom skill has the same name as a role procedure,
+its switch affects only sessions that would load the custom file; the role still loads its
+required procedure. Built-in text is read-only.
 
 Select a project to manage its `.agents/skills` files. For project files, **Allowed by workspace** describes the name switch, not a guarantee that the file is active: a session resolves its own worktree, including its ignore rules. User skill directories must
 be explicitly listed under `[skills]` in `.corral-next/pi.toml`, for example:

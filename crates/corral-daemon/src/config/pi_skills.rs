@@ -63,6 +63,13 @@ struct Policy {
     disabled: Vec<String>,
     user_dirs: Vec<String>,
 }
+// Match JavaScript String.trim() used by Pi's workspace policy reader (including BOM).
+fn policy_string(s: &str) -> bool {
+    !s.is_empty()
+        && !s.contains('\0')
+        && s.trim_matches(|c: char| (c.is_whitespace() && c != '\u{85}') || c == '\u{feff}') == s
+}
+
 fn policy(doc: &DocumentMut) -> Result<Policy> {
     let table = doc
         .get("skills")
@@ -80,7 +87,7 @@ fn policy(doc: &DocumentMut) -> Result<Policy> {
             .iter()
             .map(|item| {
                 item.as_str()
-                    .filter(|s| !s.is_empty() && s.trim() == *s && !s.contains('\0'))
+                    .filter(|s| policy_string(s))
                     .map(str::to_owned)
                     .context("pi.toml skills entries must be nonempty strings")
             })
@@ -207,12 +214,7 @@ impl Scan {
             Ok(text) => text,
             Err(error) => std::str::from_utf8(&prefix[..error.valid_up_to()])?,
         };
-        let Some(name) = skill_name(text, &path).filter(|name| {
-            name.len() <= 64
-                && name
-                    .bytes()
-                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-        }) else {
+        let Some(name) = skill_name(text, &path).filter(|name| policy_string(name)) else {
             return Ok(());
         };
         if self.paths.insert(path.clone()) {
@@ -311,23 +313,40 @@ fn select(root: &Path, project: Option<&str>, policy: &Policy) -> Result<Vec<Ent
     let home = std::env::var_os("HOME").map(PathBuf::from);
     for dir in &policy.user_dirs {
         let path = if let Some(suffix) = dir.strip_prefix("~/") {
-            let Some(home) = &home else {
-                continue;
-            };
-            if suffix.starts_with('/') {
-                continue;
-            }
-            home.join(suffix)
+            let home = home
+                .as_ref()
+                .context("Cannot expand skills.user_dirs without home")?;
+            home.join(suffix.trim_start_matches('/'))
         } else {
             PathBuf::from(dir)
         };
-        if !path.is_absolute()
-            || path == Path::new("/")
-            || home.as_ref().is_some_and(|home| home.starts_with(&path))
-        {
-            continue;
+        ensure!(
+            path.is_absolute(),
+            "skills.user_dirs entries must be absolute or start with ~/"
+        );
+        let mut normalized = PathBuf::from("/");
+        for part in path.components() {
+            match part {
+                Component::ParentDir => {
+                    normalized.pop();
+                }
+                Component::Normal(name) => normalized.push(name),
+                _ => (),
+            }
         }
-        scan.root(&path, PiSkillSource::User)?;
+        let actual = normalized
+            .canonicalize()
+            .unwrap_or_else(|_| normalized.clone());
+        ensure!(
+            normalized != Path::new("/")
+                && !home.as_ref().is_some_and(|home| {
+                    home.canonicalize()
+                        .unwrap_or_else(|_| home.clone())
+                        .starts_with(&actual)
+                }),
+            "skills.user_dirs cannot include home or an ancestor of home"
+        );
+        scan.root(&normalized, PiSkillSource::User)?;
     }
     // In the next-generation workspace, only registry entries are trusted as project roots.
     if let Some(project) = project {
@@ -346,7 +365,10 @@ fn select(root: &Path, project: Option<&str>, policy: &Policy) -> Result<Vec<Ent
     for entry in &mut scan.entries {
         // Project directories are resolved by the SDK in the session's actual worktree,
         // including its ignore files. Never infer a winning project file from this inventory.
-        entry.row.shadowed = if entry.row.source == PiSkillSource::Project {
+        entry.row.shadowed = if entry.row.required {
+            // Required procedures take precedence only in the roles that register them.
+            false
+        } else if entry.row.source == PiSkillSource::Project {
             names.contains(&entry.row.name)
         } else {
             !names.insert(entry.row.name.clone())
@@ -528,16 +550,16 @@ pub(crate) fn toggle(root: &Path, req: PiSkillToggle) -> Result<PiSkillsCatalog>
             let entries = select(root, req.project.as_deref(), &policy)?;
             let entry = entries
                 .iter()
-                .find(|entry| entry.row.name == req.name && !entry.row.shadowed)
-                .context("Unknown Pi skill name")?;
-            ensure!(
-                !entry.row.required,
-                "Role procedures cannot be switched off"
-            );
+                .find(|entry| {
+                    entry.row.name == req.name && !entry.row.shadowed && !entry.row.required
+                })
+                .context(
+                    "No switchable skill with this name; role procedures are always required",
+                )?;
             let unchanged = req.enabled == entry.row.enabled;
             result.skills = entries.into_iter().map(|entry| entry.row).collect();
             for row in &mut result.skills {
-                if row.name == req.name && !row.shadowed {
+                if row.name == req.name && !row.shadowed && !row.required {
                     row.enabled = req.enabled;
                 }
             }
@@ -683,7 +705,10 @@ mod tests {
         let user = root.join("user");
         fs::create_dir(&state)?;
         fs::create_dir(&user)?;
-        fs::write(user.join("extra.md"), BODY.replace("programming", "extra"))?;
+        fs::write(
+            user.join("extra.md"),
+            BODY.replace("programming", "Team-Notes"),
+        )?;
         let path = state.join("pi.toml");
         let unrelated = "[hosted_tools]\nweb_search = 'off'\n";
         fs::write(
@@ -724,7 +749,7 @@ mod tests {
             before
                 .skills
                 .iter()
-                .any(|s| s.name == "extra" && s.editable)
+                .any(|s| s.name == "Team-Notes" && s.editable)
         );
         assert!(
             before
@@ -740,9 +765,44 @@ mod tests {
                 .iter()
                 .any(|s| s.name == "programming" && !s.enabled)
         );
-        assert!(toggle(root, request("extra", &before.revision)).is_err());
+        assert!(toggle(root, request("Team-Notes", &before.revision)).is_err());
         assert!(toggle(root, request("unknown", &after.revision)).is_err());
-        assert!(fs::read_to_string(path)?.starts_with(unrelated));
+        let after = toggle(root, request("Team-Notes", &after.revision))?;
+        assert!(
+            after
+                .skills
+                .iter()
+                .any(|s| s.name == "Team-Notes" && !s.enabled)
+        );
+        fs::write(
+            user.join("worker.md"),
+            BODY.replace("programming", "corral-worker"),
+        )?;
+        let mut enable = request("corral-worker", &after.revision);
+        enable.enabled = true;
+        let enabled = toggle(root, enable)?;
+        let disabled = toggle(root, request("corral-worker", &enabled.revision))?;
+        assert!(
+            disabled
+                .skills
+                .iter()
+                .any(|s| s.name == "corral-worker" && !s.required && !s.enabled)
+        );
+        assert!(
+            disabled
+                .skills
+                .iter()
+                .any(|s| s.name == "corral-worker" && s.required && s.enabled)
+        );
+        assert!(fs::read_to_string(&path)?.starts_with(unrelated));
+        for invalid in ["relative", "/", "~/"] {
+            let invalid_doc = format!("[skills]\nuser_dirs = ['{invalid}']\n");
+            fs::write(&path, &invalid_doc)?;
+            assert!(catalog(root, PiSkillsRequest { project: None }).is_err());
+            let (revision, _) = pi_preferences::read(root)?;
+            assert!(toggle(root, request("frontend", &revision)).is_err());
+            assert_eq!(fs::read_to_string(&path)?, invalid_doc);
+        }
         Ok(())
     }
 }
