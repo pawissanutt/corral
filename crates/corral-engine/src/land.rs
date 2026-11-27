@@ -243,7 +243,7 @@ impl Engine {
                     Some(&worker.id),
                     EventKind::Landed,
                     actor,
-                    json!({"sha":worker.head_sha,"base":target}),
+                    json!({"sha":worker.head_sha,"base":target,"project":task.project}),
                 )?;
                 self.record_forced_approve(store, &task, &worker.id, force, &skipped, actor)
             })

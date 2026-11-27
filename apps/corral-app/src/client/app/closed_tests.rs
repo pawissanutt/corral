@@ -146,6 +146,7 @@ fn an_unchanged_first_commit_page_drops_the_older_pages_it_did_not_read_again() 
                 links_omitted: 0,
             }],
             refs_incomplete: false,
+            links_incomplete: false,
         })),
     };
     ask("first", None, None, page("p0", "tip", Some("1")));

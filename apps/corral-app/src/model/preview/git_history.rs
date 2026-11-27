@@ -141,6 +141,7 @@ pub(super) fn serve(
         skip: skip as u64,
         commits,
         refs_incomplete: false,
+        links_incomplete: false,
     };
     let pages: Vec<DetailReply> = (0..shown)
         .map(|i| DetailReply {
@@ -265,18 +266,11 @@ const MAIN_LINKS: &[(&str, &str, Linked)] = &[
 ];
 
 /// The links on a local branch's own tip commit, by branch name.
-const BRANCH_LINKS: &[(&str, &str, Linked)] = &[
-    (
-        "corral",
-        "corral/T-11",
-        ("T-11", "R1", GitLinkRelation::Candidate, true),
-    ),
-    (
-        "corral",
-        "corral/T-11",
-        ("T-11", "R2", GitLinkRelation::Reviewed, true),
-    ),
-];
+const BRANCH_LINKS: &[(&str, &str, Linked)] = &[(
+    "corral",
+    "corral/T-11",
+    ("T-11", "R1", GitLinkRelation::Candidate, true),
+)];
 
 /// The links `table` holds for `project` at `at`, titled by the sample task when it is known.
 fn links(

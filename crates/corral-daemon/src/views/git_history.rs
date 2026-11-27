@@ -2,7 +2,7 @@
 //! links only where a run record names the exact commit.
 use anyhow::{Context, Result, ensure};
 use corral_engine::{
-    Engine, Outcome, Role,
+    Engine,
     git_history::{HistoryLink, LinkBasis},
 };
 use corral_protocol::detail::{
@@ -44,6 +44,7 @@ pub(super) fn read(
         skip: skip as u64,
         commits: history.commits.into_iter().map(commit).collect(),
         refs_incomplete: history.refs_incomplete,
+        links_incomplete: history.links_incomplete,
     };
     let mut more = history.more;
     // Leave room for the envelope; drop the oldest commits of the page, never skip any.
@@ -119,11 +120,9 @@ fn commit(commit: corral_engine::git_history::HistoryCommit) -> GitCommit {
 
 fn link(link: HistoryLink) -> GitCommitLink {
     let run = link.run;
-    let relation = match (link.basis, run.role, run.outcome) {
-        (LinkBasis::Submitted, ..) => GitLinkRelation::Candidate,
-        (_, Role::Worker, Some(Outcome::Landed)) => GitLinkRelation::Landed,
-        (_, Role::Worker, _) => GitLinkRelation::Candidate,
-        (_, Role::Reviewer, _) => GitLinkRelation::Reviewed,
+    let relation = match link.basis {
+        LinkBasis::Landed => GitLinkRelation::Landed,
+        LinkBasis::Submitted => GitLinkRelation::Candidate,
     };
     GitCommitLink {
         session: run

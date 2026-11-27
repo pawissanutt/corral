@@ -49,6 +49,7 @@ pub const EMPTY_HEADING: &str = "No commits";
 pub const UNAVAILABLE_HEADING: &str = "Git history is unavailable";
 pub const STALE: &str = "Shown as last read; reading the history again failed:";
 pub const TIP_CAPTION: &str = "Tip";
+pub const LINKS_INCOMPLETE: &str = "Some Corral records may not be shown: a commit here is named by more records than one read takes.";
 pub const REFS_INCOMPLETE: &str =
     "Some ref labels are not shown: this repository has more refs than one read lists.";
 
@@ -258,6 +259,8 @@ pub struct Page {
     pub overflow: Option<String>,
     /// Some page of the walk says corrald's ref listing hit its bound.
     pub refs_note: Option<&'static str>,
+    /// Some page of the walk says a commit's records were more than corrald reads at once.
+    pub links_note: Option<&'static str>,
     pub more: Option<More>,
     pub inspector: Option<Inspector>,
 }
@@ -313,6 +316,7 @@ pub fn page(state: &State, feed: &Feed, scope: &Scope) -> Page {
         )
     });
     out.refs_note = walk.refs_incomplete.then_some(REFS_INCOMPLETE);
+    out.links_note = walk.links_incomplete.then_some(LINKS_INCOMPLETE);
     out.continuing = continuing(&graph);
     out.below = graph.continuing.iter().map(|open| open.lane).collect();
     out.rows = walk

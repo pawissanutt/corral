@@ -25,6 +25,10 @@ pub struct GitHistoryPage {
     /// The ref listing hit its bound, so any commit may lack some of its labels.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub refs_incomplete: bool,
+    /// Some commit is named by more records than one read takes, so its links may be
+    /// incomplete.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub links_incomplete: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -81,7 +85,7 @@ pub enum GitLinkRelation {
     /// head when it has not landed). The run may have landed a different, rebased commit.
     Candidate,
     /// The reviewer run was bound to this candidate when a verdict on it was recorded; the
-    /// verdict may have been the owner's.
+    /// verdict may have been the owner's. Not served: no record names its project.
     Reviewed,
     #[serde(other)]
     Other,

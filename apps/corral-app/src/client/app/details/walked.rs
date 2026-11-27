@@ -184,6 +184,7 @@ pub(super) fn merge_pages(pages: &[DetailReply]) -> Result<Option<DetailBody>, S
             }
             walk.commits.extend(part.commits.iter().cloned());
             walk.refs_incomplete |= part.refs_incomplete;
+            walk.links_incomplete |= part.links_incomplete;
         }
         return Ok(Some(DetailBody::GitHistory(walk)));
     }
@@ -556,6 +557,7 @@ mod tests {
                     links_omitted: 0,
                 }],
                 refs_incomplete: false,
+                links_incomplete: false,
             })),
         };
         let walk = vec![page("a", "a")];

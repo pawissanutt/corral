@@ -1,7 +1,9 @@
+use corral_engine::EventKind;
 use corral_engine::{Outcome, Role, Run, SessionRef};
 use corral_protocol::detail::{
     DetailBody, DetailGet, DetailRef, GIT_HISTORY_PAGE, GitCommit, GitHistoryPage, GitLinkRelation,
 };
+use serde_json::json;
 
 use super::{
     detail,
@@ -51,6 +53,20 @@ fn run(
     }
 }
 
+fn record(store: &corral_engine::Store, task: &str, kind: EventKind, detail: serde_json::Value) {
+    store
+        .transaction(|store| {
+            store.append_event(&corral_engine::events::NewEvent {
+                task: Some(task.into()),
+                run: Some("R1".into()),
+                kind,
+                actor: corral_engine::model::Actor::Owner,
+                detail,
+            })
+        })
+        .unwrap();
+}
+
 /// The walk is Git's own ancestry from a pinned tip across pages (a merge keeps both parents,
 /// a ref moving mid-walk changes nothing until the first page is read again), and a commit is
 /// linked only through a run of this project's task that recorded exactly that commit.
@@ -77,7 +93,7 @@ fn history_pages_follow_git_from_a_pinned_tip_and_link_only_recorded_commits() {
     git(fixture.shared.root(), &["clone", "-q", "repo", "fork"]);
     std::fs::write(
         fixture.shared.root().join(".corral-next/corral.toml"),
-        "[runner]\nmode = \"process\"\n[projects.demo]\npath = \"repo\"\n[projects.fork]\npath = \"fork\"\n",
+        "[runner]\nmode = \"process\"\n[projects.demo]\npath = \"repo\"\n[projects.fork]\npath = \"fork\"\n[projects.shared]\npath = \"repo\"\n",
     )
     .unwrap();
     fixture.shared.publish();
@@ -111,6 +127,36 @@ fn history_pages_follow_git_from_a_pinned_tip_and_link_only_recorded_commits() {
         ))
         .unwrap();
 
+    // What each run recorded: the landing and the submission name their project; a landing
+    // from before landings did names none, which only a repository used by one project
+    // (the fork's, not `repo`, which `shared` also uses) can vouch for.
+    record(
+        store,
+        &landed,
+        EventKind::Landed,
+        json!({"sha": merge, "project": "demo"}),
+    );
+    record(
+        store,
+        &candidate,
+        EventKind::Done,
+        json!({"sha": side, "project": "demo"}),
+    );
+    record(store, &elsewhere, EventKind::Landed, json!({"sha": plain}));
+    let legacy = fixture.named_task("Legacy landing", Some("demo"));
+    let unvouched = head(&repo, "main~6");
+    store
+        .insert_run(&run(
+            &repo,
+            &legacy,
+            Role::Worker,
+            Some(Outcome::Landed),
+            &unvouched,
+            false,
+        ))
+        .unwrap();
+    record(store, &legacy, EventKind::Landed, json!({"sha": unvouched}));
+
     // The landed task first submitted an older commit, which landing later rebased away.
     let submitted = head(&repo, "main~3");
     store
@@ -132,6 +178,12 @@ fn history_pages_follow_git_from_a_pinned_tip_and_link_only_recorded_commits() {
         store
             .insert_run(&run(&repo, &task, Role::Worker, None, &crowded, false))
             .unwrap();
+        record(
+            store,
+            &task,
+            EventKind::Done,
+            json!({"sha": crowded, "project": "demo"}),
+        );
     }
 
     let get_in = |project: &str, branch: Option<&str>, page: Option<String>| {
@@ -249,6 +301,11 @@ fn history_pages_follow_git_from_a_pinned_tip_and_link_only_recorded_commits() {
         GitLinkRelation::Landed
     );
     assert!(links_at("fork", &merge).is_empty());
+    // Two projects sharing one checkout: a record naming `demo` is not `shared`'s.
+    assert!(links_at("shared", &merge).is_empty());
+    assert!(links_at("shared", &side).is_empty());
+    assert!(links_at("demo", &unvouched).is_empty());
+    assert!(links_at("shared", &unvouched).is_empty());
     assert!(links_at("fork", &submitted).is_empty());
     // Retargeted before it submitted: the event says `fork`, but the run worked in `repo`.
     let relabelled = head(&repo, "main~4");

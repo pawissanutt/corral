@@ -438,11 +438,28 @@ fn commits(app: AppState, data: Memo<Page>) -> AnyElement {
         }))
     })
     .into_element();
+    let links_note = computed(move || data.with(|page| page.links_note));
+    let links_note = dynamic(move || {
+        let words = links_note.get()?;
+        Some(untracked(|| {
+            view()
+                .test_id("history-links-incomplete")
+                .child(notice(
+                    app,
+                    crate::model::Hue::Held,
+                    &vec![span(words)],
+                    None,
+                ))
+                .into_element()
+        }))
+    })
+    .into_element();
     view()
         .flex_col()
         .min_w(px(0.0))
         .child(state_block(app, data))
         .child(refs_note)
+        .child(links_note)
         .child(overflow)
         .child(list)
         .child(below)
