@@ -70,7 +70,7 @@ export interface NativePanelsOptions {
   readonly artifacts?: () => Promise<unknown>;
   /** `corral artifact show` into a private file, for the Artifacts view's byte-exact text and image preview. */
   readonly artifactFile?: (reference: string) => Promise<string>;
-  /** The host's in-process rewind (workers with turn checkpoints); F2 offers the rewind picker while it is given. */
+  /** The host's in-process rewind; F2 offers the rewind picker when turn checkpoints are supported. */
   readonly rewind?: RewindCall;
   readonly exportSession?: () => Promise<string>;
   readonly readTranscript?: TranscriptRead;
@@ -1208,7 +1208,7 @@ export class NativePanels implements PanelSurface {
    * reason it cannot run right now, shortened to the cause. A Display row marks its current value.
    */
   actions(): HostAction[] {
-    const identity = this.options.identity, taskBound = !!identity.task, rewind = identity.role === "worker" ? this.options.rewind : undefined;
+    const { identity, rewind } = this.options, taskBound = !!identity.task;
     const scope = `${identity.role} · ${identity.project}`;
     const ready = (): string | undefined => !this.ui || !this.nativeAction ? "interactive editor unavailable" : undefined;
     const queued = (): string | undefined => ready() ?? (this.editableQueue() ? undefined : "no queued input");

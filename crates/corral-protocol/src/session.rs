@@ -72,11 +72,20 @@ pub enum RewindReply {
     Turn(Rewound),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RewindScope {
+    Conversation,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RewindCheckpoint {
     pub id: String,
     pub phase: String,
     pub turn: u64,
+    /// Absent on checkpoints backed by Git.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<RewindScope>,
     pub commit: Option<String>,
     pub head: Option<String>,
     #[serde(rename = "ref")]
@@ -91,9 +100,12 @@ pub struct RewindCheckpoint {
 pub struct Rewound {
     pub turn: u64,
     pub checkpoint: String,
-    pub rescue_ref: String,
-    pub from_head: String,
-    pub head: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rescue_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_head: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub at: Option<String>,
 }
@@ -111,7 +123,8 @@ mod tests {
             "kind": "list",
             "checkpoints": [
                 {"id": "R1-t1-start", "phase": "start", "turn": 1},
-                {"id": "R1-t2-start", "phase": "start", "turn": 2, "at": checkpoint_time}
+                {"id": "R1-t2-start", "phase": "start", "turn": 2, "at": checkpoint_time,
+                 "commit": "snapshot", "head": "second", "ref": "refs/worktree/checkpoints/2"}
             ],
             "rewinds": [
                 {"turn": 1, "checkpoint": "R1-t1-start", "rescue_ref": "rescue1",
@@ -138,5 +151,25 @@ mod tests {
         assert_eq!(wire["checkpoints"][1]["at"], checkpoint_time);
         assert!(wire["rewinds"][0].get("at").is_none());
         assert_eq!(wire["rewinds"][1]["at"], rewind_time);
+        assert!(wire["checkpoints"][1].get("scope").is_none());
+        assert_eq!(wire["checkpoints"][1]["commit"], "snapshot");
+        assert_eq!(wire["checkpoints"][1]["head"], "second");
+        assert_eq!(wire["checkpoints"][1]["ref"], "refs/worktree/checkpoints/2");
+        assert_eq!(wire["rewinds"][0]["rescue_ref"], "rescue1");
+        assert_eq!(wire["rewinds"][0]["from_head"], "latest");
+        assert_eq!(wire["rewinds"][0]["head"], "initial");
+    }
+
+    #[test]
+    fn conversation_rewind_has_no_git_metadata() {
+        let checkpoint = json!({"id": "t1-start", "phase": "start", "turn": 1,
+            "scope": "conversation", "commit": null, "head": null, "ref": null, "leaf": null, "error": null});
+        let turn = json!({"kind": "turn", "turn": 1, "checkpoint": "t1-start"});
+        let list = json!({"kind": "list", "checkpoints": [checkpoint],
+            "rewinds": [{"turn": 1, "checkpoint": "t1-start"}]});
+        for wire in [list, turn] {
+            let reply: RewindReply = serde_json::from_value(wire.clone()).unwrap();
+            assert_eq!(serde_json::to_value(reply).unwrap(), wire);
+        }
     }
 }

@@ -8264,6 +8264,17 @@
               "null"
             ]
           },
+          "scope": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RewindScope"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Absent on checkpoints backed by Git."
+          },
           "turn": {
             "format": "uint64",
             "minimum": 0,
@@ -8320,6 +8331,12 @@
           }
         ]
       },
+      "RewindScope": {
+        "enum": [
+          "conversation"
+        ],
+        "type": "string"
+      },
       "Rewound": {
         "properties": {
           "at": {
@@ -8332,13 +8349,22 @@
             "type": "string"
           },
           "from_head": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "head": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "rescue_ref": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "turn": {
             "format": "uint64",
@@ -8348,10 +8374,7 @@
         },
         "required": [
           "turn",
-          "checkpoint",
-          "rescue_ref",
-          "from_head",
-          "head"
+          "checkpoint"
         ],
         "type": "object"
       },

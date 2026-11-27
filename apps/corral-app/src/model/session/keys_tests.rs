@@ -60,7 +60,7 @@ fn enter_on_the_open_menu_for_rewind_n_confirms_that_turn() {
     let run = run_of("/rewind 3").expect("`/rewind 3` opens the menu on Rewind");
     assert!(run.contains(&Action::Control {
         session: id.clone(),
-        control: Control::Rewind(3),
+        control: Control::rewind_turn(3),
     }));
     let listed = run_of("/rewind --list").expect("`/rewind --list` opens the menu on Rewind");
     assert!(listed.contains(&Action::Control {
@@ -177,7 +177,7 @@ fn a_rewind_the_host_has_not_offered_never_leaves_the_app() {
     assert!(state.act(send(&id), &feed).is_empty());
     let menu = Action::Control {
         session: id.clone(),
-        control: Control::Rewind(3),
+        control: Control::rewind_turn(3),
     };
     assert!(state.act(menu, &feed).is_empty());
     let (id, mut feed, _) = worker_run(None);

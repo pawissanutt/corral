@@ -1,6 +1,6 @@
 // The rewind picker (F2 › Rewind to an earlier turn…): the host's `rewind --list` (the transcript's turn checkpoints
-// and the rewinds already made) as Pi's own select, drawn as the docked owner card; then one confirm that says the
-// current work is saved under a rescue ref; then the host's `rewind {turn}`. The host owns every step: this module
+// and the rewinds already made) as Pi's own select, drawn as the docked owner card; then one confirmation and
+// the host's `rewind {turn}`. The host owns every step: this module
 // only words its list and its answer, and never touches Git or the transcript.
 import type { ExtensionContext, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import type { RewindInput } from "../bridge/protocol.ts";
@@ -14,10 +14,10 @@ export type TranscriptBranch = Pick<ExtensionContext["sessionManager"], "getBran
 /** The host's rewind: `{list: true}` answers `{checkpoints, rewinds}`, `{turn}` the rewind it made. */
 export type RewindCall = (input: RewindInput) => Promise<Record<string, unknown>>;
 
-export interface RewindChoice { readonly turn: number; readonly label: string }
+export interface RewindChoice { readonly turn: number; readonly label: string; readonly conversationOnly?: true }
 
 const PROMPT_CELLS = 60;
-const RESCUE_PREFIX = "refs/worktree/corral/rescue/";
+const RESCUE_PREFIX = /^refs\/(?:worktree\/)?corral\/rescue\//;
 
 const record = (value: unknown): Record<string, unknown> | undefined =>
   value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
@@ -59,20 +59,24 @@ export function turnPrompts(manager: TranscriptBranch | undefined): Map<string, 
 }
 
 /**
- * Turns a rewind can return to, newest first: one per turn whose start checkpoint saved a commit and a head (the
- * host refuses any other), `Turn 3 · “what started it” · head 1a2b3c4`.
+ * Turns a rewind can return to, newest first. Git checkpoints show their HEAD; a conversation
+ * checkpoint is selectable without a commit.
  */
 export function rewindChoices(listed: unknown, prompts: ReadonlyMap<string, string>): RewindChoice[] {
   const points = Array.isArray(record(listed)?.["checkpoints"]) ? record(listed)!["checkpoints"] as unknown[] : [];
   const latest = new Map<number, Record<string, unknown>>();
   for (const value of points) {
     const point = record(value), turn = point?.["turn"];
-    if (!point || point["phase"] !== "start" || typeof turn !== "number" || !text(point["commit"]) || !text(point["head"])) continue;
+    if (!point || point["phase"] !== "start" || typeof turn !== "number") continue;
     latest.set(turn, point);
   }
-  return [...latest].sort(([a], [b]) => b - a).map(([turn, point]) => {
+  return [...latest].sort(([a], [b]) => b - a).flatMap(([turn, point]) => {
+    const conversationOnly = point["scope"] === "conversation";
+    if (point["error"] || (!conversationOnly && (!text(point["commit"]) || !text(point["head"])))) return [];
     const prompt = prompts.get(String(point["id"]));
-    return { turn, label: `Turn ${turn}${prompt ? ` · “${prompt}”` : ""} · head ${short(point["head"])}` };
+    const label = `Turn ${turn}${prompt ? ` · “${prompt}”` : ""}`;
+    return [conversationOnly ? { turn, label: `${label} · conversation only`, conversationOnly: true as const }
+      : { turn, label: `${label} · head ${short(point["head"])}` }];
   });
 }
 
@@ -105,14 +109,17 @@ export async function runRewind(ui: Pick<ExtensionUIContext, "select" | "confirm
   const choices = rewindChoices(listed, turnPrompts(manager));
   if (!choices.length) { notice("No turn has a saved checkpoint to rewind to yet", "warning"); return; }
   const past = pastRewinds(listed, now);
-  const title = ["Rewind to the start of which turn?", "The worktree and this conversation go back to where that turn began.",
+  const title = ["Rewind to the start of which turn?", choices.every(choice => choice.conversationOnly)
+    ? "Only this conversation goes back to where that turn began. Files and Git are unchanged."
+    : "The worktree and this conversation go back to where that turn began.",
     ...(past.length ? ["", "Earlier rewinds:", ...past] : [])].join("\n");
   const picked = await ui.select(title, choices.map(choice => choice.label));
   const choice = choices.find(item => item.label === picked);
   if (!choice) return;
-  const sure = await ui.confirm(`Rewind to the start of turn ${choice.turn}?`,
-    `Files and conversation return to the start of turn ${choice.turn}; the turns after it leave this conversation. `
-    + `Your current work is saved first under a rescue ref (${RESCUE_PREFIX}…), named when the rewind finishes.`);
+  const sure = await ui.confirm(`Rewind to the start of turn ${choice.turn}?`, choice.conversationOnly
+    ? `This conversation returns to the start of turn ${choice.turn}; later messages are removed. Files and Git are unchanged.`
+    : `Files and conversation return to the start of turn ${choice.turn}; the turns after it leave this conversation. `
+    + "Your current work is saved first under a rescue ref, named when the rewind finishes.");
   if (!sure) return;
   try {
     const done = await rewind({ turn: choice.turn });

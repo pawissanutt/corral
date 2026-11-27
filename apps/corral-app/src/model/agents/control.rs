@@ -1,15 +1,16 @@
 //! Session controls addressed by a session's public id (`T-1_R1`, a chat's `A-1` or `quick`),
 //! never by its pane: Cancel ends the current turn, Pause also holds automated input until
 //! Resume (a message the owner types resumes it too), Terminate ends the host and keeps the
-//! transcript, Relaunch starts a lost host again, Rewind restores a worker's tree to the start
-//! of an earlier turn after saving the current work under a rescue ref. Which controls a menu
+//! transcript, Relaunch starts a lost host again, Rewind restores the start of an earlier turn
+//! (also restoring the tree when the checkpoint is backed by Git). Which controls a menu
 //! offers follows the role and what the rows report; whether the host supports one is
 //! corrald's to say, and its refusal is shown with its reason.
 
 use corral_protocol::rows::{AgentRow, AssistantKind, AssistantLocation, AssistantState};
 use corral_protocol::session::{
-    RewindReply, Rewound, SESSION_CANCEL, SESSION_PAUSE, SESSION_RELAUNCH, SESSION_RESUME,
-    SESSION_REWIND, SESSION_TERMINATE, SessionCancelReply, SessionPauseReply, SessionRelaunched,
+    RewindReply, RewindScope, Rewound, SESSION_CANCEL, SESSION_PAUSE, SESSION_RELAUNCH,
+    SESSION_RESUME, SESSION_REWIND, SESSION_TERMINATE, SessionCancelReply, SessionPauseReply,
+    SessionRelaunched,
 };
 use corral_types::{Refusal, Role, SessionStatus};
 use serde_json::{Value, json};
@@ -39,10 +40,27 @@ pub enum Control {
     Relaunch,
     /// Resume a cold trusted Code host in its checkout.
     ResumeCode,
-    /// Ask for the turns a worker can be rewound to and the rewinds already done.
+    /// Ask for the turns this session can be rewound to and the rewinds already done.
     Rewinds,
-    /// Rewind the worker to the start of this turn.
-    Rewind(u64),
+    /// Rewind to the start of this turn.
+    Rewind(u64, RewindTarget),
+}
+
+/// The checkpoint's scope, as reported in the list. A directly typed turn has no list yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RewindTarget {
+    Git,
+    Conversation,
+    Unlisted,
+}
+
+impl From<Option<RewindScope>> for RewindTarget {
+    fn from(scope: Option<RewindScope>) -> Self {
+        match scope {
+            Some(RewindScope::Conversation) => Self::Conversation,
+            None => Self::Git,
+        }
+    }
 }
 
 /// Which controls a session's role takes.
@@ -56,6 +74,10 @@ pub enum Kind {
 }
 
 impl Control {
+    pub fn rewind_turn(turn: u64) -> Self {
+        Self::Rewind(turn, RewindTarget::Unlisted)
+    }
+
     /// The words of its menu entry.
     pub fn label(self) -> String {
         match self {
@@ -65,7 +87,7 @@ impl Control {
             Self::Terminate => "Terminate".into(),
             Self::Relaunch => "Relaunch".into(),
             Self::Rewinds => "Rewind…".into(),
-            Self::Rewind(turn) => format!("Rewind to turn {turn}"),
+            Self::Rewind(turn, _) => format!("Rewind to turn {turn}"),
         }
     }
 
@@ -78,7 +100,7 @@ impl Control {
             Self::Terminate => "terminate",
             Self::Relaunch => "relaunch",
             Self::Rewinds => "rewind",
-            Self::Rewind(_) => "rewind-turn",
+            Self::Rewind(..) => "rewind-turn",
         }
     }
 
@@ -90,7 +112,7 @@ impl Control {
             Self::ResumeCode => corral_protocol::build::CODE_RESUME,
             Self::Terminate => SESSION_TERMINATE,
             Self::Relaunch => SESSION_RELAUNCH,
-            Self::Rewinds | Self::Rewind(_) => SESSION_REWIND,
+            Self::Rewinds | Self::Rewind(..) => SESSION_REWIND,
         }
     }
 
@@ -98,7 +120,7 @@ impl Control {
     pub fn params(self, session: &str) -> Value {
         match self {
             Self::Rewinds => json!({"id": session, "action": "list"}),
-            Self::Rewind(turn) => json!({"id": session, "action": "turn", "turn": turn}),
+            Self::Rewind(turn, _) => json!({"id": session, "action": "turn", "turn": turn}),
             _ => json!({"id": session}),
         }
     }
@@ -106,7 +128,7 @@ impl Control {
     /// Terminate and a rewind change what cannot be changed back by pressing again, so they
     /// ask once on this device before they are sent.
     pub const fn asks(self) -> bool {
-        matches!(self, Self::Terminate | Self::Rewind(_))
+        matches!(self, Self::Terminate | Self::Rewind(..))
     }
 
     /// What it does, as the confirm sheet says it.
@@ -124,8 +146,14 @@ impl Control {
             (Self::Terminate, _) => {
                 "Stops the host. The transcript stays readable and Relaunch starts it again."
             }
-            (Self::Rewind(_), _) => {
+            (Self::Rewind(_, RewindTarget::Git), _) => {
                 "Cancels the current turn, saves the current work under a rescue ref, then restores the worktree and the conversation to the start of that turn."
+            }
+            (Self::Rewind(_, RewindTarget::Conversation), _) => {
+                "Cancels the current turn and restores only the conversation to the start of that turn. Files are not changed."
+            }
+            (Self::Rewind(_, RewindTarget::Unlisted), _) => {
+                "Cancels the current turn and restores the conversation to the start of that turn. If the checkpoint includes a Git snapshot, it saves the current work under a rescue ref before restoring the worktree."
             }
             _ => "",
         }
@@ -409,7 +437,7 @@ pub fn outcome(control: Control, operation: Option<&Operation>) -> Outcome {
             None => "Relaunched".into(),
         },
         Control::Rewinds => "Rewind points loaded".into(),
-        Control::Rewind(turn) => match operation.decode::<RewindReply>() {
+        Control::Rewind(turn, _) => match operation.decode::<RewindReply>() {
             Some(RewindReply::Turn(rewound)) => rewound_line(&rewound),
             _ => format!("Rewound to turn {turn}"),
         },
@@ -417,10 +445,13 @@ pub fn outcome(control: Control, operation: Option<&Operation>) -> Outcome {
 }
 
 fn rewound_line(rewound: &Rewound) -> String {
-    format!(
-        "Rewound to turn {} · the work before it is saved as {}",
-        rewound.turn, rewound.rescue_ref
-    )
+    match rewound.rescue_ref.as_deref() {
+        Some(reference) => format!(
+            "Rewound to turn {} · the work before it is saved as {reference}",
+            rewound.turn
+        ),
+        None => format!("Conversation rewound to turn {}", rewound.turn),
+    }
 }
 
 /// The session's latest control as the strip under its head says it; none once nothing
@@ -501,14 +532,22 @@ impl State {
     }
 
     /// Picks the turn to rewind to: the sheet closes and the rewind asks once before it goes.
-    pub(super) fn rewind_to(&mut self, turn: u64) -> Vec<Effect> {
-        let Some(rewinding) = self.rewind.take() else {
+    pub(super) fn rewind_to(&mut self, turn: u64, feed: &Feed) -> Vec<Effect> {
+        let Some(sheet) = rewind_sheet(self, feed) else {
             return Vec::new();
         };
+        let Some(point) = sheet
+            .points
+            .iter()
+            .find(|point| point.turn == turn && point.usable)
+        else {
+            return Vec::new();
+        };
+        self.rewind = None;
         vec![Effect::Control {
-            session: rewinding.session,
+            session: sheet.session,
             key: self.ids.next_id(),
-            control: Control::Rewind(turn),
+            control: Control::Rewind(turn, point.target),
             confirmed: false,
         }]
     }
@@ -520,8 +559,9 @@ pub struct RewindPoint {
     pub turn: u64,
     /// `Turn 4`.
     pub label: String,
-    /// `start a1b2c3d`, or why the checkpoint cannot be restored.
+    /// What this point restores, or why it cannot be restored.
     pub detail: String,
+    target: RewindTarget,
     /// When the host recorded the checkpoint (`14:02`), absent from hosts that do not say.
     pub when: Option<String>,
     pub usable: bool,
@@ -533,7 +573,7 @@ pub struct RewindSheet {
     pub session: Id,
     pub title: String,
     /// What a rewind does, said once before the owner picks.
-    pub note: &'static str,
+    pub note: Option<&'static str>,
     /// Loading, refused or empty, in words; none once points are listed.
     pub status: Option<String>,
     /// The heading over the points.
@@ -542,11 +582,20 @@ pub struct RewindSheet {
     pub points: Vec<RewindPoint>,
     /// The heading over the rewinds already done.
     pub done: &'static str,
-    /// Rewinds already done, newest first, each with the rescue ref its work was saved under.
+    /// Rewinds already done, newest first, with their rescue refs when present.
     pub earlier: Vec<String>,
 }
 
-const REWIND_NOTE: &str = "Pick the turn to go back to. The current work is saved under a rescue ref first; you confirm once before anything changes.";
+fn rewind_note(points: &[RewindPoint]) -> Option<&'static str> {
+    let first = points.first()?.target;
+    Some(if points.iter().any(|point| point.target != first) {
+        "Pick a turn to go back to. Checkpoints with a Git snapshot save the current work under a rescue ref first; conversation-only checkpoints leave files unchanged."
+    } else if first == RewindTarget::Conversation {
+        "Pick a turn to go back to. Only the conversation is restored; files are not changed. You confirm once before anything changes."
+    } else {
+        "Pick the turn to go back to. The current work is saved under a rescue ref first; you confirm once before anything changes."
+    })
+}
 
 /// The rewind sheet while it is open.
 pub fn rewind_sheet(state: &State, feed: &Feed) -> Option<RewindSheet> {
@@ -554,7 +603,7 @@ pub fn rewind_sheet(state: &State, feed: &Feed) -> Option<RewindSheet> {
     let mut sheet = RewindSheet {
         session: rewinding.session.clone(),
         title: format!("Rewind {}", rewinding.session),
-        note: REWIND_NOTE,
+        note: None,
         status: None,
         turns: "Go back to the start of",
         points: Vec::new(),
@@ -576,34 +625,49 @@ pub fn rewind_sheet(state: &State, feed: &Feed) -> Option<RewindSheet> {
                     rewinds,
                 }) => {
                     let mut turns: Vec<RewindPoint> = Vec::new();
-                    for point in checkpoints.iter().filter(|point| point.phase == "start") {
+                    // Match the host's latest start checkpoint for each turn.
+                    for point in checkpoints
+                        .iter()
+                        .rev()
+                        .filter(|point| point.phase == "start")
+                    {
                         if turns.iter().any(|known| known.turn == point.turn) {
                             continue;
                         }
-                        let usable = point.error.is_none() && point.commit.is_some();
-                        let detail = match (&point.error, &point.commit) {
-                            (Some(error), _) => format!("cannot be restored: {error}"),
-                            (None, Some(commit)) => {
+                        let target = RewindTarget::from(point.scope);
+                        let snapshot = point.commit.as_deref();
+                        let usable = point.error.is_none()
+                            && (target == RewindTarget::Conversation || snapshot.is_some());
+                        let detail = match (&point.error, target, snapshot) {
+                            (Some(error), _, _) => format!("cannot be restored: {error}"),
+                            (None, RewindTarget::Conversation, _) => "conversation only".into(),
+                            (None, _, Some(commit)) => {
                                 format!("start {}", commit.chars().take(7).collect::<String>())
                             }
-                            (None, None) => "no snapshot recorded".into(),
+                            (None, _, None) => "no snapshot recorded".into(),
                         };
                         turns.push(RewindPoint {
                             turn: point.turn,
                             label: format!("Turn {}", point.turn),
                             detail,
+                            target,
                             when: super::live::clock(point.at.as_deref(), feed),
                             usable,
                         });
                     }
                     turns.sort_by(|a, b| b.turn.cmp(&a.turn));
+                    sheet.note = rewind_note(&turns);
                     sheet.points = turns;
                     sheet.earlier = rewinds
                         .iter()
                         .rev()
                         .map(|done| {
-                            let what =
-                                format!("to turn {} · saved as {}", done.turn, done.rescue_ref);
+                            let what = match done.rescue_ref.as_deref() {
+                                Some(reference) => {
+                                    format!("to turn {} · saved as {reference}", done.turn)
+                                }
+                                None => format!("to turn {} · conversation only", done.turn),
+                            };
                             match super::live::clock(done.at.as_deref(), feed) {
                                 Some(when) => format!("{when} · {what}"),
                                 None => what,
@@ -619,4 +683,84 @@ pub fn rewind_sheet(state: &State, feed: &Feed) -> Option<RewindSheet> {
         }
     }
     Some(sheet)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_rewind_uses_the_checkpoint_scope_not_the_session_role() {
+        let mut state = State::default();
+        let mut feed = Feed::default();
+        let session = Id::from("B-shared");
+        let key = Id::from("list");
+        state.control_sent(session.clone(), key.clone(), Control::Rewinds, None);
+        feed.operations.insert(
+            key,
+            Operation {
+                method: SESSION_REWIND.into(),
+                loading: false,
+                value: Some(json!({
+                    "kind": "list",
+                    "checkpoints": [
+                        {"id": "t1", "phase": "start", "turn": 1, "commit": "123456789", "head": "old"},
+                        {"id": "t2", "phase": "start", "turn": 2, "scope": "conversation"},
+                        {"id": "t3", "phase": "start", "turn": 3, "scope": "conversation"},
+                        {"id": "t3-new", "phase": "start", "turn": 3, "scope": "conversation", "error": "write failed"},
+                        {"id": "t4", "phase": "start", "turn": 4}
+                    ],
+                    "rewinds": [
+                        {"turn": 2, "checkpoint": "t2"},
+                        {"turn": 1, "checkpoint": "t1", "rescue_ref": "refs/worktree/rescue/1"}
+                    ]
+                })),
+                error: None,
+                refusal: None,
+            },
+        );
+        let sheet = rewind_sheet(&state, &feed).unwrap();
+        assert_eq!(
+            sheet
+                .points
+                .iter()
+                .filter(|point| point.usable)
+                .map(|point| point.turn)
+                .collect::<Vec<_>>(),
+            [2, 1]
+        );
+        assert!(sheet.earlier[0].contains("refs/worktree/rescue/1"));
+        assert!(!sheet.earlier[1].contains("saved"));
+        assert!(state.rewind_to(3, &feed).is_empty());
+        let mut git_state = state.clone();
+        for (turn, target) in [(1, RewindTarget::Git), (2, RewindTarget::Conversation)] {
+            let state = if turn == 1 {
+                &mut git_state
+            } else {
+                &mut state
+            };
+            let effects = state.rewind_to(turn, &feed);
+            let [
+                Effect::Control {
+                    session,
+                    key,
+                    control,
+                    confirmed: false,
+                },
+            ] = effects.as_slice()
+            else {
+                panic!("expected a single unconfirmed rewind");
+            };
+            assert_eq!(*control, Control::Rewind(turn, target));
+            assert_eq!(
+                control.params(session),
+                json!({"id": "B-shared", "action": "turn", "turn": turn})
+            );
+            let confirm = ask(&feed, session.clone(), key.clone(), *control);
+            assert_eq!(
+                confirm.rows[1].1.contains("rescue ref"),
+                target == RewindTarget::Git
+            );
+        }
+    }
 }

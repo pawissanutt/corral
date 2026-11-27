@@ -26,8 +26,8 @@ mod start;
 pub mod switcher;
 
 pub use control::{
-    Control, ControlAsk, Kind, RewindPoint, RewindSheet, ask, control_label, control_verbs,
-    controls, kind, rewind_blocked, rewind_can, rewind_offered, rewind_sheet,
+    Control, ControlAsk, Kind, RewindPoint, RewindSheet, RewindTarget, ask, control_label,
+    control_verbs, controls, kind, rewind_blocked, rewind_can, rewind_offered, rewind_sheet,
     status as control_status,
 };
 pub use lines::{SessionLine, removable, session_line, session_lines};
@@ -186,7 +186,7 @@ impl State {
     /// Handles an action. Every operation goes out as an effect; nothing is simulated here.
     pub fn act(&mut self, action: Action, feed: &Feed, filter: &ProjectFilter) -> Vec<Effect> {
         match action {
-            Action::RewindTo(turn) => self.rewind_to(turn),
+            Action::RewindTo(turn) => self.rewind_to(turn, feed),
             Action::CloseRewind => {
                 self.rewind = None;
                 Vec::new()

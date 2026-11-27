@@ -321,9 +321,9 @@ pub(super) fn populate(feed: &mut Feed) {
     streaming.rewinds.push(corral_protocol::session::Rewound {
         turn: 2,
         checkpoint: "cp-0-2".into(),
-        rescue_ref: format!("refs/worktree/corral/rescue/{STREAMING}/0"),
-        from_head: super::sample::sha("rescue-0", 40),
-        head: super::sample::sha("cp-0-2/head", 40),
+        rescue_ref: Some(format!("refs/worktree/corral/rescue/{STREAMING}/0")),
+        from_head: Some(super::sample::sha("rescue-0", 40)),
+        head: Some(super::sample::sha("cp-0-2/head", 40)),
         at: Some(at(HOUR + 45 * MINUTE)),
     });
     feed.hosts.insert(Id::from(STREAMING), streaming);

@@ -6,9 +6,9 @@ import { CHECKPOINT_ENTRY, type CheckpointRecord, type Checkpoints, type RewindP
 interface RewindRecord {
   readonly turn: number;
   readonly checkpoint: string;
-  readonly rescue_ref: string;
-  readonly from_head: string;
-  readonly head: string;
+  readonly rescue_ref?: string;
+  readonly from_head?: string;
+  readonly head?: string;
   readonly at?: string;
 }
 
@@ -16,7 +16,8 @@ type RewindCheckpoint = CheckpointRecord & { readonly at?: string };
 
 interface RewindTarget {
   readonly entry: string;
-  readonly point: RewindPoint;
+  readonly point: CheckpointRecord;
+  readonly git?: RewindPoint;
 }
 
 function checkpoints(manager: SessionManager) {
@@ -39,18 +40,21 @@ export function listRewinds(manager: SessionManager): { checkpoints: RewindCheck
   };
 }
 
-export function rewindPoint(manager: SessionManager, turn: number): RewindTarget {
+export function rewindPoint(manager: SessionManager, turn: number, conversationOnly: boolean): RewindTarget {
   const target = checkpoints(manager).findLast(({ point }) => point.turn === turn && point.phase === "start");
-  const point = target?.point;
-  if (!target || !point?.commit || !point.head) {
-    throw new BridgeRefusal("checkpoint_unavailable", `turn ${turn} has no saved start checkpoint; use /rewind --list`);
+  if (target && !target.point.error) {
+    const { entry, point } = target;
+    if (conversationOnly && point.scope === "conversation") return { entry, point };
+    if (!conversationOnly && !point.scope && point.commit && point.head) {
+      return { entry, point, git: { ...point, commit: point.commit, head: point.head } };
+    }
   }
-  return { entry: target.entry, point: { ...point, commit: point.commit, head: point.head } };
+  throw new BridgeRefusal("checkpoint_unavailable", `turn ${turn} has no saved start checkpoint; use /rewind --list`);
 }
 
 /** Restore Git only after the retained transcript is ready to replace the old one. */
 export function restoreRewind(session: AgentSession, snapshots: Checkpoints,
-  { entry, point }: RewindTarget) {
+  { entry, point, git }: RewindTarget): RewindRecord {
   const manager = session.sessionManager;
   const file = manager.getSessionFile();
   const header = manager.getHeader();
@@ -59,15 +63,16 @@ export function restoreRewind(session: AgentSession, snapshots: Checkpoints,
   try {
     const retained = [header, ...manager.getBranch(entry)].map(item => JSON.stringify(item)).join("\n");
     writeFileSync(cut, `${retained}\n`, { flag: "wx", mode: 0o600 });
-    const rescue = snapshots.restore(point);
-    const result = { turn: point.turn, checkpoint: point.id, rescue_ref: rescue.ref,
-      from_head: rescue.head, head: point.head, at: new Date().toISOString() };
+    const rescue = git && snapshots.restore(git);
+    const result: RewindRecord = { turn: point.turn, checkpoint: point.id, at: new Date().toISOString(),
+      ...(rescue && git ? { rescue_ref: rescue.ref, from_head: rescue.head, head: git.head } : {}) };
     try {
       renameSync(cut, file);
       manager.setSessionFile(file);
       session.refreshContext();
     } catch (error) {
-      throw new Error(`rewind restored the worktree but could not reload the transcript; saved work is at ${rescue.ref}: ${String(error)}`);
+      const detail = rescue ? `; saved work is at ${rescue.ref}` : "";
+      throw new Error(`rewind could not replace or reload the transcript${detail}: ${String(error)}`);
     }
     return result;
   } finally {

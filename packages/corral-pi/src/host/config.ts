@@ -165,7 +165,7 @@ export const EXPLORE_DEFAULT_TIMEOUT_SECS = 300;
 export function workspaceSettings(root: string, role: keyof typeof ABILITIES, run?: string, raw = readPiSettings(root), workspaceBound = false) {
   const hosted = workspaceBound ? parseHostedTools(raw.hosted_tools) : undefined;
   const enabled = [...ABILITIES[role]];
-  if (role === "worker" && run) enabled.push("checkpoints");
+  if (role === "assistant" || role === "build" || (role === "worker" && run)) enabled.push("checkpoints");
   if (raw.bash_rules !== undefined) enabled.push("bash_rules");
   if (raw.hooks !== undefined && role === "worker") enabled.push("hooks");
   if (raw.browser !== undefined && role !== "reviewer") enabled.push("browser");

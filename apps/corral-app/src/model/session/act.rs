@@ -333,7 +333,7 @@ impl State {
                 Vec::new()
             }
             Action::Control { session, control } => {
-                if matches!(control, Control::Rewinds | Control::Rewind(_)) {
+                if matches!(control, Control::Rewinds | Control::Rewind(..)) {
                     self.ui_mut(&session).rewind_armed = None;
                     if let Some(why) = crate::model::agents::rewind_blocked(feed, session.as_str())
                     {
@@ -496,7 +496,7 @@ impl State {
             return vec![Effect::Control {
                 session,
                 key: self.ids.next_id(),
-                control: turn.map_or(Control::Rewinds, Control::Rewind),
+                control: turn.map_or(Control::Rewinds, Control::rewind_turn),
                 confirmed: false,
             }];
         }

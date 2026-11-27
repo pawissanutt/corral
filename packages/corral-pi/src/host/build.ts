@@ -92,11 +92,16 @@ export function buildHostConfig(launch: BuildLaunchOptions, record: BuildSession
   const route = record.route ?? launch;
   const noFallback = launch.noFallback === true || record.route?.noFallback === true;
   const fallback = launch.noFallback === true ? undefined : route.fallback;
+  const settings = workspaceSettings(record.workspaceRoot ?? record.repoRoot, "build", undefined, undefined, !!record.workspaceRoot && !record.bare);
+  // Trusted Code shares the Build host but is a separate in-place session mode.
+  const capabilities = record.trustedCode
+    ? { ...settings.capabilities, enabled: settings.capabilities.enabled.filter(ability => ability !== "checkpoints") }
+    : settings.capabilities;
   return {
     identity: { store: "build", project: record.project ?? "", role: "build" },
     pane: "", cwd: record.worktree, root: record.workspaceRoot ?? record.repoRoot, corral: launch.corral ?? "", assets,
     sessionDir: join(dir, "sessions"), runtimeDir: join(dir, "runtime"), ui: "rich",
-    ...workspaceSettings(record.workspaceRoot ?? record.repoRoot, "build", undefined, undefined, !!record.workspaceRoot && !record.bare),
+    ...settings, capabilities,
     local: { dir, id: record.id, socket: local.socket ?? sessionSocket(dir, process.env), headless: local.headless },
     provider: route.provider, model: route.model,
     effort: route.effort, fallback,

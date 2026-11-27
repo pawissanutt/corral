@@ -72,7 +72,7 @@ pub(super) fn control(
             json!({"paused": false})
         }
         Control::Rewinds => serde_json::to_value(list).map_err(|error| error.to_string())?,
-        Control::Rewind(turn) => rewind(feed, id, turn, &at)?,
+        Control::Rewind(turn, _) => rewind(feed, id, turn, &at)?,
         Control::Terminate | Control::Relaunch | Control::ResumeCode => {
             return Err("terminate and relaunch go through corrald, not the host".into());
         }
@@ -125,9 +125,9 @@ fn rewind(feed: &mut Feed, id: &str, turn: u64, at: &str) -> Result<Value, Strin
     let rewound = Rewound {
         turn,
         checkpoint: point.id.clone(),
-        rescue_ref: format!("refs/worktree/corral/rescue/{id}/{number}"),
-        from_head: sha(&format!("{id}/rescue/{number}"), 40),
-        head: point.head.clone().unwrap_or_default(),
+        rescue_ref: Some(format!("refs/worktree/corral/rescue/{id}/{number}")),
+        from_head: Some(sha(&format!("{id}/rescue/{number}"), 40)),
+        head: point.head.clone(),
         at: Some(at.into()),
     };
     host.transcript.truncate(cut);

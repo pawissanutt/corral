@@ -169,6 +169,68 @@ fn worker_live_replay_cancel_and_paused_engine_send_back_share_the_session() {
     ));
 }
 
+#[test]
+fn build_rewind_routes_list_and_turn_to_the_selected_host() {
+    let fixture = Fixture::new();
+    let build = |id: &str, socket_name: &str| {
+        let dir = fixture.root().join("pi-data/build").join(id);
+        let socket = fixture.root().join(socket_name);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("session.json"),
+            json!({
+                "version": 1, "id": id, "name": "walk", "workspaceRoot": fixture.root(),
+                "repoRoot": fixture.root().join("repo"),
+                "worktree": fixture.root().join("repo/.worktrees/build-walk"),
+                "project": "demo", "here": false, "branch": "build/walk", "base": "base-commit",
+                "created": AT, "updated": AT, "socket": socket, "pid": PID,
+                "sessionFile": dir.join("pi.jsonl"),
+                "route": {"provider": "anthropic-api", "model": "claude-opus-5-5", "effort": "high"},
+            })
+            .to_string(),
+        )
+        .unwrap();
+        Host::start(socket, id.into(), "build", &dir, Script::default())
+    };
+    let selected = build("B-rewind", "rewind-build.sock");
+    let other = build("B-other", "other-build.sock");
+    let mut owner = Client::connect_with(&fixture.unix_server(), vec![wire::BUILD_V1.into()]);
+
+    let listed: RewindReply = owner.ok(SESSION_REWIND, json!({"id":"B-rewind", "action":"list"}));
+    let RewindReply::List {
+        checkpoints,
+        rewinds,
+    } = listed
+    else {
+        panic!("expected rewind list");
+    };
+    assert_eq!(checkpoints.len(), 1);
+    assert_eq!(checkpoints[0].id, "turn-1");
+    assert_eq!(checkpoints[0].turn, 1);
+    assert!(rewinds.is_empty());
+
+    let rewound: RewindReply = owner.ok(
+        SESSION_REWIND,
+        json!({"id":"B-rewind", "action":"turn", "turn":1}),
+    );
+    let rewound = serde_json::to_value(rewound).unwrap();
+    assert_eq!(rewound["kind"], "turn");
+    assert_eq!(rewound["turn"], 1);
+    assert_eq!(rewound["checkpoint"], "turn-1");
+    assert_eq!(rewound["rescue_ref"], "refs/worktree/corral/rescue/1");
+    assert_eq!(rewound["from_head"], "new");
+    assert_eq!(rewound["head"], "old");
+    assert_eq!(rewound["at"], AT);
+    assert_eq!(
+        selected.state.lock().unwrap().requests,
+        vec![
+            ("rewind".into(), json!({"list":true})),
+            ("rewind".into(), json!({"turn":1}))
+        ]
+    );
+    assert!(other.state.lock().unwrap().requests.is_empty());
+}
+
 fn chat_fixture() -> (Fixture, Placement) {
     let placement = Placement::new(|command, dir| {
         assert_eq!(command.get_program(), "corral-pi");

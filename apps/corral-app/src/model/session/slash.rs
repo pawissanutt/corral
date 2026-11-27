@@ -239,7 +239,7 @@ pub fn slash(cx: &Cx<'_>, catalog: &SessionActions) -> Option<SlashMenu> {
             ) => match super::super::keys::rewind_typed(draft) {
                 Some(turn) => Action::Control {
                     session: session.clone(),
-                    control: turn.map_or(Control::Rewinds, Control::Rewind),
+                    control: turn.map_or(Control::Rewinds, Control::rewind_turn),
                 },
                 None if !argued => found.action.clone(),
                 None => continue,
@@ -248,7 +248,7 @@ pub fn slash(cx: &Cx<'_>, catalog: &SessionActions) -> Option<SlashMenu> {
         };
         let label = match &action {
             Action::Control {
-                control: control @ Control::Rewind(_),
+                control: control @ Control::Rewind(..),
                 ..
             } => control_label(*control, kind(cx.feed, cx.id.as_str())),
             _ => found.label.clone(),

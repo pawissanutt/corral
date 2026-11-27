@@ -1,4 +1,4 @@
-// Worker checkpoints and rewind through the socket, on a linked worktree and a fixture provider.
+// Turn checkpoints and rewind with a fixture provider.
 import { expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
@@ -7,15 +7,21 @@ import { join } from "node:path";
 
 import { EventLog } from "../src/bridge/events.ts";
 import { type BridgeServer, startBridge } from "../src/bridge/server.ts";
+import { saveSession, sessionDir } from "../src/build/session-store.ts";
+import { readBuildSettings } from "../src/build/settings.ts";
+import type { BuildSessionRecord } from "../src/build/types.ts";
 import { CHECKPOINT_ENTRY, type CheckpointRecord, Checkpoints } from "../src/capabilities/checkpoints.ts";
 import { workspaceSettings } from "../src/host/config.ts";
 import { loadModules } from "../src/host/modules.ts";
 import { guardedFetch, restrictEnvironment } from "../src/host/restrict.ts";
 import { HostSession, authContext } from "../src/host/session.ts";
 import type { CapabilitySet } from "../src/roles/types.ts";
+import { buildRole } from "../src/roles/build/index.ts";
 import { workerRole } from "../src/roles/worker/index.ts";
 import { CorralClient } from "../src/tools/corral.ts";
-import { fixtureTransport } from "./fixtures/auth/index.ts";
+import auth, { fixtureTransport } from "./fixtures/auth/index.ts";
+import { fakeCodexTransport } from "./fixtures/auth/fake-transport.ts";
+import { codeHost } from "./support/code-host.ts";
 import { buildFixtureInstall, PACKAGE_ROOT } from "./support/fixture-install.ts";
 import { writeFakeEngine } from "./support/fake-engine.ts";
 import { connect, testHandlers } from "./support/bridge-client.ts";
@@ -28,7 +34,7 @@ function git(cwd: string, ...args: string[]): string {
 }
 
 /** A linked worktree of a fresh repository, with the deterministic test identity. */
-function worktree(work: string): string {
+function worktree(work: string, branch = "corral/T-575"): string {
   const repo = join(work, "repo");
   mkdirSync(repo);
   git(repo, "init", "-qb", "main");
@@ -39,7 +45,7 @@ function worktree(work: string): string {
   git(repo, "add", ".");
   git(repo, "commit", "-qm", "initial");
   const cwd = join(work, "wt");
-  git(repo, "worktree", "add", "-q", "-b", "corral/T-575", cwd);
+  git(repo, "worktree", "add", "-q", "-b", branch, cwd);
   return cwd;
 }
 
@@ -215,13 +221,136 @@ test("rewind restores the start of a turn and continues the retained conversatio
 // The event and drain barriers, not Bun's wall-clock timeout, govern fixture cleanup.
 }, 0);
 
+test("a build rewinds its own branch, retains its abandoned work and leaves the source checkout alone", async () => {
+  const work = mkdtempSync(join(tmpdir(), "corral-build-rewind-"));
+  let host: HostSession | undefined;
+  try {
+    const branch = "build/walk", cwd = worktree(work, branch), repoRoot = join(work, "repo");
+    const base = git(cwd, "rev-parse", "HEAD");
+    const identity = { store: "build", project: "", role: "build" as const };
+    const at = new Date().toISOString();
+    const record: BuildSessionRecord = { version: 1, id: "B-walk", name: "walk", created: at, updated: at,
+      worktree: cwd, repoRoot, branch, base, here: false };
+    const sdk = await import("@earendil-works/pi-coding-agent");
+    const transport = fakeCodexTransport();
+    const { capabilities, guidance } = workspaceSettings(repoRoot, "build");
+    saveSession(work, record);
+    host = await HostSession.create({ sdk, identity, cwd, agentDir: join(work, "agent"), model: "gpt-6.1-sol",
+      ui: "plain", network: guardedFetch(transport.send), capabilities, guidance, runtimeDir: join(work, "runtime"),
+      build: { dir: sessionDir(work, record.id), corral: "", settings: readBuildSettings(record), session: record },
+      modules: { auth, role: buildRole(PACKAGE_ROOT), assetRoot: PACKAGE_ROOT },
+      client: new CorralClient({ corral: "", root: work, cwd, identity }), events: new EventLog(),
+      sessionManager: sdk.SessionManager.create(cwd, join(work, "sessions")) });
+    await host.session.bindExtensions({});
+    await host.startLocal();
+    transport.script([{ text: "Keep this" }, { text: "Discard this" }]);
+    await host.session.prompt("First build prompt");
+    writeFileSync(join(cwd, "tracked"), "at the second checkpoint\n");
+    const obstruction = join(cwd, "local.cfg");
+    writeFileSync(obstruction, "checkpoint version\n");
+    await host.session.prompt("Second build prompt");
+    rmSync(obstruction);
+    writeFileSync(join(cwd, ".gitignore"), "ignored/\nlocal.cfg\n");
+    writeFileSync(join(cwd, "tracked"), "after the checkpoint\n");
+    git(cwd, "commit", "-qam", "post-checkpoint work");
+    const later = git(cwd, "rev-parse", "HEAD");
+    expect(host.state().checkpoints).toBeTrue();
+    const listed = await host.rewind({ list: true });
+    expect(listed.checkpoints).toMatchObject([
+      { turn: 1, phase: "start" }, { turn: 1, phase: "end" },
+      { turn: 2, phase: "start", head: base }, { turn: 2, phase: "end" },
+    ]);
+    expect((listed.checkpoints as CheckpointRecord[])[2]?.ref).toMatch(/^refs\/worktree\/corral\/checkpoints\/B-walk\//);
+    git(cwd, "switch", "--detach", "-q");
+    await expect(host.rewind({ turn: 2 })).rejects.toThrow("recorded branch");
+    expect(git(cwd, "rev-parse", "HEAD")).toBe(later);
+    git(cwd, "switch", "-q", branch);
+    const lock = `${git(cwd, "rev-parse", "--path-format=absolute", "--git-path", "index")}.lock`;
+    writeFileSync(lock, "another Git writer", { flag: "wx" });
+    await expect(host.rewind({ turn: 2 })).rejects.toThrow("index.lock");
+    transport.script([{ text: "The turn still runs" }]);
+    await host.session.prompt("Turn while Git is locked");
+    const blocked = (await host.rewind({ list: true })).checkpoints as CheckpointRecord[];
+    expect(blocked.find(point => point.turn === 3 && point.phase === "start")?.error).toContain("index.lock");
+    expect(readFileSync(lock, "utf8")).toBe("another Git writer");
+    rmSync(lock);
+
+    git(repoRoot, "switch", "-qc", "merge-topic");
+    writeFileSync(join(repoRoot, "merge.txt"), "merge content\n");
+    git(repoRoot, "add", "merge.txt");
+    git(repoRoot, "commit", "-qm", "topic");
+    git(repoRoot, "switch", "-q", "main");
+    git(cwd, "merge", "--no-commit", "--no-ff", "merge-topic");
+    const mergedIndex = git(cwd, "write-tree");
+    const file = host.session.sessionFile!;
+    const before = readFileSync(file, "utf8");
+    await expect(host.rewind({ turn: 2 })).rejects.toThrow("in-progress Git operation");
+    expect(git(cwd, "rev-parse", "MERGE_HEAD")).toBe(git(repoRoot, "rev-parse", "merge-topic"));
+    expect(git(cwd, "rev-parse", "HEAD")).toBe(later);
+    expect(git(cwd, "write-tree")).toBe(mergedIndex);
+    expect(readFileSync(file, "utf8")).toBe(before);
+    git(cwd, "merge", "--abort");
+
+    writeFileSync(obstruction, "ignored owner data\n");
+    await expect(host.rewind({ turn: 2 })).rejects.toThrow("ignored content obstructs");
+    expect(readFileSync(obstruction, "utf8")).toBe("ignored owner data\n");
+    expect(git(cwd, "rev-parse", "HEAD")).toBe(later);
+    rmSync(obstruction);
+    const result = await host.rewind({ turn: 2 });
+    expect(result).toMatchObject({ turn: 2, head: base, from_head: later });
+    expect(result.rescue_ref).toMatch(/^refs\/corral\/rescue\/B-walk\//);
+    expect(git(repoRoot, "show", `${result.rescue_ref}:tracked`)).toBe("after the checkpoint");
+    expect(readFileSync(obstruction, "utf8")).toBe("checkpoint version\n");
+    expect(git(cwd, "symbolic-ref", "--short", "HEAD")).toBe(branch);
+    expect(git(cwd, "rev-parse", "HEAD")).toBe(base);
+    expect(readFileSync(join(cwd, "tracked"), "utf8")).toBe("at the second checkpoint\n");
+    expect(readFileSync(join(repoRoot, "tracked"), "utf8")).toBe("initial\n");
+    const retained = readFileSync(file, "utf8");
+    expect(retained).toContain("First build prompt");
+    expect(retained).not.toContain("Second build prompt");
+  } finally {
+    await host?.close();
+    rmSync(work, { recursive: true, force: true });
+  }
+});
+
+test("chat rewinds its saved conversation without touching a Git checkout", async () => {
+  const settings = workspaceSettings(PACKAGE_ROOT, "assistant", undefined, {});
+  const fx = await codeHost("assistant", { enabled: settings.capabilities.enabled.filter(name => name === "checkpoints") });
+  try {
+    git(fx.cwd, "init", "-qb", "main");
+    git(fx.cwd, "add", ".");
+    git(fx.cwd, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "initial");
+    await fx.turn([{ text: "First reply" }], "First chat prompt");
+    await fx.turn([{ text: "Second reply" }], "Second chat prompt");
+    writeFileSync(join(fx.cwd, "one.txt"), "shared edit\n");
+    git(fx.cwd, "add", "one.txt");
+    const head = git(fx.cwd, "rev-parse", "HEAD"), index = git(fx.cwd, "write-tree");
+    expect(fx.host.state().checkpoints).toBeTrue();
+    const listed = await fx.host.rewind({ list: true });
+    expect(listed.checkpoints).toMatchObject([1, 2].flatMap(turn => ["start", "end"].map(phase =>
+      ({ id: `A-1-t${turn}-${phase}`, turn, phase, scope: "conversation" }))));
+    const rewound = await fx.host.rewind({ turn: 2 });
+    expect(typeof rewound.at).toBe("string");
+    expect(rewound).toEqual({ turn: 2, checkpoint: "A-1-t2-start", at: rewound.at });
+    expect((await fx.host.rewind({ list: true })).rewinds).toEqual([rewound]);
+    expect(git(fx.cwd, "rev-parse", "HEAD")).toBe(head);
+    expect(git(fx.cwd, "write-tree")).toBe(index);
+    expect(git(fx.cwd, "for-each-ref", "refs/worktree")).toBe("");
+    expect(readFileSync(join(fx.cwd, "one.txt"), "utf8")).toBe("shared edit\n");
+    const retained = readFileSync(fx.host.session.sessionFile!, "utf8");
+    expect(retained).toContain("First chat prompt");
+    expect(retained).not.toContain("Second chat prompt");
+  } finally { await fx.close(); }
+});
+
 test("a failed snapshot is recorded with its error and never throws into the turn", () => {
   // An unborn repository has no HEAD even when TMPDIR sits inside another Git worktree.
   const work = mkdtempSync(join(tmpdir(), "corral-pi-checkpoints-"));
   try {
     git(work, "init", "-qb", "main");
     const recorded: CheckpointRecord[] = [];
-    const checkpoints = new Checkpoints({ cwd: work, run: "R2", record: entry => recorded.push(entry) });
+    const checkpoints = new Checkpoints({ git: { cwd: work }, id: "R2", record: entry => recorded.push(entry) });
     // When a turn starts, then the entry names the failure and carries no commit or cursor.
     const entry = checkpoints.capture("start", 4, "leaf-1");
     expect(entry.id).toBe("R2-t4-start");
@@ -233,10 +362,12 @@ test("a failed snapshot is recorded with its error and never throws into the tur
   }
 });
 
-test("workspace settings enable checkpoints only for workers with a run", () => {
+test("workspace settings enable checkpoints for workers with a run, chats and builds", () => {
   const work = mkdtempSync(join(tmpdir(), "corral-pi-checkpoint-settings-"));
   try {
     expect(workspaceSettings(work, "worker", "R1").capabilities.enabled).toContain("checkpoints");
+    expect(workspaceSettings(work, "assistant").capabilities.enabled).toContain("checkpoints");
+    expect(workspaceSettings(work, "build").capabilities.enabled).toContain("checkpoints");
     expect(workspaceSettings(work, "worker").capabilities.enabled).not.toContain("checkpoints");
     expect(workspaceSettings(work, "reviewer", "R1").capabilities.enabled).not.toContain("checkpoints");
   } finally {
@@ -260,7 +391,7 @@ test("a checkpoint re-hashes a racily clean file as git does", () => {
     writeFileSync(join(cwd, "a.txt"), "two\n");
     utimesSync(join(cwd, "a.txt"), tick, tick);
     // When the host checkpoints, then the snapshot has the new content, as `git status` sees it.
-    const entry = new Checkpoints({ cwd, run: "R1", record: () => undefined }).capture("start", 1, "l");
+    const entry = new Checkpoints({ git: { cwd }, id: "R1", record: () => undefined }).capture("start", 1, "l");
     expect(git(cwd, "show", `${entry.commit}:a.txt`)).toBe("two");
     expect(git(cwd, "status", "--porcelain")).toBe("M a.txt");
   } finally {

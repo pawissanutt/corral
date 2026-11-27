@@ -409,10 +409,35 @@ automated input such as gate notes. **Resume** delivers that input in order, as 
 typing a new owner message. Pause and held input survive a host restart. See
 [Session controls](../app-design/SESSION-CONTROL.md#controls) for daemon requests.
 
-A Pi worker saves a checkpoint before each turn. The socket's `rewind` command can
-list saved turns or restore the worktree and transcript to the start of a turn.
-This can overwrite hand edits; the host reports the rescue Git ref where it saved
-the current tree.
+Pi workers, chats and builds save checkpoints at the start and end of each turn.
+Use the terminal's F2 rewind picker or `/rewind <turn>`, or open Rewind… in the
+app (also Esc twice or `/rewind`) to return to the start of a saved turn.
+Later messages are removed from the conversation. Turns from before checkpointing
+was enabled are not available for rewind.
+
+- **Worker run:** restores the conversation and run worktree, as before. Checkpoint
+  refs are scoped to the worktree and run.
+- **Build with its own worktree:** restores the conversation, files and recorded
+  build branch to the checkpoint. The recorded branch must still be checked out;
+  wait for live children, background jobs and exit operations, and finish or
+  abort any in-progress Git operation before rewinding. Do not switch branches
+  or change the build checkout from another process during a turn or rewind;
+  Git updates the index and `HEAD` separately, so external changes cannot be
+  treated as one atomic operation. Checkpoint refs are scoped to the worktree
+  and session id. Rewind refuses if restoring a checkpoint would overwrite
+  ignored files that were not saved.
+- **Chat, `build --here`, and builds outside Git:** rewind only the conversation.
+  Files, branches and the Git index are untouched, and no rescue ref is created.
+  The separate in-place `corral-pi code` mode does not offer rewind.
+
+A worktree rewind can overwrite hand edits or move the branch back. Before making
+those changes, the host saves the current non-ignored worktree files and staged
+index state and reports their rescue Git ref. Worker rescue refs under
+`refs/worktree/corral/rescue/` are local to the run worktree. Build rescue refs
+under `refs/corral/rescue/<build-id>/` stay in the local repository after the
+build worktree is removed; delete them when no longer needed.
+A rewind does not undo effects outside the transcript and worktree (for example,
+board changes or a previous landing).
 
 The `/rewind --list` output and the daemon's `session.rewind` list reply include
 an ISO 8601 `at` string for each checkpoint and prior rewind when its time is

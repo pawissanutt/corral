@@ -54,6 +54,19 @@ test("a pick asks once, says the work is saved under a rescue ref, then rewinds 
   expect(notices).toEqual(["success: Rewound to the start of turn 1 · current work saved as refs/worktree/corral/rescue/20261118T150000Z"]);
 });
 
+test("a conversation checkpoint is selectable without Git metadata and does not offer a rescue ref", async () => {
+  const calls: RewindInput[] = [];
+  const { asked, ui } = dialogs(options => options[0], true);
+  await runRewind(ui, async input => {
+    calls.push(input);
+    return "list" in input ? { checkpoints: [{ id: "chat", turn: 1, phase: "start", scope: "conversation" }] }
+      : { turn: 1 };
+  }, undefined, () => {});
+  expect(calls).toEqual([{ list: true }, { turn: 1 }]);
+  expect(asked[1]).toContain("Files and Git are unchanged");
+  expect(asked[1]).not.toContain("rescue ref");
+});
+
 test("Esc at the pick or the confirm rewinds nothing; a refusal is a notice in its own words", async () => {
   const calls: RewindInput[] = [], notices: string[] = [];
   const rewind = async (input: RewindInput) => { calls.push(input); return listed; };

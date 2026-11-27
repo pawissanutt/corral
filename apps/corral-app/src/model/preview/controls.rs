@@ -153,7 +153,7 @@ fn chat(feed: &mut Feed, session: &str, control: Control) -> Result<Value, Fail>
             pi::revive(feed, &id);
             Ok(json!({"id": id.as_str()}))
         }
-        Control::Rewinds | Control::Rewind(_) => {
+        Control::Rewinds | Control::Rewind(..) => {
             Err(Fail::Refused("chat sessions are not rewound".into()))
         }
         _ => pi_control::control(feed, &id, control).map_err(Fail::Refused),

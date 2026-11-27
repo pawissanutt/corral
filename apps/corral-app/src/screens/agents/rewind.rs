@@ -1,8 +1,6 @@
-//! The rewind sheet over every page, open while a worker's turns are listed: what a rewind
-//! does, the turns it can go back to (newest first, one button each), and the rewinds already
-//! done with the rescue refs their work was saved under. Picking a turn closes it and asks once
-//! in the confirm sheet before anything is sent. Escape, the scrim and Close dismiss it. test_id
-//! "rewind" ("rewind-done", "btn-rewind-turn-<n>").
+//! The rewind sheet: the turns it can go back to (newest first, one button each), and earlier
+//! rewinds with rescue refs when present. Picking a turn asks once in the confirm sheet.
+//! Escape, the scrim and Close dismiss it. test_id "rewind" ("rewind-done", "btn-rewind-turn-<n>").
 
 use nsh_core::prelude::*;
 
@@ -31,11 +29,11 @@ fn modal(app: AppState) -> Modal {
         app.agents
             .with(|state| app.feed.with(|feed| rewind_sheet(state, feed)))
     });
-    let (title, note) = untracked(|| {
+    let title = untracked(|| {
         shown.with(|sheet| {
             sheet
                 .as_ref()
-                .map(|sheet| (sheet.title.clone(), sheet.note))
+                .map(|sheet| sheet.title.clone())
                 .unwrap_or_default()
         })
     });
@@ -44,7 +42,7 @@ fn modal(app: AppState) -> Modal {
     Modal {
         test_id: String::from("rewind"),
         title,
-        sub: Some(note.to_owned()),
+        sub: None,
         body: body.into_element(),
         foot: None,
         done: Some("Close".to_owned()),
@@ -103,6 +101,7 @@ fn body(app: AppState, sheet: RewindSheet) -> AnyElement {
     let has_earlier = !earlier.is_empty();
     view()
         .gap(px(gap))
+        .children(sheet.note.map(|note| plain(app, note)))
         .children(sheet.status.map(|status| plain(app, status)))
         .when(has_points, |body| {
             body.child(

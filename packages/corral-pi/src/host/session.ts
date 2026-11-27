@@ -61,7 +61,7 @@ import { closeResidentSession, residentLifecycle } from "../claude/resident.ts";
 import { BridgeRefusal, type AnswerInput, type RewindInput, type SessionInput, type SubmitResult } from "../bridge/protocol.ts";
 import { listRewinds, parseRewindCommand, recordRewind, restoreRewind, rewindPoint } from "./rewind.ts";
 import type { HostIdentity, RoleContext } from "../roles/types.ts";
-import type { BuildContext, BuildProfile, ChildSnapshot, FleetSnapshot } from "../build/types.ts";
+import { LIVE_CHILD_STATES, type BuildContext, type BuildProfile, type ChildSnapshot, type FleetSnapshot } from "../build/types.ts";
 import { createBuildControls, type BuildControls } from "../build/host-controls.ts";
 import { type CorralClient, type ModelUsage } from "../tools/corral.ts";
 import { observeUsage } from "./model-usage.ts";
@@ -688,7 +688,7 @@ export class HostSession {
       canRenderTool: name => exploreLoadout(this.loadout).includes(name),
       artifacts: () => options.client.artifacts(),
       artifactFile: reference => options.client.artifactFile(reference),
-      rewind: input => this.rewind(input),
+      get rewind() { return host.checkpoints ? (input: RewindInput) => host.rewind(input) : undefined; },
       exportSession: async () => (await this.reportedExport()).text,
       readHistory: request => options.client.history(request),
       readTranscript: (id, request) => this.readAgentTranscript(id, request),
@@ -953,10 +953,17 @@ export class HostSession {
       },
     }) : undefined;
     if (options.capabilities?.enabled.includes("checkpoints") === true) {
-      if (options.identity.role !== "worker" || !run) throw new Error("module_invalid: checkpoints needs a worker run");
+      const { role, assistant } = options.identity;
+      const build = role === "build" ? options.build?.session : undefined;
+      const id = role === "worker" ? run : role === "build" ? build?.id
+        : role === "assistant" ? assistant ?? options.sessionManager.getSessionId() : undefined;
+      if (!id) throw new Error("module_invalid: checkpoints needs a worker run, chat or build session");
+      // A chat, in-place build or Code session does not own its checkout. Never snapshot or reset it.
+      const git = role === "worker" ? { cwd: options.cwd }
+        : build && !build.here && !build.trustedCode && build.repository !== false && build.branch
+          ? { cwd: options.cwd, buildBranch: build.branch } : undefined;
       this.checkpoints = new Checkpoints({
-        cwd: options.cwd, run,
-        record: (entry) => this.session.sessionManager.appendCustomEntry(CHECKPOINT_ENTRY, entry),
+        id, git, record: (entry) => this.session.sessionManager.appendCustomEntry(CHECKPOINT_ENTRY, entry),
       });
     }
   }
@@ -1549,13 +1556,13 @@ export class HostSession {
     });
     pi.on("session_before_fork", (_event, ctx) => refuse("forking the session", ctx.ui));
     if (this.checkpoints) pi.registerCommand("rewind", {
-      description: "Restore the worktree and conversation to the start of a turn; /rewind --list",
+      description: "Restore the conversation (and any private worktree) to the start of a turn; /rewind --list",
       handler: async (args, ctx) => {
         try {
           const input = parseRewindCommand(args);
           const result = await this.rewind(input);
           if ("list" in input) this.notice(JSON.stringify(result, null, 2), "text", ctx.ui);
-          else this.notice(`Rewound to the start of turn ${input.turn}. Saved work: ${result.rescue_ref}`, "text", ctx.ui);
+          else this.notice(`Rewound to the start of turn ${input.turn}.${result.rescue_ref ? ` Saved work: ${result.rescue_ref}` : ""}`, "text", ctx.ui);
         } catch (error) {
           this.notice(error instanceof Error ? error.message : String(error), "error", ctx.ui);
         }
@@ -2466,22 +2473,37 @@ export class HostSession {
     return { cancelled: true, turn: cancelled };
   }
 
+  private requireBuildRewindIdle(): void {
+    const build = this.buildControls;
+    if (build && (build.exit.busy() || build.fleet.snapshot().children.some(child => LIVE_CHILD_STATES.includes(child.state))
+      || this.jobs?.inspection().some(job => !job.groupClear))) {
+      throw new BridgeRefusal("busy", "wait for build children, background jobs and exit operations before rewinding the worktree");
+    }
+  }
+
   async rewind(input: RewindInput): Promise<Record<string, unknown>> {
     const snapshots = this.checkpoints;
     if (!snapshots || !this.bound || this.closing) {
-      throw new BridgeRefusal("rewind_unavailable", "rewind is available in a running worker with turn checkpoints");
+      throw new BridgeRefusal("rewind_unavailable", "rewind is available in a running session with turn checkpoints");
     }
     if (this.rewinding || this.remoteShellRunning) throw new BridgeRefusal("busy", "a rewind or shell command is already in progress");
     const session = this.session;
     const manager = session.sessionManager;
     if ("list" in input) return listRewinds(manager);
-    const point = rewindPoint(manager, input.turn);
+    const point = rewindPoint(manager, input.turn, snapshots.conversationOnly);
+    if (point.git) this.requireBuildRewindIdle();
     this.rewinding = true;
     try {
       session.clearQueue();
       if (this.open) await this.cancel(undefined);
       else await session.abort();
+      if (point.git) this.requireBuildRewindIdle();
       const result = restoreRewind(session, snapshots, point);
+      if (point.git && this.buildControls) {
+        this.buildControls.supersedeFinishOffer();
+        void this.workspaceGit.refresh();
+        this.remoteBuild.refreshExit();
+      }
       this.turn = 0;
       this.settledTurn = undefined;
       this.restoreTurn(manager);
@@ -2500,7 +2522,10 @@ export class HostSession {
       this.options.transcriptRewound?.();
       const file = manager.getSessionFile()!;
       try { recordRewind(file, result); }
-      catch (error) { throw new Error(`rewound but could not record history; saved work is at ${result.rescue_ref}: ${String(error)}`); }
+      catch (error) {
+        const detail = result.rescue_ref ? `; saved work is at ${result.rescue_ref}` : "";
+        throw new Error(`rewound but could not record history${detail}: ${String(error)}`);
+      }
       return { ...result };
     } finally {
       this.rewinding = false;
