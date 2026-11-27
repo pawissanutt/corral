@@ -15,8 +15,8 @@ use crate::model::nav::{PALETTE_HINT, PALETTE_KEY, SIGNS_AS, THIS_DEVICE};
 use crate::model::{Area, Destination, SettingsSection, Workspace, dock};
 use crate::screens;
 use crate::shell::{
-    activity_pages, confirmation, current_area, places, section_short, sidebar_collapsed, stale,
-    toast,
+    area_pages, confirmation, current_area, has_pages, places, section_short, sidebar_collapsed,
+    stale, toast,
 };
 use crate::state::AppState;
 use crate::ui::ask;
@@ -413,7 +413,7 @@ fn rail_place(app: AppState, current: Memo<Area>, area: Area) -> AnyElement {
             .child(count(app, counted))
     }))
     .into_element();
-    if area != Area::Activity {
+    if !has_pages(area) {
         return button;
     }
     view()
@@ -421,16 +421,16 @@ fn rail_place(app: AppState, current: Memo<Area>, area: Area) -> AnyElement {
         .gap(px(2.0))
         .child(button)
         .child(when(
-            move || current.get() == Area::Activity,
-            move || rail_pages(app),
+            move || current.get() == area,
+            move || rail_pages(app, area),
         ))
         .into_element()
 }
 
-/// Activity's pages in the rail: each its own icon, smaller than a place's, the five on one
-/// faint ground so they read as Activity's; the hint and assistive technology give the name.
-fn rail_pages(app: AppState) -> AnyElement {
-    let pages = computed(move || activity_pages(app));
+/// Activity's or Insight's pages in the rail: each its own icon, smaller than a place's, all on
+/// one faint ground so they read as the place's; the hint and assistive technology give the name.
+fn rail_pages(app: AppState, area: Area) -> AnyElement {
+    let pages = computed(move || area_pages(app, area));
     let ink = color(Token::ShellInk);
     dynamic(move || {
         let pages = pages.get();
@@ -714,22 +714,22 @@ fn place_row(app: AppState, current: Memo<Area>, area: Area) -> AnyElement {
         Some(trailing),
         move || app.go_area(area),
     );
-    if area != Area::Activity {
+    if !has_pages(area) {
         return row;
     }
     view()
         .gap(px(2.0))
         .child(row)
         .child(when(
-            move || current.get() == Area::Activity,
-            move || activity_rows(app),
+            move || current.get() == area,
+            move || page_rows(app, area),
         ))
         .into_element()
 }
 
-/// Activity's pages under its row, set in under the places' labels.
-fn activity_rows(app: AppState) -> AnyElement {
-    let pages = computed(move || activity_pages(app));
+/// Activity's or Insight's pages under its row, set in under the places' labels.
+fn page_rows(app: AppState, area: Area) -> AnyElement {
+    let pages = computed(move || area_pages(app, area));
     dynamic(move || {
         let pages = pages.get();
         untracked(move || {

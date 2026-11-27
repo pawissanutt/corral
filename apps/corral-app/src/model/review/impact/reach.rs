@@ -1,6 +1,6 @@
-//! Where "Open in System" can take an item. Activity › System draws the project at its own
+//! Where "Open in System" can take an item. Insight › Structure draws the project at its own
 //! head, not at the task's submission, so it need not have the item's node. Each level along
-//! the item's target is looked up in Activity › System's own served map, confirmed and read at
+//! the item's target is looked up in Insight › Structure's own served map, confirmed and read at
 //! one head: the item opens at its node when the map has it, at the deepest level that holds it
 //! otherwise, and says so when the map has none of it. Until every level is confirmed it says
 //! it is still checking, and what it could not read.
@@ -16,7 +16,7 @@ use crate::model::system::{Node, base_name, request};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reach {
-    /// Activity › System has `node` at `trail`; `note` says what it stands for when it is not
+    /// Insight › Structure has `node` at `trail`; `note` says what it stands for when it is not
     /// the item's own node.
     Open {
         trail: Vec<SystemAt>,
@@ -24,12 +24,12 @@ pub enum Reach {
         label: String,
         note: Option<String>,
     },
-    /// Activity › System's map is still being read.
+    /// Insight › Structure's map is still being read.
     Checking,
     Unavailable(String),
 }
 
-pub const CHECKING: &str = "Looking for it on Activity › System's map…";
+pub const CHECKING: &str = "Looking for it on Insight › Structure's map…";
 
 /// The System maps a target is looked up in, one per level along it.
 pub fn wanted(project: &str, target: &Target) -> Vec<DetailRef> {
@@ -71,7 +71,7 @@ pub fn reach(feed: &Feed, project: &str, target: &Target) -> Reach {
             Some(error) if error.code == "not_found" => break,
             Some(error) => {
                 return Reach::Unavailable(format!(
-                    "Could not check Activity › System's map: {}",
+                    "Could not check Insight › Structure's map: {}",
                     error.message
                 ));
             }
@@ -101,7 +101,7 @@ pub fn reach(feed: &Feed, project: &str, target: &Target) -> Reach {
     let wanted = words(&target.node);
     match found {
         None => Reach::Unavailable(format!(
-            "Not on Activity › System's map: {wanted} is not in {project}{}.",
+            "Not on Insight › Structure's map: {wanted} is not in {project}{}.",
             head.flatten()
                 .map(|head| format!(" at {}", head.get(..10).unwrap_or(&head)))
                 .unwrap_or_default()
@@ -116,7 +116,7 @@ pub fn reach(feed: &Feed, project: &str, target: &Target) -> Reach {
             trail: trail[..depth].to_vec(),
             label: format!("Open {name} in System"),
             note: Some(format!(
-                "Activity › System's map does not show {wanted}; {name}, which holds it, is \
+                "Insight › Structure's map does not show {wanted}; {name}, which holds it, is \
                  there."
             )),
             node,

@@ -186,10 +186,10 @@ impl AppState {
             && !untracked(|| self.overlay_blocks_page_keys())
             && self.work.with_untracked(|state| state.menu.is_none())
             && self.menus.get_untracked() == 0
-            && self.nav.with_untracked(|nav| nav.destination) == Destination::System
-            && self
-                .system
-                .with_untracked(|state| state.view != crate::model::system::View::Lenses);
+            && matches!(
+                self.nav.with_untracked(|nav| nav.destination),
+                Destination::Structure | Destination::Runtime | Destination::Data
+            );
         if clear {
             self.run(vec![Effect::Focus(crate::model::system::FILTER_FIELD)]);
         }

@@ -1,5 +1,6 @@
 //! Activity: the five pages under the one place. Feed is every event, Timeline the lanes and
-//! the burn-up, Usage the totals, Artifacts the finder and System the project's map, each under the one project scope.
+//! the burn-up, Usage the totals, Artifacts the finder and Host performance the daemon's
+//! machine, each under the one project scope. The project's map is Insight's (`screens::system`).
 //! The sidebar lists them under Activity while one shows (its rail too), and is the only way
 //! between them on desktop and in a terminal; the phone's Activity tab lists them as its root
 //! and pushes each. On desktop every page keeps its head and content to `MEASURE_PAGE`, centred,
@@ -11,7 +12,7 @@ mod feed_filter;
 use nsh_core::prelude::*;
 
 use crate::model::Destination;
-use crate::screens::{artifacts, host, system, timeline, usage};
+use crate::screens::{artifacts, host, timeline, usage};
 use crate::state::AppState;
 
 /// The Activity page `page` names; Feed for a destination that is not one of Activity's.
@@ -20,7 +21,6 @@ pub fn screen(app: AppState, page: Destination) -> AnyElement {
         Destination::Timeline => timeline::screen(app),
         Destination::Usage => usage::screen(app),
         Destination::Artifacts => artifacts::screen(app),
-        Destination::System => system::screen(app),
         Destination::Host => host::screen(app),
         _ => feed::screen(app),
     }

@@ -13,8 +13,9 @@ fn both_forms_open_on_home() {
     app.wait_for("id:list-home").unwrap();
 }
 
-/// The sidebar lists the four places at rest and Activity's four pages only under Activity
-/// while one of them shows; every one of them, and Settings at the foot, opens a page.
+/// The sidebar lists the places at rest, and Activity's and Insight's pages only under their
+/// place while one of them shows; every one of them, and Settings at the foot, opens a page.
+/// System is Insight's four pages, never an Activity page.
 #[test]
 fn desktop_sidebar_reaches_every_place_and_activity_page() {
     let mut app = preview(desktop(), &[]);
@@ -28,19 +29,36 @@ fn desktop_sidebar_reaches_every_place_and_activity_page() {
         assert_eq!(app.screen().count("id:nav-usage").unwrap(), 0);
     }
     app.press("id:nav-activity").unwrap();
-    for slug in ["feed", "timeline", "usage", "artifacts", "system"] {
+    for slug in ["feed", "timeline", "usage", "artifacts"] {
         app.wait_for(&format!("id:nav-{slug}")).unwrap();
         app.press(&format!("id:nav-{slug}")).unwrap();
         app.wait_for("id:page-title").unwrap();
         assert!(selected(&app, &format!("nav-{slug}")), "{slug} is current");
         assert!(selected(&app, "nav-activity"));
     }
+    assert_eq!(app.screen().count("id:nav-system").unwrap(), 0);
+    assert_eq!(app.screen().count("id:nav-structure").unwrap(), 0);
+    app.press("id:nav-insight").unwrap();
+    for (slug, title) in [
+        ("structure", "Structure"),
+        ("runtime", "Runtime"),
+        ("data", "Data"),
+        ("lenses", "Lenses"),
+    ] {
+        app.wait_for(&format!("id:nav-{slug}")).unwrap();
+        app.press(&format!("id:nav-{slug}")).unwrap();
+        assert_text(&mut app, "page-title", title);
+        assert!(selected(&app, &format!("nav-{slug}")), "{slug} is current");
+        assert!(selected(&app, "nav-insight"));
+        assert!(!selected(&app, "nav-activity"));
+        assert_eq!(app.screen().count("id:nav-usage").unwrap(), 0);
+    }
     app.press("id:nav-settings").unwrap();
     app.wait_for("id:settings-devices").unwrap();
     assert_eq!(app.screen().count("id:nav-usage").unwrap(), 0);
 }
 
-/// The phone's four tabs are the four places; Activity's root lists its four pages, each a
+/// The phone's tabs are the places; Activity's and Insight's roots list their pages, each a
 /// page pushed over the list.
 #[test]
 fn phone_tabs_reach_every_place_and_activity_page() {
@@ -54,13 +72,31 @@ fn phone_tabs_reach_every_place_and_activity_page() {
 
     app.press("id:tab-activity").unwrap();
     assert_text(&mut app, "page-title", "Activity");
-    for slug in ["feed", "timeline", "usage", "artifacts", "system"] {
+    for slug in ["feed", "timeline", "usage", "artifacts"] {
         app.wait_for(&format!("id:nav-{slug}")).unwrap();
         app.press(&format!("id:nav-{slug}")).unwrap();
         app.wait_for_gone("id:nav-feed", Duration::from_secs(5))
             .unwrap();
         app.back().unwrap();
         app.wait_for("id:nav-feed").unwrap();
+    }
+    assert_eq!(app.screen().count("id:nav-system").unwrap(), 0);
+
+    app.press("id:tab-insight").unwrap();
+    assert_text(&mut app, "page-title", "Insight");
+    for (slug, title) in [
+        ("structure", "Structure"),
+        ("runtime", "Runtime"),
+        ("data", "Data"),
+        ("lenses", "Lenses"),
+    ] {
+        app.wait_for(&format!("id:nav-{slug}")).unwrap();
+        app.press(&format!("id:nav-{slug}")).unwrap();
+        app.wait_for_gone("id:nav-structure", Duration::from_secs(5))
+            .unwrap();
+        app.wait_for(&format!("text:/^{title}$/")).unwrap();
+        app.back().unwrap();
+        app.wait_for("id:nav-structure").unwrap();
     }
 }
 
@@ -69,8 +105,8 @@ fn phone_tabs_reach_every_place_and_activity_page() {
 #[test]
 fn phone_system_lists_the_map_and_the_picked_nodes_edges() {
     let mut app = preview(phone(), &[]);
-    app.press("id:tab-activity").unwrap();
-    app.press("id:nav-system").unwrap();
+    app.press("id:tab-insight").unwrap();
+    app.press("id:nav-structure").unwrap();
     app.press("id:system-pick-corral").unwrap();
     app.wait_for("id:system-tree").unwrap();
     app.press("id:node-c-crates-corral-ops").unwrap();

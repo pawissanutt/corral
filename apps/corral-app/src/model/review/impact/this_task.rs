@@ -1,5 +1,5 @@
 //! The inspector's "This task" section in Impact (docs/plans/system-map.md §3.3): what the
-//! change did under the picked node, before the facts Activity › System's inspector shows. It
+//! change did under the picked node, before the facts Insight › Structure's inspector shows. It
 //! leads with the lines added and removed and the files they are in, each of which selects
 //! that file on the map, then the dependents the node holds, each of which selects its file.
 //! A "N more" card explains the files it folds; a definition, its own change and whether it

@@ -74,7 +74,7 @@ pub struct AppState {
     pub timeline: Signal<timeline::State>,
     pub usage: Signal<usage::State>,
     pub artifacts: Signal<artifacts::State>,
-    /// Activity › System: the level, pick, overlay and filter.
+    /// Insight's System map: the level, pick, overlay and filter.
     pub system: Signal<system::State>,
     /// A task page's Changes view (Diff or Impact) and the Impact's pick.
     pub impact: Signal<review::impact::State>,
@@ -184,9 +184,6 @@ impl AppState {
         let mut launch_impact = review::impact::State::default();
         if let Some(place) = address::launched() {
             place.restore_impact(&mut launch_impact);
-            if let crate::model::address::Place::SystemView(view) = place {
-                launch_system.view = view;
-            }
             if let crate::model::address::Place::Project(id) = &place {
                 launch_scope = Some(crate::model::projects::Scope::Project(id.clone()));
             }
@@ -198,6 +195,9 @@ impl AppState {
             crate::client::configured(),
             pairing_link,
         );
+        if let Some(view) = nav.destination.system_view() {
+            launch_system.view = view;
+        }
         let open_section = (nav.section_opens > 0).then_some(nav.settings);
         let identity = crate::client::requests::new_id();
         let namespace = identity
@@ -750,6 +750,15 @@ impl AppState {
         f(&mut nav);
         if on_config && self.asks_to_leave(&nav) {
             return;
+        }
+        self.set_nav(nav);
+    }
+
+    /// Moves the navigation. Each Insight page is one view of the System map: the map's state
+    /// shows that view before the page does.
+    fn set_nav(&self, nav: NavState) {
+        if let Some(view) = nav.destination.system_view() {
+            self.system_act(system::Action::View(view));
         }
         self.nav.set(nav);
     }

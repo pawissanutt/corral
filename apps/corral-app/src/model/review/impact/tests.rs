@@ -343,7 +343,7 @@ fn a_retained_impact_after_a_failed_read_is_marked_stale() {
     }
 }
 
-/// Activity › System draws the current head: a package only the submission adds is not
+/// Insight › Structure draws the current head: a package only the submission adds is not
 /// there, so Open in System must not promise it; one it has is opened with it selected.
 #[test]
 fn open_in_system_offers_only_what_the_system_map_has() {

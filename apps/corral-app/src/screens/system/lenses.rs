@@ -1,4 +1,4 @@
-//! Activity › System's Lenses view: the project's lenses (kind, title, and whether each is
+//! Insight › Lenses: the project's lenses (kind, title, and whether each is
 //! current, stale, incomplete or malformed) with Draft a lens under them, the selected lens
 //! drawn with its failing and unchecked checks listed, and the inspector for the picked
 //! element (its anchor, its committed line and its checks). Desktop and web draw the lens on a

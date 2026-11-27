@@ -1,6 +1,6 @@
 //! Impact's list: the touched modules, then the Model impact categories with their items.
 //! Selecting an item opens its node's level on the map beside it, selects the node and shows
-//! its source anchor; "Open in System" opens Activity › System where its own map has the node,
+//! its source anchor; "Open in System" opens Insight › Structure where its own map has the node,
 //! or says why it cannot. Every word is `model::review::impact`'s.
 //!
 //! Test ids: "impact-item-<key>", "btn-open-in-system", "impact-unreachable",
@@ -413,7 +413,7 @@ fn reveal(map: ElementRef) {
     map.reveal(options);
 }
 
-/// "Open in System" where Activity › System's own map has the item's node (or the level that
+/// "Open in System" where Insight › Structure's own map has the item's node (or the level that
 /// holds it, said so), and why not where it has none of it.
 fn to_system(app: AppState, project: Id, target: Option<impact::Target>) -> AnyElement {
     let reach = {

@@ -50,10 +50,15 @@ pub fn places(app: AppState) -> Vec<Area> {
     app.feed.with(nav::places)
 }
 
-/// Tracked: Activity's pages in this workspace, which the sidebar lists under Activity while
-/// one of them shows.
-pub fn activity_pages(app: AppState) -> Vec<Destination> {
-    app.feed.with(nav::activity_pages)
+/// Tracked: a place's pages in this workspace (Activity's and Insight's), which the sidebar
+/// lists under the place while one of them shows; none for a place whose row is its page.
+pub fn area_pages(app: AppState, area: Area) -> Vec<Destination> {
+    app.feed.with(|feed| nav::area_pages(feed, area))
+}
+
+/// Whether the place lists its pages under its row: Activity and Insight.
+pub const fn has_pages(area: Area) -> bool {
+    matches!(area, Area::Activity | Area::Insight)
 }
 
 /// Tracked: the place whose row is current: the destination's, a page on top included (a

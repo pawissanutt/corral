@@ -1,4 +1,4 @@
-//! Activity › System's Lenses view: a project's saved behaviour diagrams (a state lens or a
+//! Insight › Lenses: a project's saved behaviour diagrams (a state lens or a
 //! sequence lens), each checked against the code by corrald. The view reads `system_lenses`
 //! for the list and `system_lens` for the one drawn; a task's Impact reads `system_lens` at its
 //! head for a lens the change touches. A served lens becomes a [`Diagram`]: its elements in

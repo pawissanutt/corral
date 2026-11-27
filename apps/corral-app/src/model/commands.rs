@@ -631,7 +631,8 @@ pub fn run(
 }
 
 /// The key that opens the page, as a static key cap for renderers: its place's key where the
-/// place opens it, Usage's, Artifacts' and System's own. Timeline has none.
+/// place opens it, Usage's and Artifacts' own. Timeline, Host performance and Insight's pages
+/// after the first have none.
 pub const fn destination_key(destination: Destination) -> Option<&'static str> {
     match destination {
         Destination::Home => Some("h"),
@@ -641,8 +642,9 @@ pub const fn destination_key(destination: Destination) -> Option<&'static str> {
         Destination::Timeline => None,
         Destination::Usage => Some("u"),
         Destination::Artifacts => Some("f"),
-        Destination::System => Some("m"),
         Destination::Host => None,
+        Destination::Structure => Some("m"),
+        Destination::Runtime | Destination::Data | Destination::Lenses => None,
         Destination::Settings => Some(","),
     }
 }
@@ -655,15 +657,18 @@ pub const fn area_key(area: crate::model::nav::Area) -> &'static str {
         Area::Tasks => "t",
         Area::Sessions => "s",
         Area::Activity => "a",
+        Area::Insight => "m",
         Area::Settings => ",",
     }
 }
 
-/// A page as the palette names it: Activity's pages under their place.
+/// A page as the palette names it: Activity's and Insight's pages under their place.
 fn place_label(destination: Destination) -> String {
     use crate::model::nav::Area;
     match destination.area() {
-        Area::Activity => format!("{} › {}", Area::Activity.label(), destination.label()),
+        area @ (Area::Activity | Area::Insight) => {
+            format!("{} › {}", area.label(), destination.label())
+        }
         _ => destination.label().to_owned(),
     }
 }

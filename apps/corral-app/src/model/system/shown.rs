@@ -15,7 +15,6 @@ use crate::model::Id;
 use crate::model::daemon::{DetailCache, Feed};
 use crate::model::projects::{Scope, known_projects};
 
-pub const TITLE: &str = "System";
 pub const ASK_HEADING: &str = "Choose a project";
 pub const ASK_WORDS: &str =
     "The map is one project's packages, modules, files and definitions. Pick the project to draw.";

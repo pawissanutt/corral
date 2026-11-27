@@ -1,6 +1,7 @@
 //! The four places, their pages and overlays shared by every shell.
 
 use crate::model::live::{Live, Route, Selection};
+use crate::model::system::View;
 
 /// Phone floating action label for the Ask composer.
 pub const ASK_LABEL: &str = "Ask";
@@ -26,8 +27,8 @@ pub const ASK_BUTTON_LABEL: &str = "Ask (opens the composer)";
 /// Accessible label of the phone large-title palette search button.
 pub const SEARCH_LABEL: &str = "Search";
 
-/// A page the navigation opens directly: the four places' own pages and Settings. Activity has
-/// five pages; every other place has one.
+/// A page the navigation opens directly: the places' own pages and Settings. Activity and
+/// Insight have several pages; every other place has one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Destination {
     /// What waits on the owner, then what is working.
@@ -44,17 +45,23 @@ pub enum Destination {
     Usage,
     /// Activity › Artifacts: the finder over every task's artifacts.
     Artifacts,
-    /// Activity › System: the map of one project's packages, modules, files and definitions.
-    System,
     /// Activity › Host performance: the machine running corrald, host-wide.
     Host,
+    /// Insight › Structure: the map of one project's packages, modules, files and definitions.
+    Structure,
+    /// Insight › Runtime: what starts, runs and builds what.
+    Runtime,
+    /// Insight › Data: the types the project stores and sends.
+    Data,
+    /// Insight › Lenses: the project's checked state and sequence diagrams.
+    Lenses,
     /// Settings.
     Settings,
 }
 
 impl Destination {
     /// Destinations in navigation order.
-    pub const ALL: [Destination; 10] = [
+    pub const ALL: [Destination; 13] = [
         Self::Home,
         Self::Tasks,
         Self::Sessions,
@@ -62,19 +69,24 @@ impl Destination {
         Self::Timeline,
         Self::Usage,
         Self::Artifacts,
-        Self::System,
         Self::Host,
+        Self::Structure,
+        Self::Runtime,
+        Self::Data,
+        Self::Lenses,
         Self::Settings,
     ];
     /// Activity's pages, in the order the sidebar lists them.
-    pub const ACTIVITY: [Destination; 6] = [
+    pub const ACTIVITY: [Destination; 5] = [
         Self::Feed,
         Self::Timeline,
         Self::Usage,
         Self::Artifacts,
-        Self::System,
         Self::Host,
     ];
+    /// Insight's pages, in the order the sidebar lists them: the System map's four views.
+    pub const INSIGHT: [Destination; 4] =
+        [Self::Structure, Self::Runtime, Self::Data, Self::Lenses];
     /// The display label.
     pub const fn label(self) -> &'static str {
         match self {
@@ -85,8 +97,11 @@ impl Destination {
             Self::Timeline => "Timeline",
             Self::Usage => "Usage",
             Self::Artifacts => "Artifacts",
-            Self::System => "System",
             Self::Host => "Host performance",
+            Self::Structure => "Structure",
+            Self::Runtime => "Runtime",
+            Self::Data => "Data",
+            Self::Lenses => "Lenses",
             Self::Settings => "Settings",
         }
     }
@@ -100,15 +115,20 @@ impl Destination {
             Self::Timeline => "timeline",
             Self::Usage => "usage",
             Self::Artifacts => "artifacts",
-            Self::System => "system",
             Self::Host => "host",
+            Self::Structure => "structure",
+            Self::Runtime => "runtime",
+            Self::Data => "data",
+            Self::Lenses => "lenses",
             Self::Settings => "settings",
         }
     }
-    /// Finds a destination by its slug. The nine former destinations' slugs open their new
-    /// homes, so a stored destination or an old link still lands somewhere.
+    /// Finds a destination by its slug. The former destinations' slugs open their new homes
+    /// (Activity's former System page Insight › Structure), so a stored destination or an old
+    /// link still lands somewhere.
     pub fn from_slug(slug: &str) -> Option<Destination> {
         match slug {
+            "system" => Some(Self::Structure),
             "now" | "inbox" => Some(Self::Home),
             "plans" | "review" => Some(Self::Tasks),
             "agents" | "builds" => Some(Self::Sessions),
@@ -122,13 +142,30 @@ impl Destination {
             Self::Home => Area::Home,
             Self::Tasks => Area::Tasks,
             Self::Sessions => Area::Sessions,
-            Self::Feed
-            | Self::Timeline
-            | Self::Usage
-            | Self::Artifacts
-            | Self::System
-            | Self::Host => Area::Activity,
+            Self::Feed | Self::Timeline | Self::Usage | Self::Artifacts | Self::Host => {
+                Area::Activity
+            }
+            Self::Structure | Self::Runtime | Self::Data | Self::Lenses => Area::Insight,
             Self::Settings => Area::Settings,
+        }
+    }
+    /// The System map's view an Insight page shows.
+    pub const fn system_view(self) -> Option<View> {
+        match self {
+            Self::Structure => Some(View::Structure),
+            Self::Runtime => Some(View::Runtime),
+            Self::Data => Some(View::Data),
+            Self::Lenses => Some(View::Lenses),
+            _ => None,
+        }
+    }
+    /// The Insight page that shows a System map view.
+    pub const fn of_view(view: View) -> Destination {
+        match view {
+            View::Structure => Self::Structure,
+            View::Runtime => Self::Runtime,
+            View::Data => Self::Data,
+            View::Lenses => Self::Lenses,
         }
     }
     /// The phone tab whose stack shows the page; none for Settings, which opens over the tab
@@ -139,32 +176,42 @@ impl Destination {
             Area::Tasks => Some(PhoneTab::Tasks),
             Area::Sessions => Some(PhoneTab::Sessions),
             Area::Activity => Some(PhoneTab::Activity),
+            Area::Insight => Some(PhoneTab::Insight),
             Area::Settings => None,
         }
     }
 }
 
-/// One of the four places, or Settings in its corner: what the sidebar lists at rest and a
+/// One of the five places, or Settings in its corner: what the sidebar lists at rest and a
 /// place key opens.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Area {
     Home,
     Tasks,
     Sessions,
-    /// Feed, Timeline, Usage, Artifacts and System.
+    /// Feed, Timeline, Usage, Artifacts and Host performance.
     Activity,
+    /// Structure, Runtime, Data and Lenses: one project's analysis.
+    Insight,
     Settings,
 }
 
 impl Area {
-    /// The four places in navigation order.
-    pub const PLACES: [Area; 4] = [Self::Home, Self::Tasks, Self::Sessions, Self::Activity];
-    /// The places, then Settings.
-    pub const ALL: [Area; 5] = [
+    /// The five places in navigation order.
+    pub const PLACES: [Area; 5] = [
         Self::Home,
         Self::Tasks,
         Self::Sessions,
         Self::Activity,
+        Self::Insight,
+    ];
+    /// The places, then Settings.
+    pub const ALL: [Area; 6] = [
+        Self::Home,
+        Self::Tasks,
+        Self::Sessions,
+        Self::Activity,
+        Self::Insight,
         Self::Settings,
     ];
     /// The display label.
@@ -174,6 +221,7 @@ impl Area {
             Self::Tasks => "Tasks",
             Self::Sessions => "Sessions",
             Self::Activity => "Activity",
+            Self::Insight => "Insight",
             Self::Settings => "Settings",
         }
     }
@@ -184,6 +232,7 @@ impl Area {
             Self::Tasks => "tasks",
             Self::Sessions => "sessions",
             Self::Activity => "activity",
+            Self::Insight => "insight",
             Self::Settings => "settings",
         }
     }
@@ -194,6 +243,8 @@ impl Area {
             Self::Tasks => 't',
             Self::Sessions => 's',
             Self::Activity => 'a',
+            // `m` for the map: the key the former System page had.
+            Self::Insight => 'm',
             Self::Settings => ',',
         }
     }
@@ -215,8 +266,8 @@ impl Area {
     }
 }
 
-/// Every key that opens a place or one of Activity's pages: the places' own, the former
-/// destinations' (`n p r`), and Usage's, Artifacts' and System's (`u f m`).
+/// Every key that opens a place or one of Activity's pages: the places' own (Insight's `m`),
+/// the former destinations' (`n p r`), and Usage's and Artifacts' (`u f`).
 pub const PLACE_KEYS: [&str; 11] = ["h", "t", "s", "a", ",", "n", "p", "r", "u", "f", "m"];
 
 /// A tab of the task page. The page is the one place tabs stay: the diff needs the width.
@@ -312,10 +363,18 @@ pub enum PhoneTab {
     Sessions,
     /// The list of Activity's pages.
     Activity,
+    /// The list of Insight's pages.
+    Insight,
 }
 impl PhoneTab {
     /// Phone tabs in display order.
-    pub const ALL: [PhoneTab; 4] = [Self::Home, Self::Tasks, Self::Sessions, Self::Activity];
+    pub const ALL: [PhoneTab; 5] = [
+        Self::Home,
+        Self::Tasks,
+        Self::Sessions,
+        Self::Activity,
+        Self::Insight,
+    ];
     /// The place the tab shows.
     pub const fn area(self) -> Area {
         match self {
@@ -323,6 +382,7 @@ impl PhoneTab {
             Self::Tasks => Area::Tasks,
             Self::Sessions => Area::Sessions,
             Self::Activity => Area::Activity,
+            Self::Insight => Area::Insight,
         }
     }
     /// The display label.
@@ -333,13 +393,14 @@ impl PhoneTab {
     pub const fn slug(self) -> &'static str {
         self.area().slug()
     }
-    /// The tab's destination, if its root is one: Activity's root lists its pages.
+    /// The tab's destination, if its root is one: Activity's and Insight's roots list their
+    /// pages.
     pub const fn destination(self) -> Option<Destination> {
         match self {
             Self::Home => Some(Destination::Home),
             Self::Tasks => Some(Destination::Tasks),
             Self::Sessions => Some(Destination::Sessions),
-            Self::Activity => None,
+            Self::Activity | Self::Insight => None,
         }
     }
 }
@@ -457,6 +518,8 @@ pub struct NavState {
     pub destination: Destination,
     /// The Activity page last shown, which the Activity place opens again.
     pub activity: Destination,
+    /// The Insight page last shown, which the Insight place opens again.
+    pub insight: Destination,
     /// The current settings section.
     pub settings: SettingsSection,
     /// Counts explicit section-opening intents, including a repeated opening of the same section.
@@ -479,6 +542,7 @@ impl NavState {
         NavState {
             destination: form.home(),
             activity: Destination::Feed,
+            insight: Destination::Structure,
             settings: SettingsSection::Devices,
             section_opens: 0,
             goes: 0,
@@ -492,19 +556,22 @@ impl NavState {
     pub fn go(&mut self, destination: Destination) {
         self.goes = self.goes.wrapping_add(1);
         self.destination = destination;
-        if destination.area() == Area::Activity {
-            self.activity = destination;
+        match destination.area() {
+            Area::Activity => self.activity = destination,
+            Area::Insight => self.insight = destination,
+            _ => {}
         }
         self.pages.clear();
         self.close(Overlay::Palette);
     }
-    /// The page a place opens: its own, or for Activity the page last shown there.
+    /// The page a place opens: its own, or for Activity and Insight the page last shown there.
     pub const fn page_of(&self, area: Area) -> Destination {
         match area {
             Area::Home => Destination::Home,
             Area::Tasks => Destination::Tasks,
             Area::Sessions => Destination::Sessions,
             Area::Activity => self.activity,
+            Area::Insight => self.insight,
             Area::Settings => Destination::Settings,
         }
     }
@@ -513,7 +580,6 @@ impl NavState {
         match key {
             'u' => Some(Destination::Usage),
             'f' => Some(Destination::Artifacts),
-            'm' => Some(Destination::System),
             _ => Area::from_key(key).map(|area| self.page_of(area)),
         }
     }
@@ -633,12 +699,24 @@ pub fn places(feed: &crate::model::daemon::Feed) -> Vec<Area> {
         .collect()
 }
 
-/// Activity's pages in this workspace, in order.
-pub fn activity_pages(feed: &crate::model::daemon::Feed) -> Vec<Destination> {
-    Destination::ACTIVITY
-        .into_iter()
+/// A place's pages in this workspace, in order: Activity's and Insight's; none for a place
+/// whose row is its page.
+pub fn area_pages(feed: &crate::model::daemon::Feed, area: Area) -> Vec<Destination> {
+    let pages: &[Destination] = match area {
+        Area::Activity => &Destination::ACTIVITY,
+        Area::Insight => &Destination::INSIGHT,
+        _ => &[],
+    };
+    pages
+        .iter()
+        .copied()
         .filter(|page| offers(feed, *page))
         .collect()
+}
+
+/// Activity's pages in this workspace, in order.
+pub fn activity_pages(feed: &crate::model::daemon::Feed) -> Vec<Destination> {
+    area_pages(feed, Area::Activity)
 }
 
 /// Every page this workspace has, in navigation order: what the palette lists.
@@ -664,6 +742,7 @@ const fn page_at_rest(area: Area) -> Destination {
         Area::Tasks => Destination::Tasks,
         Area::Sessions => Destination::Sessions,
         Area::Activity => Destination::Feed,
+        Area::Insight => Destination::Structure,
         Area::Settings => Destination::Settings,
     }
 }

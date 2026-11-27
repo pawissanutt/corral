@@ -66,7 +66,7 @@ pub mod sessions;
 pub mod settings;
 /// The engine's statuses and a session's states as words and marks.
 pub mod status;
-/// Activity › System: one project's map, its levels, layout and inspector.
+/// Insight's pages: one project's map, its levels, layout and inspector.
 pub mod system;
 /// Tasks: every task, grouped by status, and the task page.
 pub mod tasks;

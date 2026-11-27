@@ -19,7 +19,7 @@ use nsh_core::{
 };
 
 use self::nav::{Entry, Nav};
-use super::{activity_pages, confirmation, lock, refusal, stale, toast};
+use super::{area_pages, confirmation, lock, refusal, stale, toast};
 use crate::{
     model::{
         Area, Availability, DataState, Destination, Live, Overlay, PhoneTab, Route,
@@ -224,7 +224,7 @@ fn root(nav: Nav, tab: PhoneTab) -> Screen {
             false,
             false,
         ),
-        None => activity_list(nav),
+        None => page_list(nav, tab.area()),
     };
     nav_page()
         .key(tab.slug())
@@ -418,11 +418,11 @@ fn page_bar(bar: PhoneBar) -> AnyElement {
         .into_element()
 }
 
-/// The Activity tab's root: the large title with search, then a row per page this workspace
-/// has (Feed, Timeline, Usage, Artifacts) with its icon and name, each pushing its page.
-fn activity_list(nav: Nav) -> AnyElement {
+/// The Activity or Insight tab's root (`activity-list`, `insight-list`): the large title with
+/// search, then a row per page this workspace has with its icon and name, each pushing its page.
+fn page_list(nav: Nav, area: Area) -> AnyElement {
     let app = nav.app;
-    let listed = computed(move || activity_pages(app));
+    let listed = computed(move || area_pages(app, area));
     let list = dynamic(move || {
         let pages = listed.get();
         untracked(move || {
@@ -436,9 +436,13 @@ fn activity_list(nav: Nav) -> AnyElement {
     });
     frame(
         app,
-        Some(head(app, Area::Activity.label(), None, vec![search(app)])),
+        Some(head(app, area.label(), None, vec![search(app)])),
         follow_scroll(app.form, nsh_core::prelude::scroll())
-            .test_id("activity-list")
+            .test_id(if area == Area::Insight {
+                "insight-list"
+            } else {
+                "activity-list"
+            })
             .flex_1()
             .min_h(px(0.0))
             .child(view().pb(px(ASK_CLEARANCE)).child(list))
@@ -579,6 +583,7 @@ const fn symbol(tab: PhoneTab) -> &'static str {
         PhoneTab::Tasks => "list.bullet.rectangle",
         PhoneTab::Sessions => "terminal",
         PhoneTab::Activity => "waveform.path.ecg",
+        PhoneTab::Insight => "point.3.connected.trianglepath.dotted",
     }
 }
 

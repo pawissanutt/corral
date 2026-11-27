@@ -8,10 +8,14 @@ use crate::model::review::impact;
 use crate::model::system::View;
 use crate::model::{Destination, Form, Id, Live, NavState, Route, SettingsSection};
 
-/// The first segment of a task's page, a session's page and Activity's pages.
+/// The first segment of a task's page, a session's page, Activity's and Insight's pages.
+/// Activity's former System page (`activity/system[/<view>]`) opens its view's Insight page.
 const TASK: &str = "task";
 const SESSION: &str = "session";
 const ACTIVITY: &str = "activity";
+const INSIGHT: &str = "insight";
+/// Activity's former System page, whose views are Insight's pages now.
+const SYSTEM: &str = "system";
 /// The first segment of the former Project page.
 const PROJECTS: &str = "projects";
 
@@ -20,8 +24,6 @@ const PROJECTS: &str = "projects";
 pub enum Place {
     /// A destination's own screen.
     Destination(Destination),
-    /// Activity › System showing a view other than Structure (Runtime or Lenses).
-    SystemView(View),
     /// A Settings section.
     Settings(SettingsSection),
     /// A task's page at one of its tabs.
@@ -40,8 +42,6 @@ pub enum Place {
 pub struct Shown {
     /// The Settings section the phone's stack has open over its Settings list.
     pub phone_section: Option<SettingsSection>,
-    /// The view Activity › System shows.
-    pub system_view: View,
 }
 
 impl Place {
@@ -60,9 +60,6 @@ impl Place {
                 .phone_section
                 .map_or(Place::Destination(Destination::Settings), Place::Settings),
             Destination::Settings => Place::Settings(nav.settings),
-            Destination::System if shown.system_view != View::Structure => {
-                Place::SystemView(shown.system_view)
-            }
             destination => Place::Destination(destination),
         }
     }
@@ -93,10 +90,10 @@ impl Place {
             Place::Destination(destination) if destination.area() == Area::Activity => {
                 format!("{ACTIVITY}/{}", destination.slug())
             }
-            Place::Destination(destination) => destination.slug().to_owned(),
-            Place::SystemView(view) => {
-                format!("{ACTIVITY}/{}/{}", Destination::System.slug(), view.slug())
+            Place::Destination(destination) if destination.area() == Area::Insight => {
+                format!("{INSIGHT}/{}", destination.slug())
             }
+            Place::Destination(destination) => destination.slug().to_owned(),
             Place::Settings(section) => {
                 format!("{}/{}", Destination::Settings.slug(), section.slug())
             }
@@ -140,15 +137,21 @@ impl Place {
             SESSION => return id(rest).map(Place::Session),
             PROJECTS => return id(rest).map(Place::Project),
             ACTIVITY => {
-                if let Some((page, view)) = rest.split_once('/')
-                    && page == Destination::System.slug()
-                    && let Some(view) = View::from_slug(view)
-                {
-                    return Some(Place::SystemView(view));
+                // The former System page and its views: `activity/system[/<view>]`.
+                let (page, view) = rest.split_once('/').unwrap_or((rest, ""));
+                if page == SYSTEM {
+                    let view = View::from_slug(view).unwrap_or_default();
+                    return Some(Place::Destination(Destination::of_view(view)));
                 }
                 let page = Destination::from_slug(rest)
                     .filter(|page| page.area() == Area::Activity)
                     .unwrap_or(Destination::Feed);
+                return Some(Place::Destination(page));
+            }
+            INSIGHT => {
+                let page = Destination::from_slug(rest)
+                    .filter(|page| page.area() == Area::Insight)
+                    .unwrap_or(Destination::Structure);
                 return Some(Place::Destination(page));
             }
             _ => {}
@@ -172,8 +175,6 @@ impl Place {
     pub fn open(self, nav: &mut NavState) {
         match self {
             Place::Destination(destination) => nav.go(destination),
-            // The view itself is the System page's state, which the caller sets.
-            Place::SystemView(_) => nav.go(Destination::System),
             Place::Settings(section) => nav.go_settings(section),
             Place::Task(id, tab) => open_task(nav, id, tab),
             Place::TaskImpact(id, _) => open_task(nav, id, TaskTab::Changes),
@@ -270,30 +271,32 @@ mod tests {
 
     const SHOWN: Shown = Shown {
         phone_section: None,
-        system_view: View::Structure,
     };
 
-    /// The Runtime view had no address of its own: a reload or a link must open it again,
-    /// and only on the System page.
+    /// System moved from Activity to Insight's pages: every link to the former page or one
+    /// of its views has to open that view's page, and each page has its own address.
     #[test]
-    fn the_runtime_view_has_its_own_address() {
-        let runtime = Shown {
-            phone_section: None,
-            system_view: View::Runtime,
-        };
-        let mut nav = NavState::new(Form::Desktop);
-        nav.go(Destination::System);
-        let place = Place::of(&nav, Form::Desktop, runtime);
-        assert_eq!(place.path(), "activity/system/runtime");
-        assert_eq!(
-            Place::parse(&place.path()),
-            Some(Place::SystemView(View::Runtime))
-        );
-        nav.go(Destination::Usage);
-        assert_eq!(
-            Place::of(&nav, Form::Desktop, runtime),
-            Place::Destination(Destination::Usage)
-        );
+    fn the_former_system_links_open_their_insight_pages() {
+        let page = |destination| Some(Place::Destination(destination));
+        for (path, place) in [
+            ("activity/system", page(Destination::Structure)),
+            ("activity/system/structure", page(Destination::Structure)),
+            ("activity/system/runtime", page(Destination::Runtime)),
+            ("/activity/system/data/", page(Destination::Data)),
+            ("activity/system/lenses", page(Destination::Lenses)),
+            ("system", page(Destination::Structure)),
+            ("insight", page(Destination::Structure)),
+            ("insight/lenses", page(Destination::Lenses)),
+        ] {
+            assert_eq!(Place::parse(path), place, "{path}");
+        }
+        for destination in Destination::INSIGHT {
+            let view = destination.system_view().map(View::slug);
+            assert_eq!(
+                Place::Destination(destination).path(),
+                format!("insight/{}", view.unwrap_or_default())
+            );
+        }
     }
 
     fn reloaded(nav: &NavState, form: Form) -> Place {
@@ -353,7 +356,6 @@ mod tests {
         assert_eq!(list, Place::Destination(Destination::Settings));
         let open = Shown {
             phone_section: Some(SettingsSection::Config),
-            system_view: View::Structure,
         };
         let section = Place::of(&nav, Form::Phone, open);
         assert_ne!(section.path(), list.path());

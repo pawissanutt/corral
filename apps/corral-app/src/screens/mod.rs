@@ -164,8 +164,11 @@ fn screen(app: AppState, destination: Destination) -> AnyElement {
         | Destination::Timeline
         | Destination::Usage
         | Destination::Artifacts
-        | Destination::System
         | Destination::Host => activity::screen(app, destination),
+        // Insight's pages are the System map's views; the navigation sets the view.
+        Destination::Structure | Destination::Runtime | Destination::Data | Destination::Lenses => {
+            system::screen(app)
+        }
         Destination::Settings => settings::screen(app),
     }
 }

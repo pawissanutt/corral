@@ -1,4 +1,4 @@
-//! Activity › System: one project's map. The page reads the project's `system` row (whether
+//! Insight's pages, one project's map. The page reads the project's `system` row (whether
 //! its facts are building, its extension and that extension's last error) and the
 //! `system_map` detail of the level shown, nothing else. Every form shares this state: the
 //! trail of levels drilled into, what is picked (a node or an edge), the overlay, the activity

@@ -11,8 +11,7 @@ use nsh_core::url_scheme::HistoryBehavior;
 
 use super::AppState;
 use crate::model::address::{Place, Shown, url_path};
-use crate::model::system::{Action, View};
-use crate::model::{Destination, Form, Live, TaskTab};
+use crate::model::{Form, Live, TaskTab};
 
 /// The place the page was opened at, read before the first screen is built so a reload never
 /// shows another one first.
@@ -43,7 +42,6 @@ impl AppState {
         let place = computed(move || {
             let shown = Shown {
                 phone_section: self.phone_section.get(),
-                system_view: self.system.with(|s| s.view),
             };
             let place = self.nav.with(|nav| Place::of(nav, form, shown));
             if matches!(place, Place::Task(_, TaskTab::Changes)) {
@@ -78,6 +76,11 @@ impl AppState {
                 }
                 target => target,
             };
+            // A former path (`/activity/system/runtime`) names a place whose own path differs:
+            // the entry takes the place's own path, without a new entry.
+            if url_path(&url) != href(&target) {
+                let _ = set_app_url(href(&target));
+            }
             // The entry has this address already: arriving there must not write another.
             named.replace(Some(target.clone()));
             if place.get_untracked() == target {
@@ -107,14 +110,7 @@ impl AppState {
     /// Shows the place an address names, as opening it by name does.
     fn open_place(&self, place: Place) {
         match place {
-            Place::Destination(destination) => {
-                self.go(destination);
-                self.show_system_view(View::Structure);
-            }
-            Place::SystemView(view) => {
-                self.go(Destination::System);
-                self.show_system_view(view);
-            }
+            Place::Destination(destination) => self.go(destination),
             Place::Project(id) => self.open_project(id),
             Place::TaskImpact(ref id, _) | Place::Task(ref id, TaskTab::Changes) => {
                 // The address must not see a Changes tab with its previous view or pick.
@@ -129,14 +125,6 @@ impl AppState {
                 });
             }
             place => self.change(|nav| place.open(nav)),
-        }
-    }
-
-    /// The System page's view an address names, once the move there happened: a refused move
-    /// (unsaved Configuration edits ask first) leaves the view as it was.
-    fn show_system_view(&self, view: View) {
-        if self.nav.with_untracked(|nav| nav.destination) == Destination::System {
-            self.system_act(Action::View(view));
         }
     }
 }

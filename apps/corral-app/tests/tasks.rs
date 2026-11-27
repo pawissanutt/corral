@@ -357,7 +357,7 @@ fn more_branches_from_the_keyboard_keeps_the_focus_on_the_paging_row() {
 
 /// Changes › Impact draws T-11's change on the System page's map at the task's head; its
 /// touched module opens the package's level with the module selected, and Open in System opens
-/// Activity › System at that level with the module selected.
+/// Insight › Structure at that level with the module selected.
 #[test]
 fn a_touched_module_opens_in_system_at_its_package_level() {
     let mut app = preview("tasks");

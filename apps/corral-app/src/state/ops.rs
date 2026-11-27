@@ -119,7 +119,7 @@ impl AppState {
             Some(Confirming::Leave(nav)) => {
                 self.confirm.set(None);
                 self.act(self.settings, |state, _| state.discard_config());
-                self.nav.set(*nav);
+                self.set_nav(*nav);
                 self.settle_pane_cite(true);
             }
             None => {}

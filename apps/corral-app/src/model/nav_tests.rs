@@ -32,6 +32,7 @@ fn the_former_destinations_open_their_new_homes() {
         ("timeline", Destination::Timeline),
         ("usage", Destination::Usage),
         ("artifacts", Destination::Artifacts),
+        ("system", Destination::Structure),
     ] {
         assert_eq!(Destination::from_slug(slug), Some(home), "{slug}");
     }
@@ -42,6 +43,7 @@ fn the_former_destinations_open_their_new_homes() {
         ('r', Destination::Tasks),
         ('u', Destination::Usage),
         ('f', Destination::Artifacts),
+        ('m', Destination::Structure),
     ] {
         assert_eq!(nav.key_page(key), Some(home), "{key}");
     }
@@ -59,6 +61,28 @@ fn activity_opens_at_its_last_page() {
     assert!(nav.press_key('a'));
     assert_eq!(nav.destination, Destination::Usage);
     assert_eq!(nav.destination.area(), Area::Activity);
+}
+
+/// System's views are Insight's pages: each its own page under Insight, none under Activity,
+/// and `m` reopens the one last shown, as `a` does Activity's.
+#[test]
+fn insight_holds_the_system_views_and_opens_at_its_last_page() {
+    use crate::model::system::View;
+    for view in View::ALL {
+        let page = Destination::of_view(view);
+        assert_eq!(page.system_view(), Some(view));
+        assert_eq!(page.area(), Area::Insight);
+        assert!(!Destination::ACTIVITY.contains(&page));
+    }
+    let mut nav = NavState::new(Form::Desktop);
+    assert!(nav.press_key('m'));
+    assert_eq!(nav.destination, Destination::Structure);
+    nav.go(Destination::Lenses);
+    nav.go(Destination::Usage);
+    assert!(nav.press_key('m'));
+    assert_eq!(nav.destination, Destination::Lenses);
+    assert!(nav.press_key('a'));
+    assert_eq!(nav.destination, Destination::Usage);
 }
 
 #[test]

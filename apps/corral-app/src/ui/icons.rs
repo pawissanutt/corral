@@ -50,6 +50,10 @@ const EVENTS: ImageAsset = asset!("icons/delta.svg");
 const FILES: ImageAsset = asset!("icons/note.svg");
 const SYSTEM: ImageAsset = asset!("icons/system.svg");
 const HOST: ImageAsset = asset!("icons/host.svg");
+const INSIGHT: ImageAsset = asset!("icons/insight.svg");
+const RUNTIME: ImageAsset = asset!("icons/runtime.svg");
+const DATA: ImageAsset = asset!("icons/data.svg");
+const LENSES: ImageAsset = asset!("icons/lenses.svg");
 
 /// The mock's sprite (`ui.js`, `i-*`). `Ask` is the sprite's `i-chat` speech bubble.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -115,8 +119,16 @@ pub enum Icon {
     Events,
     /// A page with lines (`i-note`).
     Files,
-    /// Three linked boxes: Activity › System, the map.
+    /// Three linked boxes: Insight › Structure, the map.
     System,
+    /// A magnifier over bars: the Insight place.
+    Insight,
+    /// A play mark in a ring: Insight › Runtime.
+    Runtime,
+    /// A stacked cylinder: Insight › Data.
+    Data,
+    /// Three linked states: Insight › Lenses.
+    Lenses,
     /// A machine with a pulse: Activity › Host performance, the daemon host.
     Host,
 }
@@ -133,8 +145,11 @@ impl Icon {
             Destination::Timeline => Icon::Timeline,
             Destination::Usage => Icon::Usage,
             Destination::Artifacts => Icon::Files,
-            Destination::System => Icon::System,
             Destination::Host => Icon::Host,
+            Destination::Structure => Icon::System,
+            Destination::Runtime => Icon::Runtime,
+            Destination::Data => Icon::Data,
+            Destination::Lenses => Icon::Lenses,
             Destination::Settings => Icon::Settings,
         }
     }
@@ -146,6 +161,7 @@ impl Icon {
             Area::Tasks => Icon::Plans,
             Area::Sessions => Icon::Agents,
             Area::Activity => Icon::Changes,
+            Area::Insight => Icon::Insight,
             Area::Settings => Icon::Settings,
         }
     }
@@ -197,6 +213,10 @@ impl Icon {
             Icon::Files => FILES,
             Icon::System => SYSTEM,
             Icon::Host => HOST,
+            Icon::Insight => INSIGHT,
+            Icon::Runtime => RUNTIME,
+            Icon::Data => DATA,
+            Icon::Lenses => LENSES,
         }
     }
 }

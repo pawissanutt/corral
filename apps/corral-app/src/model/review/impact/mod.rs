@@ -1,6 +1,6 @@
 //! A task page's Changes › Impact (docs/plans/system-map.md §3.3): what the task's submitted
 //! change moved in its project's structure, read from the `system_review` detail. The map is
-//! the task's head, drawn by Activity › System's map at the level drilled into (packages, a
+//! the task's head, drawn by Insight › Structure's map at the level drilled into (packages, a
 //! package's modules, a module's files, a file's definitions), each node marked with the lines
 //! the change added and removed there and the dependents it holds, the rest dimmed. Under it
 //! the touched modules, then the Model impact list: the ten fixed categories in their order,
@@ -58,7 +58,7 @@ pub struct State {
     pub task: Option<String>,
     /// The selected item's key.
     pub item: Option<String>,
-    /// The map's trail and pick, with Activity › System's rules for both.
+    /// The map's trail and pick, with Insight › Structure's rules for both.
     pub map: map::State,
     /// Explicit fold choices, by their place in `Category::ALL`.
     pub category_open: BTreeMap<usize, bool>,

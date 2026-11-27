@@ -1,6 +1,6 @@
 //! Impact's inspector: what the picked card or edge is, led by "This task" (the lines the
 //! change added and removed there, the files they are in and the dependents held there, each
-//! of which selects its file on the map), then Activity › System's own inspector for the same
+//! of which selects its file on the map), then Insight › Structure's own inspector for the same
 //! node, drawn by the System page's code on this map.
 //!
 //! Test ids: "impact-this-task", "impact-file-<n>", "impact-dependent-<n>", and those of

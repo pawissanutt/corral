@@ -1,4 +1,4 @@
-//! Activity › System: one project's map. The head carries the overlay (Structure, Activity,
+//! Insight's pages, one project's map. The head carries the overlay (Structure, Activity,
 //! Coverage) and, under Activity, its window; under it the breadcrumb, which goes up a level as
 //! Escape does, and the filter; then the notices, the summary, the map with its legend and the
 //! one provenance line, and the inspector beside it. Desktop and web draw the map on a canvas
@@ -28,7 +28,7 @@ use crate::model::system::inspect::Inspector;
 use crate::model::system::marks::{self, Marks, drawn_pick};
 use crate::model::system::scene::EdgeKind;
 use crate::model::system::scene::Scene;
-use crate::model::system::shown::{ASK_HEADING, ASK_WORDS, Shown, Status, TITLE, shown};
+use crate::model::system::shown::{ASK_HEADING, ASK_WORDS, Shown, Status, shown};
 use crate::model::system::words::{Swatch, slot_hue};
 use crate::model::system::{
     Action, FILTER_FIELD, Node, Overlay, Pick, State, View, Window, view_request,
@@ -48,7 +48,7 @@ use crate::ui::kit::text::{h3, label_value, plain};
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, MEASURE_PAGE, Token, color, text_size};
 
-/// Whose state a map draws and picks: Activity › System's, or a task page's Impact, which
+/// Whose state a map draws and picks: Insight › Structure's, or a task page's Impact, which
 /// marks what its change touched.
 #[derive(Clone, Copy)]
 pub(crate) enum Host {
@@ -111,7 +111,7 @@ impl Host {
     }
 }
 
-/// Activity › System.
+/// Insight's pages: each one view of the project's map, the one the navigation chose.
 pub fn screen(app: AppState) -> AnyElement {
     let data = computed(move || {
         let scope = app.project_scope();
@@ -180,26 +180,13 @@ fn page_head(app: AppState, data: Memo<Shown>) -> AnyElement {
         Overlay::ALL.iter().map(|o| (*o, o.label())).collect();
     let windows: Vec<(Window, &'static str)> =
         Window::ALL.iter().map(|w| (*w, w.label())).collect();
-    let views: Vec<(View, &'static str)> = View::ALL.iter().map(|v| (*v, v.label())).collect();
+    // Each Insight page is one view, which the navigation chose before the page was built:
+    // the page is titled by it, and the sidebar, not the head, moves between them.
+    let title = untracked(|| app.system.with(|s| s.view)).label();
     // Asking for a project, there is no map to re-colour.
     let drawing = computed(move || data.with(|shown| shown.project.is_some()));
     let structure =
         computed(move || drawing.get() && app.system.with(|s| s.view == View::Structure));
-    let view_seg = dynamic(move || {
-        let views = views.clone();
-        drawing.get().then(|| {
-            untracked(|| {
-                seg(
-                    app,
-                    &views,
-                    move || app.system.with(|s| s.view),
-                    move |v| app.system_act(Action::View(v)),
-                    "seg-view",
-                )
-            })
-        })
-    })
-    .into_element();
     let overlay = dynamic(move || {
         let overlays = overlays.clone();
         structure.get().then(|| {
@@ -237,26 +224,19 @@ fn page_head(app: AppState, data: Memo<Shown>) -> AnyElement {
         return view()
             .flex_none()
             .flex_col()
-            .child(head(app, TITLE, None, Vec::new()))
+            .child(head(app, title, None, Vec::new()))
             .child(
                 view()
                     .flex_col()
                     .gap(px(8.0))
                     .px(px(16.0))
                     .py(px(8.0))
-                    .child(view_seg)
                     .child(overlay)
                     .child(window),
             )
             .into_element();
     }
-    measured_head(
-        app,
-        MEASURE_PAGE,
-        TITLE,
-        None,
-        vec![view_seg, overlay, window],
-    )
+    measured_head(app, MEASURE_PAGE, title, None, vec![overlay, window])
 }
 
 /// All projects in scope: the page asks for one.

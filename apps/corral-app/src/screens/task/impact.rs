@@ -1,6 +1,6 @@
-//! The Changes tab's Impact view: the task's `system_review` as Activity › System's map at the
+//! The Changes tab's Impact view: the task's `system_review` as Insight › Structure's map at the
 //! task's head (`screens::system::Host::Impact`: touched cards ringed solid with their lines,
-//! cards holding dependents ringed dashed, the rest dimmed), drilled like Activity › System.
+//! cards holding dependents ringed dashed, the rest dimmed), drilled like Insight › Structure.
 //! On a wide window the list of what changed (`impact_list.rs`) is a column beside the map's
 //! stage, each scrolling on its own: the breadcrumb, Escape hint and summary over the map, the
 //! legend and provenance under it, and the inspector (`impact_inspect.rs`) beside it while a
@@ -103,7 +103,7 @@ pub(crate) fn impact(app: AppState, id: Id) -> AnyElement {
 }
 
 /// Keeps the impact read at the project level and at the level shown, and, for the selected
-/// item, Activity › System's maps along its target, which say whether that page has it.
+/// item, Insight › Structure's maps along its target, which say whether that page has it.
 fn keep(app: AppState, task: Memo<Id>, trail: Memo<Vec<SystemAt>>, listing: Memo<Listing>) {
     let targets = computed(move || {
         let task = task.get();

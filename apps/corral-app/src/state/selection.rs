@@ -20,7 +20,7 @@ impl AppState {
         }
         match destination {
             Destination::Artifacts => self.escape_artifacts(),
-            Destination::System => self.escape_system(),
+            destination if destination.system_view().is_some() => self.escape_system(),
             _ => false,
         }
     }

@@ -16,7 +16,7 @@ use crate::{
     },
     screens,
     shell::{
-        activity_pages, confirmation, current_area, places, refusal, section_short, terminal_bar,
+        area_pages, confirmation, current_area, places, refusal, section_short, terminal_bar,
         terminal_keys::{PALETTE_CHORD, key_line},
         toast,
     },
@@ -340,11 +340,11 @@ fn place_row(app: AppState, current: Memo<Area>, item: Area) -> AnyElement {
         move || app.go_area(item),
     );
     match item {
-        Area::Activity => view()
+        Area::Activity | Area::Insight => view()
             .child(row)
             .child(when(
-                move || current.get() == Area::Activity,
-                move || activity_rows(app),
+                move || current.get() == item,
+                move || page_rows(app, item),
             ))
             .into_element(),
         Area::Settings => view()
@@ -358,9 +358,10 @@ fn place_row(app: AppState, current: Memo<Area>, item: Area) -> AnyElement {
     }
 }
 
-/// Activity's pages, two Cells in under Activity, as the Settings sections sit under Settings.
-fn activity_rows(app: AppState) -> AnyElement {
-    let pages = computed(move || activity_pages(app));
+/// Activity's or Insight's pages, two Cells in under the place, as the Settings sections sit
+/// under Settings.
+fn page_rows(app: AppState, area: Area) -> AnyElement {
+    let pages = computed(move || area_pages(app, area));
     dynamic(move || {
         let pages = pages.get();
         untracked(move || {
