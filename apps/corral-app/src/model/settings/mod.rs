@@ -18,6 +18,7 @@ pub mod profiles;
 pub mod push;
 pub mod qr;
 pub mod routing;
+pub mod skills;
 
 pub use edits::{Edits, Pending, device_slot};
 pub use live::daemon_connection_details;
@@ -29,4 +30,6 @@ pub struct State {
     pub edits: Edits,
     /// `corral.toml` and its unsaved draft.
     pub config: editor::Editor,
+    pub skills: skills::Editors,
+    pub skill_fixture: skills::Fixture,
 }

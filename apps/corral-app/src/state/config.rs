@@ -22,6 +22,15 @@ impl AppState {
     }
 
     pub fn save_config(&self) {
+        if self
+            .settings
+            .with_untracked(|state| state.config.part == Part::Skills)
+        {
+            if let Some(ctx) = untracked(|| super::skills::context(*self)) {
+                super::skills::save(*self, &ctx);
+            }
+            return;
+        }
         let available = untracked(|| self.automations_available());
         self.act(self.settings, move |state, _| {
             if state.config.waiting.is_some() {

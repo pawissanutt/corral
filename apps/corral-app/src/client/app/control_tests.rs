@@ -583,3 +583,22 @@ fn ask_holds_its_draft_until_end_is_acknowledged_even_with_a_delayed_row() {
         matches!(send(&mut ask, &chats, &quick).as_slice(), [Effect::SessionSend { send, .. }] if send.id == QUICK_THREAD && send.text == draft)
     );
 }
+
+#[test]
+fn pi_skills_routes_all_replies_and_requires_a_compatible_connection() {
+    for method in [PI_SKILLS, PI_SKILL_GET, PI_SKILL_PUT, PI_SKILL_TOGGLE] {
+        assert!(handles(&Event::Reply {
+            method,
+            tag: Some("skill-1".into()),
+            params: json!({}),
+            outcome: Ok(json!({"revision": "r1"})),
+            error_data: None,
+        }));
+    }
+    let unavailable = crate::model::settings::skills::unavailable;
+    let mut feed = crate::model::preview::feed(0, String::new(), String::new(), None);
+    assert!(unavailable(&feed).is_none());
+    feed.capabilities.remove(wire::config::PI_SKILLS_V1);
+    assert!(unavailable(&feed).is_some());
+    assert!(unavailable(&Feed::default()).is_some());
+}

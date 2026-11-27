@@ -8,6 +8,7 @@ mod attach;
 mod board;
 mod commands;
 mod config;
+pub(crate) mod skills;
 mod devices;
 mod dock;
 mod finder;
@@ -372,6 +373,7 @@ impl AppState {
         app.follow_agents();
         app.follow_dock();
         app.settle_config();
+        skills::settle(app);
         app.follow_cached_feed();
         app.watch_device_receipts();
         if form == Form::Phone {

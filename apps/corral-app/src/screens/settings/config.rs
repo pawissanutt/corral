@@ -17,6 +17,7 @@ use super::{config_profiles, config_routing};
 mod automations;
 mod extensions;
 mod harnesses;
+mod skills;
 use crate::model::Form;
 use crate::model::settings::document::Path;
 use crate::model::settings::editor::{self, Edit, Part};
@@ -54,7 +55,16 @@ pub fn screen(app: AppState) -> AnyElement {
         .flex_1()
         .min_h(px(0.0))
         .child(body(app, "settings-body", content(app)))
-        .child(save_bar(app))
+        .child(dynamic(move || {
+            let shown = app.settings.with(|s| s.config.part != Part::Skills);
+            untracked(|| {
+                if shown {
+                    save_bar(app)
+                } else {
+                    view().into_element()
+                }
+            })
+        }))
         .into_element()
 }
 
@@ -65,7 +75,10 @@ pub fn phone(app: AppState) -> PhonePage {
         body: content(app),
         trailing: None,
         bar: Some(PhoneBar {
-            shown: computed(move || app.settings.with(|state| state.config.saved.is_some())),
+            shown: computed(move || {
+                app.settings
+                    .with(|state| state.config.part != Part::Skills && state.config.saved.is_some())
+            }),
             view: save_bar(app),
         }),
         ask: false,
@@ -99,40 +112,71 @@ fn open(app: AppState) {
 }
 
 fn content(app: AppState) -> AnyElement {
+    let selected = computed(move || app.settings.with(|state| state.config.part));
+    frame(
+        app,
+        "Configuration",
+        12.0,
+        vec![
+            tab_strip(
+                app,
+                &PARTS,
+                move || selected.get(),
+                move |part| app.act(app.settings, move |state, _| state.config_part(part)),
+                "tab-config",
+            ),
+            dynamic(move || {
+                let active = selected.get() == Part::Skills;
+                untracked(|| {
+                    button(
+                        app,
+                        "Skills",
+                        if active {
+                            ButtonKind::Primary
+                        } else {
+                            ButtonKind::Ghost
+                        },
+                        "tab-config-9",
+                        move || app.act(app.settings, |state, _| state.config_part(Part::Skills)),
+                    )
+                })
+            })
+            .into_element(),
+            dynamic(move || {
+                let part = selected.get();
+                untracked(|| {
+                    if part == Part::Skills {
+                        skills::panel(app)
+                    } else {
+                        document(app, part)
+                    }
+                })
+            })
+            .into_element(),
+        ],
+    )
+}
+
+fn document(app: AppState, selected: Part) -> AnyElement {
     open(app);
     let live = computed(move || app.settings.with(|state| Live::of(&state.config)));
     let shape = computed(move || {
         app.settings.with(|state| {
-            (
-                state.config.part,
-                app.feed.with(|feed| form::shape(&state.config, feed)),
-            )
+            state.config.saved.as_ref()?;
+            Some(app.feed.with(|feed| form::shape(&state.config, feed)))
         })
     });
-    let loaded = computed(move || app.settings.with(|state| state.config.saved.is_some()));
-    let parts = dynamic(move || {
-        if !loaded.get() {
-            return view().into_element();
-        }
-        untracked(move || {
-            view()
-                .min_w(px(0.0))
-                .child(tab_strip(
-                    app,
-                    &PARTS,
-                    move || app.settings.with(|state| state.config.part),
-                    move |part| app.act(app.settings, move |state, _| state.config_part(part)),
-                    "tab-config",
-                ))
-                .child(space(app, 12.0))
-                .child(dynamic(move || {
-                    let (selected, shape) = shape.get();
-                    untracked(move || part(app, selected, shape, live))
-                }))
-                .into_element()
-        })
-    });
-    frame(app, "Configuration", 12.0, vec![notices(app), parts])
+    view()
+        .min_w(px(0.0))
+        .child(notices(app))
+        .child(dynamic(move || {
+            let shape = shape.get();
+            untracked(|| match shape {
+                Some(shape) => part(app, selected, shape, live),
+                None => view().into_element(),
+            })
+        }))
+        .into_element()
 }
 
 /// The file on disk not parsing, an edit made elsewhere, why the file is not read or the last

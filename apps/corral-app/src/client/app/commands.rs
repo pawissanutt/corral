@@ -122,6 +122,13 @@ impl AppState {
                 OP_RESULT,
                 value(corral_protocol::op::OpResult { operation }),
             ),
+            ClientRequest::PiSkills {
+                request_id,
+                request,
+            } => {
+                let (method, params) = request.wire();
+                self.operation(feed, request_id, method, params)
+            }
             ClientRequest::ConfigGet { request_id } => {
                 self.operation(feed, request_id, CONFIG_GET, json!({}))
             }

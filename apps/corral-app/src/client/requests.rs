@@ -97,6 +97,10 @@ pub enum ClientRequest {
         request_id: String,
         operation: String,
     },
+    PiSkills {
+        request_id: String,
+        request: crate::model::settings::skills::Request,
+    },
     ConfigGet {
         request_id: String,
     },

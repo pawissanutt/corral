@@ -410,3 +410,43 @@ fn timeline_keyboard_focus_survives_folding_a_plan_and_selecting_a_lane() {
     app.press_key("enter").unwrap();
     app.wait_for("id:task-page").unwrap();
 }
+
+#[test]
+fn skills_fixture_keeps_markdown_drafts_and_switches_read_only_builtins() {
+    let mut app = preview(phone(), &[]);
+    app.press("id:nav-settings").unwrap();
+    app.press("id:settings-config").unwrap();
+    app.press("id:tab-config-9").unwrap();
+    app.press("id:btn-pi-skill-0").unwrap();
+    app.wait_for("id:field-pi-skill-markdown").unwrap();
+    assert_eq!(app.screen().count("id:btn-pi-skill-save").unwrap(), 0);
+    app.press("id:btn-pi-skill-toggle").unwrap();
+    app.wait_for("text:Enable in workspace").unwrap();
+    app.press("id:btn-pi-skill-back").unwrap();
+
+    app.press("id:btn-pi-skill-9").unwrap();
+    assert_text(
+        &mut app,
+        "pi-skill-path",
+        "/preview/configured/skills/notes/SKILL.md",
+    );
+    let field = "id:field-pi-skill-markdown";
+    app.type_text(field, "Draft note").unwrap();
+    let draft = app.screen().input_text(field).unwrap().unwrap().to_owned();
+    assert!(draft.contains("Draft note"));
+    app.press("id:tab-config-0").unwrap();
+    app.press("id:tab-config-9").unwrap();
+    app.wait_for(field).unwrap();
+    assert_eq!(
+        app.screen().input_text(field).unwrap(),
+        Some(draft.as_str())
+    );
+    app.press("id:btn-pi-skill-save").unwrap();
+    app.press("id:btn-pi-skill-back").unwrap();
+    app.press("id:btn-pi-skill-9").unwrap();
+    app.wait_for(field).unwrap();
+    assert_eq!(
+        app.screen().input_text(field).unwrap(),
+        Some(draft.as_str())
+    );
+}

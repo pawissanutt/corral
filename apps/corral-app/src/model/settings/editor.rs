@@ -31,12 +31,13 @@ pub enum Part {
     Artifacts,
     Extensions,
     Automations,
+    Skills,
     /// The whole file as text, for anything the form does not cover.
     File,
 }
 
 impl Part {
-    pub const ALL: [Part; 9] = [
+    pub const ALL: [Part; 10] = [
         Part::Workspace,
         Part::Projects,
         Part::Profiles,
@@ -46,6 +47,7 @@ impl Part {
         Part::Extensions,
         Part::File,
         Part::Automations,
+        Part::Skills,
     ];
 
     pub const fn label(self) -> &'static str {
@@ -59,6 +61,7 @@ impl Part {
             Part::Extensions => "Extensions",
             Part::File => "File",
             Part::Automations => "Automations",
+            Part::Skills => "Skills",
         }
     }
 
