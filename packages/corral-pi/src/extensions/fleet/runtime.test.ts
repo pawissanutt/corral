@@ -146,7 +146,8 @@ function workerFixture(extraProfiles: readonly BuildProfile[] = []) {
 }
 
 test("Worker task requires a profile in the schema and starts on the selected model and effort", async () => {
-  const { runtime, runner, task } = workerFixture();
+  const slashProfile = { name: "team/cheap", model: "openai/child-only", effort: "low" };
+  const { runtime, runner, task } = workerFixture([slashProfile]);
   try {
     const child = spec("valid", { profile: writer.name });
     expect(Check(task.parameters, { agents: [child] })).toBeTrue();
@@ -155,6 +156,9 @@ test("Worker task requires a profile in the schema and starts on the selected mo
     await task.execute("run", { agents: [child] }, undefined, undefined, {} as never);
     await flush();
     expect(runner.children.get(child.id)?.model).toMatchObject({ profile: writer.name, provider: "openai", model: "child-only", effort: "high" });
+    await task.execute("slash", { agents: [spec("slash", { profile: slashProfile.name })] }, undefined, undefined, {} as never);
+    await flush();
+    expect(runner.children.get("slash")?.model).toMatchObject({ profile: slashProfile.name, provider: "openai", model: "child-only", effort: "low" });
   } finally { await runtime.close(); }
 });
 

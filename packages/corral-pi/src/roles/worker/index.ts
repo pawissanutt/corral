@@ -28,7 +28,7 @@ export function kickoff(context: RoleContext): string | undefined {
 
 /** The named models a worker's `task` children may use. */
 export function childProfilesContract(context: RoleContext): string {
-  const profiles = (context.childProfiles ?? []).filter(profile => profile.name !== "default" && !profile.name.includes("/"));
+  const profiles = (context.childProfiles ?? []).filter(profile => profile.name.trim() && profile.name !== "default");
   if (!profiles.length) return "\n\n## Child profiles\n\nNo child profiles are configured. Continue inline rather than delegating with `task`.";
   return ["", "", "## Child profiles", "",
     "Every `task` child requires a configured named `profile`; do not omit it or use `default`. "

@@ -43,7 +43,7 @@ export function fleetTools(runtime: FleetRuntime, allowedKinds: readonly ChildKi
   const communication = agentCommunicationTools({ message: (to, text, options) => runtime.message("parent", to, text, options), roster: () => runtime.rosterText() });
   if (!allowedKinds.length) return communication;
   const workerTask = runtime.requireTaskProfile;
-  const workerProfile = "Choose a configured named profile for each child; do not use default or a raw provider/model. Continue inline if none can be used.";
+  const workerProfile = "Choose an exact configured profile name for each child; do not use default or an unconfigured provider/model. Continue inline if none can be used.";
   return [
     {
       name: "task", label: "Delegate work",

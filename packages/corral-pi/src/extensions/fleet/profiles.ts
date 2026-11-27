@@ -29,8 +29,8 @@ export function resolveModel(choice: string | undefined, profiles: readonly Buil
 export function resolveTaskProfile(choice: string | undefined, configured: readonly BuildProfile[], approved: readonly string[]): ResolvedModel {
   if (typeof choice !== "string" || !choice.trim()) throw new Error("A configured child profile is required");
   if (choice === "default") throw new Error('The "default" profile is not allowed for Worker task');
-  if (choice.includes("/")) throw new Error("Use a named child profile, not a provider/model");
   const profile = configured.find(profile => profile.name === choice);
+  if (!profile && choice.includes("/")) throw new Error("Use a named child profile, not a provider/model");
   if (!profile) throw new Error(`Unknown child profile: ${JSON.stringify(choice)}`);
   return resolveChoice(choice, profile, approved);
 }
