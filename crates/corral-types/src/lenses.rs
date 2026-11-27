@@ -37,6 +37,19 @@ pub struct LensLocation {
     pub path: String,
     /// One-based committed source line.
     pub line: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub span: Option<BoundSpan>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoundSpan {
+    /// Index into this revision's recipe.evidence, not a cross-revision ID.
+    pub binding: usize,
+    /// Inclusive last line.
+    pub end_line: u64,
+    /// Blob ID for a Path, SHA-256 of complete resolved lines otherwise.
+    /// None when the pinned bytes could not be checked within bounds.
+    pub digest: Option<String>,
 }
 
 /// A few committed source lines around a located element, read from the Git object at the

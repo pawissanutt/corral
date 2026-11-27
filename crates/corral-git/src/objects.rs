@@ -16,6 +16,7 @@ pub fn committed_paths(repo: &Path, base: &str, head: &str) -> Result<Vec<String
     oid(base)?;
     oid(head)?;
     let args = [
+        "--no-replace-objects",
         "diff",
         "--name-only",
         "--no-renames",
@@ -35,7 +36,15 @@ pub fn committed_paths(repo: &Path, base: &str, head: &str) -> Result<Vec<String
 /// Only regular blobs, never directories, gitlinks or a symlink's referent.
 pub fn committed_blob(repo: &Path, commit: &str, path: &str) -> Result<Option<String>> {
     oid(commit)?;
-    let args = ["ls-tree", "-z", commit, "--", path];
+    let args = [
+        "--no-replace-objects",
+        "--literal-pathspecs",
+        "ls-tree",
+        "-z",
+        commit,
+        "--",
+        path,
+    ];
     let out = super::git_raw(repo, &args)?;
     ensure!(out.status.success(), "{}", super::fail(repo, &args, &out));
     for record in out.stdout.split(|b| *b == 0).filter(|s| !s.is_empty()) {
@@ -47,7 +56,7 @@ pub fn committed_blob(repo: &Path, commit: &str, path: &str) -> Result<Option<St
         }
         let header = std::str::from_utf8(&record[..tab]).context("git tree header")?;
         let fields: Vec<_> = header.split_whitespace().collect();
-        if fields.len() == 3 && fields[1] == "blob" {
+        if fields.len() == 3 && matches!(fields[0], "100644" | "100755") && fields[1] == "blob" {
             oid(fields[2])?;
             return Ok(Some(fields[2].into()));
         }
@@ -56,7 +65,7 @@ pub fn committed_blob(repo: &Path, commit: &str, path: &str) -> Result<Option<St
 }
 pub fn blob_size(repo: &Path, blob: &str) -> Result<u64> {
     oid(blob)?;
-    super::git(repo, &["cat-file", "-s", blob])?
+    super::git(repo, &["--no-replace-objects", "cat-file", "-s", blob])?
         .trim()
         .parse()
         .context("git blob size")
@@ -76,7 +85,7 @@ pub fn stream_blob(
     let mut child = command
         .arg("-C")
         .arg(repo)
-        .args(["cat-file", "blob", blob])
+        .args(["--no-replace-objects", "cat-file", "blob", blob])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -126,6 +135,12 @@ mod tests {
         let head = crate::rev_sha(repo, "HEAD").unwrap();
         std::fs::write(repo.join("after"), "uncommitted").unwrap();
         std::fs::write(repo.join("untracked"), "untracked").unwrap();
+        // Mutable replacement refs must not change either the tree lookup or the
+        // bytes read for the already-pinned object.
+        let original = committed_blob(repo, &head, "after").unwrap().unwrap();
+        let other = committed_blob(repo, &base, "before").unwrap().unwrap();
+        crate::git(repo, &["replace", &head, &base]).unwrap();
+        crate::git(repo, &["replace", &original, &other]).unwrap();
         assert_eq!(
             committed_paths(repo, &base, &head).unwrap(),
             vec!["after", "before"]

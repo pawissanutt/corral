@@ -62,6 +62,7 @@ pub(super) fn results(project: &str) -> Result<Vec<LensResult>, String> {
                         element: b.element.clone(),
                         path: path.clone(),
                         line: 42,
+                        span: None,
                     });
                 }
             } else {

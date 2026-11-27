@@ -4,9 +4,12 @@
 //! file order, each with the checker's name for it (so a failure, a location or a touch lands
 //! on the element it names), its anchor, its committed line and its marks.
 
+use std::collections::BTreeMap;
+
 use corral_protocol::detail::{DetailBody, DetailRef};
 use corral_types::lenses::{
-    EvidenceAnchor, LensDiagnostic, LensExcerpt, LensResult, LensStatus, RecipeLayout,
+    EvidenceAnchor, LensDiagnostic, LensExcerpt, LensLocation, LensResult, LensStatus,
+    RecipeEvidence, RecipeLayout,
 };
 use corral_types::{SystemLens, SystemLenses, SystemRow, SystemStatus};
 
@@ -200,6 +203,7 @@ pub struct Diagram {
     pub title: String,
     pub file: String,
     pub status: LensStatus,
+    pub evidence: BTreeMap<RecipeEvidence, Option<LensLocation>>,
     pub derived: Vec<corral_types::lenses::InboundReference>,
     /// The commit it was checked at.
     pub commit: Option<String>,
@@ -317,6 +321,20 @@ pub fn diagram(
         title: recipe.title.clone(),
         file: result.file.clone(),
         status: result.status,
+        evidence: {
+            let mut evidence: BTreeMap<_, _> =
+                recipe.evidence.iter().cloned().map(|e| (e, None)).collect();
+            for loc in &result.locations {
+                if let Some(span) = &loc.span
+                    && let Some(binding) = recipe.evidence.get(span.binding)
+                    && binding.element == loc.element
+                    && let Some(value) = evidence.get_mut(binding)
+                {
+                    *value = Some(loc.clone());
+                }
+            }
+            evidence
+        },
         derived: result.derived.clone(),
         commit: commit.map(str::to_owned),
         nodes,
@@ -588,6 +606,25 @@ pub fn inspect(diagram: &Diagram, name: &str) -> Option<Inspect> {
         rows.push(("Note", detail.clone()));
     }
     rows.extend(element.authored.clone());
+    for (key, loc) in &diagram.evidence {
+        if key.element != name {
+            continue;
+        }
+        let source = loc.as_ref().and_then(|loc| {
+            let span = loc.span.as_ref()?;
+            Some(format!(
+                "{}:{}–{} · {}",
+                loc.path,
+                loc.line,
+                span.end_line,
+                span.digest.as_deref().unwrap_or("content not checked")
+            ))
+        });
+        rows.push((
+            "Bound span",
+            source.unwrap_or_else(|| "No resolved span available for comparison".into()),
+        ));
+    }
     let mut checks: Vec<(Hue, String)> = Vec::new();
     for issue in diagram.failures.iter().filter(|i| i.element == name) {
         checks.push((Hue::Fail, format!("Failed: {}", issue.message)));
@@ -607,7 +644,7 @@ pub fn inspect(diagram: &Diagram, name: &str) -> Option<Inspect> {
     if element.marks.contains(&Mark::Touched) {
         checks.push((
             Hue::Worker,
-            "Bound source differs between the revisions.".into(),
+            "Binding, resolved path, or bound source differs between the revisions.".into(),
         ));
     }
     if element.marks.contains(&Mark::Added) {

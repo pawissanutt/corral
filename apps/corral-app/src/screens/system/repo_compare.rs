@@ -58,7 +58,7 @@ pub(super) fn bar(
                         .child(quiet(
                             app,
                             format!(
-                                "Base {} · head {}. Comparing bound source, not relationships.",
+                                "Base {} · head {}. Comparing bindings and resolved spans, not relationships. Unavailable source is not proof of a change.",
                                 p.base, p.head
                             ),
                         ))
@@ -83,42 +83,86 @@ pub(super) fn target(project: &str, p: &Pins) -> DetailRef {
     lens_request(project, &p.file, Some(&p.base))
 }
 
-/// Mark only differences that the two served documents/excerpts demonstrate. An absent
+/// Mark only differences that the two served documents and pinned spans demonstrate. An absent
 /// excerpt can be a failed or unavailable read, never proof that source was removed.
 pub(super) fn compare(head: &Diagram, base: &Diagram) -> (Touch, Touch) {
     let mut h = Touch::default();
     let mut b = Touch::default();
     for el in head.elements() {
-        if base.element(&el.name).is_none() {
+        if head.id != base.id || base.element(&el.name).is_none() {
             h.added.push(el.name.clone());
             continue;
         }
-        let lines = |d: &Diagram| {
-            d.excerpts
-                .iter()
-                .filter(|e| e.element == el.name)
-                .map(|e| {
-                    (
-                        &e.path,
-                        e.line,
-                        e.line
-                            .checked_sub(e.first)
-                            .and_then(|n| e.lines.get(n as usize)),
-                    )
-                })
-                .map(|(p, l, s)| (p.clone(), l, s.cloned()))
-                .collect::<Vec<_>>()
-        };
-        let (before, after) = (lines(base), lines(head));
-        if !before.is_empty() && !after.is_empty() && before != after {
+        // Match durable anchor values, not evidence order, excerpts, or partial
+        // result lists. A line shift alone is not a change to the bound content.
+        let changed = head.evidence.iter().any(|(key, after)| {
+            if key.element != el.name {
+                return false;
+            }
+            let Some(before) = base.evidence.get(key) else {
+                return true;
+            };
+            if let (Some(a), Some(b)) = (after, before)
+                && let (Some(x), Some(y)) = (&a.span, &b.span)
+            {
+                return a.path != b.path
+                    || x.digest
+                        .as_ref()
+                        .zip(y.digest.as_ref())
+                        .is_some_and(|(a, b)| a != b);
+            }
+            false
+        }) || base
+            .evidence
+            .keys()
+            .any(|k| k.element == el.name && !head.evidence.contains_key(k));
+        if changed {
             h.touched.push(el.name.clone());
             b.touched.push(el.name.clone());
         }
     }
     b.removed = base
         .elements()
-        .filter(|e| head.element(&e.name).is_none())
+        .filter(|e| head.id != base.id || head.element(&e.name).is_none())
         .map(|e| e.name.clone())
         .collect();
     (h, b)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use corral_types::lenses::{BoundSpan, EvidenceAnchor, LensLocation, RecipeEvidence};
+
+    #[test]
+    fn compares_recipe_scoped_bindings_not_excerpt_coverage() {
+        let mut base = crate::model::artifacts::mermaid::parse("flowchart LR\na --> b").unwrap();
+        let id = base.nodes[0].name.clone();
+        let key = RecipeEvidence {
+            element: id.clone(),
+            anchor: EvidenceAnchor::Path { path: "src".into() },
+        };
+        let mut loc = LensLocation {
+            element: id.clone(),
+            path: "src".into(),
+            line: 1,
+            span: Some(BoundSpan {
+                binding: 0,
+                end_line: 3,
+                digest: Some("abc".into()),
+            }),
+        };
+        base.evidence.insert(key.clone(), Some(loc.clone()));
+        let mut head = base.clone();
+        head.evidence.insert(key.clone(), None);
+        assert!(compare(&head, &base).0.touched.is_empty());
+        loc.span.as_mut().unwrap().digest = Some("xyz".into());
+        head.evidence.insert(key, Some(loc));
+        assert_eq!(compare(&head, &base).1.touched, [id.clone()]);
+        head.evidence.clear();
+        assert_eq!(compare(&head, &base).0.touched, [id.clone()]);
+        head.id.push_str("-replacement");
+        let (h, b) = compare(&head, &base);
+        assert!(h.added.contains(&id) && b.removed.contains(&id) && h.touched.is_empty());
+    }
 }

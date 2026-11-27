@@ -162,6 +162,7 @@ impl Built {
             file: String::new(),
             status: LensStatus::Current,
             derived: Vec::new(),
+            evidence: Default::default(),
             commit: None,
             nodes: self.nodes,
             edges: self.edges,

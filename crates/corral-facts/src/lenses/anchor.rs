@@ -3,7 +3,9 @@ use std::{
     ops::Range,
 };
 
-use corral_types::lenses::{EvidenceAnchor, LensLocation, LensResult};
+use corral_types::lenses::EvidenceAnchor;
+
+use sha2::{Digest, Sha256};
 
 use super::LensCoverage;
 use crate::{
@@ -94,6 +96,21 @@ impl Text {
         self.starts.partition_point(|&start| start <= offset) as u64
     }
 
+    pub(super) fn digest(&self, span: Range<u64>, budget: &mut usize) -> Option<String> {
+        if span.start >= span.end || span.end - 1 > self.lines {
+            return None;
+        }
+        let start = *self.starts.get(span.start.checked_sub(1)? as usize)?;
+        let end = self
+            .starts
+            .get((span.end - 1) as usize)
+            .copied()
+            .unwrap_or(self.source.len());
+        let bytes = self.source.as_bytes().get(start..end)?;
+        *budget = budget.checked_sub(bytes.len())?;
+        Some(format!("{:x}", Sha256::digest(bytes)))
+    }
+
     fn unique(&self, needle: &str, path: &str) -> Result<Range<u64>, Issue> {
         let start = self.source.find(needle).ok_or_else(|| {
             Issue::Failed(format!("anchor text {needle:?} not found in {path:?}"))
@@ -103,7 +120,7 @@ impl Text {
             + needle
                 .chars()
                 .next()
-                .expect("validated nonempty anchor")
+                .ok_or_else(|| Issue::Failed("empty text anchor".into()))?
                 .len_utf8();
         if self.source[next..].contains(needle) {
             return Err(Issue::Failed(format!("ambiguous anchor text in {path:?}")));
@@ -118,14 +135,6 @@ fn file_fact<'a>(tree: &'a TreeFacts, path: &str) -> Option<&'a FileFact> {
         .binary_search_by(|file| file.path.as_str().cmp(path))
         .ok()?;
     tree.files.get(index)
-}
-
-pub(super) fn locate(result: &mut LensResult, element: &str, path: &str, line: u64) {
-    result.locations.push(LensLocation {
-        element: element.to_owned(),
-        path: path.to_owned(),
-        line,
-    });
 }
 
 pub(super) enum Issue {
@@ -251,6 +260,16 @@ pub(super) fn resolve<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn digest_uses_complete_bound_lines_only() {
+        let digest = |s: &str, mut bytes: usize| Text::new(s, 4).digest(2..4, &mut bytes);
+        let a = digest("a\nb\nc\nd", 4);
+        assert!(a.is_some());
+        assert_eq!(a, digest("x\nb\nc\ny", 4));
+        assert_ne!(a, digest("a\nb\nx\nd", 4));
+        assert_eq!(None, digest("a\nb\nc\nd", 3));
+    }
 
     #[test]
     fn lens_source_budget_counts_retained_line_indexes() {

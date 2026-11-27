@@ -10,7 +10,8 @@ use std::{
 
 use anyhow::{Context, Result, ensure};
 use corral_types::lenses::{
-    EvidenceAnchor, InboundReference, LensDiagnostic, LensResult, LensStatus, RepoRecipe,
+    BoundSpan, EvidenceAnchor, InboundReference, LensDiagnostic, LensLocation, LensResult,
+    LensStatus, RepoRecipe,
 };
 use heck::ToSnakeCase;
 
@@ -186,7 +187,10 @@ pub fn check(
     for row in &tree.file_references {
         inbound.entry(&row.to).or_default().push(row);
     }
-    let mut evidence_budget = LENS_TOTAL_BYTES;
+    let mut budget = EvidenceBudget {
+        hash_bytes: 16 * 1024 * 1024,
+        references: LENS_TOTAL_BYTES,
+    };
     sources
         .lenses
         .iter()
@@ -211,7 +215,7 @@ pub fn check(
                         tree,
                         coverage,
                         &inbound,
-                        &mut evidence_budget,
+                        &mut budget,
                     );
                     check_coverage(&mut result, lens, sources, &mut variant_budget);
                     result.status = if !result.failures.is_empty() {
@@ -229,6 +233,11 @@ pub fn check(
         .collect()
 }
 
+struct EvidenceBudget {
+    hash_bytes: usize,
+    references: usize,
+}
+
 fn check_evidence(
     result: &mut LensResult,
     lens: &RepoRecipe,
@@ -236,19 +245,38 @@ fn check_evidence(
     tree: &TreeFacts,
     coverage: Option<LensCoverage<'_>>,
     inbound: &BTreeMap<&str, Vec<&crate::Reference<String>>>,
-    evidence_budget: &mut usize,
+    budget: &mut EvidenceBudget,
 ) {
     let mut per_recipe = 8 * 1024;
     let mut bound = BTreeSet::new();
     let mut derived = BTreeSet::new();
-    for binding in &lens.evidence {
+    for (index, binding) in lens.evidence.iter().enumerate() {
         let id = &binding.element;
         bound.insert(id.as_str());
         match anchor::resolve(&binding.anchor, tree, coverage, |path| {
             sources.sources.get(path)
         }) {
             Ok((path, span)) => {
-                anchor::locate(result, id, &path, span.start);
+                let digest = sources
+                    .sources
+                    .get(&path)
+                    .and_then(|source| match binding.anchor {
+                        EvidenceAnchor::Path { .. } => source.blob.clone(),
+                        _ => source
+                            .text
+                            .as_ref()?
+                            .digest(span.clone(), &mut budget.hash_bytes),
+                    });
+                result.locations.push(LensLocation {
+                    element: id.clone(),
+                    path: path.clone(),
+                    line: span.start,
+                    span: Some(BoundSpan {
+                        binding: index,
+                        end_line: span.end - 1,
+                        digest,
+                    }),
+                });
                 if derived.insert((id, path.clone()))
                     && let Some(refs) = inbound.get(path.as_str())
                 {
@@ -256,7 +284,7 @@ fn check_evidence(
                         let bytes = reference.from.len() + reference.to.len() + id.len() + 128;
                         if result.derived.len() >= 64
                             || bytes > per_recipe
-                            || bytes > *evidence_budget
+                            || bytes > budget.references
                         {
                             note(
                                 &mut result.not_checked,
@@ -265,7 +293,7 @@ fn check_evidence(
                             );
                             break;
                         }
-                        *evidence_budget -= bytes;
+                        budget.references -= bytes;
                         per_recipe -= bytes;
                         result.derived.push(InboundReference {
                             element: id.clone(),

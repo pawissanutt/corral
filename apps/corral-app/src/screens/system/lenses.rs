@@ -158,7 +158,7 @@ pub(super) fn page(app: AppState, project: String) -> AnyElement {
         .gap(px(if form == Form::Terminal { 0.0 } else { 10.0 }))
         .when(form != Form::Terminal, |v| v.px(px(16.0)).py(px(12.0)))
         .child(repo_compare::bar(app, target, pins))
-        .child(drawn_lens(app, project, read, shown, picked, on_pick))
+        .child(drawn_lens(app, project, read, shown, picked, on_pick, pins))
         .child(dynamic(move || {
             base.get().map(|_| {
                 untracked(|| {
@@ -403,6 +403,7 @@ fn drawn_lens(
     shown: Memo<Option<Diagram>>,
     picked: Memo<Option<String>>,
     on_pick: OnPick,
+    pins: Signal<Option<repo_compare::Pins>>,
 ) -> AnyElement {
     let form = app.form;
     let state = computed(move || match read.get() {
@@ -426,7 +427,10 @@ fn drawn_lens(
     let head = dynamic(move || {
         let d = shown.get()?;
         let project = project.clone();
-        Some(untracked(|| head(app, d, project)))
+        // Repair acts on the current project tip, not a retained or comparison revision.
+        let current =
+            pins.with(Option::is_none) && read.with(|r| matches!(r, Read::Ready(_, false)));
+        Some(untracked(|| head(app, d, project, current)))
     });
     let picture = repo_view::picture(app, shown, picked, on_pick.clone());
     let checks = dynamic(move || {
@@ -443,7 +447,7 @@ fn drawn_lens(
         .into_element()
 }
 
-fn head(app: AppState, d: Diagram, project: String) -> AnyElement {
+fn head(app: AppState, d: Diagram, project: String, current: bool) -> AnyElement {
     let form = app.form;
     let title = text(d.title.clone())
         .font_weight(FontWeight::BOLD)
@@ -455,7 +459,7 @@ fn head(app: AppState, d: Diagram, project: String) -> AnyElement {
         lens::status_word(d.status)
     ))
     .text_color(hue_ink(lens::status_hue(d.status)));
-    let repair = (d.status != LensStatus::Current).then(|| {
+    let repair = (current && d.status != LensStatus::Current).then(|| {
         // The engine resolves an exact file before an ID, so the file names this lens.
         let id = d.file.clone();
         let name = d.id.clone();
