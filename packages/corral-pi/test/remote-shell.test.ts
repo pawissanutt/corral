@@ -3,6 +3,8 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { EventLog } from "../src/bridge/events.ts";
 import { installToolControls } from "../src/host/tool-controls.ts";
+import { ToolApprovals } from "../src/host/tool-approvals.ts";
+import { PendingQuestions } from "../src/host/pending-questions.ts";
 import { registerShell } from "../src/host/remote/shell.ts";
 import { capabilities } from "../src/host/remote/state.ts";
 import { codeHost } from "./support/code-host.ts";
@@ -28,6 +30,21 @@ test("remote shell uses Pi's bash path, records context policy, and refuses a bu
       await expect(shell({ command: "printf no", exclude_from_context: false })).rejects.toMatchObject({ code: "busy" });
     } finally { fx.holds.get("shell").release("done"); await turn; }
   } finally { await fx.close(); }
+});
+
+test("owner approval is isolated from model approval and is not delivered to the agent", async () => {
+  let delivered = 0;
+  const questions = new PendingQuestions({ session: () => "fixture", append() {}, entries: () => [], changed() {},
+    async deliver() { delivered++; return true; } });
+  const approvals = new ToolApprovals(questions, "/tmp");
+  const input = { command: "echo hello" };
+  expect(approvals.shell("bash", input, true)).toContain("Waiting for owner approval");
+  const owner = questions.pending()[0]!;
+  await questions.answer(owner.id, [{ option: "allow" }]);
+  expect(delivered).toBe(0);
+  expect(approvals.shell("bash", input)).toContain("Waiting for owner approval");
+  expect(approvals.shell("bash", input, true)).toBeUndefined();
+  questions.close();
 });
 
 test("owner shell obeys configured deny rules before executing", async () => {

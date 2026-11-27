@@ -21,7 +21,7 @@ export function validAnswer(q: ChoiceQuestion, a: ChoiceAnswer): boolean {
 }
 const Record = z.object({ version: z.literal(1), id: z.string(), session: z.string(),
   questions: z.array(Choice).min(1).max(4), expires: z.number(),
-  tool: z.enum(["ask_user", "bash", "file_write", "task_worktree"]).optional(),
+  tool: z.enum(["ask_user", "bash", "owner_bash", "file_write", "task_worktree"]).optional(),
   status: z.enum(["pending", "answered", "cancelled", "expired", "withdrawn", "ended"]),
   answers: z.array(Answer).optional(), message: z.string().optional(),
 });
@@ -29,7 +29,7 @@ export type PendingQuestion = z.infer<typeof Record>;
 export const APPROVAL_CHOICES = {
   deny: "deny", once: "allow once", legacyOnce: "allow", timed: "allow for 30 minutes", session: "allow for this session",
 } as const;
-export const isToolApproval = (q: PendingQuestion): boolean => q.tool === "bash" || q.tool === "file_write" || q.tool === "task_worktree";
+export const isToolApproval = (q: PendingQuestion): boolean => q.tool === "bash" || q.tool === "owner_bash" || q.tool === "file_write" || q.tool === "task_worktree";
 export type QuestionEntry = { type: string; customType?: string; data?: unknown; message?: unknown };
 export interface QuestionHost {
   session(): string;
@@ -178,7 +178,8 @@ export class PendingQuestions {
     }
     // Only actual answers, never a cancelled or withdrawn status, become owner input.
     this.save({ ...q, status: "answered", answers, message: `${answerMarker(id)}\n${text}` });
-    await this.send(id);
+    // An owner-shell approval is consumed only by the owner's explicit retry, never by the agent.
+    if (q.tool !== "owner_bash") await this.send(id);
     return this.status(id);
   }
   /** Runs on host startup and whenever the owner reopens /questions. */
@@ -195,7 +196,7 @@ export class PendingQuestions {
   }
   private async sendAnswer(id: string): Promise<void> {
     const q = this.questions.get(id);
-    if (this.closed || q?.status !== "answered" || !q.message || this.consumed.has(id) || this.queued.has(id)) return;
+    if (this.closed || q?.tool === "owner_bash" || q?.status !== "answered" || !q.message || this.consumed.has(id) || this.queued.has(id)) return;
     const attempt = Symbol();
     this.queued.set(id, attempt);
     let accepted = false;

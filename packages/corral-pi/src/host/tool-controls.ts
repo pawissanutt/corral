@@ -75,7 +75,7 @@ export function installToolControls(pi: ExtensionAPI, controls: ToolControls): v
     const decision = controls.rules && decideBash(event.command, controls.rules);
     const reason = fixed ?? planned ?? (decision?.action === "deny"
       ? `bash rule ${JSON.stringify(decision.rule ?? "default deny")} denies ${JSON.stringify(decision.segment ?? event.command)}; nothing ran`
-      : decision?.action === "ask" ? controls.approvals?.shell("bash", input) ?? (controls.approvals ? undefined : "bash rule requires owner confirmation; nothing ran")
+      : decision?.action === "ask" ? controls.approvals?.shell("bash", input, true) ?? (controls.approvals ? undefined : "bash rule requires owner confirmation; nothing ran")
       : undefined);
     return reason ? { result: { output: reason, exitCode: 1, cancelled: false, truncated: false } } : undefined;
   });

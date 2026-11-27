@@ -96,13 +96,13 @@ export class ToolApprovals {
         ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) : value));
   }
 
-  shell(tool: ShellTool, input: Input): string | undefined {
+  shell(tool: ShellTool, input: Input, owner = false): string | undefined {
     const runtime = typeof input.timeout === "number" ? `\nRequested timeout: ${input.timeout} s` : "";
     const wait = tool === "job_start" || input.wait_ms === 0 ? "\nStart in background without waiting."
       : typeof input.wait_ms === "number" ? `\nWait up to ${input.wait_ms} ms for output.` : "";
-    const key = this.key(tool, input);
+    const key = this.key(owner ? `owner_${tool}` : tool, input);
     const title = this.reusable ? `Allow this exact ${tool} invocation?` : `Allow this ${tool} command once?`;
-    return this.confirm(key, key, "bash", `${title}\n`
+    return this.confirm(key, key, owner ? "owner_bash" : "bash", `${title}\n`
       + `Working directory: ${quoted(this.cwd)}${runtime}${wait}\n${quoted(String(input.command))}`);
   }
 
@@ -131,10 +131,11 @@ export class ToolApprovals {
       summary && fitsPrompt(preview) ? preview : title, decision.canonical);
   }
 
-  private confirm(key: string, scope: string, kind: "bash" | "file_write", question: string, destination?: string): string | undefined {
-    const effect = kind === "bash" ? "nothing ran" : "nothing was written";
+  private confirm(key: string, scope: string, kind: "bash" | "owner_bash" | "file_write", question: string, destination?: string): string | undefined {
+    const effect = kind === "file_write" ? "nothing was written" : "nothing ran";
     const waiting = (id: string) => `Waiting for owner approval ${id} (/questions or the app); ${effect}. `
-      + "Retry the exact tool call only after an affirmative owner choice.";
+      + (kind === "owner_bash" ? "Retry the exact owner command only after an affirmative owner choice."
+        : "Retry the exact tool call only after an affirmative owner choice.");
     if (this.denials.has(`${key}\0${scope}`)) {
       this.requests.delete(key);
       return `The owner denied this exact tool call for the live session; ${effect}.`;
