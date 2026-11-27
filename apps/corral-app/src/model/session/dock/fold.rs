@@ -47,6 +47,7 @@ fn open(ui: &mut Ui, card: String, kind: CardKind, cards: &[CardBrief], now: u64
         }
         // The plan's document takes the conversation's place.
         CardKind::PlanReview => {
+            ui.release_opened_receiver(now);
             unfold(ui, card, kind, cards, now);
             ui.tab = Tab::Chat;
             ui.sub = None;

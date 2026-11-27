@@ -20,6 +20,15 @@ test("no role draws a binding segment, and the role keeps three letters when tin
   }
 });
 
+test("a long child identity does not clip the host's alerts when the meter moves to its own row", () => {
+  const rows = statusBar(worker, snapshot(true), new Map([["refusal", "Parent input was refused: check the host's reason before trying again."]]),
+    64, false, undefined, { id: "a".repeat(32) });
+  const text = rows.map(stripTerminalSequences).join("\n");
+  expect(text).toContain("Context unavailable");
+  expect(text.replace(/\s+/g, " ")).toContain("Parent input was refused: check the host's reason before trying again.");
+  expect(rows.every(row => visibleWidth(row) === 64)).toBeTrue();
+});
+
 test("while the composer bar is folded the status bar names the model and effort, and holds its width at 46 columns", () => {
   const folded = { model: "openai/gpt-6.1-sol", effort: "high" };
   expect(stripTerminalSequences(bar(worker, true, 140, folded)[0]!)).toContain("gpt-6.1-sol · effort high");

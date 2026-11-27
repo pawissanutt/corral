@@ -106,7 +106,7 @@ export function statusBar(identity: HostIdentity, snapshot: PanelSnapshot | null
   const roomFor = (level: ComposerLevel) => width - 1 - visibleWidth(pill + cost + composer(level)) - 3;
   const level = LEVELS.find(candidate => roomFor(candidate) >= (composer(candidate) ? Math.max(meter, shortest) : shortest));
   if (level === undefined) {
-    return [row(pill + cost + (alerts ? sep + PANEL_WARNING + alerts : "")), row(meterAt(width - 1))];
+    return [row(pill + cost), row(meterAt(width - 1)), ...(alerts ? wrapped(alerts) : [])];
   }
   const room = roomFor(level), tail = composer(level);
   const inline = alerts && visibleWidth(alerts) + 3 + shortest <= room;

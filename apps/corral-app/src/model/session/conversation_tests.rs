@@ -12,7 +12,7 @@ use crate::model::effect::{Conn, Env};
 use crate::model::health::daemon_env;
 use crate::model::nav::Form;
 use crate::model::session::transcript::{LiveSession, MessageKind};
-use crate::model::session::{Action, Cx, Facts, FleetAction, SessionRole, State, Ui, page};
+use crate::model::session::{Action, Cx, Facts, FleetAction, SessionRole, State, Tab, Ui, page};
 
 const ID: &str = "B-k3x9";
 const SCOPE: &str = "B-k3x9/child/a1";
@@ -297,6 +297,28 @@ fn an_opened_conversation_gives_the_composer_and_status_bar_its_agent() {
         .expect("inline composer");
     assert_eq!(waiting.activity.expect("child is asking").glyph, Some("▲"));
 
+    state.act(
+        Action::Draft {
+            session: id.clone(),
+            text: "draft stays".into(),
+        },
+        &feed,
+    );
+    state.act(
+        Action::Tab {
+            session: id.clone(),
+            tab: Tab::Chat,
+        },
+        &feed,
+    );
+    let chat = shown_page(&feed, &state, &id)
+        .composer
+        .expect("parent composer");
+    assert_eq!(chat.title.to, "→ parent");
+    assert_eq!(chat.send.label, "Send");
+    assert_eq!(chat.draft, "draft stays");
+
+    state.act(open("a1"), &feed);
     state.act(open("unlisted"), &feed);
     let unlisted = shown_page(&feed, &state, &id);
     let shown = unlisted.composer.expect("inline composer");

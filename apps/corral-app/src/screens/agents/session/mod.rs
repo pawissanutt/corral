@@ -41,6 +41,8 @@ pub(crate) use files::{HtmlStop, html_target};
 pub(in crate::screens::agents) use header::popup;
 pub(crate) use mention_menu::mention_menu;
 
+use std::{cell::Cell, rc::Rc};
+
 use corral_protocol::detail::DetailRef;
 use nsh_core::desktop::WindowAttributes;
 use nsh_core::element::desktop::current_window;
@@ -508,19 +510,78 @@ fn keep_child_live(app: AppState, id: &Id) {
         return;
     }
     let parent = Id::from(parent);
-    let live = untracked(|| {
-        app.feed.with(|feed| {
-            crate::model::agents::session_line(feed, parent.as_str())
-                .is_some_and(|line| line.state != SessionState::Gone)
-        })
-    });
-    if live {
-        watch(app, parent);
-    }
     let source = untracked(|| app.scope());
+    let watched = parent.clone();
+    track_parent_watch(
+        move || {
+            source.feed.with(|feed| {
+                crate::model::agents::session_line(feed, parent.as_str())
+                    .is_some_and(|line| line.state != SessionState::Gone)
+            })
+        },
+        move |on| {
+            run(
+                source,
+                session::Action::Watch {
+                    session: watched.clone(),
+                    on,
+                },
+            )
+        },
+    );
     let target = DetailRef::Session { id: id.to_string() };
     source.watch_detail(target.clone(), true);
     cleanup(move || source.watch_detail(target, false));
+}
+
+/// A roster row can arrive or become live after the view mounts. Balance only the watch this
+/// view acquired, including after NSH has disposed the owner's reactive storage.
+fn track_parent_watch(eligible: impl Fn() -> bool + 'static, watch: impl Fn(bool) + 'static) {
+    let held = Rc::new(Cell::new(false));
+    let watch = Rc::new(watch);
+    effect({
+        let held = held.clone();
+        let watch = watch.clone();
+        move || {
+            let on = eligible();
+            if held.replace(on) != on {
+                untracked(|| watch(on));
+            }
+        }
+    });
+    cleanup(move || {
+        if held.get() {
+            watch(false);
+        }
+    });
+}
+
+#[cfg(test)]
+mod parent_watch_tests {
+    use super::*;
+    use nsh_core::element::{Runtime, create_root};
+    use std::cell::RefCell;
+
+    #[test]
+    fn a_mounted_child_acquires_the_parent_when_it_appears_or_resumes() {
+        let runtime = Runtime::default();
+        let _entered = runtime.enter();
+        let changes = Rc::new(RefCell::new(Vec::new()));
+        let (owner, live) = create_root(|| {
+            let live = signal(false);
+            let changes = changes.clone();
+            track_parent_watch(move || live.get(), move |on| changes.borrow_mut().push(on));
+            live
+        });
+        assert!(changes.borrow().is_empty());
+        live.set(true);
+        live.set(true);
+        live.set(false);
+        live.set(true);
+        assert_eq!(*changes.borrow(), [true, false, true]);
+        owner.dispose();
+        assert_eq!(*changes.borrow(), [true, false, true, false]);
+    }
 }
 
 /// What the open page keeps going, through the source it mounted on: the served page read (or,

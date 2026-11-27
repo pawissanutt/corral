@@ -28,6 +28,28 @@ use super::{
     sidebar, tabs, task, transcript, usage,
 };
 
+impl Ui {
+    /// Leave a conversation's receiver behind, but preserve a different, explicitly picked target.
+    pub(super) fn release_opened_receiver(&mut self, now: u64) {
+        if matches!(&self.sub, Some(SubView::Agent(id)) if self.to.as_ref() == Some(id)) {
+            self.set_receiver(None, now);
+        }
+    }
+
+    fn set_receiver(&mut self, to: Option<String>, now: u64) {
+        dock::leave(self, now);
+        if self.to == to {
+            return;
+        }
+        let words = match &to {
+            Some(child) => format!("Messages now go to {child}"),
+            None => "Messages go to the session's own agent again".into(),
+        };
+        self.to = to;
+        self.notices.push(Hue::Neutral, words, now);
+    }
+}
+
 /// What the session page and its parts do.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
@@ -213,6 +235,7 @@ impl State {
                 if ui.tab == Tab::Chat || tab == Tab::Chat {
                     ui.seen = Some(rows);
                 }
+                ui.release_opened_receiver(feed.now);
                 ui.tab = tab;
                 ui.sub = None;
                 ui.focus = if tab == Tab::Chat {
@@ -233,6 +256,9 @@ impl State {
             Action::Sub { session, sub } => {
                 self.panel.give_way(sub.is_some());
                 let ui = self.ui_mut(&session);
+                if ui.sub != sub {
+                    ui.release_opened_receiver(feed.now);
+                }
                 match &sub {
                     Some(SubView::Usage) => ui.tab = Tab::Chat,
                     Some(SubView::Agent(_) | SubView::Job(_)) => ui.tab = Tab::Agents,
@@ -385,18 +411,7 @@ impl State {
     }
 
     fn receiver(&mut self, session: &Id, to: Option<String>, feed: &Feed) {
-        let now = feed.now;
-        let ui = self.ui_mut(session);
-        dock::leave(ui, now);
-        if ui.to == to {
-            return;
-        }
-        let words = match &to {
-            Some(child) => format!("Messages now go to {child}"),
-            None => "Messages go to the session's own agent again".into(),
-        };
-        ui.to = to;
-        ui.notices.push(Hue::Neutral, words, now);
+        self.ui_mut(session).set_receiver(to, feed.now);
     }
 
     /// Ask keeps its composer mounted while an End is pending, so the draft stays editable.
