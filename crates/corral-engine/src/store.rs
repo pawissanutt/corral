@@ -55,9 +55,7 @@ impl Store {
             .context("index task events by kind")?;
         // Git History finds the events naming a commit without scanning the log.
         connection
-            .execute_batch(
-                "CREATE INDEX IF NOT EXISTS events_commit ON events(json_extract(detail,'$.sha'))",
-            )
+            .execute_batch(crate::git_history::INDEX)
             .context("index events by commit")?;
         connection
             .execute_batch(crate::gate_attempts::SCHEMA)

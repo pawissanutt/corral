@@ -5369,7 +5369,7 @@
             "type": "array"
           },
           "links_omitted": {
-            "description": "Such records beyond those listed (at most 16 are).",
+            "description": "Such records beyond those listed (at most 16 are); a lower bound when the page's\n`links_incomplete` is set.",
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -5455,7 +5455,7 @@
             "type": "array"
           },
           "links_incomplete": {
-            "description": "Some commit is named by more records than one read takes, so its links may be\nincomplete.",
+            "description": "Some commit is named by more records than one read takes (or the daemon could not look\nrecords up by commit), so links may be missing.",
             "type": "boolean"
           },
           "reference": {

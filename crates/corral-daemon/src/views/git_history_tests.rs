@@ -142,6 +142,13 @@ fn history_pages_follow_git_from_a_pinned_tip_and_link_only_recorded_commits() {
         EventKind::Done,
         json!({"sha": side, "project": "demo"}),
     );
+    // A landing without a rebase: the run submitted the very commit it landed; one link, Landed.
+    record(
+        store,
+        &landed,
+        EventKind::Done,
+        json!({"sha": merge, "project": "demo"}),
+    );
     record(store, &elsewhere, EventKind::Landed, json!({"sha": plain}));
     let legacy = fixture.named_task("Legacy landing", Some("demo"));
     let unvouched = head(&repo, "main~6");
@@ -186,6 +193,26 @@ fn history_pages_follow_git_from_a_pinned_tip_and_link_only_recorded_commits() {
         );
     }
 
+    // A commit named by more eligible records than one read takes: the page still serves, and
+    // says its links may be incomplete.
+    let flooded = head(&repo, "main~7");
+    store
+        .transaction(|store| {
+            for kind in [EventKind::Ready, EventKind::Done] {
+                for _ in 0..257 {
+                    store.append_event(&corral_engine::events::NewEvent {
+                        task: Some(candidate.clone()),
+                        run: Some("R1".into()),
+                        kind,
+                        actor: corral_engine::model::Actor::Owner,
+                        detail: json!({"sha": flooded, "project": "demo"}),
+                    })?;
+                }
+            }
+            Ok(())
+        })
+        .unwrap();
+
     let get_in = |project: &str, branch: Option<&str>, page: Option<String>| {
         detail(
             &fixture.shared,
@@ -208,6 +235,7 @@ fn history_pages_follow_git_from_a_pinned_tip_and_link_only_recorded_commits() {
     };
     let first = get(Some("main"), None).unwrap();
     let page = body(&first);
+    assert!(page.links_incomplete);
     assert_eq!(page.reference, "refs/heads/main");
     assert_eq!(page.tip.as_deref(), Some(merge.as_str()));
     assert_eq!(page.commits.len(), GIT_HISTORY_PAGE);

@@ -25,8 +25,8 @@ pub struct GitHistoryPage {
     /// The ref listing hit its bound, so any commit may lack some of its labels.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub refs_incomplete: bool,
-    /// Some commit is named by more records than one read takes, so its links may be
-    /// incomplete.
+    /// Some commit is named by more records than one read takes (or the daemon could not look
+    /// records up by commit), so links may be missing.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub links_incomplete: bool,
 }
@@ -53,7 +53,8 @@ pub struct GitCommit {
     /// What Corral recorded about exactly this commit in this project; empty when nothing.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<GitCommitLink>,
-    /// Such records beyond those listed (at most 16 are).
+    /// Such records beyond those listed (at most 16 are); a lower bound when the page's
+    /// `links_incomplete` is set.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub links_omitted: u64,
 }

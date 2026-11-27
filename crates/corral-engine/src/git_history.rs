@@ -16,9 +16,16 @@ pub const LINKS_MAX: usize = 16;
 /// incomplete; the read never grows with unrelated history.
 const EVENTS_PER_COMMIT: usize = 256;
 
-/// `landed` and `done` events naming one commit, in record order, through `events_commit`.
+/// Only the events that can link a commit, keyed by the commit they name. Its WHERE is the
+/// lookup's own, so a seek visits no other event and reads them in record order.
+pub(crate) const INDEX: &str = "CREATE INDEX IF NOT EXISTS events_commit_links
+     ON events(json_extract(detail,'$.sha'))
+     WHERE kind IN ('landed','done') AND task IS NOT NULL AND run IS NOT NULL";
+
+/// `landed` and `done` events naming one commit, in record order, through
+/// `events_commit_links`.
 pub(crate) const EVENTS_NAMING: &str = "SELECT task, run, kind, json_extract(detail,'$.project')
-     FROM events
+     FROM events INDEXED BY events_commit_links
      WHERE json_extract(detail,'$.sha') = ?1 AND kind IN ('landed','done')
        AND task IS NOT NULL AND run IS NOT NULL
      ORDER BY seq LIMIT ?2";
@@ -35,7 +42,8 @@ pub struct GitHistory {
     pub more: bool,
     /// The ref listing hit its bound: any commit may lack some of its labels.
     pub refs_incomplete: bool,
-    /// Some commit is named by more records than one read takes: its links may be incomplete.
+    /// Some commit is named by more records than one read takes, or the store lacks the commit
+    /// index: links may be missing, and `links_omitted` is then a lower bound.
     pub links_incomplete: bool,
 }
 
@@ -158,9 +166,18 @@ impl Engine {
         let mut links = BTreeMap::new();
         let mut incomplete = false;
         self.store.read_snapshot(|| {
+            // A store opened without setup (read-only) may lack the index: show plain history
+            // and say links are missing, rather than scan the log.
+            if !self.store.has_commit_index()? {
+                incomplete = true;
+                return Ok(());
+            }
             for sha in shas {
-                let rows = self.store.events_naming(sha)?;
-                incomplete |= rows.len() >= EVENTS_PER_COMMIT;
+                let mut rows = self.store.events_naming(sha)?;
+                if rows.len() > EVENTS_PER_COMMIT {
+                    incomplete = true;
+                    rows.truncate(EVENTS_PER_COMMIT);
+                }
                 let found = self.commit_links(project, sole, &worktrees, rows)?;
                 if !found.0.is_empty() || found.1 > 0 {
                     links.insert(sha.clone(), found);
@@ -226,15 +243,27 @@ struct EventNaming {
 }
 
 impl Store {
-    /// At most `EVENTS_PER_COMMIT` `landed` and `done` events naming `sha`, read through the
-    /// commit index.
+    /// Whether `events_commit_links` exists (`Store::open` creates it).
+    fn has_commit_index(&self) -> Result<bool> {
+        self.connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master
+                   WHERE type='index' AND name='events_commit_links')",
+                [],
+                |row| row.get(0),
+            )
+            .context("look up the commit index")
+    }
+
+    /// At most `EVENTS_PER_COMMIT` + 1 `landed` and `done` events naming `sha` (one past the
+    /// cap says there are more), read through the commit index.
     fn events_naming(&self, sha: &str) -> Result<Vec<EventNaming>> {
         let mut statement = self
             .connection
             .prepare_cached(EVENTS_NAMING)
             .context("prepare events naming a commit")?;
         let rows = statement
-            .query_map(params![sha, EVENTS_PER_COMMIT as i64], |row| {
+            .query_map(params![sha, EVENTS_PER_COMMIT as i64 + 1], |row| {
                 let kind: String = row.get(2)?;
                 Ok(EventNaming {
                     task: row.get(0)?,
@@ -257,8 +286,9 @@ impl Store {
 mod tests {
     use super::*;
 
-    /// The lookup seeks the commit index; it never scans events, so unrelated history does
-    /// not grow a page's read.
+    /// The lookup seeks the partial commit index in record order; it never scans or sorts
+    /// events, so neither unrelated history nor ineligible events naming the commit grow a
+    /// page's read past its row cap.
     #[test]
     fn commit_lookup_seeks_the_index() {
         let dir = tempfile::tempdir().unwrap();
@@ -273,11 +303,13 @@ mod tests {
             .unwrap();
         assert!(
             plan.iter()
-                .any(|step| step.contains("USING INDEX events_commit")),
+                .any(|step| step.contains("USING INDEX events_commit_links")),
             "{plan:?}"
         );
         assert!(
-            !plan.iter().any(|step| step.starts_with("SCAN")),
+            !plan
+                .iter()
+                .any(|step| step.starts_with("SCAN") || step.contains("TEMP B-TREE")),
             "{plan:?}"
         );
     }
