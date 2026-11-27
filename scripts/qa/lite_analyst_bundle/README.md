@@ -26,7 +26,9 @@ USTAR member order, permissions, ownership and timestamps and gzip metadata/leve
 
 For reviewed fault experiments only, repeat the pinned build command above with
 `--with-faults` and new output names (for example `corral-fault-fixture.tar.gz`
-and `corral-fault-pin.json`). This adds Cargo feature `lite-analyst-faults`,
+and `corral-fault-pin.json`). Use the exact `build-environment-fault-v1.json`
+package pins for this build (not the normal C4 environment). This adds Cargo
+feature `lite-analyst-faults`,
 uses `src/lite-analyst/fault-worker.ts` as Bun's entry, and copies the committed
 [fault ABI](../../../docs/contracts/lite-analyst-fault-v1/README.md) to
 `provenance/corral-fault-v1.md`. That asset marks the variant without changing

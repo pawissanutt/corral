@@ -28,6 +28,7 @@ PI_RUNTIME = f"{PI_TARGET}-v{PI_VERSION}"
 PI_FLAGS = ("--compile", f"--target={PI_TARGET}", "--no-compile-autoload-dotenv", "--no-compile-autoload-bunfig",
             "--no-compile-autoload-tsconfig", "--no-compile-autoload-package-json")
 ENVIRONMENT = "scripts/qa/lite_analyst_bundle/build-environment.json"
+FAULT_ENVIRONMENT = "scripts/qa/lite_analyst_bundle/build-environment-fault-v1.json"
 SOURCE_PINS = {"docs/contracts/lite-analyst-launcher-v1/launcher-v1.json": PROFILE_SHA,
                "docs/contracts/lite-analyst-launcher-v1/build-manifest-v1.schema.json":
                    "77ded5039e6fd3581762f119b22115cd364981d3a58054cc9a01226f543a0d3a"}
@@ -52,15 +53,15 @@ def source_archive(revision, root, env):
     return root / "source", epoch
 
 
-def check_environment(source, tools, env):
-    expected = strict_json((source / ENVIRONMENT).read_bytes())
+def check_environment(source, tools, env, environment):
+    expected = strict_json((source / environment).read_bytes())
     for name, binary in {**tools, "loader": Path(LOADER)}.items():
         need(file_sha(binary) == expected[f"{name}_sha256"], f"{name} SHA-256 differs from build pin")
     names = sorted(expected["packages"])
     observed = run(["/usr/bin/dpkg-query", "-W", "-f=${Package}=${Version}\\n", *names],
                    cwd=source, env=env, capture=True).decode("ascii").splitlines()
     need(sorted(observed) == sorted(f"{k}={v}" for k, v in expected["packages"].items()),
-         "build a provisioned Ubuntu 24.04 sysroot matching build-environment.json")
+         f"build a provisioned Ubuntu 24.04 sysroot matching {Path(environment).name}")
 
 
 def compile_programs(root, source, tools, env, *, with_faults=False):
@@ -159,7 +160,8 @@ def package(root, source, revision, programs, provenance, *, with_faults=False):
     if with_faults:
         add(FAULT_ASSET, "asset", source_file=source / "docs/contracts/lite-analyst-fault-v1/README.md")
         provenance["variant"] = FAULT_VARIANT
-    for p in (ENVIRONMENT, "Cargo.lock", ".cargo/config.toml", "packages/corral-pi/bun.lock",
+    for p in (FAULT_ENVIRONMENT if with_faults else ENVIRONMENT,
+              "Cargo.lock", ".cargo/config.toml", "packages/corral-pi/bun.lock",
               "packages/corral-pi/package.json", "LICENSE"):
         add(f"provenance/{Path(p).name}", "asset", source_file=source / p)
     provenance.update({"corral_revision": revision, "launcher_profile_sha256": PROFILE_SHA,
@@ -202,10 +204,11 @@ def build(a):
                "CFLAGS": f"-ffile-prefix-map={root}=/build"}
         source, epoch = source_archive(a.revision, root, env)
         env["SOURCE_DATE_EPOCH"] = epoch
-        names = ("build.py", "verify.py", "build-environment.json", "README.md")
+        environment = FAULT_ENVIRONMENT if a.with_faults else ENVIRONMENT
+        names = ("build.py", "verify.py", Path(environment).name, "README.md")
         for p in ([HERE / n for n in names] + [HERE.parent / "lite_analyst_host" / n for n in ("staging.py", "protocol.py")]):
             need(file_sha(source / p.relative_to(REPO)) == file_sha(p), "run the builder from the pinned commit")
-        check_environment(source, tools, env)
+        check_environment(source, tools, env, environment)
         programs, pi_inputs, commands, compile_env = compile_programs(root, source, tools, env, with_faults=a.with_faults)
         provenance = {"purpose": "C4 public-only Corral build; not a joint E1 result or authorization",
                       "recipe": "scripts/qa/lite_analyst_bundle/README.md at corral_revision",
