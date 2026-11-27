@@ -250,6 +250,20 @@ fn history_pages_follow_git_from_a_pinned_tip_and_link_only_recorded_commits() {
     );
     assert!(links_at("fork", &merge).is_empty());
     assert!(links_at("fork", &submitted).is_empty());
+    // Retargeted before it submitted: the event says `fork`, but the run worked in `repo`.
+    let relabelled = head(&repo, "main~4");
+    store
+        .transaction(|store| {
+            store.append_event(&corral_engine::events::NewEvent {
+                task: Some(landed.clone()),
+                run: Some("R1".into()),
+                kind: corral_engine::EventKind::Done,
+                actor: corral_engine::model::Actor::Owner,
+                detail: serde_json::json!({"sha": relabelled, "project": "fork"}),
+            })
+        })
+        .unwrap();
+    assert!(links_at("fork", &relabelled).is_empty());
     assert!(links_at("demo", &plain).is_empty());
     assert_eq!(links_at("fork", &plain)[0].task, elsewhere);
 }

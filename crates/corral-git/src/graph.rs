@@ -7,9 +7,9 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 
-use crate::bounded::{Limits, read_bounded};
+use crate::bounded::{Bounded, Limits, read_bounded};
 use crate::history::is_full_oid;
-use crate::{fail, git_raw_env, validate_branch_name};
+use crate::validate_branch_name;
 
 /// Browsing must neither fetch missing objects into a partial clone (`GIT_NO_LAZY_FETCH`,
 /// Git 2.44+) nor walk a history rewritten in place: replacement objects and grafts would
@@ -28,11 +28,29 @@ pub const LABELS_MAX: usize = 16;
 const LABEL_BYTES: u64 = 1 << 20;
 /// Bytes of a commit object's header read; a longer header is refused.
 const HEADER_BYTES: usize = 64 * 1024;
+/// Bytes of a page's commit objects read in all; past it the page is unavailable.
+const OBJECT_BYTES: u64 = 64 << 20;
+/// Bytes of a one-line Git answer (an object ID, a type, a path).
+const SMALL_BYTES: u64 = 64 * 1024;
+/// Bytes of a shallow file read: one line per boundary commit.
+const SHALLOW_BYTES: u64 = 16 << 20;
 /// Longest subject or author name kept, in characters.
 const TEXT_MAX: usize = 300;
 
-fn read(repo: &Path, args: &[&str]) -> Result<std::process::Output> {
-    git_raw_env(repo, args, READ_ONLY)
+/// A Git call whose whole answer is a line or so, under the same deadline as every read.
+fn small(repo: &Path, args: &[&str]) -> Result<Bounded<Vec<u8>>> {
+    let out = read_bounded(repo, args, &limits(&[], SMALL_BYTES), |out| {
+        let mut bytes = Vec::new();
+        out.read_to_end(&mut bytes).context("read git output")?;
+        Ok(bytes)
+    })?;
+    if out.exceeded {
+        bail!(
+            "`git {}` answered more than {SMALL_BYTES} bytes",
+            args.join(" ")
+        );
+    }
+    Ok(out)
 }
 
 fn limits(input: &[u8], max_bytes: u64) -> Limits<'_> {
@@ -89,14 +107,14 @@ pub fn resolve_tip(repo: &Path, branch: Option<&str>) -> Result<(String, Option<
         "--end-of-options",
         &peeled,
     ];
-    let out = read(repo, &args)?;
-    if !out.status.success() {
-        if out.status.code() == Some(1) && out.stdout.is_empty() {
+    let out = small(repo, &args)?;
+    if !out.success() {
+        if out.code == Some(1) && out.value.is_empty() {
             return Ok((reference, None));
         }
-        return Err(fail(repo, &args, &out));
+        bail!("git could not resolve {reference}");
     }
-    let sha = String::from_utf8_lossy(&out.stdout).trim_end().to_owned();
+    let sha = String::from_utf8_lossy(&out.value).trim_end().to_owned();
     if !is_full_oid(&sha) {
         bail!("malformed rev-parse output for {reference}");
     }
@@ -114,8 +132,8 @@ pub fn log_page(repo: &Path, tip: &str, skip: usize, limit: usize) -> Result<Vec
     if !is_full_oid(tip) {
         bail!("expected a full commit ID, got {tip:?}");
     }
-    let kind = read(repo, &["cat-file", "-t", tip])?;
-    if !kind.status.success() || kind.stdout != b"commit\n" {
+    let kind = small(repo, &["cat-file", "-t", tip])?;
+    if !kind.success() || kind.value != b"commit\n" {
         bail!("expected an existing full commit ID, got {tip:?}");
     }
     let skip = format!("--skip={skip}");
@@ -141,6 +159,9 @@ pub fn log_page(repo: &Path, tip: &str, skip: usize, limit: usize) -> Result<Vec
     })?;
     if out.exceeded {
         bail!("git log page exceeded {max_bytes} bytes");
+    }
+    if !out.success() {
+        bail!("git log failed from {tip}");
     }
     let mut commits = Vec::new();
     for record in out.value.split(|b| *b == 0).filter(|r| !r.is_empty()) {
@@ -175,21 +196,34 @@ fn recorded_parents(repo: &Path, commits: &mut [GraphCommit]) -> Result<()> {
         return Ok(());
     }
     let input: String = commits.iter().map(|c| format!("{}\n", c.sha)).collect();
-    // Only headers are kept; a long message is streamed past within the deadline.
+    // Only headers are kept; long messages are streamed past, within a byte bound and the
+    // deadline (a cut object fails its declared size below).
     let recorded = read_bounded(
         repo,
         &["cat-file", "--batch"],
-        &limits(input.as_bytes(), u64::MAX),
+        &limits(input.as_bytes(), OBJECT_BYTES),
         |out| object_parents(out, commits.len()),
-    )?
-    .value;
-    let shallow = read(repo, &["rev-parse", "--is-shallow-repository"])?;
-    let shallow = shallow.status.success() && shallow.stdout == b"true\n";
-    for (commit, parents) in commits.iter_mut().zip(recorded) {
+    )?;
+    if !recorded.success() {
+        bail!("git cat-file could not read the page's commits");
+    }
+    let mut shallow: Option<BTreeSet<String>> = None;
+    for (commit, parents) in commits.iter_mut().zip(recorded.value) {
         if commit.parents == parents {
             continue;
         }
-        if shallow && commit.parents.is_empty() {
+        if commit.parents.is_empty() {
+            let declared = match &shallow {
+                Some(declared) => declared,
+                None => shallow.insert(shallow_commits(repo)?),
+            };
+            if !declared.contains(&commit.sha) {
+                bail!(
+                    "this repository overrides the parents of {} locally, so its recorded \
+                     history cannot be shown",
+                    commit.sha
+                );
+            }
             commit.parents = parents;
             continue;
         }
@@ -200,6 +234,32 @@ fn recorded_parents(repo: &Path, commits: &mut [GraphCommit]) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// The boundary commits this repository declares shallow; empty when it is not shallow.
+fn shallow_commits(repo: &Path) -> Result<BTreeSet<String>> {
+    let shallow = small(repo, &["rev-parse", "--is-shallow-repository"])?;
+    if !shallow.success() || shallow.value != b"true\n" {
+        return Ok(BTreeSet::new());
+    }
+    let path = small(repo, &["rev-parse", "--git-path", "shallow"])?;
+    if !path.success() {
+        bail!("git could not name the shallow file");
+    }
+    let path = repo.join(String::from_utf8_lossy(&path.value).trim_end());
+    let file = std::fs::File::open(&path).context("open the shallow file")?;
+    let mut text = String::new();
+    file.take(SHALLOW_BYTES + 1)
+        .read_to_string(&mut text)
+        .context("read the shallow file")?;
+    if text.len() as u64 > SHALLOW_BYTES {
+        bail!("shallow file longer than {SHALLOW_BYTES} bytes");
+    }
+    Ok(text
+        .lines()
+        .filter(|line| is_full_oid(line))
+        .map(str::to_owned)
+        .collect())
 }
 
 /// The `parent` lines of `count` commit objects from `git cat-file --batch`, reading at most
@@ -245,11 +305,17 @@ fn object_parents(out: &mut dyn BufRead, count: usize) -> Result<Vec<Vec<String>
             }
         }
         std::io::copy(&mut body, &mut std::io::sink()).context("skip commit message")?;
+        if body.limit() != 0 {
+            bail!("commit object shorter than its declared size");
+        }
         line.clear();
         (&mut *out)
             .take(1)
             .read_until(b'\n', &mut line)
             .context("read object end")?;
+        if line != b"\n" {
+            bail!("commit object not followed by its newline");
+        }
         all.push(parents);
     }
     Ok(all)
@@ -273,9 +339,9 @@ pub fn ref_labels(repo: &Path, shas: &BTreeSet<String>) -> Result<RefLabels> {
             *found.omitted.entry(sha.to_owned()).or_default() += 1;
         }
     };
-    let head = read(repo, &["rev-parse", "--verify", "--quiet", "HEAD^{commit}"])?;
-    if head.status.success() {
-        let head = String::from_utf8_lossy(&head.stdout).trim_end().to_owned();
+    let head = small(repo, &["rev-parse", "--verify", "--quiet", "HEAD^{commit}"])?;
+    if head.success() {
+        let head = String::from_utf8_lossy(&head.value).trim_end().to_owned();
         if shas.contains(&head) {
             add(&mut found, &head, "HEAD".into());
         }
@@ -297,9 +363,12 @@ pub fn ref_labels(repo: &Path, shas: &BTreeSet<String>) -> Result<RefLabels> {
             if out.read_until(b'\n', &mut line).context("read refs")? == 0 {
                 break;
             }
+            // A line the byte bound cut short is not a whole ref.
+            let Some(whole) = line.strip_suffix(b"\n") else {
+                break;
+            };
             // A ref name need not be UTF-8; it is only a label here.
-            let text = String::from_utf8_lossy(&line);
-            let text = text.trim_end_matches('\n');
+            let text = String::from_utf8_lossy(whole);
             let mut fields = text.splitn(3, ' ');
             let (Some(object), Some(peeled), Some(name)) =
                 (fields.next(), fields.next(), fields.next())
@@ -321,6 +390,9 @@ pub fn ref_labels(repo: &Path, shas: &BTreeSet<String>) -> Result<RefLabels> {
         }
         Ok(())
     })?;
+    if !listed.exceeded && !listed.success() {
+        bail!("git for-each-ref failed");
+    }
     found.incomplete = listed.exceeded;
     Ok(found)
 }

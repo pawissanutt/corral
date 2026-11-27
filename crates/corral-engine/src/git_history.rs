@@ -52,8 +52,8 @@ pub enum LinkBasis {
     /// The run's `head_sha`, for a run whose recorded worktree is in this project's repository:
     /// its landed tip, its latest submission or, for a reviewer, the candidate it was bound to.
     Head,
-    /// A `done` event that recorded this project and commit: the worker submitted it for
-    /// review. It stays even when a later landing rebased the run to another head.
+    /// A `done` event that recorded this project and commit, from a run whose recorded
+    /// worktree is in this project's repository: the worker submitted it for review. It stays even when a later landing rebased the run to another head.
     Submitted,
 }
 
@@ -130,10 +130,15 @@ impl Engine {
                 .to_str()
                 .map(|dir| format!("{dir}/"))
         });
-        let heads = self.store.runs_naming(&wanted, worktrees.as_deref())?;
-        let submissions = self
-            .store
-            .submissions_naming(project, &wanted, worktrees.as_deref())?;
+        // One snapshot: a landing between the two reads would move a run's head from one
+        // query's answer to the other's.
+        let (heads, submissions) = self.store.read_snapshot(|| {
+            Ok((
+                self.store.runs_naming(&wanted, worktrees.as_deref())?,
+                self.store
+                    .submissions_naming(project, &wanted, worktrees.as_deref())?,
+            ))
+        })?;
         let ids: BTreeSet<&str> = heads
             .iter()
             .map(|(run, _)| run.task.as_str())
@@ -226,14 +231,16 @@ impl Store {
     }
 
     /// Up to `LINKS_MAX` distinct submissions per commit (`done` events) that recorded
-    /// `project` and one of `shas`, leaving out those `runs_naming` already links by head.
+    /// `project` and one of `shas` from a run whose worktree is `<worktrees><task>` (a task's
+    /// project can change while its run is live, so the event's label alone is not evidence),
+    /// leaving out those `runs_naming` already links by head.
     fn submissions_naming(
         &self,
         project: &str,
         shas: &[&str],
         worktrees: Option<&str>,
     ) -> Result<Vec<Submission>> {
-        if shas.is_empty() {
+        if shas.is_empty() || worktrees.is_none() {
             return Ok(Vec::new());
         }
         let mut statement = self
@@ -249,6 +256,9 @@ impl Store {
                          WHERE e.kind='done' AND e.task IS NOT NULL AND e.run IS NOT NULL
                            AND json_extract(e.detail,'$.project')=?1
                            AND json_extract(e.detail,'$.sha') IN (SELECT value FROM json_each(?2))
+                           AND EXISTS (SELECT 1 FROM runs r
+                             WHERE r.task=e.task AND r.id=e.run
+                               AND json_extract(r.document,'$.worktree') = ?3 || r.task)
                            AND NOT EXISTS (SELECT 1 FROM runs r
                              WHERE r.task=e.task AND r.id=e.run
                                AND json_extract(r.document,'$.head_sha')

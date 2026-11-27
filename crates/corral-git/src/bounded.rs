@@ -3,7 +3,7 @@
 //! read fails. Either way the child is killed and reaped, never left running.
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, atomic::AtomicBool, atomic::Ordering, mpsc};
 use std::thread;
 use std::time::Duration;
@@ -20,14 +20,22 @@ pub(crate) struct Limits<'a> {
     pub deadline: Duration,
 }
 
-/// What `read` returned, and whether the output was cut at `max_bytes`.
+/// What `read` returned, whether the output was cut at `max_bytes`, and the exit code of a
+/// run read to its end (`None` when it was cut, stopped early or killed by a signal).
 pub(crate) struct Bounded<T> {
     pub value: T,
     pub exceeded: bool,
+    pub code: Option<i32>,
+}
+
+impl<T> Bounded<T> {
+    pub fn success(&self) -> bool {
+        self.code == Some(0)
+    }
 }
 
 /// Run `git -C repo args` and hand its stdout, capped at `limits.max_bytes`, to `read`.
-/// A complete run must exit successfully; a cut or early-stopped one is killed.
+/// A cut or early-stopped run is killed; the caller judges the exit code.
 pub(crate) fn read_bounded<T>(
     repo: &Path,
     args: &[&str],
@@ -81,15 +89,24 @@ pub(crate) fn read_bounded<T>(
             && reader.get_mut().get_mut().read(&mut probe).unwrap_or(0) > 0;
         Ok::<_, anyhow::Error>((value, unread, exceeded))
     })();
-    let _ = done.send(());
-    let _ = watchdog.join();
     let complete = matches!(result, Ok((_, false, false)));
-    let status = {
-        let mut child = child
+    // Reap while the watchdog still runs: a Git that closed stdout yet keeps running is still
+    // killed at the deadline.
+    let status = loop {
+        let mut running = child
             .lock()
             .map_err(|_| anyhow::anyhow!("git child lock poisoned"))?;
-        finish(&mut child, !complete)?
+        if !complete {
+            let _ = running.kill();
+        }
+        if let Some(status) = running.try_wait().context("wait for git")? {
+            break status;
+        }
+        drop(running);
+        thread::sleep(Duration::from_millis(2));
     };
+    let _ = done.send(());
+    let _ = watchdog.join();
     if fired.load(Ordering::SeqCst) {
         bail!(
             "`{}` took longer than {:?}",
@@ -98,16 +115,9 @@ pub(crate) fn read_bounded<T>(
         );
     }
     let (value, _, exceeded) = result?;
-    if complete && !status {
-        bail!("`{}` failed", cmdline(repo, args));
-    }
-    Ok(Bounded { value, exceeded })
-}
-
-/// Kill the child when its output is no longer wanted, then reap it; true when it succeeded.
-fn finish(child: &mut Child, kill: bool) -> Result<bool> {
-    if kill {
-        let _ = child.kill();
-    }
-    Ok(child.wait().context("wait for git")?.success())
+    Ok(Bounded {
+        value,
+        exceeded,
+        code: if complete { status.code() } else { None },
+    })
 }
