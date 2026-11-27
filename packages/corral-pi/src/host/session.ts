@@ -485,7 +485,11 @@ export class HostSession {
 
   handleCodeCommand(text: string): boolean {
     // Once the handoff is admitted, don't let native submissions (e.g. !bash) start new work.
-    return this.switchingCode || this.remoteShellRunning || (this.codeCommand?.(text) ?? false);
+    if (this.remoteShellRunning) {
+      this.session.extensionRunner.getUIContext().notify("Wait for the running shell command to finish; input was not submitted.", "warning");
+      return true;
+    }
+    return this.switchingCode || (this.codeCommand?.(text) ?? false);
   }
 
   private constructor(private readonly options: HostSessionOptions) {

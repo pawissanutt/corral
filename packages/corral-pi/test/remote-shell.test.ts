@@ -1,4 +1,8 @@
 import { expect, test } from "bun:test";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { EventLog } from "../src/bridge/events.ts";
+import { installToolControls } from "../src/host/tool-controls.ts";
 import { registerShell } from "../src/host/remote/shell.ts";
 import { capabilities } from "../src/host/remote/state.ts";
 import { codeHost } from "./support/code-host.ts";
@@ -23,5 +27,18 @@ test("remote shell uses Pi's bash path, records context policy, and refuses a bu
       await fx.holds.get("shell").started;
       await expect(shell({ command: "printf no", exclude_from_context: false })).rejects.toMatchObject({ code: "busy" });
     } finally { fx.holds.get("shell").release("done"); await turn; }
+  } finally { await fx.close(); }
+});
+
+test("owner shell obeys configured deny rules before executing", async () => {
+  const fx = await codeHost("assistant", { extend: pi => installToolControls(pi, {
+    rules: { allow: [], ask: [], deny: ["touch *"], default: "allow" },
+    events: new EventLog(), corral: new Set(), currentTurn: () => undefined,
+  }) });
+  registerShell(fx.host.remoteRegistry, () => fx.host.session, run => fx.host.runRemoteShell(run), () => {});
+  try {
+    const result = await fx.host.remoteRegistry.get("owner_bash")!({ command: "touch blocked", exclude_from_context: false });
+    expect("text" in result && typeof result.text === "string" && result.text.includes("bash rule")).toBeTrue();
+    expect(existsSync(join(fx.cwd, "blocked"))).toBeFalse();
   } finally { await fx.close(); }
 });

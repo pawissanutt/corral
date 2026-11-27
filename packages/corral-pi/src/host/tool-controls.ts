@@ -67,6 +67,18 @@ function commandOf(input: unknown): string {
 }
 
 export function installToolControls(pi: ExtensionAPI, controls: ToolControls): void {
+  // Owner ! and !! commands, whether submitted in the pane or remotely, share this path.
+  pi.on("user_bash", event => {
+    const input = { command: event.command };
+    const fixed = controls.fixed?.(event.command);
+    const planned = controls.plan?.refusal("bash", input);
+    const decision = controls.rules && decideBash(event.command, controls.rules);
+    const reason = fixed ?? planned ?? (decision?.action === "deny"
+      ? `bash rule ${JSON.stringify(decision.rule ?? "default deny")} denies ${JSON.stringify(decision.segment ?? event.command)}; nothing ran`
+      : decision?.action === "ask" ? controls.approvals?.shell("bash", input) ?? (controls.approvals ? undefined : "bash rule requires owner confirmation; nothing ran")
+      : undefined);
+    return reason ? { result: { output: reason, exitCode: 1, cancelled: false, truncated: false } } : undefined;
+  });
   const hooked = new Set<string>();
   pi.on("tool_call", async (event, ctx) => {
     const input = event.input as Record<string, unknown>;
