@@ -539,21 +539,24 @@ pub fn skill_stamp(role: &str, unstamped: &str) -> String {
 
 /// The full versioned SKILL.md text of a role skill, or None for an unknown role.
 pub fn role_skill_markdown(role: &str) -> Option<String> {
+    // Native Pi reads the package Markdown directly. Only the classic installer stamps it.
+    macro_rules! pi_skill {
+        ($name:literal) => {
+            include_str!(concat!("../../../packages/corral-pi/assets/skills/", $name, "/SKILL.md"))
+                .replacen("\n---\n", "\n---\n{{marker}}\n", 1)
+        };
+    }
     let body = match role {
         PM_SKILL => pm_skill_body(),
         WORKER_SKILL => include_str!("../assets/skills/corral-worker.md").to_string(),
         PLANNER_SKILL => include_str!("../assets/skills/corral-planner.md").to_string(),
         SUBMIT_SKILL => include_str!("../assets/skills/corral-submit.md").to_string(),
-        "frontend" => include_str!("../assets/skills/corral-pi/frontend/SKILL.md").to_string(),
-        "visual-qa" => include_str!("../assets/skills/corral-pi/visual-qa/SKILL.md").to_string(),
-        "programming" => {
-            include_str!("../assets/skills/corral-pi/programming/SKILL.md").to_string()
-        }
-        "debugging" => include_str!("../assets/skills/corral-pi/debugging/SKILL.md").to_string(),
-        "git-master" => include_str!("../assets/skills/corral-pi/git-master/SKILL.md").to_string(),
-        "simplify-and-cleanup" => {
-            include_str!("../assets/skills/corral-pi/simplify-and-cleanup/SKILL.md").to_string()
-        }
+        "frontend" => pi_skill!("frontend"),
+        "visual-qa" => pi_skill!("visual-qa"),
+        "programming" => pi_skill!("programming"),
+        "debugging" => pi_skill!("debugging"),
+        "git-master" => pi_skill!("git-master"),
+        "simplify-and-cleanup" => pi_skill!("simplify-and-cleanup"),
         _ => return None,
     };
     let unstamped = body.replace("{{marker}}", SKILL_MARKER);
