@@ -29,7 +29,7 @@ import { ToolApprovals } from "./tool-approvals.ts";
 import { WORKTREE_ACCESS_COMMAND, WORKTREE_ACCESS_ENTRY, WORKTREE_REQUEST_TOOL, WorktreeAccess } from "./worktree-access.ts";
 import { worktreeTools } from "./worktree-tools.ts";
 import { taskDestinationLock } from "./worktree-writer.ts";
-import { codingSkillPaths } from "../roles/common/assets.ts";
+import { codingSkillPaths, RoleAssetMissing } from "../roles/common/assets.ts";
 import { type CapabilityGuidance, type Guidance, selectGuidance } from "../capabilities/guidance.ts";
 import { PROVIDERS, type ProviderId, billingKind, hostDestinations, isApiProvider, isProviderId } from "../auth/providers.ts";
 import type { AuthContext, Fetch } from "../auth/types.ts";
@@ -1580,10 +1580,12 @@ export class HostSession {
     });
     this.options.modules.role.extend?.(pi, this.roleContext);
     // First name wins: role procedures, then the native pack, then optional user/project skills.
-    pi.on("resources_discover", () => ({ skillPaths: [
-      ...(this.settings.enableSkillCommands ? codingSkillPaths(this.options.modules.assetRoot) : []),
-      ...this.guidance.skillPaths,
-    ] }));
+    pi.on("resources_discover", () => {
+      if (!this.settings.enableSkillCommands) return { skillPaths: [...this.guidance.skillPaths] };
+      const root = this.options.modules.assetRoot;
+      if (!root) throw new RoleAssetMissing("assets/skills");
+      return { skillPaths: [...codingSkillPaths(root), ...this.guidance.skillPaths] };
+    });
     pi.on("session_shutdown", async (event) => {
       // InteractiveMode exits the process after runtime disposal; main's finally never runs.
       // Await the release here, but keep reporting through extension reloads.
