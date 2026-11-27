@@ -1,10 +1,12 @@
 //! Words as the terminal UI renders them, laid out by NSH's Markdown `TextView` in the app's
 //! type: headings, paragraphs, lists, block quotes, inline bold, italic, code and links, tables,
-//! and code blocks with a muted language label and no fence characters. Chat tables and
-//! narrow tables become records (`header  cell` rows), so their contents can wrap.
-//! Shared by every transcript that shows written Markdown: a watched session's and the
-//! assistant's.
+//! and code blocks with a muted language label and no fence characters. Narrow tables become
+//! records (`header  cell` rows), so their contents can wrap; a chat message's tables are NSH's
+//! grid where the message's own measured width holds them whole, and records otherwise
+//! (`markdown_tables.rs`). Shared by every transcript that shows written Markdown: a watched
+//! session's and the assistant's.
 
+use nsh_base::text_view::document::TableCell;
 use nsh_base::text_view::{
     Block, CodeBlock, CustomNode, Document, Inline, MarkdownOptions, Parser, Table,
     TextViewElement, TextViewLinkPressEvent, TextViewPart as Part, TextViewParts, text_view,
@@ -26,6 +28,10 @@ use crate::screens::markdown_links::{
 use crate::state::AppState;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color, text_size};
+
+#[path = "markdown_tables.rs"]
+mod tables;
+use tables::Measure;
 
 /// Below this page width the existing non-chat table layout uses records.
 const TABLE_CELLS: f32 = 54.0;
@@ -198,47 +204,46 @@ fn record_blocks(table: &Table) -> Vec<Block> {
     table
         .rows
         .iter()
-        .flat_map(|row| {
-            let mut content = Vec::new();
-            let mut blocks = Vec::new();
-            for (at, cell) in row.iter().enumerate() {
-                if !content.is_empty()
-                    && !table
-                        .head
-                        .get(at)
-                        .is_some_and(|head| only_images(&head.content))
-                {
-                    content.push(Inline::Break);
-                }
-                if let Some(head) = table.head.get(at) {
-                    if only_images(&head.content) {
-                        if !content.is_empty() {
-                            blocks.push(Block::paragraph(std::mem::take(&mut content)));
-                        }
-                        blocks.push(Block::paragraph(head.content.clone()));
-                    } else {
-                        content.push(Inline::Strong {
-                            content: head.content.clone(),
-                        });
-                        content.push(Inline::Text { text: "  ".into() });
-                    }
-                }
-                // Standalone image paragraphs retain NSH's natural sizing.
-                if only_images(&cell.content) {
-                    if !content.is_empty() {
-                        blocks.push(Block::paragraph(std::mem::take(&mut content)));
-                    }
-                    blocks.push(Block::paragraph(cell.content.clone()));
-                } else {
-                    content.extend(cell.content.iter().cloned());
-                }
-            }
-            if !content.is_empty() {
-                blocks.push(Block::paragraph(content));
-            }
-            blocks
-        })
+        .flat_map(|row| record_row(&table.head, row))
         .collect()
+}
+
+/// One row of a table with header `head` as records: each field on its own line, the header
+/// in bold before the cell.
+fn record_row(head: &[TableCell], row: &[TableCell]) -> Vec<Block> {
+    let mut content = Vec::new();
+    let mut blocks = Vec::new();
+    for (at, cell) in row.iter().enumerate() {
+        if !content.is_empty() && !head.get(at).is_some_and(|head| only_images(&head.content)) {
+            content.push(Inline::Break);
+        }
+        if let Some(head) = head.get(at) {
+            if only_images(&head.content) {
+                if !content.is_empty() {
+                    blocks.push(Block::paragraph(std::mem::take(&mut content)));
+                }
+                blocks.push(Block::paragraph(head.content.clone()));
+            } else {
+                content.push(Inline::Strong {
+                    content: head.content.clone(),
+                });
+                content.push(Inline::Text { text: "  ".into() });
+            }
+        }
+        // Standalone image paragraphs retain NSH's natural sizing.
+        if only_images(&cell.content) {
+            if !content.is_empty() {
+                blocks.push(Block::paragraph(std::mem::take(&mut content)));
+            }
+            blocks.push(Block::paragraph(cell.content.clone()));
+        } else {
+            content.extend(cell.content.iter().cloned());
+        }
+    }
+    if !content.is_empty() {
+        blocks.push(Block::paragraph(content));
+    }
+    blocks
 }
 
 /// A fenced code block without its fences: the language muted on its own row, then the code in
@@ -299,25 +304,32 @@ fn plain_code(app: AppState, language: Option<&str>, code: &str) -> AnyElement {
 /// `markdown` laid out; while `streaming`, syntax its end leaves open reads as closed. Text
 /// and HTML-looking words stay literal, as the terminal shows them: no formulas, no markup.
 pub(crate) fn markdown(app: AppState, markdown: &str, streaming: bool) -> AnyElement {
-    cited(app, markdown, streaming, true, false, false)
+    cited(app, markdown, streaming, true, false)
 }
 
-/// Chat messages use records at every width: their available width is not the page width.
+/// A chat message's words: each table is NSH's grid where the width this message really has
+/// holds it whole, and records otherwise (and before it is first laid out), as
+/// [`chat_markdown_streaming`]'s are. A terminal's are records at every width.
 pub(crate) fn chat_markdown(app: AppState, markdown: &str, streaming: bool) -> AnyElement {
-    cited(app, markdown, streaming, true, true, false)
+    let markdown = markdown.to_owned();
+    chat_markdown_streaming(
+        app,
+        computed(move || markdown.clone()),
+        computed(move || streaming),
+    )
 }
 
 /// `markdown` laid out, every image as its alt text: for stored words someone else wrote (a
 /// reviewer's note), which must not make the device fetch a URL just by being shown.
 pub(crate) fn markdown_without_images(app: AppState, markdown: &str) -> AnyElement {
-    cited(app, markdown, false, false, false, false)
+    cited(app, markdown, false, false, false)
 }
 
 /// A saved artifact's Markdown: laid out as `markdown` is, with each Mermaid fence drawn as
 /// its diagram where the form can draw one and read as its source otherwise, and every other
 /// fence as the text view's own code block, syntax-highlighted by its language tag.
 pub(crate) fn artifact_markdown(app: AppState, markdown: &str) -> AnyElement {
-    cited(app, markdown, false, true, false, true)
+    cited(app, markdown, false, true, true)
 }
 
 /// Laid out with every citation that resolves as a link to what it cites, drawn again when
@@ -327,19 +339,18 @@ fn cited(
     markdown: &str,
     streaming: bool,
     images: bool,
-    chat: bool,
     diagrams: bool,
 ) -> AnyElement {
     let cites = cite::cites(markdown);
     if cites.is_empty() {
-        return laid_out(app, markdown, streaming, images, chat, diagrams, &[]);
+        return laid_out(app, markdown, streaming, images, diagrams, &[]);
     }
     keep_cited(app, &cites);
     let open = computed(move || app.feed.with(|feed| cite::opening(feed, &cites)));
     let markdown = markdown.to_owned();
     dynamic(move || {
         let open = open.get();
-        untracked(|| laid_out(app, &markdown, streaming, images, chat, diagrams, &open))
+        untracked(|| laid_out(app, &markdown, streaming, images, diagrams, &open))
     })
     .into_element()
 }
@@ -370,16 +381,36 @@ pub(crate) fn chat_markdown_streaming(
         }
         None::<AnyElement>
     });
+    let parsed = computed(move || markdown.with(|source| parse(source, streaming.get())));
+    let terminal = app.form == Form::Terminal;
+    let minimums = computed(move || {
+        if terminal {
+            Vec::new()
+        } else {
+            parsed.with(tables::minimums)
+        }
+    });
+    // Resizing does not reparse Markdown or replace unchanged blocks. Update the document only
+    // when a table changes presentation, the words change, or a link resolves.
+    let measure = Measure::new();
+    let plan = computed(move || minimums.with(|widths| measure.plan(widths)));
     let words = shown(
         app,
         text_view().document(move || {
-            let open = open.get();
-            markdown.with(|markdown| document(app, markdown, streaming.get(), true, true, &open))
+            let mut document = parsed.get();
+            open.with(|open| {
+                if !open.is_empty() {
+                    link_blocks(&mut document.blocks, open);
+                }
+            });
+            tables::apply(&mut document, &plan.get());
+            document
         }),
         false,
     );
     view()
         .min_w(px(0.0))
+        .when(!terminal, |wrapper| measure.track(wrapper))
         .child(kept)
         .child(words)
         .into_element()
@@ -390,11 +421,10 @@ fn laid_out(
     markdown: &str,
     streaming: bool,
     images: bool,
-    chat: bool,
     diagrams: bool,
     open: &[String],
 ) -> AnyElement {
-    let mut document = document(app, markdown, streaming, images, chat, open);
+    let mut document = document(app, markdown, streaming, images, open);
     if diagrams {
         diagram_nodes(&mut document.blocks);
         for note in &mut document.footnotes {
@@ -404,16 +434,8 @@ fn laid_out(
     shown(app, text_view().document(document), diagrams)
 }
 
-/// `markdown` read as the app shows it: images as their alt text unless `images`, the
-/// citations among `open` as links, tables as records where they would not fit.
-fn document(
-    app: AppState,
-    markdown: &str,
-    streaming: bool,
-    images: bool,
-    chat: bool,
-    open: &[String],
-) -> Document {
+/// `markdown` as the parser reads it, its open ends closed while `streaming`.
+fn parse(markdown: &str, streaming: bool) -> Document {
     let options = MarkdownOptions {
         math: false,
         html: false,
@@ -421,15 +443,26 @@ fn document(
         streaming,
         ..MarkdownOptions::default()
     };
-    let mut document = Parser::new().options(options).markdown(markdown);
+    Parser::new().options(options).markdown(markdown)
+}
+
+/// `markdown` read as the app shows it: images as their alt text unless `images`, the
+/// citations among `open` as links, tables as records where they would not fit.
+fn document(
+    app: AppState,
+    markdown: &str,
+    streaming: bool,
+    images: bool,
+    open: &[String],
+) -> Document {
+    let mut document = parse(markdown, streaming);
     if !images {
         without_images(&mut document);
     }
     if !open.is_empty() {
         link_blocks(&mut document.blocks, open);
     }
-    if chat
-        || app.form == Form::Phone
+    if app.form == Form::Phone
         || (app.form == Form::Terminal && term::page_columns(app) < TABLE_CELLS)
     {
         document.blocks = records(std::mem::take(&mut document.blocks));
@@ -604,6 +637,15 @@ mod tests {
         let blocks = records(document.blocks);
         assert!(blocks.iter().any(|block| matches!(block, Block::Paragraph { content } if matches!(content.as_slice(), [Inline::Image(_)]))));
         assert!(serde_json::to_string(&blocks).unwrap().contains("example"));
+    }
+
+    #[test]
+    fn a_mixed_image_cell_does_not_choose_a_grid_on_alt_text_width() {
+        let document = parse(
+            "| Label | Attachment |\n| --- | --- |\n| Wide | See **![x](image.png)** |",
+            false,
+        );
+        assert_eq!(tables::minimums(&document), [f32::INFINITY]);
     }
 
     /// A stored note must not fetch a URL when shown: an image anywhere, a footnote's

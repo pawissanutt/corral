@@ -18,6 +18,9 @@ use super::{PARAGRAPH, Written};
 #[path = "prose_tests.rs"]
 mod tests;
 
+/// Leave room for two-column comparisons within a full-width conversation.
+const PROSE_MEASURE: f32 = 700.0;
+
 /// One blink of the streaming caret, as the assistant thread's.
 const BLINK_MS: f32 = 1000.0;
 
@@ -42,8 +45,8 @@ pub(super) fn caret(app: AppState) -> AnyElement {
         .into_element()
 }
 
-/// Words of a message: rendered Markdown at most ~70 characters wide on the desktop, then
-/// where the rest of a continued item stands. `live` is the words while they are still being
+/// Words of a message: rendered Markdown within the desktop's reply measure, then where the
+/// rest of a continued item stands. `live` is the words while they are still being
 /// written, drawn in a view that stays as they grow.
 pub(super) fn prose(app: AppState, words: &Prose, id: &str, live: Option<Written>) -> AnyElement {
     let body = match live {
@@ -53,7 +56,7 @@ pub(super) fn prose(app: AppState, words: &Prose, id: &str, live: Option<Written
     view()
         .min_w(px(0.0))
         .when(app.form == Form::Desktop, |block| {
-            block.max_w(px(PARAGRAPH))
+            block.max_w(px(PROSE_MEASURE))
         })
         .when(app.form != Form::Terminal, |block| block.mb(px(6.0)))
         .child(body)
