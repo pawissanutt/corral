@@ -329,6 +329,8 @@ pub struct Ui {
     pub picker: PickerUi,
     /// Bumped each time the transcript is asked back to its newest rows (End, Ctrl+End).
     pub jump: u32,
+    /// When a first Esc on an idle, empty composer armed the rewind (`Feed::now`).
+    pub rewind_armed: Option<u64>,
     /// Where the reader was in this scope's transcript when its last view closed.
     pub reading: transcript::Reading,
 }
@@ -359,6 +361,7 @@ impl Ui {
         fleet: FleetUi::EMPTY,
         picker: PickerUi::EMPTY,
         jump: 0,
+        rewind_armed: None,
         reading: transcript::Reading::End,
     };
 }

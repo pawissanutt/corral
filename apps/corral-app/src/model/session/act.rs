@@ -132,6 +132,8 @@ pub enum Action {
     Command(super::CommandAction),
     /// Return the transcript to its newest rows and follow them again.
     JumpEnd(Id),
+    /// A first Esc on an idle, empty composer: the next one within a moment opens Rewind.
+    ArmRewind(Id),
 }
 
 /// Whether a continuation should be fetched: it was never asked for, or its last read failed.
@@ -327,12 +329,23 @@ impl State {
                 ui.hide_thinking = !ui.hide_thinking;
                 Vec::new()
             }
-            Action::Control { session, control } => vec![Effect::Control {
-                session,
-                key: self.ids.next_id(),
-                control,
-                confirmed: false,
-            }],
+            Action::Control { session, control } => {
+                if control == Control::Rewinds {
+                    self.ui_mut(&session).rewind_armed = None;
+                }
+                vec![Effect::Control {
+                    session,
+                    key: self.ids.next_id(),
+                    control,
+                    confirmed: false,
+                }]
+            }
+            Action::ArmRewind(session) => {
+                let ui = self.ui_mut(&session);
+                ui.rewind_armed = Some(feed.now);
+                ui.notices.push(Hue::Neutral, "Esc again to rewind", feed.now);
+                Vec::new()
+            }
             Action::SelectAgent { session, child } => {
                 self.ui_mut(&session).agent = child;
                 Vec::new()
@@ -451,6 +464,20 @@ impl State {
         let text = text.trim().to_owned();
         if text.is_empty() && attachments.is_empty() {
             return Vec::new();
+        }
+        // `/rewind [n]` is the host's own command: the sheet opens here instead of a send.
+        if let Some(turn) = super::keys::rewind_typed(&text)
+            && crate::model::agents::rewind_offered(feed, session.as_str())
+        {
+            let ui = self.ui_mut(&session);
+            ui.draft.clear();
+            ui.recall = None;
+            return vec![Effect::Control {
+                session,
+                key: self.ids.next_id(),
+                control: turn.map_or(Control::Rewinds, Control::Rewind),
+                confirmed: false,
+            }];
         }
         let key = self.ids.next_id();
         let typed_at = stamp(feed.now);

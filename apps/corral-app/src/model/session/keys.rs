@@ -279,6 +279,45 @@ fn talks(cx: &Cx<'_>) -> bool {
     *cx.role != SessionRole::Child && !cx.log_only()
 }
 
+/// Seconds a first Esc stays armed for the second.
+const REWIND_WINDOW: u64 = 4;
+
+/// Esc on an idle, empty composer of a session whose host can rewind: the first press arms and
+/// says so, a second within the window opens the rewind sheet.
+fn rewind_escape(cx: &Cx<'_>) -> Option<Action> {
+    if !talks(cx)
+        || !cx.ui.draft.trim().is_empty()
+        || !crate::model::agents::rewind_offered(cx.feed, cx.id.as_str())
+    {
+        return None;
+    }
+    let session = cx.id.clone();
+    let armed = cx
+        .ui
+        .rewind_armed
+        .is_some_and(|at| cx.feed.now.saturating_sub(at) <= REWIND_WINDOW);
+    Some(if armed {
+        Action::Control {
+            session,
+            control: Control::Rewinds,
+        }
+    } else {
+        Action::ArmRewind(session)
+    })
+}
+
+/// `/rewind` or `/rewind <n>` as typed: none for any other text, else the turn it names.
+pub(super) fn rewind_typed(text: &str) -> Option<Option<u64>> {
+    let rest = text.trim().strip_prefix("/rewind")?;
+    if rest.is_empty() {
+        return Some(None);
+    }
+    if !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    rest.trim().parse().ok().map(Some)
+}
+
 /// What a pressed key does on the page `cx` reads. Enter and Alt+Enter are the composer's own:
 /// the composer sends the field's text through `Action::Send`, so they are not resolved here.
 /// Escape first closes an open picker or `/` menu, then what the dock holds (a confirmation,
@@ -309,12 +348,15 @@ pub fn press(key: &str, cx: &Cx<'_>, web: bool) -> Option<Action> {
                     session,
                     tab: Tab::Chat,
                 })
-            } else {
-                (super::composer::working(cx) && cx.controls().contains(&Control::Cancel))
+            } else if super::composer::working(cx) {
+                cx.controls()
+                    .contains(&Control::Cancel)
                     .then_some(Action::Control {
                         session,
                         control: Control::Cancel,
                     })
+            } else {
+                rewind_escape(cx)
             }
         }),
         KeyAction::Thinking => Some(Action::Thinking(session)),

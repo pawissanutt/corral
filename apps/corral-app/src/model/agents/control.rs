@@ -212,9 +212,33 @@ fn run_controls(row: &AgentRow, kind: Kind) -> Vec<Control> {
     controls
 }
 
+/// What the host's state says of rewinding: none when it declares nothing or does not serve it,
+/// else `None` inside when it can now, or `Some(why)` when it is served but not now.
+pub fn rewind_can(feed: &Feed, session: &str) -> Option<Option<String>> {
+    let state = feed.live.get(session)?.state.as_ref()?;
+    let capability = state.can.iter().find(|capability| capability.id == "rewind")?;
+    Some(capability.unavailable.clone())
+}
+
+/// Whether the host can rewind this session now.
+pub fn rewind_offered(feed: &Feed, session: &str) -> bool {
+    matches!(rewind_can(feed, session), Some(None))
+}
+
+/// A chat's or a build's controls, with Rewind… before Terminate when its host serves it.
+fn chat_controls(feed: &Feed, session: &str) -> Vec<Control> {
+    let mut controls = chat_base_controls(feed, session);
+    if rewind_can(feed, session).is_some()
+        && let Some(at) = controls.iter().position(|c| *c == Control::Terminate)
+    {
+        controls.insert(at, Control::Rewinds);
+    }
+    controls
+}
+
 /// A chat's or a build's controls follow its row's state. A build whose host runs in a terminal
 /// corrald cannot reach is continued there, not resumed here.
-fn chat_controls(feed: &Feed, session: &str) -> Vec<Control> {
+fn chat_base_controls(feed: &Feed, session: &str) -> Vec<Control> {
     let Some(row) = crate::model::assistant::row(feed, session) else {
         return Vec::new();
     };
@@ -251,15 +275,21 @@ pub fn control_verbs(feed: &Feed, session: &Id) -> Vec<VerbAction> {
     let kind = kind(feed, session);
     controls(feed, session)
         .into_iter()
-        .map(|control| VerbAction {
-            slug: control.slug(),
-            label: control_label(control, kind),
-            enabled: true,
-            reason: None,
-            press: Press::Control {
-                session: session.clone(),
-                control,
-            },
+        .map(|control| {
+            // A served capability the host cannot run now stays listed with its reason.
+            let why = (control == Control::Rewinds)
+                .then(|| rewind_can(feed, session).flatten())
+                .flatten();
+            VerbAction {
+                slug: control.slug(),
+                label: control_label(control, kind),
+                enabled: why.is_none(),
+                reason: why,
+                press: Press::Control {
+                    session: session.clone(),
+                    control,
+                },
+            }
         })
         .collect()
 }
