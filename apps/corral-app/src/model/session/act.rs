@@ -277,6 +277,9 @@ impl State {
                 if text.is_empty() {
                     ui.recall = None;
                 }
+                if ui.draft != text {
+                    ui.mention.closed = None;
+                }
                 ui.draft = text;
                 ui.picker.slash_at = None;
                 ui.mention.at = 0;

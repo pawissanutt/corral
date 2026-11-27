@@ -136,10 +136,12 @@ impl AppState {
         let walked = walked(&request.target);
         let session = matches!(request.target, DetailRef::Session { .. });
         if matches!(request.target, DetailRef::SessionFileSearch { .. })
-            && feed.with_untracked(Feed::file_search_loading)
+            && feed.with_untracked(|feed| {
+                feed.file_search_loading() || feed.detail(&request.target).is_some()
+            })
         {
-            // Do not queue more scans behind the one already on the connection. The
-            // composer's reactive fetch will ask for the latest draft once it settles.
+            // The popup asks for an absent result once the current scan settles. A
+            // duplicate request queued before the result arrived must not scan again.
             return vec![];
         }
         if session
@@ -322,7 +324,9 @@ impl AppState {
         if id.starts_with(transcript_window::PREFIX) {
             return Ok(self.reader_reply(feed, &id, request, outcome));
         }
-        if self.detail_inflight.get(&key) != Some(&id) {
+        if self.detail_inflight.get(&key) != Some(&id)
+            || self.discard_released_search_reply(feed, &key)
+        {
             return Ok(vec![]);
         }
         if let DetailRef::Session { id: scope } = &request.target {

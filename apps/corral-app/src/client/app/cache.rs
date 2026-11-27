@@ -25,6 +25,8 @@ pub(super) struct RetainedCache {
     /// An open session pins these tokens, not every item ever expanded there.
     item_refs: BTreeMap<String, BTreeSet<String>>,
     operations: BTreeMap<String, BTreeSet<String>>,
+    /// At most one search is in flight, even if its picker has since closed.
+    released_search: Option<String>,
 }
 
 impl RetainedCache {
@@ -57,6 +59,9 @@ impl RetainedCache {
     fn forget_detail(&mut self, key: &str) {
         self.requests.remove(key);
         self.operations.remove(key);
+        if self.released_search.as_deref() == Some(key) {
+            self.released_search = None;
+        }
     }
 }
 
@@ -113,7 +118,15 @@ impl AppState {
                 // refetched on every board change; folding, paging or leaving drops it.
                 // An unpinned diagram comparison resolves a moving head or candidate: a new
                 // choice must ask again rather than pin a kept answer.
-                if matches!(
+                if matches!(target, DetailRef::SessionFileSearch { .. }) {
+                    if self.detail_inflight.contains_key(&key) {
+                        // Keep the single-flight slot until the response arrives, but do not
+                        // let this activation's reply satisfy a picker reopened in the meantime.
+                        self.retained.released_search = Some(key);
+                    } else {
+                        self.evict_detail(feed, &key);
+                    }
+                } else if matches!(
                     target,
                     DetailRef::Closed { .. }
                         | DetailRef::ArtifactDiagramCompare {
@@ -127,6 +140,14 @@ impl AppState {
             }
         }
         self.trim_retained(feed);
+    }
+
+    pub(super) fn discard_released_search_reply(&mut self, feed: Signal<Feed>, key: &str) -> bool {
+        if self.retained.released_search.as_deref() != Some(key) {
+            return false;
+        }
+        self.evict_detail(feed, key);
+        true
     }
 
     pub(super) fn touch_detail(&mut self, feed: Signal<Feed>, target: &DetailRef) {

@@ -5,6 +5,8 @@
 //! folder descends, a file goes into the draft) and Esc closes the popup and keeps the text;
 //! pressing a row chooses it. Test ids `session-mentions`, `mention-<n>`.
 
+use std::{cell::RefCell, rc::Rc};
+
 use nsh_core::keymap::When;
 use nsh_core::prelude::*;
 
@@ -34,7 +36,40 @@ pub(crate) fn mention_menu(
     typing: Memo<bool>,
     ask: bool,
 ) -> AnyElement {
-    let menu = computed(move || composer.with(|c| c.as_ref().and_then(|c| c.mention.clone())));
+    let menu = computed(move || {
+        composer.with(|composer| {
+            let menu = composer.as_ref()?.mention.as_ref()?;
+            app.shows_composer(&menu.session).then(|| menu.clone())
+        })
+    });
+    let source = untracked(|| app.scope());
+    let held = Rc::new(RefCell::new(None));
+    let watched = held.clone();
+    effect(move || {
+        let shown = menu.get();
+        let next = shown.as_ref().and_then(|menu| menu.search.clone());
+        if *watched.borrow() != next {
+            let previous = watched.replace(next.clone());
+            untracked(|| {
+                if let Some(target) = previous {
+                    source.watch_detail(target, false);
+                }
+                if let Some(target) = next {
+                    source.watch_detail(target, true);
+                }
+            });
+        }
+        if let Some(menu) = shown
+            && let Some(target) = source.feed.with(|feed| menu.search_request(feed))
+        {
+            untracked(|| source.load(target));
+        }
+    });
+    cleanup(move || {
+        if let Some(target) = held.take() {
+            source.watch_detail(target, false);
+        }
+    });
     // Not while a side pane it is drawn in is set aside, nor while the field has given the
     // keyboard to another control: the page keeps its keys then.
     effect(move || {

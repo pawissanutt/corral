@@ -305,6 +305,13 @@ impl AppState {
         self.pane_held() && !self.pane_aside()
     }
 
+    /// Tracked: whether this composer is the one actually shown in the side pane.
+    /// Other composer surfaces unmount when they leave.
+    pub fn shows_composer(&self, session: &Id) -> bool {
+        !self.dock_ui.in_pane
+            || (self.pane_open() && self.pane_conversation().as_ref() == Some(session))
+    }
+
     /// Tracked: whether the keys what this copy draws binds may be bound now. A pane set aside
     /// stays mounted, hidden, and its keys (Alt+Enter's send, the `/` menu's and pickers' ↑ ↓,
     /// a card's options) are the window's: while it is aside they are dropped, not just idle,

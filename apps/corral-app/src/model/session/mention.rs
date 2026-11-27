@@ -72,6 +72,8 @@ pub struct MentionMenu {
     pub more: usize,
     /// The folder listed, as typed: `src/`, or empty for the worktree's root.
     pub folder: String,
+    /// The fuzzy result to keep only while this picker is active.
+    pub search: Option<DetailRef>,
     /// What the read says, or why there is nothing to list.
     pub note: Option<(Hue, String)>,
     /// Esc: close the popup, keep the text.
@@ -90,6 +92,12 @@ pub struct MentionRow {
 }
 
 impl MentionMenu {
+    /// The active popup requests only a missing query, after any older scan has settled.
+    pub fn search_request(&self, feed: &Feed) -> Option<DetailRef> {
+        let target = self.search.as_ref()?;
+        (!feed.file_search_loading() && feed.detail(target).is_none()).then(|| target.clone())
+    }
+
     /// The highlighted row's choice, if any.
     pub fn chosen(&self) -> Option<&Action> {
         self.rows.get(self.at?).map(|row| &row.pick)
@@ -261,6 +269,7 @@ pub fn menu(cx: &Cx<'_>) -> Option<MentionMenu> {
         total: 0,
         more: 0,
         folder: shown_folder.clone(),
+        search: None,
         note: None,
         close: Action::Mention(MentionAction::Close(cx.id.clone())),
     };
@@ -275,6 +284,9 @@ pub fn menu(cx: &Cx<'_>) -> Option<MentionMenu> {
     if let Some(target) = fuzzy(cx) {
         menu.folder = String::new();
         search_rows(cx, &mut menu, before, &target);
+        if cx.feed.link == Link::Up {
+            menu.search = Some(target);
+        }
         return Some(menu);
     }
     let query = query.to_lowercase();
@@ -461,16 +473,9 @@ fn or_root(folder: &str) -> &str {
 /// listing was cut short, corrald's search of the folder for what is typed.
 pub(super) fn fetch(cx: &Cx<'_>) -> Option<Action> {
     let (_, folder, query) = typed(&cx.ui.draft)?;
-    if !offered(cx) || !files::applies(cx) {
+    if !offered(cx) || !files::applies(cx) || fuzzy(cx).is_some() {
+        // A fuzzy search is owned by the mounted popup, not followed by the page in background.
         return None;
-    }
-    if let Some(target) = fuzzy(cx) {
-        // The newest draft gets its own read as soon as the connection's outstanding search
-        // settles. Intermediate keystrokes neither queue scans nor pick an earlier word's rows.
-        if cx.feed.link != Link::Up || cx.feed.file_search_loading() {
-            return None;
-        }
-        return tabs::load(cx, Ok(target), None);
     }
     let whole = listing(cx.id, folder, None);
     let query = query.to_lowercase();
@@ -641,7 +646,9 @@ mod tests {
             ..Ui::default()
         };
         let cx = Cx::new(&feed, &ui, &id, daemon_env(&feed, Form::Desktop), &worker);
-        let rows = menu(&cx).map(|menu| menu.rows).unwrap_or_default();
+        let shown = menu(&cx).unwrap();
+        assert_eq!(shown.search, Some(search("mo")));
+        let rows = shown.rows;
         let shown: Vec<(String, Action)> = rows.into_iter().map(|r| (r.name, r.pick)).collect();
         // The server's order, each choice the whole path.
         assert_eq!(shown[0].0, "src/model/mod.rs");
@@ -653,7 +660,38 @@ mod tests {
                 text: "look at @src/model/mod.rs ".into(),
             }
         );
-        assert_eq!(fetch(&cx), None);
+        assert!(menu(&cx).unwrap().search_request(&feed).is_none());
+        let mut state = State::default();
+        let edit = |state: &mut State, text: &str| {
+            state.act(
+                Action::Draft {
+                    session: id.clone(),
+                    text: text.into(),
+                },
+                &feed,
+            );
+        };
+        edit(&mut state, &ui.draft);
+        state.act(Action::Mention(MentionAction::Close(id.clone())), &feed);
+        let cx = Cx::new(
+            &feed,
+            state.ui(id.as_str()),
+            &id,
+            daemon_env(&feed, Form::Desktop),
+            &worker,
+        );
+        assert!(menu(&cx).is_none());
+        assert!(fetch(&cx).is_none());
+        edit(&mut state, "look at ");
+        edit(&mut state, &ui.draft);
+        let cx = Cx::new(
+            &feed,
+            state.ui(id.as_str()),
+            &id,
+            daemon_env(&feed, Form::Desktop),
+            &worker,
+        );
+        assert_eq!(menu(&cx).unwrap().search, Some(search("mo")));
 
         // The word typed next has its own selector: nothing of `mo`'s answer shows meanwhile, and
         // it is read. A folder path ending in `/` keeps the folder listing.
@@ -661,11 +699,16 @@ mod tests {
         let older = detail_key(&search("mod"));
         feed.details.get_mut(&older).unwrap().loading = true;
         let cx = Cx::new(&feed, &ui, &id, daemon_env(&feed, Form::Desktop), &worker);
-        assert_eq!(menu(&cx).map(|menu| menu.rows.len()), Some(0));
-        assert_eq!(fetch(&cx), None);
+        let popup = menu(&cx).unwrap();
+        assert!(popup.rows.is_empty());
+        assert!(popup.search_request(&feed).is_none());
         feed.details.get_mut(&older).unwrap().loading = false;
         let cx = Cx::new(&feed, &ui, &id, daemon_env(&feed, Form::Desktop), &worker);
-        assert_eq!(fetch(&cx), Some(Action::Refresh(search("mox"))));
+        assert_eq!(
+            menu(&cx).unwrap().search_request(&feed),
+            Some(search("mox"))
+        );
+        assert!(fetch(&cx).is_none());
         feed.details.get_mut(&older).unwrap().stale = true;
         ui.draft = "look at @mod".into();
         let cx = Cx::new(&feed, &ui, &id, daemon_env(&feed, Form::Desktop), &worker);

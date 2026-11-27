@@ -1,6 +1,74 @@
 use super::*;
 
 #[test]
+fn reopening_a_mention_search_rechecks_the_same_query() {
+    use corral_protocol::detail::SessionFileSearch;
+
+    let runtime = nsh_core::element::Runtime::default();
+    let _entered = runtime.enter();
+    let feed = signal(Feed::default());
+    let mut app = AppState::new();
+    app.ready = true;
+    let target = DetailRef::SessionFileSearch {
+        id: "B-1".into(),
+        query: "foo".into(),
+        limit: 8,
+    };
+    let request = DetailGet {
+        target: target.clone(),
+        etag: None,
+        page: None,
+    };
+    let reply = |app: &mut AppState, (_, params, tag): Outgoing, paths: Vec<String>| {
+        app.detail_reply(
+            feed,
+            tag,
+            params,
+            Ok(value(DetailReply {
+                etag: "files".into(),
+                as_of: "now".into(),
+                seq: 1,
+                next: None,
+                body: Some(DetailBody::SessionFileSearch(SessionFileSearch {
+                    paths,
+                    truncated: false,
+                })),
+            })),
+        )
+        .unwrap();
+    };
+    app.watch_detail(feed, target.clone(), true);
+    let mut first = app.detail_request(feed, "empty".into(), request.clone());
+    reply(&mut app, first.remove(0), vec![]);
+    assert!(feed.with_untracked(|f| f.detail(&target).is_some()));
+    assert!(
+        app.detail_request(feed, "duplicate".into(), request.clone())
+            .is_empty()
+    );
+    app.watch_detail(feed, target.clone(), false);
+    assert!(feed.with_untracked(|f| f.detail(&target).is_none()));
+
+    // Reopen the exact same query. If it is closed and reopened again while loading,
+    // wait for (but do not publish) that obsolete reply before searching again.
+    app.watch_detail(feed, target.clone(), true);
+    let mut second = app.detail_request(feed, "old".into(), request.clone());
+    app.watch_detail(feed, target.clone(), false);
+    app.watch_detail(feed, target.clone(), true);
+    assert!(
+        app.detail_request(feed, "overlap".into(), request.clone())
+            .is_empty()
+    );
+    reply(&mut app, second.remove(0), vec![]);
+    assert!(feed.with_untracked(|f| f.detail(&target).is_none()));
+    let mut latest = app.detail_request(feed, "fresh".into(), request);
+    reply(&mut app, latest.remove(0), vec!["src/foo.rs".into()]);
+    assert!(feed.with_untracked(|f| matches!(
+        f.detail(&target).and_then(DetailCache::body),
+        Some(DetailBody::SessionFileSearch(search)) if search.paths == ["src/foo.rs"]
+    )));
+}
+
+#[test]
 fn aggregate_retention_plateaus_without_evicting_readers_or_unresolved_sends() {
     let runtime = nsh_core::element::Runtime::default();
     let _entered = runtime.enter();
