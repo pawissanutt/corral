@@ -14,6 +14,17 @@ package's locked dependencies (`bun install --frozen-lockfile`).
 | Code in place as your user, without a Corral task, worktree or required finish | `corral-pi code` (trusted mode; see below). |
 | Work directly in Git without a task | `corral-pi build`; see [Build sessions](build-sessions.md). |
 
+## Built-in coding skills
+
+Build, worker, assistant and reviewer sessions with skills enabled include `debugging`,
+`frontend`, `git-master`, `programming`, `simplify-and-cleanup` and `visual-qa` on a fresh
+install. Type `/skill:debugging` to load that skill explicitly, optionally followed by the
+problem to investigate. No separate skill install or global configuration is required.
+
+A skill supplies guidance, not permission: a read-only reviewer can use `frontend` to
+assess a change, but loading it does not grant editing tools. A user or project skill
+with the same name does not replace the built-in one.
+
 ## Command reference
 
 ```text

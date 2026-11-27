@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { CODING_SKILL_NAMES } from "../../src/roles/common/assets.ts";
 import { ROLES } from "../../src/roles/types.ts";
 import type { FakeStep } from "../fixtures/auth/fake-transport.ts";
 
@@ -67,6 +68,10 @@ export function buildFixtureInstall(options: FixtureOptions = {}): FixtureInstal
   const dir = mkdtempSync(join(options.parent ?? tmpdir(), "corral-pi-assets-"));
   for (const file of ["package.json", "bun.lock"]) copy(join(PACKAGE_ROOT, file), join(dir, file));
   copy(join(PACKAGE_ROOT, "src"), join(dir, "src"));
+  for (const name of CODING_SKILL_NAMES) {
+    const file = `assets/skills/${name}/SKILL.md`;
+    copy(join(PACKAGE_ROOT, file), join(dir, file));
+  }
   const base = "assets/families/gpt/base.md";
   copy(join(PACKAGE_ROOT, base), join(dir, base));
   if (options.isolatePiState) {

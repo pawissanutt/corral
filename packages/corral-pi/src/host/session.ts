@@ -29,6 +29,7 @@ import { ToolApprovals } from "./tool-approvals.ts";
 import { WORKTREE_ACCESS_COMMAND, WORKTREE_ACCESS_ENTRY, WORKTREE_REQUEST_TOOL, WorktreeAccess } from "./worktree-access.ts";
 import { worktreeTools } from "./worktree-tools.ts";
 import { taskDestinationLock } from "./worktree-writer.ts";
+import { codingSkillPaths } from "../roles/common/assets.ts";
 import { type CapabilityGuidance, type Guidance, selectGuidance } from "../capabilities/guidance.ts";
 import { PROVIDERS, type ProviderId, billingKind, hostDestinations, isApiProvider, isProviderId } from "../auth/providers.ts";
 import type { AuthContext, Fetch } from "../auth/types.ts";
@@ -1578,9 +1579,11 @@ export class HostSession {
       return { action: "continue" as const };
     });
     this.options.modules.role.extend?.(pi, this.roleContext);
-    // Registered after the role's own handler: upstream keeps the first skill of each name, so
-    // a home or repository skill can never replace the role's packaged one (corral-worker).
-    pi.on("resources_discover", () => ({ skillPaths: [...this.guidance.skillPaths] }));
+    // First name wins: role procedures, then the native pack, then optional user/project skills.
+    pi.on("resources_discover", () => ({ skillPaths: [
+      ...(this.settings.enableSkillCommands ? codingSkillPaths(this.options.modules.assetRoot) : []),
+      ...this.guidance.skillPaths,
+    ] }));
     pi.on("session_shutdown", async (event) => {
       // InteractiveMode exits the process after runtime disposal; main's finally never runs.
       // Await the release here, but keep reporting through extension reloads.
