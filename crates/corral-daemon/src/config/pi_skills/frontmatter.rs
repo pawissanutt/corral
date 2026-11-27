@@ -61,7 +61,10 @@ fn blank_description(s: &str) -> bool {
 }
 
 pub(super) fn skill_name(text: &str, path: &Path) -> Option<String> {
-    let mut lines = text.trim_start_matches('\u{feff}').split_inclusive('\n');
+    let mut lines = text
+        .strip_prefix('\u{feff}')
+        .unwrap_or(text)
+        .split_inclusive('\n');
     if lines.next()?.trim_end_matches(['\n', '\r']) != "---" {
         return None;
     }
@@ -127,7 +130,7 @@ fn fields(yaml: &str) -> Option<(Scalar, Scalar)> {
 fn node<'a>(
     event: Event<'a>,
     next: &mut impl FnMut() -> Option<Event<'a>>,
-    anchors: &mut HashMap<usize, Scalar>,
+    anchors: &mut HashMap<usize, (Scalar, usize)>,
     depth: usize,
 ) -> Option<Scalar> {
     if depth > 64 {
@@ -138,11 +141,16 @@ fn node<'a>(
             let value =
                 is_string(&text, style, tag.as_deref())?.then(|| Arc::<str>::from(text.as_ref()));
             if anchor != 0 {
-                anchors.insert(anchor, value.clone());
+                anchors.insert(anchor, (value.clone(), 1));
             }
             Some(value)
         }
-        Event::Alias(anchor) => anchors.get(&anchor).cloned(),
+        Event::Alias(anchor) => {
+            let (value, count) = anchors.get_mut(&anchor)?;
+            *count += 1;
+            // Pi converts via yaml.toJS with maxAliasCount=100, counting the anchor itself.
+            (*count <= 100).then(|| value.clone())
+        }
         Event::MappingStart(_, None) => {
             let mut keys = HashSet::new();
             loop {

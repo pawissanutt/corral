@@ -641,8 +641,17 @@ mod tests {
             "description:",
             "metadata: {version: 1, version: 2}\ndescription:",
         );
-        assert!(put(root, put_req(duplicate)).is_err());
-        assert_eq!(fs::read_to_string(&path)?, SKILL);
+        let aliases = SKILL.replace(
+            "description:",
+            &format!(
+                "label: &label shared\nmetadata: [{}]\ndescription:",
+                ["*label"; 100].join(",")
+            ),
+        );
+        for invalid in [duplicate, aliases, format!("\u{feff}\u{feff}{SKILL}")] {
+            assert!(put(root, put_req(invalid)).is_err());
+            assert_eq!(fs::read_to_string(&path)?, SKILL);
+        }
         put(root, put_req(format!("{SKILL}\nUpdated.")))?;
         toggle(
             root,
