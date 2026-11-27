@@ -115,6 +115,7 @@ export class LiveEvents {
   private childrenJson = "[]";
   childCounts: Counts = { live: 0, waiting: 0, total: 0 };
   activity: Activity | undefined;
+  private retryActive = false;
   private readState: (() => StateProjection) | undefined;
   private state: BoundedSessionState | undefined;
   private stateSeq = 0;
@@ -300,12 +301,19 @@ export class LiveEvents {
         this.error = undefined;
         this.toolCompletions.length = 0;
         this.awaitingMessagePersistence = false;
-        this.activity = { phase: "working", since: new Date().toISOString() };
+        if (this.retryActive && this.activity) {
+          // Pi starts the continuation before the retry attempt resolves; the backoff is over,
+          // but the retry is still active until auto_retry_end.
+          this.activity = { phase: this.activity.phase, since: this.activity.since };
+        } else {
+          this.activity = { phase: "working", since: new Date().toISOString() };
+        }
         this.stateChanged();
         this.events.emit("live_turn", { turn, state: "started", ...(this.journal ? { journal: this.journal } : {}) });
         break;
       case "agent_settled":
         this.assistantEnd = undefined;
+        this.retryActive = false;
         this.activity = undefined;
         this.stateChanged();
         // Settlement also runs after a failed message append; that is not a replay barrier.
@@ -346,7 +354,9 @@ export class LiveEvents {
         }
         break;
       case "tool_execution_start":
-        this.activity = { phase: utf8Prefix(event.toolName, 96), since: new Date().toISOString() };
+        if (!this.retryActive) {
+          this.activity = { phase: utf8Prefix(event.toolName, 96), since: new Date().toISOString() };
+        }
         this.stateChanged();
         this.events.emit("live_tool", { turn, call: event.toolCallId, tool: event.toolName,
           state: "started", ...argumentsText(event.args) });
@@ -358,7 +368,9 @@ export class LiveEvents {
         break;
       }
       case "tool_execution_end":
-        this.activity = { phase: "working", since: new Date().toISOString() };
+        if (!this.retryActive) {
+          this.activity = { phase: "working", since: new Date().toISOString() };
+        }
         this.stateChanged();
         this.toolCompletions.push({ turn, call: event.toolCallId, tool: event.toolName,
           state: "ended", failed: event.isError,
@@ -377,6 +389,7 @@ export class LiveEvents {
         this.stateChanged();
         break;
       case "auto_retry_start": {
+        this.retryActive = true;
         const now = Date.now();
         const summary = event.errorMessage.replace(/\s+/g, " ").trim();
         const phase = `Retrying (attempt ${event.attempt}/${event.maxAttempts})${summary ? ` · ${summary}` : ""}`;
@@ -387,11 +400,12 @@ export class LiveEvents {
         break;
       }
       case "auto_retry_end":
-        if (this.activity?.phase.startsWith("Retrying")) this.activity = undefined;
+        if (this.retryActive) this.activity = undefined;
+        this.retryActive = false;
         this.stateChanged();
         break;
       case "compaction_start":
-        this.activity = { phase: "compacting", since: new Date().toISOString() };
+        if (!this.retryActive) this.activity = { phase: "compacting", since: new Date().toISOString() };
         this.stateChanged();
         break;
       case "compaction_end":

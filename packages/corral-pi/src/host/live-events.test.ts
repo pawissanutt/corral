@@ -38,13 +38,31 @@ test("retry activity reaches session state and clears on retry end", async () =>
     const activity = page.state?.activity;
     expect(activity?.phase).toBe("Retrying (attempt 2/3) · 429 rate limit try again");
     expect(Date.parse(activity!.retry_at!) - Date.parse(activity!.since)).toBe(4000);
+    const resumed = nextEvent(live.events, event => event.kind === "live_state", 2000);
+    live.observe({ type: "agent_start" }, 7);
+    await resumed;
+    const continuation = live.since(page.next, EVENT_PAGE_BYTES);
+    expect(continuation.state?.activity).toEqual({ phase: activity!.phase, since: activity!.since });
+    live.observe({ type: "tool_execution_start", toolCallId: "call", toolName: "read", args: {} }, 7);
+    live.observe({ type: "tool_execution_end", toolCallId: "call", toolName: "read",
+      result: { content: [] }, isError: false }, 7);
+    expect(live.activity).toEqual({ phase: activity!.phase, since: activity!.since });
     const ended = nextEvent(live.events, event => event.kind === "live_state", 2000);
     live.observe({ type: "auto_retry_end", success: true, attempt: 2 }, 7);
     await ended;
-    const cleared = live.since(page.next, EVENT_PAGE_BYTES);
+    const cleared = live.since(continuation.next, EVENT_PAGE_BYTES);
     expect(cleared.state).toBeDefined();
     expect(cleared.state?.activity).toBeUndefined();
   } finally { live.close(); }
+});
+
+test("a tool name beginning with Retrying does not hold activity after it ends", () => {
+  const live = new LiveEvents();
+  live.observe({ type: "tool_execution_start", toolCallId: "call", toolName: "Retrying_read", args: {} }, 7);
+  live.observe({ type: "tool_execution_end", toolCallId: "call", toolName: "Retrying_read",
+    result: { content: [] }, isError: false }, 7);
+  expect(live.activity?.phase).toBe("working");
+  live.close();
 });
 
 test("host notice IDs are unique across host instances", () => {
