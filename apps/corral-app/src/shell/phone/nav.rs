@@ -88,7 +88,36 @@ impl Nav {
         nav.follow();
         nav.track_drawn();
         nav.tell_section();
+        nav.tell_list();
+        nav.open_lists();
         nav
+    }
+
+    /// Tells the app which place's list of pages shows at the tab's root with nothing over it,
+    /// with the navigation's `goes` then, for the address to name (`/insight`, `/activity`).
+    fn tell_list(self) {
+        effect(move || {
+            let tab = self.tab.get();
+            let bare = self.stack.with(Vec::is_empty);
+            let list = (bare && tab.destination().is_none()).then(|| tab.area());
+            let goes = self.app.nav.with_untracked(|nav| nav.goes);
+            self.app.phone_list.set(list.map(|area| (area, goes)));
+        });
+    }
+
+    /// Opens the tab root an address asks for: a list of pages, with nothing over it.
+    fn open_lists(self) {
+        effect(move || {
+            let Some(area) = self.app.phone_list_open.get() else {
+                return;
+            };
+            untracked(|| {
+                self.app.phone_list_open.set(None);
+                if let Some(tab) = PhoneTab::ALL.into_iter().find(|tab| tab.area() == area) {
+                    self.select(tab);
+                }
+            });
+        });
     }
 
     /// Tells the app which Settings section the stack has open, for the address to name.

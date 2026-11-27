@@ -160,6 +160,12 @@ pub struct AppState {
     /// The Settings section open on the phone's stack, which its shell keeps; the address
     /// names it.
     pub phone_section: Signal<Option<SettingsSection>>,
+    /// The place whose list of pages the phone shows at its tab root with nothing over it, and
+    /// the navigation's `goes` when it came to show; its shell keeps it and the address names it.
+    pub phone_list: Signal<Option<(crate::model::nav::Area, u32)>>,
+    /// A list of pages an address asks the phone to show (`/insight`, `/activity`): its shell
+    /// opens that tab's root and takes the request.
+    pub phone_list_open: Signal<Option<crate::model::nav::Area>>,
     /// Press-opened menus open now: the terminal's key line gives a menu's keys while any is.
     pub menus: Signal<u32>,
     key_focus: Signal<keys::KeyFocus>,
@@ -182,12 +188,19 @@ impl AppState {
         let mut launch_scope = None;
         let mut launch_system = system::State::default();
         let mut launch_impact = review::impact::State::default();
+        let mut launch_list = None;
         if let Some(place) = address::launched() {
             place.restore_impact(&mut launch_impact);
             if let crate::model::address::Place::Project(id) = &place {
                 launch_scope = Some(crate::model::projects::Scope::Project(id.clone()));
             }
-            place.open(&mut nav);
+            match place {
+                // The phone's shell opens the list's tab root itself.
+                crate::model::address::Place::List(area) if form == Form::Phone => {
+                    launch_list = Some(area);
+                }
+                place => place.open(&mut nav),
+            }
         }
         let (data, feed) = startup(
             &mut nav,
@@ -332,6 +345,8 @@ impl AppState {
             list_keys: element_ref(),
             focused_row: signal(None),
             phone_section: signal(None),
+            phone_list: signal(None),
+            phone_list_open: signal(launch_list),
             menus: signal(0),
             key_focus: signal(keys::KeyFocus::default()),
         };

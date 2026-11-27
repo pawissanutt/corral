@@ -56,6 +56,22 @@ pub fn area_pages(app: AppState, area: Area) -> Vec<Destination> {
     app.feed.with(|feed| nav::area_pages(feed, area))
 }
 
+/// A page's name where the folded terminal sidebar lists it under its place's key.
+pub const fn page_short(page: Destination) -> &'static str {
+    match page {
+        Destination::Feed => "Feed",
+        Destination::Timeline => "Time",
+        Destination::Usage => "Usage",
+        Destination::Artifacts => "Files",
+        Destination::Host => "Host",
+        Destination::Structure => "Struct",
+        Destination::Runtime => "Run",
+        Destination::Data => "Data",
+        Destination::Lenses => "Lenses",
+        page => page.label(),
+    }
+}
+
 /// Whether the place lists its pages under its row: Activity and Insight.
 pub const fn has_pages(area: Area) -> bool {
     matches!(area, Area::Activity | Area::Insight)

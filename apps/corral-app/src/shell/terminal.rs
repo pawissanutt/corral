@@ -16,7 +16,8 @@ use crate::{
     },
     screens,
     shell::{
-        area_pages, confirmation, current_area, places, refusal, section_short, terminal_bar,
+        area_pages, confirmation, current_area, has_pages, page_short, places, refusal,
+        section_short, terminal_bar,
         terminal_keys::{PALETTE_CHORD, key_line},
         toast,
     },
@@ -248,8 +249,8 @@ fn sidebar(
 
 /// The folded sidebar: the scope's name, each place as its key with its count beside it, then
 /// Go to and Settings as their keys, the Settings sections' short names under Settings
-/// while it is selected. Activity's and Insight's pages need their names, so the folded sidebar
-/// leaves them to the unfolded one (`^B`) and to Go to.
+/// while it is selected, and Activity's or Insight's pages' short names under its key while one
+/// of them shows.
 fn rail(app: AppState, current: Memo<Area>, shown: Memo<Vec<Area>>) -> AnyElement {
     let key_row = move |area: Area| {
         atoms::nav_row(
@@ -268,13 +269,23 @@ fn rail(app: AppState, current: Memo<Area>, shown: Memo<Vec<Area>>) -> AnyElemen
             move || app.go_area(area),
         )
     };
+    // Activity's and Insight's pages follow their key while one of them shows, each by its
+    // short name (its full one for assistive technology), the current one marked.
+    let place = move |area: Area| {
+        if !has_pages(area) {
+            return key_row(area);
+        }
+        view()
+            .child(key_row(area))
+            .child(when(
+                move || current.get() == area,
+                move || rail_pages(app, area),
+            ))
+            .into_element()
+    };
     let rows = dynamic(move || {
         let shown = shown.get();
-        untracked(move || {
-            view()
-                .children(shown.into_iter().map(key_row))
-                .into_element()
-        })
+        untracked(move || view().children(shown.into_iter().map(place)).into_element())
     });
     let sections = move || {
         view()
@@ -323,6 +334,31 @@ fn rail(app: AppState, current: Memo<Area>, shown: Memo<Vec<Area>>) -> AnyElemen
         .w(move || cells(term::sidebar_columns(app)))
         .flex_shrink_0()
         .into_element()
+}
+
+/// Activity's or Insight's pages in the folded sidebar: each its short name, its full one for
+/// assistive technology, the page shown marked.
+fn rail_pages(app: AppState, area: Area) -> AnyElement {
+    let pages = computed(move || area_pages(app, area));
+    dynamic(move || {
+        let pages = pages.get();
+        untracked(move || {
+            view()
+                .children(pages.into_iter().map(move |page| {
+                    atoms::nav_row_icon(
+                        app,
+                        None,
+                        page_short(page),
+                        move || SharedString::from(page.label()),
+                        format!("nav-{}", page.slug()),
+                        move || app.destination() == page,
+                        None,
+                        move || app.go(page),
+                    )
+                }))
+                .into_element()
+        })
+    })
 }
 
 /// A place's row: its name, count and key. Activity brings its pages under it while one of

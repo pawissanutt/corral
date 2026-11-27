@@ -24,6 +24,9 @@ const PROJECTS: &str = "projects";
 pub enum Place {
     /// A destination's own screen.
     Destination(Destination),
+    /// Activity's or Insight's list of pages: the phone's tab root (`/activity`, `/insight`).
+    /// Elsewhere the place opens at its page last shown.
+    List(Area),
     /// A Settings section.
     Settings(SettingsSection),
     /// A task's page at one of its tabs.
@@ -42,6 +45,10 @@ pub enum Place {
 pub struct Shown {
     /// The Settings section the phone's stack has open over its Settings list.
     pub phone_section: Option<SettingsSection>,
+    /// The place whose list of pages the phone shows at its tab root with nothing over it,
+    /// with the navigation's `goes` when it came to show: a `go` since then (Forward to one of
+    /// its pages) has moved on from it before the shell does.
+    pub phone_list: Option<(Area, u32)>,
 }
 
 impl Place {
@@ -53,6 +60,12 @@ impl Place {
                 return Place::Task(id.clone(), nav.task_tab);
             }
             None => {}
+        }
+        if form == Form::Phone
+            && let Some((area, goes)) = shown.phone_list
+            && goes == nav.goes
+        {
+            return Place::List(area);
         }
         match nav.destination {
             // The phone lists the sections first; which one is open is its shell's.
@@ -94,6 +107,7 @@ impl Place {
                 format!("{INSIGHT}/{}", destination.slug())
             }
             Place::Destination(destination) => destination.slug().to_owned(),
+            Place::List(area) => area.slug().to_owned(),
             Place::Settings(section) => {
                 format!("{}/{}", Destination::Settings.slug(), section.slug())
             }
@@ -143,12 +157,18 @@ impl Place {
                     let view = View::from_slug(view).unwrap_or_default();
                     return Some(Place::Destination(Destination::of_view(view)));
                 }
+                if rest.is_empty() {
+                    return Some(Place::List(Area::Activity));
+                }
                 let page = Destination::from_slug(rest)
                     .filter(|page| page.area() == Area::Activity)
                     .unwrap_or(Destination::Feed);
                 return Some(Place::Destination(page));
             }
             INSIGHT => {
+                if rest.is_empty() {
+                    return Some(Place::List(Area::Insight));
+                }
                 let page = Destination::from_slug(rest)
                     .filter(|page| page.area() == Area::Insight)
                     .unwrap_or(Destination::Structure);
@@ -175,6 +195,8 @@ impl Place {
     pub fn open(self, nav: &mut NavState) {
         match self {
             Place::Destination(destination) => nav.go(destination),
+            // The phone's shell shows the list itself (`AppState::phone_lists`).
+            Place::List(area) => nav.go(nav.page_of(area)),
             Place::Settings(section) => nav.go_settings(section),
             Place::Task(id, tab) => open_task(nav, id, tab),
             Place::TaskImpact(id, _) => open_task(nav, id, TaskTab::Changes),
@@ -271,7 +293,32 @@ mod tests {
 
     const SHOWN: Shown = Shown {
         phone_section: None,
+        phone_list: None,
     };
+
+    /// The phone's Insight list had no address: the entry under a page pushed from it kept
+    /// the address of what showed before (Settings), so the browser's Back opened that and
+    /// Forward could not bring the page back. The list names `/insight` while it shows, and a
+    /// `go` since (Forward to one of its pages) moves the address on before the shell does.
+    #[test]
+    fn the_phone_list_of_a_places_pages_has_its_own_address() {
+        let mut nav = NavState::new(Form::Phone);
+        nav.go(Destination::Settings);
+        let list = Shown {
+            phone_section: None,
+            phone_list: Some((Area::Insight, nav.goes)),
+        };
+        let place = Place::of(&nav, Form::Phone, list);
+        assert_eq!(place, Place::List(Area::Insight));
+        assert_eq!(place.path(), "insight");
+        assert_eq!(Place::parse("/insight/"), Some(place));
+        assert_eq!(Place::parse("activity"), Some(Place::List(Area::Activity)));
+        nav.go(Destination::Runtime);
+        assert_eq!(Place::of(&nav, Form::Phone, list).path(), "insight/runtime");
+        let mut fresh = NavState::new(Form::Desktop);
+        Place::List(Area::Insight).open(&mut fresh);
+        assert_eq!(fresh.destination, Destination::Structure);
+    }
 
     /// System moved from Activity to Insight's pages: every link to the former page or one
     /// of its views has to open that view's page, and each page has its own address.
@@ -285,7 +332,6 @@ mod tests {
             ("/activity/system/data/", page(Destination::Data)),
             ("activity/system/lenses", page(Destination::Lenses)),
             ("system", page(Destination::Structure)),
-            ("insight", page(Destination::Structure)),
             ("insight/lenses", page(Destination::Lenses)),
         ] {
             assert_eq!(Place::parse(path), place, "{path}");
@@ -356,6 +402,7 @@ mod tests {
         assert_eq!(list, Place::Destination(Destination::Settings));
         let open = Shown {
             phone_section: Some(SettingsSection::Config),
+            phone_list: None,
         };
         let section = Place::of(&nav, Form::Phone, open);
         assert_ne!(section.path(), list.path());
@@ -461,7 +508,7 @@ mod tests {
             ("timeline", page(Destination::Timeline)),
             ("usage", page(Destination::Usage)),
             ("artifacts", page(Destination::Artifacts)),
-            ("activity", page(Destination::Feed)),
+            ("activity", Some(Place::List(Area::Activity))),
             (
                 "projects/my%20site",
                 Some(Place::Project(Id::from("my site"))),

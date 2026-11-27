@@ -42,6 +42,7 @@ impl AppState {
         let place = computed(move || {
             let shown = Shown {
                 phone_section: self.phone_section.get(),
+                phone_list: self.phone_list.get(),
             };
             let place = self.nav.with(|nav| Place::of(nav, form, shown));
             if matches!(place, Place::Task(_, TaskTab::Changes)) {
@@ -111,6 +112,8 @@ impl AppState {
     fn open_place(&self, place: Place) {
         match place {
             Place::Destination(destination) => self.go(destination),
+            Place::List(area) if self.form == Form::Phone => self.phone_list_open.set(Some(area)),
+            Place::List(area) => self.go_area(area),
             Place::Project(id) => self.open_project(id),
             Place::TaskImpact(ref id, _) | Place::Task(ref id, TaskTab::Changes) => {
                 // The address must not see a Changes tab with its previous view or pick.

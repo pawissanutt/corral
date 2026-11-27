@@ -100,6 +100,58 @@ fn phone_tabs_reach_every_place_and_activity_page() {
     }
 }
 
+/// The phone's Insight list had no address, so the entry under Runtime kept Settings': the
+/// browser's Back opened Settings with a new entry and Forward could not bring Runtime back.
+#[test]
+fn phone_browser_back_and_forward_walk_the_insight_list_and_its_page() {
+    let mut config = phone();
+    config.storage = Some(MemoryStorage::new(std::iter::empty()));
+    let mut app = Headless::start_at_page(config, "https://corral.test/").unwrap();
+    app.wait_for("id:nav-settings").unwrap();
+    app.press("id:btn-search").unwrap();
+    app.type_text("id:palette-input", "Data: fixture").unwrap();
+    app.press("text:Data: fixture").unwrap();
+    app.wait_for_gone("id:palette-input", Duration::from_secs(5))
+        .unwrap();
+    app.press("id:nav-settings").unwrap();
+    app.wait_for("id:settings-devices").unwrap();
+
+    let url = |app: &mut Headless| app.browser().url().map(str::to_owned);
+    app.press("id:tab-insight").unwrap();
+    app.wait_for("id:insight-list").unwrap();
+    assert_eq!(
+        url(&mut app).as_deref(),
+        Some("https://corral.test/insight")
+    );
+    app.press("id:nav-runtime").unwrap();
+    app.wait_for_gone("id:nav-structure", Duration::from_secs(5))
+        .unwrap();
+    assert_eq!(
+        url(&mut app).as_deref(),
+        Some("https://corral.test/insight/runtime")
+    );
+    let entries = app.browser().entries().len();
+
+    app.browser().back().unwrap();
+    app.wait_for("id:nav-structure").unwrap();
+    assert_eq!(
+        url(&mut app).as_deref(),
+        Some("https://corral.test/insight")
+    );
+    assert_eq!(app.screen().count("id:settings-devices").unwrap(), 0);
+    assert_eq!(app.browser().entries().len(), entries);
+
+    app.browser().forward().unwrap();
+    app.wait_for_gone("id:nav-structure", Duration::from_secs(5))
+        .unwrap();
+    app.wait_for("text:/^Runtime$/").unwrap();
+    assert_eq!(
+        url(&mut app).as_deref(),
+        Some("https://corral.test/insight/runtime")
+    );
+    assert_eq!(app.browser().entries().len(), entries);
+}
+
 /// The phone has no canvas map: with a project chosen, System lists the same nodes, and the
 /// picked one's edges under it, which pick the other end.
 #[test]
@@ -273,6 +325,28 @@ fn terminal_80_columns_keeps_what_needs_you_in_view() {
             bounds.size.height.0 > 0.0 && bounds.origin.y.0 + bounds.size.height.0 <= 384.0,
             "id:{id} is in view: {bounds:?}"
         );
+    }
+}
+
+/// The folded terminal sidebar showed Insight only as its key `m`: its four pages, and which
+/// one shows, were not in it. They follow the key while Insight shows, the current one marked.
+#[test]
+fn the_folded_terminal_sidebar_lists_insights_pages_and_marks_the_current_one() {
+    let mut app = preview(terminal_80(), &[]);
+    app.wait_for("id:nav-insight").unwrap();
+    // Folded: the place is its key, without its name.
+    assert_eq!(app.screen().count("text:/^Insight$/").unwrap(), 0);
+    assert_eq!(app.screen().count("id:nav-runtime").unwrap(), 0);
+    app.press("id:nav-insight").unwrap();
+    app.wait_for("id:nav-runtime").unwrap();
+    assert!(selected(&app, "nav-structure"));
+    app.press("id:nav-runtime").unwrap();
+    app.wait_for("text:/^Runtime$/").unwrap();
+    assert!(selected(&app, "nav-runtime"));
+    assert!(!selected(&app, "nav-structure"));
+    assert!(selected(&app, "nav-insight"));
+    for page in ["data", "lenses"] {
+        app.wait_for(&format!("id:nav-{page}")).unwrap();
     }
 }
 
