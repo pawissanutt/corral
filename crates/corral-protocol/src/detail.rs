@@ -9,6 +9,7 @@ pub mod artifact;
 pub mod closed;
 pub mod diagram;
 pub mod diagram_compare;
+pub mod git_history;
 pub mod plan;
 pub mod question;
 pub mod review;
@@ -22,6 +23,7 @@ pub use artifact::*;
 pub use closed::*;
 pub use diagram::*;
 pub use diagram_compare::*;
+pub use git_history::*;
 pub use plan::*;
 pub use question::*;
 pub use review::*;
@@ -265,6 +267,13 @@ pub enum DetailRef {
     ProjectBranches {
         project: String,
     },
+    /// `git.history.v1`: a configured project's commit graph on a local branch, or on the
+    /// project checkout's `HEAD` when `branch` is absent. Read-only; see `GitHistoryPage`.
+    GitHistory {
+        project: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        branch: Option<String>,
+    },
     #[serde(other)]
     Other,
 }
@@ -337,6 +346,7 @@ pub enum DetailBody {
     Artifacts(ArtifactsPage),
     Closed(ClosedPage),
     ProjectBranches(ProjectBranchesPage),
+    GitHistory(GitHistoryPage),
     #[serde(other, deserialize_with = "skip_body")]
     Other,
 }

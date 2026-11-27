@@ -544,6 +544,19 @@ impl Store {
         documents(&mut statement, [])
     }
 
+    /// Runs whose recorded `head_sha` is exactly one of `shas`.
+    pub fn runs_with_heads(&self, shas: &[&str]) -> Result<Vec<Run>> {
+        if shas.is_empty() {
+            return Ok(Vec::new());
+        }
+        let list = serde_json::to_string(shas).context("encode commit list")?;
+        let mut statement = self
+            .connection
+            .prepare("SELECT document FROM runs WHERE json_extract(document,'$.head_sha') IN (SELECT value FROM json_each(?1)) ORDER BY task,CAST(substr(id,2) AS INTEGER)")
+            .context("prepare runs by head")?;
+        documents(&mut statement, [list])
+    }
+
     pub fn latest_run(&self, task: &str, role: Role) -> Result<Option<Run>> {
         self.optional_document("SELECT document FROM runs WHERE task=?1 AND role=?2 ORDER BY CAST(substr(id,2) AS INTEGER) DESC LIMIT 1", params![task, role.as_str()])
     }

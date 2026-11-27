@@ -16,6 +16,7 @@ pub mod events;
 pub mod extension;
 pub mod facts;
 mod gate_attempts;
+pub mod git_history;
 mod land;
 mod lens_tasks;
 pub mod model;

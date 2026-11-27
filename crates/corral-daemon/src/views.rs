@@ -5,6 +5,7 @@ mod details;
 mod diagram;
 mod diagram_compare;
 pub(crate) use diagram_compare::ComparedHeads;
+mod git_history;
 mod review;
 pub(crate) mod rows;
 mod session_files;
@@ -17,6 +18,8 @@ pub(crate) mod transcript;
 mod board_wire_tests;
 #[cfg(test)]
 mod cite_tests;
+#[cfg(test)]
+mod git_history_tests;
 
 use std::{
     hash::{DefaultHasher, Hasher},

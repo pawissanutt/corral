@@ -102,6 +102,9 @@ pub(super) fn read(engine: &Engine, query: DetailGet) -> Result<DetailReply> {
     if let DetailRef::ProjectBranches { project } = &query.target {
         return project_branches(engine, &query, project);
     }
+    if let DetailRef::GitHistory { project, branch } = &query.target {
+        return super::git_history::read(engine, &query, project, branch.as_deref());
+    }
     engine.store.read_snapshot(|| {
         let seq = engine.store.latest_seq()?;
         match &query.target {
@@ -490,7 +493,7 @@ pub(super) fn reply(
     reply_page(seq, etag, body, next, unchanged)
 }
 
-fn reply_page(
+pub(super) fn reply_page(
     seq: u64,
     etag: String,
     body: DetailBody,

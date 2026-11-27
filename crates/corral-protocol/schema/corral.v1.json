@@ -3131,6 +3131,22 @@
           },
           {
             "properties": {
+              "body": {
+                "$ref": "#/components/schemas/GitHistoryPage"
+              },
+              "kind": {
+                "const": "git_history",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
               "kind": {
                 "const": "other",
                 "type": "string"
@@ -4083,6 +4099,29 @@
             "properties": {
               "kind": {
                 "const": "project_branches",
+                "type": "string"
+              },
+              "project": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "project"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "`git.history.v1`: a configured project's commit graph on a local branch, or on the\nproject checkout's `HEAD` when `branch` is absent. Read-only; see `GitHistoryPage`.",
+            "properties": {
+              "branch": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "const": "git_history",
                 "type": "string"
               },
               "project": {
@@ -5308,6 +5347,150 @@
       "GateAttemptPage": {
         "type": "object",
         "x-rust-type": "corral_types::GateAttemptPage"
+      },
+      "GitCommit": {
+        "properties": {
+          "author": {
+            "type": "string"
+          },
+          "authored": {
+            "description": "Author date, RFC 3339.",
+            "type": "string"
+          },
+          "committed": {
+            "description": "Committer date, RFC 3339.",
+            "type": "string"
+          },
+          "links": {
+            "description": "What Corral recorded about exactly this commit in this project; empty when nothing.",
+            "items": {
+              "$ref": "#/components/schemas/GitCommitLink"
+            },
+            "type": "array"
+          },
+          "parents": {
+            "description": "Every parent's full commit ID in Git's order (first parent first). A parent need not\nbe on this page: it is further down the walk, never a root.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "refs": {
+            "description": "Local branches (`main`), tags (`tag: v1`) and `HEAD` that point at this commit.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "sha": {
+            "description": "Full commit ID.",
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sha",
+          "parents",
+          "subject",
+          "author",
+          "authored",
+          "committed"
+        ],
+        "type": "object"
+      },
+      "GitCommitLink": {
+        "description": "One run record naming this exact commit. It proves what `relation` says, never that the\nagent authored the commit.",
+        "properties": {
+          "relation": {
+            "$ref": "#/components/schemas/GitLinkRelation"
+          },
+          "run": {
+            "description": "The run whose record names the commit (`R2`).",
+            "type": "string"
+          },
+          "session": {
+            "description": "The run's agent session (`T-12_R2`) when the run recorded one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "task": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "task",
+          "title",
+          "run",
+          "relation"
+        ],
+        "type": "object"
+      },
+      "GitHistoryPage": {
+        "description": "A page of commits reachable from one tip, children before parents (`git log --topo-order`).\n\nThe first page (no `DetailGet.page`) resolves the ref; every later page walks from the same\n`tip`, so a walk is a stable snapshot even when the ref moves. Asking for the first page\nagain is the refresh: a moved ref changes its `tip` and etag.",
+        "properties": {
+          "commits": {
+            "description": "At most `GIT_HISTORY_PAGE` commits.",
+            "items": {
+              "$ref": "#/components/schemas/GitCommit"
+            },
+            "type": "array"
+          },
+          "reference": {
+            "description": "The fully qualified ref read (`refs/heads/main`), or `HEAD` for the project checkout's.",
+            "type": "string"
+          },
+          "skip": {
+            "description": "Commits already walked before this page.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "tip": {
+            "description": "Full commit ID the walk starts from; absent when the ref has no commits yet.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "reference",
+          "skip",
+          "commits"
+        ],
+        "type": "object"
+      },
+      "GitLinkRelation": {
+        "oneOf": [
+          {
+            "enum": [
+              "other"
+            ],
+            "type": "string"
+          },
+          {
+            "const": "landed",
+            "description": "The worker run landed: the target branch was fast-forwarded to this commit.",
+            "type": "string"
+          },
+          {
+            "const": "candidate",
+            "description": "The worker run submitted this commit as its review candidate; it has not landed.",
+            "type": "string"
+          },
+          {
+            "const": "reviewed",
+            "description": "The reviewer run's verdict was recorded against this candidate commit.",
+            "type": "string"
+          }
+        ]
       },
       "HarnessFact": {
         "properties": {
@@ -14743,6 +14926,16 @@
           }
         },
         {
+          "name": "branch",
+          "required": false,
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        {
           "name": "by",
           "required": false,
           "schema": {
@@ -15117,6 +15310,10 @@
                 "type": "string"
               },
               {
+                "const": "git_history",
+                "type": "string"
+              },
+              {
                 "const": "other",
                 "type": "string"
               }
@@ -15176,7 +15373,8 @@
             7,
             8,
             9,
-            44
+            44,
+            45
           ]
         },
         {
