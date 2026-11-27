@@ -351,7 +351,7 @@ pub fn press(key: &str, cx: &Cx<'_>, web: bool) -> Option<Action> {
                     session,
                     tab: Tab::Chat,
                 })
-            } else if super::composer::working(cx) {
+            } else if super::composer::parent_working(cx) {
                 cx.controls()
                     .contains(&Control::Cancel)
                     .then_some(Action::Control {

@@ -2,15 +2,17 @@ use corral_protocol::detail::{
     ChildSteer, ChildUsage, DetailBody, DetailRef, HostPresence, SessionChildDetail, SessionItem,
     SessionMessage, SessionPage,
 };
+use corral_protocol::session_state::{Activity, SessionState};
 use corral_protocol::subscription::{SessionAgentMessage, SessionChild, SessionFleet};
 
 use super::conversation;
 use crate::model::Id;
 use crate::model::daemon::{self, DetailCache, Feed, Link};
+use crate::model::effect::{Conn, Env};
 use crate::model::health::daemon_env;
 use crate::model::nav::Form;
 use crate::model::session::transcript::{LiveSession, MessageKind};
-use crate::model::session::{Cx, Facts, SessionRole, SubView, Tab, Ui, composer, status};
+use crate::model::session::{Action, Cx, Facts, FleetAction, SessionRole, State, Ui, page};
 
 const ID: &str = "B-k3x9";
 const SCOPE: &str = "B-k3x9/child/a1";
@@ -202,38 +204,64 @@ fn an_opened_conversation_gives_the_composer_and_status_bar_its_agent() {
         link: Link::Up,
         ..Feed::default()
     };
-    let mut live = LiveSession::default();
-    live.replace_fleet(Some(SessionFleet {
+    let mut live = LiveSession {
+        state: Some(SessionState {
+            model: Some("parent/model".into()),
+            activity: Some(Activity {
+                phase: "compacting".into(),
+                since: "2026-11-19T09:59:55Z".into(),
+                retry_at: None,
+            }),
+            queue_total: 2,
+            ..SessionState::default()
+        }),
+        ..LiveSession::default()
+    };
+    let mut fleet = SessionFleet {
         children: vec![SessionChild {
             model: "child/model".into(),
             effort: Some("low".into()),
             cost_usd: Some(0.21),
             context_percent: Some(42.0),
+            activity: Some("running child-check".into()),
             ..row()
         }],
         messages: Vec::new(),
         messages_total: 0,
         max_parallel: 2,
-    }));
-    feed.live.insert(Id::from(ID), live);
+    };
+    live.replace_fleet(Some(fleet.clone()));
     let id = Id::from(ID);
-    let facts = Facts {
-        role: SessionRole::Build,
-        task: None,
+    feed.live.insert(id.clone(), live);
+    let mut state = State::default();
+    let open = |child: &str| {
+        Action::Fleet(FleetAction::Open {
+            session: id.clone(),
+            child: child.into(),
+        })
     };
-    let ui = Ui {
-        tab: Tab::Agents,
-        sub: Some(SubView::Agent("a1".into())),
-        ..Ui::default()
+    let env = Env {
+        conn: Conn::Healthy,
+        form: Form::Terminal,
     };
-    let cx = Cx::new(&feed, &ui, &id, daemon_env(&feed, Form::Terminal), &facts);
-    let shown = composer(&cx).expect("a build takes messages");
+    let shown_page = |feed: &Feed, state: &State, id: &Id| page(feed, state, id, env);
+    state.act(open("a1"), &feed);
+    let inline = shown_page(&feed, &state, &id);
+    let shown = inline.composer.expect("a build takes messages");
+    assert_eq!(shown.title.to, "→ a1");
+    assert_eq!(shown.send.label, "Steer");
+    assert!(shown.send.unavailable.is_none());
+    assert!(shown.queue.is_none() && shown.stop.is_none());
+    assert_eq!(
+        shown.activity.expect("child is working").short,
+        "child-check"
+    );
     let model = shown.model.expect("the agent's model");
     assert_eq!(model.label, "child/model");
     assert!(model.opens.is_some());
     let effort = shown.effort.expect("the agent's effort");
     assert_eq!((effort.level.as_deref(), effort.fixed), (Some("low"), true));
-    let bar = status(&cx);
+    let bar = inline.status;
     assert_eq!(bar.role.full, "AGENT a1");
     assert_eq!(bar.cost.text, "$0.21");
     assert_eq!(bar.meter.short, "ctx 42%");
@@ -241,19 +269,70 @@ fn an_opened_conversation_gives_the_composer_and_status_bar_its_agent() {
         bar.model_effort.as_deref(),
         Some("child/model · effort low")
     );
+    assert!(bar.queued.is_none());
 
-    let parent = Ui::default();
-    let cx = Cx::new(
-        &feed,
-        &parent,
-        &id,
-        daemon_env(&feed, Form::Terminal),
-        &facts,
-    );
-    assert_eq!(status(&cx).role.full, "BUILD");
+    let scope = Id::from(SCOPE);
+    let standalone = shown_page(&feed, &state, &scope);
+    assert_eq!(standalone.status.role, bar.role);
+    assert_eq!(standalone.status.cost.text, bar.cost.text);
+    assert_eq!(standalone.status.meter.short, bar.meter.short);
+    assert_eq!(standalone.status.model_effort, bar.model_effort);
+    assert!(standalone.composer.is_none() && standalone.watch.is_none());
+    let target = DetailRef::SessionChild {
+        id: ID.into(),
+        child: "a1".into(),
+    };
     assert!(
-        composer(&cx)
-            .and_then(|c| c.model)
-            .is_none_or(|m| m.opens.is_none())
+        standalone
+            .fetches
+            .iter()
+            .any(|action| matches!(action, Action::Refresh(asked) if *asked == target))
+    );
+
+    fleet.children[0].state = "needs".into();
+    let host = feed.live.get_mut(ID).expect("parent is live");
+    host.replace_fleet(Some(fleet));
+    let waiting = shown_page(&feed, &state, &id)
+        .composer
+        .expect("inline composer");
+    assert_eq!(waiting.activity.expect("child is asking").glyph, Some("▲"));
+
+    state.act(open("unlisted"), &feed);
+    let unlisted = shown_page(&feed, &state, &id);
+    let shown = unlisted.composer.expect("inline composer");
+    assert_eq!(shown.title.to, "→ parent");
+    assert!(shown.activity.is_none());
+    assert_eq!(
+        shown.model.expect("placeholder model").label,
+        "Model unavailable"
+    );
+    assert_eq!(unlisted.status.cost.text, "$–");
+
+    feed.live
+        .get_mut(ID)
+        .expect("parent is live")
+        .replace_fleet(None);
+    feed.details
+        .extend([cache(target, DetailBody::SessionChild(detail()))]);
+    let archived = shown_page(&feed, &state, &scope);
+    assert_eq!(
+        archived.status.model_effort.as_deref(),
+        Some("provider/model")
+    );
+    assert_eq!(archived.status.cost.text, "$–");
+    assert_eq!(archived.status.meter.short, "ctx –");
+
+    state.act(Action::Fleet(FleetAction::Leave(id.clone())), &feed);
+    let parent = shown_page(&feed, &state, &id);
+    assert_eq!(parent.status.role.full, "BUILD");
+    assert_eq!(parent.status.queued.as_deref(), Some("2 queued"));
+    assert_eq!(
+        parent
+            .composer
+            .expect("parent composer")
+            .model
+            .expect("parent model")
+            .label,
+        "parent/model"
     );
 }

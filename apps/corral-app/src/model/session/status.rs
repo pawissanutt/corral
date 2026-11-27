@@ -217,7 +217,9 @@ pub fn status(cx: &Cx<'_>) -> StatusBar {
         None => model,
     };
     // An open agent conversation reports that agent's facts; the host's alerts stay.
-    let (role, cost, partial, meter, model_effort) = match super::fleet::opened_agent(cx) {
+    let opened = super::fleet::opened_agent(cx);
+    let viewing_child = opened.is_some();
+    let (role, cost, partial, meter, model_effort) = match opened {
         Some(agent) => (
             RolePill {
                 full: format!("AGENT {}", agent.id),
@@ -246,9 +248,10 @@ pub fn status(cx: &Cx<'_>) -> StatusBar {
         },
         meter,
         model_effort,
-        quiet: quiet(cx),
+        quiet: if viewing_child { None } else { quiet(cx) },
         queued: cx
             .state
+            .filter(|_| !viewing_child)
             .map(|state| state.queue_total)
             .filter(|queued| *queued > 0)
             .map(|queued| format!("{queued} queued")),

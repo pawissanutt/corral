@@ -8,7 +8,7 @@ import { chooseProject, projectScopes } from "./project-scopes.ts";
 import type { HostIdentity } from "../roles/types.ts";
 import type { JobControl } from "../host/job-controls.ts";
 import { LIVE_CHILD_STATES } from "../build/types.ts";
-import type { BuildPanelState, BuildUi, FleetControl } from "../build/types.ts";
+import type { BuildPanelState, BuildUi, ChildSnapshot, FleetControl, FleetSnapshot } from "../build/types.ts";
 import { target } from "./chrome.ts";
 import type { ExtensionUIContext, InteractiveChatPresentation } from "@earendil-works/pi-coding-agent";
 import { HStack, VStack, ScrollView, getKeybindings, matchesKey, type Component, type OverlayOptions, type TuiMouseEvent } from "@earendil-works/pi-tui";
@@ -1127,11 +1127,12 @@ export class NativeWorkbench {
     const selection = context === "agent" && this.agentKey?.startsWith("retained:")
       ? this.agentRow(this.agentKey)?.capabilities.transcript ? ["transcript" as const] : []
       : context === "agents" || context === "agent" ? this.agentsView.actions() : context === "job" ? this.jobPage.actions() : context === "plan" ? this.planPage?.actions() : undefined;
-    const target = controller?.target();
+    const target = controller?.target(), snapshot = this.options.snapshot();
     const lead = this.focused && !this.images.isOpen && this.view !== "conversation" && context === CONTEXT_OF[this.view] ? this.place() : undefined;
     return {
       ...(context === "agent" ? { agentBackLabel: this.agentBackLabel() } : {}),
-      context, streaming: this.options.snapshot()?.streaming ?? false, queue, chat: this.view === "conversation" && !this.images.isOpen,
+      context, streaming: snapshot?.streaming ?? false, queue, chat: this.view === "conversation" && !this.images.isOpen,
+      viewingChild: this.openedChild(snapshot) !== undefined,
       mode: { taskBound: !!identity.task, lifecycle: !!identity.task },
       ...(selection ? { selection } : {}), ...(questions > 0 ? { questions } : {}), ...(lead !== undefined ? { lead } : {}),
       authors: (this.shownChanges?.authors.length ?? 0) > 0, legend: this.legend,
@@ -1175,6 +1176,16 @@ export class NativeWorkbench {
       color: agentColor,
       ...(this.focused && this.selectedAgent() ? { current: this.selectedAgent()!.key } : {}),
     };
+  }
+  /** The open fleet conversation, even if its row is no longer in the snapshot. */
+  openedChild(snapshot = this.options.snapshot()): {
+    readonly id: string; readonly child: ChildSnapshot | undefined; readonly fleet: FleetSnapshot | undefined;
+  } | undefined {
+    if (this.view !== "agent" || this.agentKey === undefined) return undefined;
+    const id = childIdOf(this.agentKey);
+    if (id === undefined) return undefined;
+    const fleet = shownFleet(snapshot);
+    return { id, child: fleet?.children.find(child => child.id === id), fleet };
   }
   /** The agent the Agents view selects, or whose conversation is open; undefined elsewhere or on a job row. */
   selectedAgent(): AgentRow | undefined {

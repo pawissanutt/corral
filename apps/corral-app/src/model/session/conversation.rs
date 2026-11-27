@@ -15,10 +15,11 @@ use crate::model::board::Mark;
 use crate::model::daemon::{ClientError, DetailCache};
 use crate::model::hue::Hue;
 
+use super::super::activity::{self, ActivityLine};
 use super::super::composer::ModelPill;
 use super::super::status::cost_text;
 use super::super::transcript::{self, Transcript};
-use super::super::{Action, Cx, DockAction, SubView, Tab, Ui};
+use super::super::{Action, Cx, DockAction, SessionRole, SubView, Tab, Ui};
 use super::{
     CHILD_CONTROL, FleetAction, FleetButton, asks, card_of, child, child_detail, child_state,
     child_target, control, ctx, fleet, helper, live, ops, profile_model, scope, shown_id,
@@ -221,52 +222,124 @@ pub struct OpenedAgent {
     pub effort: Option<String>,
     pub cost_usd: Option<f64>,
     pub context_percent: Option<f32>,
+    pub activity: Option<ActivityLine>,
 }
 
-/// The agent whose conversation the Agents tab shows, while the fleet still lists it.
+fn child_activity(state: &str, activity: Option<&str>) -> Option<ActivityLine> {
+    let (phase, hue, glyph, spinner) = match state {
+        "running" => (
+            activity
+                .filter(|text| !text.trim().is_empty())
+                .unwrap_or("working"),
+            Hue::Worker,
+            None,
+            true,
+        ),
+        "needs" => ("waiting for your answer", Hue::You, Some("▲"), false),
+        "queued" => ("waiting to start", Hue::Held, None, false),
+        "stopping" => ("waiting for cleanup", Hue::Held, None, false),
+        _ => return None,
+    };
+    Some(ActivityLine {
+        spinner,
+        glyph,
+        hue,
+        phase: if spinner {
+            format!("Working · {phase}")
+        } else {
+            phase.to_owned()
+        },
+        short: activity::short(phase),
+        elapsed: None,
+    })
+}
+
+/// The child conversation on screen, inline in Agents or opened under its own scope.
 pub(in crate::model::session) fn opened_agent(cx: &Cx<'_>) -> Option<OpenedAgent> {
-    if cx.ui.tab != Tab::Agents {
-        return None;
-    }
-    let Some(SubView::Agent(id)) = cx.ui.sub.as_ref() else {
-        return None;
-    };
-    let row = fleet(cx)?.children.iter().find(|child| child.id == *id)?;
-    let served = child_detail(cx.feed, cx.id, id);
-    let unavailable = if helper(row) {
-        Some("a helper call keeps the model it was started with".to_owned())
-    } else if !live(row) {
-        Some("it has finished".to_owned())
+    let standalone = *cx.role == SessionRole::Child;
+    let (parent, id, fleet) = if standalone {
+        let (parent, id) = cx.id.as_str().split_once("/child/")?;
+        if parent.is_empty() || id.is_empty() {
+            return None;
+        }
+        let parent = Id::from(parent);
+        let fleet = cx
+            .feed
+            .live
+            .get(&parent)
+            .and_then(|live| live.fleet.as_ref());
+        (parent, id, fleet)
     } else {
-        control(cx, CHILD_CONTROL)
-            .or_else(|| ops::sending(cx, id).then(|| "your last request is on its way".into()))
+        let Some(SubView::Agent(id)) = cx.ui.sub.as_ref().filter(|_| cx.ui.tab == Tab::Agents)
+        else {
+            return None;
+        };
+        (cx.id.clone(), id.as_str(), fleet(cx))
     };
-    let picking = cx.ui.fleet.picking.as_deref() == Some(id.as_str());
+    let row = fleet.and_then(|fleet| fleet.children.iter().find(|child| child.id == id));
+    let served = child_detail(cx.feed, &parent, id);
+    let (unavailable, opens) = match row.filter(|_| !standalone) {
+        Some(row) => {
+            let unavailable = if helper(row) {
+                Some("a helper call keeps the model it was started with".to_owned())
+            } else if !live(row) {
+                Some("it has finished".to_owned())
+            } else {
+                control(cx, CHILD_CONTROL).or_else(|| {
+                    ops::sending(cx, id).then(|| "your last request is on its way".into())
+                })
+            };
+            let picking = cx.ui.fleet.picking.as_deref() == Some(id);
+            (
+                unavailable,
+                Some(Action::Fleet(FleetAction::Models {
+                    session: parent,
+                    child: (!picking).then(|| id.to_owned()),
+                })),
+            )
+        }
+        None => (Some("this conversation is read-only".into()), None),
+    };
+    let state = row
+        .map(|row| row.state.as_str())
+        .or_else(|| served.map(|detail| detail.state.as_str()));
+    let activity = row
+        .and_then(|row| {
+            row.activity
+                .as_deref()
+                .filter(|text| !text.trim().is_empty())
+        })
+        .or_else(|| served.and_then(|detail| detail.activity.as_deref()));
     Some(OpenedAgent {
-        child: id.clone(),
-        id: shown_id(row),
+        child: id.to_owned(),
+        id: row.map_or_else(|| id.to_owned(), shown_id),
         model: ModelPill {
-            label: row.model.clone(),
+            label: row
+                .map(|row| row.model.as_str())
+                .filter(|model| !model.trim().is_empty())
+                .or_else(|| {
+                    served
+                        .map(|detail| detail.model.as_str())
+                        .filter(|model| !model.trim().is_empty())
+                })
+                .unwrap_or("Model unavailable")
+                .to_owned(),
             pending: row
-                .pending_model
-                .clone()
+                .and_then(|row| row.pending_model.clone())
                 .or_else(|| served.and_then(|detail| detail.pending_model.clone())),
             unavailable,
-            opens: Some(Action::Fleet(FleetAction::Models {
-                session: cx.id.clone(),
-                child: (!picking).then(|| id.clone()),
-            })),
+            opens,
         },
         effort: row
-            .effort
-            .clone()
+            .and_then(|row| row.effort.clone())
             .or_else(|| served.and_then(|detail| detail.effort.clone())),
         cost_usd: row
-            .cost_usd
+            .and_then(|row| row.cost_usd)
             .or_else(|| served.and_then(|detail| detail.usage.cost_usd)),
         context_percent: row
-            .context_percent
+            .and_then(|row| row.context_percent)
             .or_else(|| served.and_then(|detail| detail.usage.context_percent)),
+        activity: state.and_then(|state| child_activity(state, activity)),
     })
 }
 

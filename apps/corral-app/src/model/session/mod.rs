@@ -844,6 +844,20 @@ pub fn page(feed: &Feed, state: &State, id: &Id, env: Env) -> SessionPage {
     fetches.extend(actions::fetches(&cx));
     fetches.extend(mention::fetch(&cx));
     fetches.extend(board::record_fetches(&cx));
+    if *cx.role == SessionRole::Child
+        && let Some((parent, child)) = id.as_str().split_once("/child/")
+        && !parent.is_empty()
+        && !child.is_empty()
+    {
+        fetches.extend(tabs::load(
+            &cx,
+            Ok(DetailRef::SessionChild {
+                id: parent.into(),
+                child: child.into(),
+            }),
+            None,
+        ));
+    }
     fetches.extend(match &body {
         Body::Usage(_) => usage::fetches(&cx),
         Body::Changes(_) => changes::fetches(&cx),

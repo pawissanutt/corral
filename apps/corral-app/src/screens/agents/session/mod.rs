@@ -50,6 +50,7 @@ use nsh_core::prelude::*;
 use crate::model::board::Mark;
 use crate::model::hue::Hue;
 use crate::model::session::{self, Body, Cx, Facts, Focus, KeyAction, SessionPage};
+use crate::model::status::SessionState;
 use crate::model::text::span;
 use crate::model::work::{session_task, task_ref};
 use crate::model::{Form, Id};
@@ -497,11 +498,37 @@ fn view_of(app: AppState, id: Id) -> Memo<SessionPage> {
     })
 }
 
+/// A standalone child follows its parent's fleet and `children` events, but keeps its own
+/// transcript pinned. Both the full page and the side-pane tab hold these while mounted.
+fn keep_child_live(app: AppState, id: &Id) {
+    let Some((parent, child)) = id.as_str().split_once("/child/") else {
+        return;
+    };
+    if parent.is_empty() || child.is_empty() {
+        return;
+    }
+    let parent = Id::from(parent);
+    let live = untracked(|| {
+        app.feed.with(|feed| {
+            crate::model::agents::session_line(feed, parent.as_str())
+                .is_some_and(|line| line.state != SessionState::Gone)
+        })
+    });
+    if live {
+        watch(app, parent);
+    }
+    let source = untracked(|| app.scope());
+    let target = DetailRef::Session { id: id.to_string() };
+    source.watch_detail(target.clone(), true);
+    cleanup(move || source.watch_detail(target, false));
+}
+
 /// What the open page keeps going, through the source it mounted on: the served page read (or,
 /// for a session without a Pi host, its log capture), a closed run's task record (where an ended
 /// headless run is read from), the live topic where the session streams, and the complete words
 /// behind every preview on the shown page.
 fn follow(app: AppState, id: Id, page: Memo<SessionPage>) {
+    keep_child_live(app, &id);
     let scoped = app.scope();
     if let Some(task) = session_task(id.as_str()).map(task_ref)
         && untracked(|| app.feed.with(|feed| !feed.agents.contains_key(id.as_str())))

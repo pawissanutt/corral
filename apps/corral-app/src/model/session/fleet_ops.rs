@@ -294,6 +294,8 @@ pub(in crate::model::session) fn act(
         }
         FleetAction::Open { session, child } => {
             let ui = state.ui_mut(&session);
+            let receiving_previous =
+                matches!(&ui.sub, Some(SubView::Agent(id)) if ui.to.as_ref() == Some(id));
             ui.tab = Tab::Agents;
             ui.sub = Some(SubView::Agent(child.clone()));
             ui.agent = Some(child.clone());
@@ -308,6 +310,9 @@ pub(in crate::model::session) fn act(
                     },
                     feed,
                 );
+            }
+            if receiving_previous {
+                return state.act(Action::Receiver { session, to: None }, feed);
             }
             Vec::new()
         }

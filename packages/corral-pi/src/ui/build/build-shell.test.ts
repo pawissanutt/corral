@@ -396,6 +396,47 @@ test("x on a child row asks before cancelling, and m sets the chosen profile", a
   } finally { h.stop(); }
 });
 
+test("following a child updates the composer and status while keeping the draft", () => {
+  const running = child("picker-ui", "running", {
+    model: "openai/child-picker", effort: "low", activity: "running child-check",
+    usage: { ...USAGE, turns: 1, cost: 0.21, contextPercent: 42 },
+  });
+  for (const [columns, rows] of [[140, 46], [80, 24]] as const) {
+    const build = fakeBuild(work);
+    build.s.children = [running];
+    const h = shell(columns, rows, build, {
+      model: "openai/parent-model", effort: "high", context: { tokens: 3_000, contextWindow: 10_000, percent: 30 },
+    });
+    const composer = () => plain(h.editor.render(columns));
+    const status = () => plain(h.footer.render(columns));
+    const modelBar = rows < 28 ? status : composer;
+    try {
+      h.editor.setText("Draft stays here");
+      expect(h.panels.handleInput(KEY.f8)).toBeTrue();
+      expect(h.panels.handleInput(KEY.enter)).toBeTrue();
+      expect(h.panels.workbench.view).toBe("agent");
+      expect(composer()).toContain("Message → picker-ui");
+      expect(composer()).toContain("running child-check");
+      expect(modelBar()).toContain("child-picker · effort low");
+      expect(modelBar()).not.toContain("parent-model");
+      expect(status()).toContain("AGENT picker-ui");
+      expect(status()).toContain("$0.21");
+      expect(status()).toContain("42%");
+      expect(status()).not.toContain("30%");
+      expect(h.editor.getText()).toBe("Draft stays here");
+
+      build.s.children = [{ ...running, model: "openai/child-updated", activity: "running next-check" }];
+      build.fire();
+      expect(composer()).toContain("running next-check");
+      expect(modelBar()).toContain("child-updated · effort low");
+      expect(h.panels.handleInput(KEY.f9)).toBeTrue();
+      expect(modelBar()).toContain("parent-model");
+      expect(status()).toContain("30%");
+      expect(h.editor.getText()).toBe("Draft stays here");
+    } finally { h.stop(); }
+  }
+});
+
 /** A Git repository with one commit (returned as `base`), then `commits` committed and `edits` left uncommitted. */
 function repository(name: string, files: readonly string[], commits: readonly string[], edits: readonly string[]): { readonly path: string; readonly base: string } {
   const path = join(work, name);

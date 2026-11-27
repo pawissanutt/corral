@@ -27,23 +27,28 @@ export type ContextForm = "full" | "mid" | "tiny";
  * never dropped: `ctx ▰▰▰▱▱▱▱▱▱▱▱▱ 24% · 48.0k / 200k` → `ctx ▰▰▱▱▱▱▱▱ 24% 48k/200k` → `ctx ▰▰▱▱▱▱▱▱ 24%`
  * → `24% 48k/200k` → `24%`. Filled cells are accent (warning and error from 80% and 95%), empty cells the line colour.
  */
-export function contextSegment(snapshot: PanelSnapshot | null, room: number, form: ContextForm = "full"): string {
-  const usage = snapshot?.context;
-  if (usage?.tokens == null) return PANEL_MUTED + "Context unavailable";
-  const window = usage.contextWindow;
-  if (usage.percent == null) {
-    return PANEL_TEXT + (room >= 40 ? `ctx usage unknown · ${compact1(usage.tokens)} / ${compact1(window)}`
-      : `? ${compact0(usage.tokens)}/${compact0(window)}`);
+export function contextSegment(snapshot: PanelSnapshot | null, room: number, form: ContextForm = "full",
+  child?: { readonly percent?: number }): string {
+  const usage = child ? undefined : snapshot?.context;
+  const percentOf = child
+    ? child.percent !== undefined && Number.isFinite(child.percent) ? Math.min(100, Math.max(0, child.percent)) : undefined
+    : usage?.percent;
+  if (child ? percentOf == null : usage?.tokens == null) return PANEL_MUTED + "Context unavailable";
+  if (percentOf == null) {
+    if (usage?.tokens == null) return PANEL_MUTED + "Context unavailable";
+    return PANEL_TEXT + (room >= 40 ? `ctx usage unknown · ${compact1(usage.tokens)} / ${compact1(usage.contextWindow)}`
+      : `? ${compact0(usage.tokens)}/${compact0(usage.contextWindow)}`);
   }
-  const percent = Math.round(usage.percent);
+  const percent = Math.round(percentOf);
   const tone = percent >= 95 ? PANEL_ERROR : percent >= 80 ? PANEL_WARNING : PANEL_TEXT;
   const fill = percent >= 80 ? tone : PANEL_BLUE;
   const bar = (cells: number) => {
     const filled = Math.max(0, Math.min(cells, Math.round(cells * percent / 100)));
     return fill + "▰".repeat(filled) + PANEL_LINE + "▱".repeat(cells - filled) + tone;
   };
-  const full = ` ${percent}% · ${compact1(usage.tokens)} / ${compact1(window)}`;
-  const mid = ` ${percent}% ${compact0(usage.tokens)}/${compact0(window)}`;
+  const share = ` ${percent}%`;
+  const full = usage?.tokens != null ? `${share} · ${compact1(usage.tokens)} / ${compact1(usage.contextWindow)}` : share;
+  const mid = usage?.tokens != null ? `${share} ${compact0(usage.tokens)}/${compact0(usage.contextWindow)}` : share;
   const forms = [
     ...(form === "full" ? [{ cells: 12, text: full }] : []),
     ...(form !== "tiny" ? [{ cells: 8, text: mid }] : []),
@@ -69,9 +74,11 @@ const LEVELS: readonly ComposerLevel[] = [0, 1, 2, 3];
  * row; alerts that do not fit wrap, never drop. `partialCost` marks a cost that leaves out unknown parts with `+`.
  */
 export function statusBar(identity: HostIdentity, snapshot: PanelSnapshot | null,
-  statuses: ReadonlyMap<string, string>, width: number, partialCost = false, folded?: FoldedComposer): string[] {
+  statuses: ReadonlyMap<string, string>, width: number, partialCost = false, folded?: FoldedComposer,
+  child?: { readonly id: string; readonly cost?: number; readonly contextPercent?: number }): string[] {
   const tiny = width < 64, small = width < 105;
-  const role = tiny ? ROLE_SHORT[identity.role] : identity.role.replaceAll("_", " ").toUpperCase();
+  const role = child ? tiny ? "AGT" : `AGENT ${plainLabel(child.id)}`
+    : tiny ? ROLE_SHORT[identity.role] : identity.role.replaceAll("_", " ").toUpperCase();
   const pill = `${PANEL_ON_ACCENT} ${role} \x1b[22m${PANEL_BG}`;
   const model = folded?.model ? plainLabel(folded.model.slice(folded.model.indexOf("/") + 1)) : "";
   const effort = folded?.effort ? plainLabel(folded.effort) : "";
@@ -86,19 +93,23 @@ export function statusBar(identity: HostIdentity, snapshot: PanelSnapshot | null
     .sort(([a], [b]) => Number(b === STATUS_ALERTS) - Number(a === STATUS_ALERTS))
     .map(([, value]) => plainLabel(stripTerminalSequences(value))).filter(Boolean).join(" · ");
   const sep = PANEL_LINE + " │ ";
-  const cost = snapshot?.cost === undefined ? "" : sep + PANEL_TEXT + "$" + snapshot.cost.toFixed(2) + (partialCost ? "+" : "");
+  const value = child ? child.cost : snapshot?.cost;
+  const cost = child ? sep + PANEL_TEXT + "$" + (value !== undefined && Number.isFinite(value) ? value.toFixed(2) : "–")
+    : value === undefined ? "" : sep + PANEL_TEXT + "$" + value.toFixed(2) + (partialCost ? "+" : "");
   const row = (text: string) => PANEL_BG + PANEL_TEXT + pad(" " + text, width).replaceAll(RESET, RESET + PANEL_BG) + RESET;
   const wrapped = (text: string) => new Text(text, 0, 0).render(Math.max(1, width - 1)).map(line => row(PANEL_WARNING + line));
   const form = tiny ? "tiny" : small ? "mid" : "full";
   // The folded composer stays only beside a meter that still reads `ctx ▰▰▱▱▱▱▱▱ 24%`; without it the meter may shorten further.
-  const shortest = visibleWidth(contextSegment(snapshot, 0, form)), meter = visibleWidth(contextSegment(snapshot, width, "tiny"));
+  const share = child ? child.contextPercent === undefined ? {} : { percent: child.contextPercent } : undefined;
+  const meterAt = (room: number, tier: ContextForm = form) => contextSegment(snapshot, room, tier, share);
+  const shortest = visibleWidth(meterAt(0)), meter = visibleWidth(meterAt(width, "tiny"));
   const roomFor = (level: ComposerLevel) => width - 1 - visibleWidth(pill + cost + composer(level)) - 3;
   const level = LEVELS.find(candidate => roomFor(candidate) >= (composer(candidate) ? Math.max(meter, shortest) : shortest));
   if (level === undefined) {
-    return [row(pill + cost + (alerts ? sep + PANEL_WARNING + alerts : "")), row(contextSegment(snapshot, width - 1, form))];
+    return [row(pill + cost + (alerts ? sep + PANEL_WARNING + alerts : "")), row(meterAt(width - 1))];
   }
   const room = roomFor(level), tail = composer(level);
   const inline = alerts && visibleWidth(alerts) + 3 + shortest <= room;
-  const context = contextSegment(snapshot, room - (inline ? visibleWidth(alerts) + 3 : 0), form);
+  const context = meterAt(room - (inline ? visibleWidth(alerts) + 3 : 0));
   return [row(pill + cost + sep + context + tail + (inline ? sep + PANEL_WARNING + alerts : "")), ...(alerts && !inline ? wrapped(alerts) : [])];
 }

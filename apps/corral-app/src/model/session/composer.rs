@@ -227,8 +227,23 @@ pub struct HostBar {
     pub action: Option<(&'static str, Action)>,
 }
 
-/// Whether the session's agent works now.
+/// Whether the receiver has an active turn to steer.
 pub fn working(cx: &Cx<'_>) -> bool {
+    let Some(id) = cx.ui.to.as_deref() else {
+        return parent_working(cx);
+    };
+    cx.live
+        .and_then(|live| live.fleet.as_ref())
+        .is_some_and(|fleet| {
+            fleet
+                .children
+                .iter()
+                .any(|child| child.id == id && child.steerable)
+        })
+}
+
+/// Whether the session's own agent works now, regardless of the receiver.
+pub(super) fn parent_working(cx: &Cx<'_>) -> bool {
     cx.state.is_some_and(|state| state.open) || cx.live.is_some_and(|live| live.open)
 }
 
@@ -387,12 +402,10 @@ fn receiver_word(cx: &Cx<'_>) -> String {
 /// The newest send's standing while it is not served yet.
 fn last(cx: &Cx<'_>) -> Option<(Hue, String)> {
     let page = cx.page;
-    let sent = cx
-        .ui
-        .echoes
-        .iter()
-        .rev()
-        .find(|sent| !echo::retired(sent, cx.id.as_str(), page, cx.feed))?;
+    let sent = cx.ui.echoes.iter().rev().find(|sent| {
+        (cx.ui.to.is_none() || sent.to == cx.ui.to)
+            && !echo::retired(sent, cx.id.as_str(), page, cx.feed)
+    })?;
     match echo::state(sent, cx.id.as_str(), cx.feed) {
         EchoState::Pending => Some((Hue::Neutral, "last input pending admission".into())),
         EchoState::Queued { .. } => Some((Hue::Neutral, "last input queued".into())),
@@ -417,6 +430,11 @@ pub fn composer(cx: &Cx<'_>) -> Option<SessionComposer> {
     let working = working(cx);
     let refused = refusal(cx);
     let child = cx.ui.to.is_some();
+    let opened = super::fleet::opened_agent(cx);
+    let activity = match &opened {
+        Some(agent) => agent.activity.clone(),
+        None => activity::line(cx.state, cx.live, cx.feed),
+    };
     let compose = cx.ui.dock.compose.as_ref();
     let unreachable = (cx.env.conn.refuses() || cx.feed.link != Link::Up)
         .then(|| "corrald is unreachable".to_owned());
@@ -443,6 +461,17 @@ pub fn composer(cx: &Cx<'_>) -> Option<SessionComposer> {
             };
             (send, None)
         }
+        (None, None) if child => (
+            SendButton {
+                id: "btn-steer",
+                label: "Steer",
+                policy: SendPolicy::Steer,
+                unavailable: refused
+                    .or_else(|| unavailable(cx.can("steer")))
+                    .or_else(|| (!working).then(|| "This agent is not accepting messages".into())),
+            },
+            None,
+        ),
         (None, None) if working => {
             let steer = SendButton {
                 id: "btn-steer",
@@ -458,10 +487,7 @@ pub fn composer(cx: &Cx<'_>) -> Option<SessionComposer> {
                 id: "btn-queue",
                 label: "Queue",
                 policy: SendPolicy::FollowUp,
-                unavailable: refused
-                    .clone()
-                    .or_else(|| child.then(|| "Only the parent takes queued follow-ups".into()))
-                    .or_else(|| unavailable(cx.can("follow_up"))),
+                unavailable: refused.or_else(|| unavailable(cx.can("follow_up"))),
             });
             (steer, queue)
         }
@@ -475,15 +501,20 @@ pub fn composer(cx: &Cx<'_>) -> Option<SessionComposer> {
             (send, None)
         }
     };
-    let stop = (working && cx.controls().contains(&Control::Cancel)).then(|| StopButton {
-        label: "Stop",
-        action: Action::Control {
-            session: cx.id.clone(),
-            control: Control::Cancel,
-        },
-    });
+    let stop =
+        (parent_working(cx) && cx.controls().contains(&Control::Cancel)).then(|| StopButton {
+            label: if opened.is_some() {
+                "Stop parent"
+            } else {
+                "Stop"
+            },
+            action: Action::Control {
+                session: cx.id.clone(),
+                control: Control::Cancel,
+            },
+        });
     // An open agent conversation shows that agent's model and effort, not the parent's.
-    let (model, effort) = match super::fleet::opened_agent(cx) {
+    let (model, effort) = match opened {
         Some(agent) => (
             Some(agent.model),
             agent.effort.map(|level| EffortControl {
@@ -532,12 +563,20 @@ pub fn composer(cx: &Cx<'_>) -> Option<SessionComposer> {
         None => (
             format!("→ {}", receiver_word(cx)),
             Hue::Neutral,
-            if working {
+            if working || child {
                 SendMode::Working
             } else {
                 SendMode::Idle
             },
-            super::keys::legend(super::Focus::Composer, super::Tab::Chat, working),
+            if child {
+                send.unavailable
+                    .is_none()
+                    .then_some(("⏎", "steer"))
+                    .into_iter()
+                    .collect()
+            } else {
+                super::keys::legend(super::Focus::Composer, super::Tab::Chat, working)
+            },
         ),
     };
     let mention = mention::menu(cx);
@@ -552,7 +591,7 @@ pub fn composer(cx: &Cx<'_>) -> Option<SessionComposer> {
             hue,
             last: last(cx),
         },
-        activity: activity::line(cx.state, cx.live, cx.feed),
+        activity,
         draft: cx.ui.draft.clone(),
         mode,
         model,

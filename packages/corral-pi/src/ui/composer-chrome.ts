@@ -102,23 +102,24 @@ export function composerRow(row: string, left: number, width: number, focused: b
  * editor hides lines. The word `effort` goes before the model name would clip. The hit ranges are cells of the
  * full row, from the same measurement that lays the row out.
  */
-export function composerBar(snapshot: PanelSnapshot | null, width: number, hidden: number, focused: boolean): {
+export function composerBar(snapshot: { readonly model: string | null; readonly effort?: string; readonly effortAvailable?: boolean } | null,
+  width: number, hidden: number, focused: boolean, readOnly = false): {
   readonly line: string; readonly model?: ComposerHit; readonly effort?: ComposerHit;
 } {
-  const full = snapshot?.model;
-  const model = full ? plainLabel(full.slice(full.indexOf("/") + 1)) + " ▾" : "Model unavailable";
+  const full = snapshot?.model, cycle = !readOnly && snapshot?.effortAvailable;
+  const model = full ? plainLabel(full.slice(full.indexOf("/") + 1)) + (readOnly ? "" : " ▾") : "Model unavailable";
   const more = hidden > 0 ? `↓ ${hidden} more` : "";
   const inner = Math.max(0, width - 2 * COMPOSER_INSET), moreCells = more ? visibleWidth(more) + 2 : 0;
-  const level = snapshot ? `${plainLabel(snapshot.effort)}${snapshot.effortAvailable ? " ↻" : ""}` : "";
-  const worded = snapshot ? ` · effort ${level}` : "";
-  const effort = inner - visibleWidth(worded) - moreCells >= visibleWidth(model) ? worded : snapshot ? ` · ${level}` : "";
+  const level = snapshot?.effort === undefined ? "" : `${plainLabel(snapshot.effort)}${cycle ? " ↻" : ""}`;
+  const worded = level ? ` · effort ${level}` : "";
+  const effort = inner - visibleWidth(worded) - moreCells >= visibleWidth(model) ? worded : level ? ` · ${level}` : "";
   const room = Math.max(0, inner - visibleWidth(effort) - moreCells);
   const label = pad(model, Math.min(room, visibleWidth(model))).trimEnd();
   const modelEnd = COMPOSER_INSET + visibleWidth(label), effortEnd = modelEnd + visibleWidth(effort);
   const color = border(focused);
   return {
     line: `${PANEL_BG} ${color}│${PANEL_TEXT} ` + splitRow(PANEL_TEXT + label + PANEL_MUTED + effort, PANEL_MUTED + more, inner) + `${PANEL_BG} ${color}│${PANEL_BG} ${PANEL_TEXT}`,
-    ...(full && label ? { model: { from: COMPOSER_INSET, to: modelEnd } } : {}),
-    ...(snapshot?.effortAvailable && effortEnd <= width - COMPOSER_INSET ? { effort: { from: modelEnd, to: effortEnd } } : {}),
+    ...(!readOnly && full && label ? { model: { from: COMPOSER_INSET, to: modelEnd } } : {}),
+    ...(cycle && level && effortEnd <= width - COMPOSER_INSET ? { effort: { from: modelEnd, to: effortEnd } } : {}),
   };
 }

@@ -313,7 +313,6 @@ pub(super) fn pane(app: AppState) -> AnyElement {
 
 fn session(app: AppState, id: Id) -> AnyElement {
     let app = app.for_dock();
-    keep_child_live(app, &id);
     let page = ask_view(app, id.clone());
     view()
         .flex_1()
@@ -321,29 +320,6 @@ fn session(app: AppState, id: Id) -> AnyElement {
         .child(head(app, id.clone(), page))
         .child(ask_session(app, id, page, Compact::Dock))
         .into_element()
-}
-
-/// A child agent's conversation is told apart only through its session's live stream (its fleet
-/// and the `children` events that re-read the child's transcript), and its transcript is not
-/// pinned by that stream: while its tab is mounted the pane holds both, whatever page shows.
-fn keep_child_live(app: AppState, id: &Id) {
-    let Some((parent, _)) = id.as_str().split_once("/child/") else {
-        return;
-    };
-    let parent = Id::from(parent);
-    let live = untracked(|| {
-        app.feed.with(|feed| {
-            crate::model::agents::session_line(feed, parent.as_str())
-                .is_some_and(|line| line.state != SessionState::Gone)
-        })
-    });
-    if live {
-        crate::screens::agents::watch_transcript(app, parent);
-    }
-    let source = untracked(|| app.scope());
-    let target = corral_protocol::detail::DetailRef::Session { id: id.to_string() };
-    source.watch_detail(target.clone(), true);
-    cleanup(move || source.watch_detail(target, false));
 }
 
 /// As Ask's head: the session's id and name, its role and state, then Open session ↗, which

@@ -20,6 +20,7 @@ export interface HintState {
   readonly mode: { readonly taskBound: boolean; readonly lifecycle: boolean };
   /** True while Chat is the open view: its tool rows fold and unfold with Pi's tool-output key. */
   readonly chat?: boolean;
+  readonly viewingChild?: boolean;
   readonly streaming: boolean;
   readonly queue: { readonly items: number; readonly editable: number; readonly control: boolean };
   /** Owner questions waiting in the dock; their card takes the queue's focus key when the queue has nothing to edit. */
@@ -174,7 +175,7 @@ function targetHint(): Hint | undefined {
 function composerHints(state: HintState): (Hint | undefined)[] {
   const build = state.build, target = build?.target;
   // While the agent works, stop comes right after Enter so it survives every width.
-  const stop = state.streaming ? piHint("app.interrupt", "interrupt", "stop") : undefined;
+  const stop = state.streaming ? piHint("app.interrupt", "interrupt", state.viewingChild ? "stop parent" : "stop") : undefined;
   // In Chat the tool rows' expand key comes last, so a narrow footer drops it first.
   const expand = state.chat ? piHint("app.tools.expand", "tools", "expand") : undefined;
   if (target) {

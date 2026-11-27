@@ -5,7 +5,7 @@ import type * as Sdk from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ExtensionUIContext, InteractiveChatPresentation, InteractiveModeOptions, SelectorComponent } from "@earendil-works/pi-coding-agent";
 import { decodeKittyPrintable, isKeyRelease, matchesKey, TuiAltScreen, visibleWidth, type Component, type OverlayHandle, type Terminal, type TUI, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import type { HostIdentity } from "../roles/types.ts";
-import { LIVE_CHILD_STATES, type BuildUi, type FleetControl } from "../build/types.ts";
+import { LIVE_CHILD_STATES, type BuildUi, type ChildSnapshot, type FleetControl } from "../build/types.ts";
 import { PanelTerminal, PANEL_BREAKPOINT, PANEL_WIDTH, RAIL_MIN, RAIL_MAX, MIN_MAIN, type PanelSurface } from "./panel-terminal.ts";
 import { NativeWorkbench, boardUnavailable, plainClick, RULE_ROWS, type MainView } from "./workbench.ts";
 import type { HistoryRead } from "./history.ts";
@@ -20,7 +20,7 @@ import { Activity, ActivityClock, elapsedLabel, PassCache, SYSTEM_SCHEDULER, typ
 import { ActionPalette, type ActionGroup, type HostAction } from "./action-palette.ts";
 import { setCanvasAppearance } from "./panel-canvas.ts";
 import { agentColor, setAgentHueAppearance } from "./agent-hues.ts";
-import { statusBar } from "./panels-chrome.ts";
+import { statusBar, type FoldedComposer } from "./panels-chrome.ts";
 import { titleText, type TitleAttention } from "./chrome.ts";
 import { composerBar, composerBottom, composerRow, composerTitle, composerTop, shellDisposition, type ComposerHit } from "./composer-chrome.ts";
 import { chromeTier, COMPACT_COLUMNS, SHORT_ROWS, type Notice } from "./header.ts";
@@ -41,14 +41,14 @@ import { SettingsPage, settingsKeys, type PersonalSettings, type SettingsControl
 import { ownerBashPresenter } from "./owner-bash.ts";
 import { planLedger } from "./plan-detail.ts";
 import type { PlanSurface } from "./todo.ts";
-import { plainLabel, setPanelAppearance, type PanelSnapshot } from "./panels-view.ts";
+import { plainLabel, PANEL_BLUE, setPanelAppearance, type PanelSnapshot } from "./panels-view.ts";
 import { sessionCost } from "./usage-model.ts";
 import { BuildController, childQuestionCard } from "./build/build-controller.ts";
 import { BUILD_BOARD_ENTRY, BUILD_EXIT_ENTRY, BUILD_FINISH_ENTRY, buildEntryRenderer, type BuildEntry } from "./build/build-entries.ts";
 import { choiceRows, PASTE_START } from "./build/choice-dock.ts";
 import { ComposerPaste, IMAGE_MARKER, StagedImages, type PasteBase } from "./composer-attach.ts";
 import { childIdOf, type BuildCardSource } from "./build/contract.ts";
-import { steerable } from "./build/fleet-rows.ts";
+import { childActivity, steerable } from "./build/fleet-rows.ts";
 import { QuestionDock, questionsKey, type QuestionSource } from "./owner-questions.ts";
 import { sidebarKeyLabel, type SidebarKey } from "./herdr-keys.ts";
 import { EscGuard } from "./esc-guard.ts";
@@ -135,6 +135,11 @@ function routedBuild(build: BuildUi, deliver: ((text: string) => Promise<boolean
   };
   return { fleet: routed, exit: build.exit, record: () => build.record(), ...(build.board ? { board: build.board } : {}),
     target: () => build.target(), setTarget: target => build.setTarget(target) };
+}
+
+/** Child effort is reported, not editable from the parent editor. */
+function childComposer(child: ChildSnapshot | undefined): FoldedComposer {
+  return { model: child?.model || null, ...(child?.effort === undefined ? {} : { effort: child.effort }) };
 }
 
 export class NativePanels implements PanelSurface {
@@ -994,10 +999,18 @@ export class NativePanels implements PanelSurface {
             // one that starts with `/` is a command for Pi, never a message for the chosen child.
             const draft = this.getExpandedText(), command = draft.trimStart().startsWith("/");
             const columns = owner.terminal?.physical.columns ?? width, stop = piKey("app.interrupt");
-            const target = command ? undefined : owner.build?.composerTarget();
+            const snapshot = owner.snapshot(), opened = owner.workbench.openedChild(snapshot);
+            const parent = opened && owner.build ? { label: "parent", color: PANEL_BLUE } : undefined;
+            const target = command ? parent : owner.build?.composerTarget() ?? parent;
             const shell = owner.build?.target() ? undefined : shellDisposition(draft);
-            const status = owner.activity.indicator(columns, owner.clock.now(), stop ? keyLabel(stop) : undefined);
-            return composerTop(composerTitle(columns < COMPACT_COLUMNS ? null : owner.snapshot(), target, shell), width, this.accent,
+            const child = opened?.child, fleet = opened?.fleet;
+            const activity = child && fleet && LIVE_CHILD_STATES.includes(child.state) ? childActivity(child, fleet) : undefined;
+            const status = opened
+              ? activity ? [`${plainLabel(opened.id)} · ${activity}`, activity] : []
+              : owner.activity.indicator(columns, owner.clock.now(), stop ? keyLabel(stop) : undefined);
+            const receiver = owner.options.build?.target();
+            const childInput = opened && !command && receiver !== undefined && receiver !== "parent" && target?.label !== "land · your reason";
+            return composerTop(composerTitle(columns < COMPACT_COLUMNS || childInput ? null : snapshot, target, shell), width, this.accent,
               hidden ? `↑ ${hidden} more` : "", status, visibleWidth(composerTitle(null, target, shell)));
           }
           protected renderBottomBorder(width: number, hidden: number): string {
@@ -1005,7 +1018,8 @@ export class NativePanels implements PanelSurface {
               this.composer = undefined;
               this.bottom = composerBottom(width, this.accent, hidden ? `↓ ${hidden} more` : "");
             } else {
-              this.composer = composerBar(owner.snapshot(), width, hidden, this.accent);
+              const snapshot = owner.snapshot(), opened = owner.workbench.openedChild(snapshot);
+              this.composer = composerBar(opened ? childComposer(opened.child) : snapshot, width, hidden, this.accent, opened !== undefined);
               this.bottom = this.composer.line;
             }
             return this.bottom;
@@ -1061,12 +1075,14 @@ export class NativePanels implements PanelSurface {
           // The status bar, a rule (not below RULE_ROWS rows), then one row of the focused surface's keys ending with F1;
           // a short terminal drops an empty key row and its rule (`footerKept`).
           render: width => {
-            const snapshot = this.snapshot(), cost = this.build ? sessionCost(snapshot) : undefined;
+            const snapshot = this.snapshot(), opened = this.workbench.openedChild(snapshot);
+            const cost = this.build && !opened ? sessionCost(snapshot) : undefined;
             const rows = this.terminal?.rows ?? RULE_ROWS;
             // The composer's model bar folds away when short; the status bar then carries model and effort.
-            const folded = rows < SHORT_ROWS ? { model: snapshot?.model ?? null, ...(snapshot ? { effort: snapshot.effort } : {}) } : undefined;
+            const model = opened ? childComposer(opened.child) : { model: snapshot?.model ?? null, ...(snapshot ? { effort: snapshot.effort } : {}) };
+            const folded = rows >= SHORT_ROWS ? undefined : opened ? { ...model, model: model.model ?? "Model unavailable" } : model;
             const status = statusBar(this.options.identity, cost && snapshot ? { ...snapshot, cost: cost.total } : snapshot,
-              data.getExtensionStatuses(), width, cost?.partial ?? false, folded);
+              data.getExtensionStatuses(), width, cost?.partial ?? false, folded, opened && { id: opened.id, ...opened.child?.usage });
             const context = this.footerContext();
             const hints = contextHints(this.workbench.hintState(context, this.queueState(), this.questionDock.waiting));
             this.statusRows = status.length;
@@ -1238,8 +1254,10 @@ export class NativePanels implements PanelSurface {
       ...(rewind ? [action("message", "rewind", "Rewind to an earlier turn…", "", async () => {
         if (this.ui) await runRewind(this.ui, rewind, this.sessionManager, (text, tone, detail) => this.workbench.notice(text, tone, detail));
       })] : []),
-      action("model", "app.model.select", "Select model", this.nativeKeys?.("app.model.select") ?? "", () => this.nativeAction?.("app.model.select")),
-      action("model", "app.thinking.cycle", "Cycle effort", this.nativeKeys?.("app.thinking.cycle") ?? "", () => this.nativeAction?.("app.thinking.cycle"),
+      action("model", "app.model.select", this.workbench.openedChild() ? "Select parent model" : "Select model",
+        this.nativeKeys?.("app.model.select") ?? "", () => this.nativeAction?.("app.model.select")),
+      action("model", "app.thinking.cycle", this.workbench.openedChild() ? "Cycle parent effort" : "Cycle effort",
+        this.nativeKeys?.("app.thinking.cycle") ?? "", () => this.nativeAction?.("app.thinking.cycle"),
         () => !this.snapshot()?.effortAvailable ? "this model has no effort levels" : ready()),
       panel("workspace", "project", "Show files from another project…"),
       panel("workspace", "refresh", taskBound ? "Reread task, proof and files" : "Reread files"),
