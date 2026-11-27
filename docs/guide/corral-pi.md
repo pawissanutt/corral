@@ -30,7 +30,7 @@ availability. Switches apply by name to new Pi sessions throughout this workspac
 turning off `debugging` does not expose a shadowed project copy. Required role
 procedures cannot be switched off. Built-in text is read-only.
 
-Select a project to manage its `.agents/skills` files. User skill directories must
+Select a project to manage its `.agents/skills` files. For project files, **Allowed by workspace** describes the name switch, not a guarantee that the file is active: a session resolves its own worktree, including its ignore rules. User skill directories must
 be explicitly listed under `[skills]` in `.corral-next/pi.toml`, for example:
 
 ```toml

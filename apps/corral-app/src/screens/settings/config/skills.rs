@@ -206,7 +206,7 @@ fn detail(
             "Saving Markdown changes this shared user file, not just this workspace."
         }
         PiSkillSource::Project if editable => {
-            "Saving Markdown changes the registered project's skill file."
+            "Save edits this project file. The session's worktree and ignore rules decide which project files it loads."
         }
         _ => "Markdown cannot be edited here.",
     };
@@ -265,7 +265,7 @@ fn detail(
             if dirty {
                 panel = panel.child(cell(
                     app,
-                    "Unsaved Markdown · kept while you use other tabs",
+                    "Unsaved Markdown · save or discard before changing workspace availability",
                     Token::Held,
                     false,
                 ));
@@ -311,18 +311,25 @@ fn detail(
                 .test_id("pi-skill-policy-path")
                 .into_element(),
         );
-        parts.push(control(
-            app,
-            if row.enabled {
-                "Disable in workspace"
-            } else {
-                "Enable in workspace"
-            },
-            "btn-pi-skill-toggle",
-            waiting,
-            false,
-            move || toggle(app, &ctx),
-        ));
+        parts.push(
+            dynamic(move || {
+                let blocked = dirty.get() || waiting;
+                let ctx = ctx.clone();
+                control(
+                    app,
+                    if row.enabled {
+                        "Disable in workspace"
+                    } else {
+                        "Enable in workspace"
+                    },
+                    "btn-pi-skill-toggle",
+                    blocked,
+                    false,
+                    move || toggle(app, &ctx),
+                )
+            })
+            .into_element(),
+        );
     }
     parts.push(actions.into_element());
     if loaded {

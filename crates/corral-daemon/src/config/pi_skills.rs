@@ -80,7 +80,7 @@ fn policy(doc: &DocumentMut) -> Result<Policy> {
             .iter()
             .map(|item| {
                 item.as_str()
-                    .filter(|s| !s.is_empty())
+                    .filter(|s| !s.is_empty() && s.trim() == *s && !s.contains('\0'))
                     .map(str::to_owned)
                     .context("pi.toml skills entries must be nonempty strings")
             })
@@ -207,7 +207,12 @@ impl Scan {
             Ok(text) => text,
             Err(error) => std::str::from_utf8(&prefix[..error.valid_up_to()])?,
         };
-        let Some(name) = skill_name(text, &path).filter(|name| name.len() <= 256) else {
+        let Some(name) = skill_name(text, &path).filter(|name| {
+            name.len() <= 64
+                && name
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        }) else {
             return Ok(());
         };
         if self.paths.insert(path.clone()) {
@@ -339,7 +344,13 @@ fn select(root: &Path, project: Option<&str>, policy: &Policy) -> Result<Vec<Ent
     }
     let mut names = HashSet::new();
     for entry in &mut scan.entries {
-        entry.row.shadowed = !names.insert(entry.row.name.clone());
+        // Project directories are resolved by the SDK in the session's actual worktree,
+        // including its ignore files. Never infer a winning project file from this inventory.
+        entry.row.shadowed = if entry.row.source == PiSkillSource::Project {
+            names.contains(&entry.row.name)
+        } else {
+            !names.insert(entry.row.name.clone())
+        };
         entry.row.enabled = !entry.row.shadowed
             && (entry.row.required || !policy.disabled.contains(&entry.row.name));
     }
@@ -577,8 +588,25 @@ mod tests {
             "[projects.demo]\npath = 'repo'\n",
         )?;
         fs::write(&path, BODY)?;
+        let skill_root = root.join("repo/.agents/skills");
+        fs::write(
+            skill_root.join("bad.md"),
+            BODY.replace("programming", "\" padded \""),
+        )?;
+        fs::write(skill_root.join(".ignore"), "a/\n")?;
+        for folder in ["a", "z"] {
+            fs::create_dir(skill_root.join(folder))?;
+            fs::write(
+                skill_root.join(folder).join("SKILL.md"),
+                BODY.replace("programming", "local-name"),
+            )?;
+        }
         let project = || Some("demo".into());
         let entries = catalog(root, PiSkillsRequest { project: project() })?.skills;
+        assert!(!entries.iter().any(|e| e.name.contains("padded")));
+        let candidates: Vec<_> = entries.iter().filter(|e| e.name == "local-name").collect();
+        assert_eq!(candidates.len(), 2);
+        assert!(candidates.iter().all(|e| e.enabled && !e.shadowed));
         let entry = entries
             .iter()
             .find(|e| e.path == path.to_str().unwrap())

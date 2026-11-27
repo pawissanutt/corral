@@ -149,6 +149,8 @@ pub fn status(row: &PiSkillRow) -> &'static str {
         "Required"
     } else if row.shadowed {
         "Shadowed"
+    } else if row.enabled && row.source == PiSkillSource::Project {
+        "Allowed by workspace · session resolves project files"
     } else if row.enabled {
         "Enabled"
     } else {

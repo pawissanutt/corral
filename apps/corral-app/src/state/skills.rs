@@ -112,7 +112,7 @@ pub(crate) fn save(app: AppState, ctx: &Context) {
 pub(crate) fn toggle(app: AppState, ctx: &Context) {
     send(app, ctx, |editor| {
         let row = editor.row()?;
-        (!row.required && !row.shadowed).then(|| {
+        (!editor.dirty() && !row.required && !row.shadowed).then(|| {
             Request::Toggle(PiSkillToggle {
                 project: ctx.1.clone(),
                 name: row.name.clone(),
