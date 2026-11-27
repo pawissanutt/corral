@@ -353,13 +353,13 @@ impl AppState {
                         })
                         .collect()
                 });
-                // An unknown outcome may never move the board: ask for a fresh snapshot, which
-                // corrald takes after this request. A lost link gets one on reconnecting.
+                // An unknown outcome waits for a later Tasks subscription: closed and opened
+                // again now, or the next connection's after a lost link.
                 let fresh = behind.iter().any(|(_, behind)| !behind.confirmed)
                     && !self.fixture()
                     && self.feed.with(|feed| feed.link == Link::Up);
                 if fresh {
-                    _ = requests::send(requests::ClientRequest::RetryTopic("tasks".into()));
+                    _ = requests::send(requests::ClientRequest::RefreshTasks);
                 }
                 batch(|| {
                     self.catching_up.update(|confirmed| {

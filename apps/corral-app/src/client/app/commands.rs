@@ -59,6 +59,7 @@ impl AppState {
                 vec![]
             }
             ClientRequest::RetryTopic(key) => self.retry_topic(feed, &key),
+            ClientRequest::RefreshTasks => self.refresh_tasks(),
             ClientRequest::Terminal { session, open } => self.terminal_request(feed, session, open),
             ClientRequest::DetailWatch { target, open } => {
                 self.watch_detail(feed, target, open);

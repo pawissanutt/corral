@@ -24,6 +24,25 @@ impl AppState {
         vec![open(topic, scope)]
     }
 
+    /// Tasks closed, then opened again: the core drops pages of the closing subscription and
+    /// sends the open only once the close is answered, so the replacement is taken after it.
+    pub(super) fn refresh_tasks(&self) -> Vec<Outgoing> {
+        if !self.ready {
+            return vec![];
+        }
+        vec![
+            out(
+                wire::SUB_CLOSE,
+                value(SubClose {
+                    topic: Topic::Tasks,
+                    scope: None,
+                }),
+                None,
+            ),
+            open(Topic::Tasks, None),
+        ]
+    }
+
     pub(super) fn terminal_request(
         &mut self,
         feed: Signal<Feed>,

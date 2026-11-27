@@ -106,7 +106,6 @@ pub(super) struct Core {
 
 impl Core {
     pub(super) fn new() -> Self {
-        super::walks::connected();
         Self {
             next_id: 0,
             pending: BTreeMap::new(),
@@ -448,6 +447,9 @@ impl Core {
                     self.prepare_open(&open, false);
                     self.outbox.push_back(frame);
                 }
+            }
+            if pending.method == wire::SUB_OPEN && pending.params["topic"] == "tasks" {
+                super::walks::subscribed();
             }
             if pending.method == wire::HELLO {
                 let welcome: Welcome = serde_json::from_value(result).map_err(decode)?;

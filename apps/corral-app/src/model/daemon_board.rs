@@ -222,9 +222,9 @@ pub struct Board {
     pub complete: bool,
     rows: Vec<Task>,
     pending_epoch: Option<u64>,
-    /// The number of the last Tasks walk applied (`client::walks`): a reply's fence below it
-    /// means the board was taken after that reply.
-    pub walk: u64,
+    /// The position of the last Tasks walk applied: its subscription and its walk within it
+    /// (`client::walks`). Past a reply's fence, the board was taken after that reply.
+    pub walk: (u64, u64),
 }
 
 impl Board {

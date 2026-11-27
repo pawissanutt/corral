@@ -169,6 +169,8 @@ pub enum ClientRequest {
         request_id: String,
     },
     RetryTopic(String),
+    /// Close and reopen Tasks: a snapshot corrald takes after this request.
+    RefreshTasks,
     Terminal {
         session: String,
         open: bool,

@@ -1,42 +1,54 @@
 //! Where the Tasks board stands relative to the replies this device received, so a move can
 //! wait for a board taken after it.
 //!
-//! corrald pins one Tasks walk at a time per subscription and writes a reply before any walk it
-//! pins after handling the request; the client reads frames in order and hands each event to
-//! the app before reading the next. So a walk completed after a reply's fence was pinned after
-//! the reply, which corrald sends once the operation committed. Walks are numbered across
-//! connections: a new connection's walks are later than any earlier reply.
+//! A board position is `(subscription, walk)`. A Tasks subscription starts when corrald answers
+//! its `sub.open`: corrald sends that answer before any page of the new subscriber, and the core
+//! drops pages of a subscription it is closing, so no page of an earlier one is counted in it.
+//! Within a subscription corrald pins one walk at a time and writes a reply before any walk it
+//! pins after handling the request. The client reads frames in order and hands each event to
+//! the app before reading the next, so a walk past the fence read while a reply is handled was
+//! taken after corrald answered it. Subscriptions are numbered across connections.
 //!
-//! The core records each Tasks page here as it reads it; the app reads the numbers while it
-//! handles the event that page or reply produced.
+//! The core records here as it reads; the app reads while it handles the event that produced it.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+/// A board position: the Tasks subscription and the walk completed within it.
+pub(crate) type Position = (u64, u64);
+
+static SUBSCRIPTION: AtomicU64 = AtomicU64::new(0);
 static WALKS: AtomicU64 = AtomicU64::new(0);
 static PARTIAL: AtomicBool = AtomicBool::new(false);
 
-/// A Tasks page was read; `more` says another page of the same walk follows.
+/// corrald answered a Tasks `sub.open`: what follows belongs to a new subscription.
+pub(super) fn subscribed() {
+    SUBSCRIPTION.fetch_add(1, Ordering::AcqRel);
+    WALKS.store(0, Ordering::Release);
+    PARTIAL.store(false, Ordering::Release);
+}
+
+/// A Tasks page of the current subscription was read; `more` says its walk continues.
 pub(super) fn page(more: bool) {
-    if more {
-        PARTIAL.store(true, Ordering::Release);
-    } else {
-        PARTIAL.store(false, Ordering::Release);
+    PARTIAL.store(more, Ordering::Release);
+    if !more {
         WALKS.fetch_add(1, Ordering::AcqRel);
     }
 }
 
-/// A new connection: a walk the old one was reading never completes.
-pub(super) fn connected() {
-    PARTIAL.store(false, Ordering::Release);
+/// The last completed walk.
+pub(crate) fn completed() -> Position {
+    (
+        SUBSCRIPTION.load(Ordering::Acquire),
+        WALKS.load(Ordering::Acquire),
+    )
 }
 
-/// The number of the last completed Tasks walk.
-pub(crate) fn completed() -> u64 {
-    WALKS.load(Ordering::Acquire)
-}
-
-/// The number a walk must exceed to have been taken after the reply being handled: a walk
-/// partly read may have been pinned before it.
-pub(crate) fn fence() -> u64 {
-    completed() + u64::from(PARTIAL.load(Ordering::Acquire))
+/// What a walk must be past to have been taken after the reply being handled: a walk partly
+/// read may have been pinned before it.
+pub(crate) fn fence() -> Position {
+    let (subscription, walks) = completed();
+    (
+        subscription,
+        walks + u64::from(PARTIAL.load(Ordering::Acquire)),
+    )
 }
