@@ -17,7 +17,11 @@ fn pi_pack_is_isolated_refreshable_and_preserves_owner_files() {
     let notes = root.join("frontend/notes.md");
     std::fs::write(&notes, "owner notes").unwrap();
     let stale = root.join("frontend/SKILL.md");
-    std::fs::write(&stale, format!("{SKILL_MARKER}\nstale")).unwrap();
+    let template = pi_skill_template("---\r\nname: frontend\r\n---\r\nstale\r\n");
+    let unstamped = template.replace("{{marker}}", SKILL_MARKER);
+    let stamped = template.replace("{{marker}}", &skill_stamp("frontend", &unstamped));
+    assert!(stamped.contains("<!-- corral-skill: frontend version="));
+    std::fs::write(&stale, stamped).unwrap();
     let foreign = root.join("debugging/SKILL.md");
     std::fs::write(&foreign, "owner skill").unwrap();
     let again = install_harness_skills(home.path(), "corral-pi", false).unwrap();

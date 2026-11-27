@@ -537,13 +537,23 @@ pub fn skill_stamp(role: &str, unstamped: &str) -> String {
     )
 }
 
+/// Produce the same classic template and stamp input on LF and CRLF checkouts.
+pub(crate) fn pi_skill_template(markdown: &str) -> String {
+    markdown
+        .replace("\r\n", "\n")
+        .replacen("\n---\n", "\n---\n{{marker}}\n", 1)
+}
+
 /// The full versioned SKILL.md text of a role skill, or None for an unknown role.
 pub fn role_skill_markdown(role: &str) -> Option<String> {
     // Native Pi reads the package Markdown directly. Only the classic installer stamps it.
     macro_rules! pi_skill {
         ($name:literal) => {
-            include_str!(concat!("../../../packages/corral-pi/assets/skills/", $name, "/SKILL.md"))
-                .replacen("\n---\n", "\n---\n{{marker}}\n", 1)
+            pi_skill_template(include_str!(concat!(
+                "../../../packages/corral-pi/assets/skills/",
+                $name,
+                "/SKILL.md"
+            )))
         };
     }
     let body = match role {
