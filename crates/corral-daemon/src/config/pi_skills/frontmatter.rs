@@ -61,31 +61,24 @@ fn blank_description(s: &str) -> bool {
 }
 
 pub(super) fn skill_name(text: &str, path: &Path) -> Option<String> {
-    let mut lines = text
+    // Bound the same raw prefix in catalog and save paths. Pi's extractFrontmatter
+    // normalizes newlines, then stops at the first newline + three dashes, not EOL.
+    let prefix = &text[..text.floor_char_boundary(super::HEADER_LIMIT.min(text.len()))];
+    let normalized = prefix
         .strip_prefix('\u{feff}')
-        .unwrap_or(text)
-        .split_inclusive('\n');
-    if lines.next()?.trim_end_matches(['\n', '\r']) != "---" {
+        .unwrap_or(prefix)
+        .replace("\r\n", "\n")
+        .replace('\r', "\n");
+    let after_marker = normalized.strip_prefix("---")?;
+    let (header, _) = after_marker.split_once("\n---")?;
+    // Require the normal opening line; don't accept ambiguous opening markers for editing.
+    let (name, description) = fields(header.strip_prefix('\n')?)?;
+    if blank_description(&description?) {
         return None;
     }
-    let mut yaml = String::new();
-    for line in lines {
-        if yaml.len() + line.len() + 5 > super::HEADER_LIMIT {
-            return None;
-        }
-        if line.trim_end_matches(['\n', '\r']) == "---" {
-            let (name, description) = fields(&yaml)?;
-            if blank_description(&description?) {
-                return None;
-            }
-            return name
-                .filter(|name| !name.is_empty())
-                .map(|name| name.to_string())
-                .or_else(|| Some(path.parent()?.file_name()?.to_str()?.to_owned()));
-        }
-        yaml.push_str(line);
-    }
-    None
+    name.filter(|name| !name.is_empty())
+        .map(|name| name.to_string())
+        .or_else(|| Some(path.parent()?.file_name()?.to_str()?.to_owned()))
 }
 
 type Scalar = Option<Arc<str>>;

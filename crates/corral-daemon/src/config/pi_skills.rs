@@ -648,11 +648,20 @@ mod tests {
                 ["*label"; 100].join(",")
             ),
         );
-        for invalid in [duplicate, aliases, format!("\u{feff}\u{feff}{SKILL}")] {
+        let early_delimiter = SKILL.replace("description:", "---note: draft\ndescription:");
+        for invalid in [
+            duplicate,
+            aliases,
+            format!("\u{feff}\u{feff}{SKILL}"),
+            early_delimiter,
+        ] {
             assert!(put(root, put_req(invalid)).is_err());
             assert_eq!(fs::read_to_string(&path)?, SKILL);
         }
-        put(root, put_req(format!("{SKILL}\nUpdated.")))?;
+        // Pi also accepts lone CR as a line ending. Keep the original bytes when saving.
+        let updated = format!("{SKILL}\nUpdated.").replace('\n', "\r");
+        put(root, put_req(updated.clone()))?;
+        assert_eq!(fs::read_to_string(&path)?, updated);
         toggle(
             root,
             PiSkillToggle {
