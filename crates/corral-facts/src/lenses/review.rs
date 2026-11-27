@@ -207,7 +207,9 @@ impl<'a> Snapshot<'a> {
     }
 
     fn resolve(&self, anchor: &EvidenceAnchor) -> Option<(String, Range<u64>)> {
-        anchor::resolve(anchor, self.tree, None, |path| self.source(path)).ok()
+        anchor::resolve(anchor, self.tree, None, |path| self.source(path))
+            .ok()
+            .map(|(path, span, _)| (path, span))
     }
 }
 

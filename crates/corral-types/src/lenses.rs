@@ -47,6 +47,9 @@ pub struct BoundSpan {
     pub binding: usize,
     /// Inclusive last line.
     pub end_line: u64,
+    /// True for a provider-supplied definition range, not a declaration-line fallback.
+    #[serde(default)]
+    pub definition_range: bool,
     /// Blob ID for a Path, SHA-256 of complete resolved lines otherwise.
     /// None when the pinned bytes could not be checked within bounds.
     pub digest: Option<String>,

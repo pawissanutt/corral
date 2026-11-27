@@ -106,10 +106,11 @@ pub(super) fn compare(head: &Diagram, base: &Diagram) -> (Touch, Touch) {
                 && let (Some(x), Some(y)) = (&a.span, &b.span)
             {
                 return a.path != b.path
-                    || x.digest
-                        .as_ref()
-                        .zip(y.digest.as_ref())
-                        .is_some_and(|(a, b)| a != b);
+                    || x.definition_range == y.definition_range
+                        && x.digest
+                            .as_ref()
+                            .zip(y.digest.as_ref())
+                            .is_some_and(|(a, b)| a != b);
             }
             false
         }) || base
@@ -148,6 +149,7 @@ mod tests {
             line: 1,
             span: Some(BoundSpan {
                 binding: 0,
+                definition_range: false,
                 end_line: 3,
                 digest: Some("abc".into()),
             }),
@@ -157,6 +159,10 @@ mod tests {
         head.evidence.insert(key.clone(), None);
         assert!(compare(&head, &base).0.touched.is_empty());
         loc.span.as_mut().unwrap().digest = Some("xyz".into());
+        loc.span.as_mut().unwrap().definition_range = true;
+        head.evidence.insert(key.clone(), Some(loc.clone()));
+        assert!(compare(&head, &base).0.touched.is_empty());
+        loc.span.as_mut().unwrap().definition_range = false;
         head.evidence.insert(key, Some(loc));
         assert_eq!(compare(&head, &base).1.touched, [id.clone()]);
         head.evidence.clear();
