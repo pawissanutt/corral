@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import type { HostIdentity } from "../types.ts";
 
+export const WORKER_SKILL_ASSET = "src/roles/worker/skills/corral-worker/SKILL.md";
 export const PLAN_SKILL_ASSET = "assets/skills/corral-plan/SKILL.md";
 export const DIAGRAM_SKILL_ASSET = "assets/skills/corral-diagrams/SKILL.md";
 

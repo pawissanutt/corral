@@ -419,3 +419,50 @@ test("session exports reuse the same private HTML file until the branch advances
     started.host.session.dispose();
   }
 }, 120_000);
+
+test("workspace skill policy applies to new runtimes and hides disabled winners and their duplicates", async () => {
+  const settings = join(root, ".corral-next/pi.toml");
+  const explicit = join(home, "explicit-skills");
+  const project = join(work, "policy-project");
+  mkdirSync(join(project, ".git"), { recursive: true });
+  skill(explicit, "explicit-skill", "EXPLICIT-POLICY-TEXT");
+  skill(explicit, "debugging", "USER-DEBUGGING-IMPOSTOR");
+  skill(join(project, ".agents/skills"), "explicit-skill", "PROJECT-EXPLICIT-IMPOSTOR");
+  skill(join(project, ".agents/skills"), "project-policy-skill");
+  put(settings, '[skills]\nuser_dirs = ["~/explicit-skills"]\ndisabled = ["debugging", "project-policy-skill", "corral-worker"]\n');
+  const { capabilities, guidance } = workspaceSettings(root, "worker");
+  const old = await start("worker", capabilities.enabled, guidance, { cwd: project, capabilities });
+  try {
+    await bind(old);
+    expect(loaded(old.host).skills).toEqual([
+      "corral-worker", "corral-plan", "corral-diagrams", "explicit-skill", ...CODING_SKILL_NAMES.filter(name => name !== "debugging"),
+    ].sort());
+    expect(old.host.session.systemPrompt).not.toContain("<name>debugging</name>");
+    expect(old.host.session.systemPrompt).not.toContain("<name>project-policy-skill</name>");
+    expect(old.host.runtime.services.resourceLoader.getSkills().diagnostics).toEqual([]);
+    await turn(old, "/skill:explicit-skill");
+    expect(userTexts(old.host).join("\n")).toContain("EXPLICIT-POLICY-TEXT");
+    expect(userTexts(old.host).join("\n")).not.toContain("PROJECT-EXPLICIT-IMPOSTOR");
+    await turn(old, "/skill:debugging");
+    expect(userTexts(old.host).join("\n")).not.toContain('<skill name="debugging"');
+
+    put(settings, '[skills]\nuser_dirs = ["~/explicit-skills"]\n');
+    expect(loaded(old.host).skills).not.toContain("debugging");
+    const next = await start("worker", capabilities.enabled, { ...guidance, projectText: false }, { cwd: project, capabilities });
+    const restricted = await start("worker", [], guidance, { cwd: project });
+    try {
+      await bind(next);
+      await bind(restricted);
+      expect(loaded(next.host).skills).toContain("debugging");
+      expect(loaded(next.host).skills).toContain("explicit-skill");
+      expect(loaded(next.host).skills).not.toContain("project-policy-skill");
+      expect(loaded(restricted.host).skills).toEqual(["corral-diagrams", "corral-plan", "corral-worker"]);
+    } finally {
+      next.host.session.dispose();
+      restricted.host.session.dispose();
+    }
+  } finally {
+    old.host.session.dispose();
+    rmSync(settings, { force: true });
+  }
+}, 120_000);

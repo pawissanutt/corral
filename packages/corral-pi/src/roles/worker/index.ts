@@ -2,7 +2,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import type { CorralToolSpec, RoleContext, RoleModule, UpstreamTool } from "../types.ts";
-import { assetPath, assetRoot, DIAGRAM_SKILL_ASSET, PLAN_SKILL_ASSET, readAsset, renderContract } from "../common/assets.ts";
+import { assetPath, assetRoot, DIAGRAM_SKILL_ASSET, PLAN_SKILL_ASSET, WORKER_SKILL_ASSET, readAsset, renderContract } from "../common/assets.ts";
 import { askUserContract } from "../common/ask-user.ts";
 import { sendOnce } from "../common/kickoff.ts";
 import { artifactTool } from "../common/tools.ts";
@@ -11,7 +11,7 @@ import { checkpointTool, doneTool } from "./tools.ts";
 import { LSP_TOOL_NAMES, type LspToolkit, type LspToolkitOptions, configuredServers, lspToolkit } from "../../extensions/lsp/index.ts";
 
 export const CONTRACT_ASSET = "assets/worker-contract.md";
-export const SKILL_ASSET = "src/roles/worker/skills/corral-worker/SKILL.md";
+export const SKILL_ASSET = WORKER_SKILL_ASSET;
 
 const UPSTREAM: readonly UpstreamTool[] = ["read", "edit", "write", "bash", "grep", "find", "ls"];
 const TOOLS: readonly CorralToolSpec[] = [checkpointTool, artifactTool, doneTool];

@@ -87,6 +87,7 @@ import { registerCacheStats } from "../ui/cache-stats.ts";
 import type { HerdrLifecycle } from "./herdr.ts";
 import type { LoadedModules } from "./modules.ts";
 import { type GuardedFetch, guardedFetch, resourceLoaderOptions, restrictedSettings } from "./restrict.ts";
+import { applySkillPolicy, explicitSkillPaths, readSkillPolicy } from "./skill-policy.ts";
 import { createModelCatalog } from "./catalog.ts";
 import { installModelSelection } from "./model-selection.ts";
 import { childModels, childProfileProviders, interactiveModels, providerCapabilities, sessionRoutes, type SessionRoutes } from "./capabilities.ts";
@@ -1202,8 +1203,13 @@ export class HostSession {
     const contract = options.modules.role.contract(host.roleContext);
     const factory: CreateAgentSessionRuntimeFactory = async ({ cwd, agentDir, sessionManager, sessionStartEvent }) => {
       const settingsManager = sdk.SettingsManager.inMemory(host.settings);
+      const home = options.home ?? homedir();
+      const workspaceRoot = options.build?.session.workspaceRoot ?? options.root
+        ?? (options.client.configured ? options.client.workspaceRoot : undefined);
+      const skillPolicy = host.settings.enableSkillCommands && workspaceRoot ? readSkillPolicy(workspaceRoot, home) : undefined;
+      const configuredSkillPaths = skillPolicy ? explicitSkillPaths(skillPolicy.userDirs) : [];
       const guidance = selectGuidance({
-        cwd, agentDir, root: options.root ?? cwd, home: options.home ?? homedir(),
+        cwd, agentDir, root: options.root ?? cwd, home,
         ...(options.capabilities ? { capabilities: options.capabilities } : {}),
         ...(options.guidance ? { guidance: options.guidance } : {}),
       });
@@ -1211,7 +1217,8 @@ export class HostSession {
       const services = await sdk.createAgentSessionServices({
         cwd, agentDir, modelRuntime: models, settingsManager,
         resourceLoaderOptions: {
-          ...resourceLoaderOptions([(pi: ExtensionAPI) => host.extension(pi)]), appendSystemPrompt: [contract],
+          ...resourceLoaderOptions([(pi: ExtensionAPI) => host.extension(pi, configuredSkillPaths)]), appendSystemPrompt: [contract],
+          ...(skillPolicy ? { skillsOverride: (result) => applySkillPolicy(result, skillPolicy, options.modules.assetRoot) } : {}),
           additionalPromptTemplatePaths: [...guidance.promptPaths],
           agentsFilesOverride: () => ({ agentsFiles: guidance.contextFiles.map((file) => ({ ...file })) }),
         },
@@ -1284,7 +1291,7 @@ export class HostSession {
     return this.open ? this.turn : undefined;
   }
 
-  private async extension(api: ExtensionAPI): Promise<void> {
+  private async extension(api: ExtensionAPI, configuredSkillPaths: readonly string[]): Promise<void> {
     residentLifecycle(api);
     const pi = api;
     this.dialogPi = pi;
@@ -1589,7 +1596,7 @@ export class HostSession {
       if (!this.settings.enableSkillCommands) return { skillPaths: [...this.guidance.skillPaths] };
       const root = this.options.modules.assetRoot;
       if (!root) throw new RoleAssetMissing("assets/skills");
-      return { skillPaths: [...codingSkillPaths(root), ...this.guidance.skillPaths] };
+      return { skillPaths: [...codingSkillPaths(root), ...configuredSkillPaths, ...this.guidance.skillPaths] };
     });
     pi.on("session_shutdown", async (event) => {
       // InteractiveMode exits the process after runtime disposal; main's finally never runs.
