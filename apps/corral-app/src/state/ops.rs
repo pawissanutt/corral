@@ -16,6 +16,9 @@ use crate::model::{Act, ActStatus, Id};
 
 const NO_SOURCE: &str = "Not connected. Choose Preview explicitly to use sample data.";
 
+/// How long a move stays held behind the board before the fresh board is asked for again.
+const REFRESH_AGAIN: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// The same operation, forced or not, as one already sent. Operations that add something
 /// (a task, a comment, a reply, an artifact, usage) may be meant twice and never count.
 fn same(sent: &Act, act: &Act) -> bool {
@@ -177,31 +180,49 @@ impl AppState {
 
     /// A held move waits for a Tasks subscription opened after its answer, which corrald does
     /// not send on its own (it sends no walk when the rows are unchanged). Whenever the link is
-    /// up and a move is held behind the board, Tasks is closed and opened again in order, once
-    /// per board batch: one that did not get through (corrald busy) is asked again at the next
-    /// batch, and one that did brings the subscription that releases the move. Only the move
-    /// is held back; nothing resends it.
+    /// up and a move is held behind the board, Tasks is closed and opened again in order: once
+    /// per board batch, and again every `REFRESH_AGAIN` while it stays held, since a refresh
+    /// can fail without a word (the core turns it away at its request bound, or its open
+    /// expires waiting for the close). Time only asks for a fresh board again; only the board
+    /// releases the move, and nothing resends it.
     fn refresh_while_held(self) {
-        let asked = stored(None::<(u64, u64)>);
+        let asked = stored(None::<(u64, u64, u64)>);
+        let again = signal(0u64);
+        let timer = stored(None::<Spawned<()>>);
         effect(move || {
-            let (up, board) = self.feed.with(|feed| {
+            let round = again.get();
+            let (up, subscription, batches) = self.feed.with(|feed| {
                 (
                     feed.link == Link::Up,
-                    (feed.board.subscription, feed.board.batches),
+                    feed.board.subscription,
+                    feed.board.batches,
                 )
             });
             // A hold the board already passed is about to settle: no refresh for it.
-            let held = self
-                .catching_up
-                .with(|waiting| waiting.values().any(|(_, behind)| board.0 <= behind.fence));
+            let held = self.catching_up.with(|waiting| {
+                waiting
+                    .values()
+                    .any(|(_, behind)| subscription <= behind.fence)
+            });
             if !held || !up || untracked(|| self.fixture()) {
+                if let Some(old) = timer.replace(None) {
+                    old.cancel();
+                }
                 return;
             }
-            if asked.with(|asked| *asked == Some(board)) {
+            let key = (subscription, batches, round);
+            if asked.with(|asked| *asked == Some(key)) {
                 return;
             }
-            let _ = asked.replace(Some(board));
+            let _ = asked.replace(Some(key));
             _ = requests::send(requests::ClientRequest::RefreshTasks);
+            if let Some(old) = timer.replace(None) {
+                old.cancel();
+            }
+            let task = set_timeout(REFRESH_AGAIN, move || {
+                again.update(|round| *round = round.wrapping_add(1))
+            });
+            let _ = timer.replace(Some(task));
         });
     }
 
