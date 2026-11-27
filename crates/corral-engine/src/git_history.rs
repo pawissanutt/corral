@@ -66,9 +66,8 @@ pub struct HistoryLink {
     pub basis: LinkBasis,
 }
 
-/// Which record names the commit. Either names this project (a `landed` event from before
-/// landings recorded one only when no other configured project shares the repository) and
-/// comes from a run whose recorded worktree is in this project's repository.
+/// Which record names the commit. Either names this exact project and comes from a run whose
+/// recorded worktree is in this project's repository.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinkBasis {
     /// A `landed` event: the run's landing fast-forwarded its target to this commit.
@@ -153,16 +152,6 @@ impl Engine {
             return Ok((BTreeMap::new(), false));
         };
         let worktrees = canonical.join(".worktrees");
-        // An event that names no project is evidence only when this project alone uses the
-        // repository; with another configured project there it is ambiguous.
-        let sole = self.config.projects.iter().all(|(name, other)| {
-            name == project
-                || self
-                    .root
-                    .join(&other.path)
-                    .canonicalize()
-                    .is_ok_and(|path| path != canonical)
-        });
         let mut links = BTreeMap::new();
         let mut incomplete = false;
         self.store.read_snapshot(|| {
@@ -178,7 +167,7 @@ impl Engine {
                     incomplete = true;
                     rows.truncate(EVENTS_PER_COMMIT);
                 }
-                let found = self.commit_links(project, sole, &worktrees, rows)?;
+                let found = self.commit_links(project, &worktrees, rows)?;
                 if !found.0.is_empty() || found.1 > 0 {
                     links.insert(sha.clone(), found);
                 }
@@ -192,17 +181,14 @@ impl Engine {
     fn commit_links(
         &self,
         project: &str,
-        sole: bool,
         worktrees: &Path,
         rows: Vec<EventNaming>,
     ) -> Result<(Vec<HistoryLink>, u64)> {
         let mut runs: BTreeMap<(String, String), LinkBasis> = BTreeMap::new();
         for row in rows {
-            let names_project = match row.project.as_deref() {
-                Some(named) => named == project,
-                None => sole && row.basis == LinkBasis::Landed,
-            };
-            if !names_project {
+            // A record naming no project (a landing from before landings recorded one) is not
+            // evidence: which projects use a path today says nothing of the past.
+            if row.project.as_deref() != Some(project) {
                 continue;
             }
             let basis = runs.entry((row.task, row.run)).or_insert(row.basis);

@@ -128,8 +128,7 @@ fn history_pages_follow_git_from_a_pinned_tip_and_link_only_recorded_commits() {
         .unwrap();
 
     // What each run recorded: the landing and the submission name their project; a landing
-    // from before landings did names none, which only a repository used by one project
-    // (the fork's, not `repo`, which `shared` also uses) can vouch for.
+    // from before landings did names none and links nowhere.
     record(
         store,
         &landed,
@@ -149,7 +148,32 @@ fn history_pages_follow_git_from_a_pinned_tip_and_link_only_recorded_commits() {
         EventKind::Done,
         json!({"sha": merge, "project": "demo"}),
     );
-    record(store, &elsewhere, EventKind::Landed, json!({"sha": plain}));
+    record(
+        store,
+        &elsewhere,
+        EventKind::Landed,
+        json!({"sha": plain, "project": "fork"}),
+    );
+    // A landing from before landings named their project, in a repository only one
+    // project uses: still no evidence of which project it was.
+    let fork_legacy = fixture.named_task("Fork legacy landing", Some("fork"));
+    let unlabelled = head(&repo, "main~8");
+    store
+        .insert_run(&run(
+            &fork,
+            &fork_legacy,
+            Role::Worker,
+            Some(Outcome::Landed),
+            &unlabelled,
+            true,
+        ))
+        .unwrap();
+    record(
+        store,
+        &fork_legacy,
+        EventKind::Landed,
+        json!({"sha": unlabelled}),
+    );
     let legacy = fixture.named_task("Legacy landing", Some("demo"));
     let unvouched = head(&repo, "main~6");
     store
@@ -351,4 +375,16 @@ fn history_pages_follow_git_from_a_pinned_tip_and_link_only_recorded_commits() {
     assert!(links_at("fork", &relabelled).is_empty());
     assert!(links_at("demo", &plain).is_empty());
     assert_eq!(links_at("fork", &plain)[0].task, elsewhere);
+    assert!(links_at("fork", &unlabelled).is_empty());
+
+    // Removing `demo`, which shared `repo` with `shared`, supplies no history: the unlabelled
+    // landing does not become `shared`'s, nor does demo's labelled one.
+    std::fs::write(
+        fixture.shared.root().join(".corral-next/corral.toml"),
+        "[runner]\nmode = \"process\"\n[projects.shared]\npath = \"repo\"\n[projects.fork]\npath = \"fork\"\n",
+    )
+    .unwrap();
+    fixture.shared.publish();
+    assert!(links_at("shared", &unvouched).is_empty());
+    assert!(links_at("shared", &merge).is_empty());
 }
