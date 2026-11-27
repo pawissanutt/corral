@@ -278,7 +278,7 @@ impl State {
                     ui.recall = None;
                 }
                 ui.draft = text;
-                ui.picker.slash_at = 0;
+                ui.picker.slash_at = None;
                 ui.mention.at = 0;
                 Vec::new()
             }
@@ -519,11 +519,15 @@ impl State {
     }
 
     /// Runs the draft's `!command` on the host, as the `/compact` row runs its action, and
-    /// clears the draft; an empty command leaves it as it is.
+    /// clears the draft; an empty command, or a host that does not declare now that it runs
+    /// them, leaves it as it is and sends nothing.
     fn shell(&mut self, session: Id, text: &str, feed: &Feed) -> Vec<Effect> {
         let Some(action) = super::composer::shell_action(text) else {
             return Vec::new();
         };
+        if !super::composer::shell_runs(feed, session.as_str()) {
+            return Vec::new();
+        }
         let ui = self.ui_mut(&session);
         ui.draft.clear();
         ui.recall = None;

@@ -430,6 +430,17 @@ fn display(cx: &Cx<'_>) -> ActionGroup {
     }
 }
 
+/// Why Rewind… cannot run, read as `agents::rewind_can` reads the host's `rewind` declaration:
+/// its reason while it is served but not now, and, as for any host action, why when a host that
+/// declares its capabilities leaves it out. A host that declares nothing is not refused here.
+fn rewinds_blocked(cx: &Cx<'_>) -> Option<String> {
+    match crate::model::agents::rewind_can(cx.feed, cx.id.as_str()) {
+        Some(why) => why,
+        None => matches!(cx.can("rewind"), Can::Absent)
+            .then(|| "this session's host does not rewind".to_owned()),
+    }
+}
+
 fn run(cx: &Cx<'_>) -> ActionGroup {
     let kind = crate::model::agents::kind(cx.feed, cx.id.as_str());
     let mut rows: Vec<ActionRow> = cx
@@ -445,10 +456,10 @@ fn run(cx: &Cx<'_>) -> ActionGroup {
                     control,
                 },
             );
-            found.command = match control {
-                Control::Rewinds => Some("/rewind"),
-                _ => None,
-            };
+            if control == Control::Rewinds {
+                found.command = Some("/rewind");
+                found.unavailable = rewinds_blocked(cx);
+            }
             found
         })
         .collect();
@@ -593,7 +604,7 @@ pub(super) fn act(state: &mut State, action: CommandAction, feed: &Feed) -> Vec<
             Vec::new()
         }
         CommandAction::MenuAt { session, at } => {
-            state.ui_mut(&session).picker.slash_at = at;
+            state.ui_mut(&session).picker.slash_at = Some(at);
             Vec::new()
         }
         CommandAction::DismissNotice { session, notice } => {

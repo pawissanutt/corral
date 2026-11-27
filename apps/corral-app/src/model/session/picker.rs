@@ -41,8 +41,8 @@ pub struct PickerUi {
     pub at: usize,
     /// The model the highlight stays on while a favorite change reorders the list.
     pub follow: Option<String>,
-    /// The highlighted row of the `/` menu.
-    pub slash_at: usize,
+    /// The highlighted row of the `/` menu, once walked; none: its first row that runs.
+    pub slash_at: Option<usize>,
     /// The draft the `/` menu was closed on (Esc keeps the text); it opens again once the draft
     /// changes.
     pub slash_closed: Option<String>,
@@ -55,7 +55,7 @@ impl PickerUi {
         scoped: false,
         at: 0,
         follow: None,
-        slash_at: 0,
+        slash_at: None,
         slash_closed: None,
     };
 }

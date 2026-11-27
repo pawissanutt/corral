@@ -306,16 +306,19 @@ fn rewind_escape(cx: &Cx<'_>) -> Option<Action> {
     })
 }
 
-/// `/rewind` or `/rewind <n>` as typed: none for any other text, else the turn it names.
+/// The one reading of `/rewind` the `/` menu and the send share: `/rewind` and `/rewind --list`
+/// list the turns (`Some(None)`), `/rewind <n>` names turn `n`; any other text is not a rewind
+/// (none), so it goes to the host as typed.
 pub(super) fn rewind_typed(text: &str) -> Option<Option<u64>> {
-    let rest = text.trim().strip_prefix("/rewind")?;
-    if rest.is_empty() {
-        return Some(None);
-    }
-    if !rest.starts_with(char::is_whitespace) {
+    let rest = text.trim().strip_prefix('/')?;
+    let (name, args) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+    if !name.eq_ignore_ascii_case("rewind") {
         return None;
     }
-    rest.trim().parse().ok().map(Some)
+    match args.trim() {
+        "" | "--list" => Some(None),
+        turn => turn.parse().ok().map(Some),
+    }
 }
 
 /// What a pressed key does on the page `cx` reads. Enter and Alt+Enter are the composer's own:

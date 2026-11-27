@@ -2,9 +2,13 @@
 //! lists the session worktree's entries in the folder the typed path names (`@src/mo` lists
 //! `src/`), narrowed by what follows its last `/` (name start first, then anywhere in the name,
 //! then its letters in order). Choosing a folder descends (`@src/`), a file puts `@path ` in the
-//! draft, as Pi's composer does: the host reads `@path` as a file mention. The folder is the same
-//! `SessionFiles` read the Files tab makes, one per folder. A session without a worktree the app
-//! can read keeps the popup open with why. Esc closes it on that text and keeps the text.
+//! draft, as Pi's composer does: the host reads `@path` as a file mention; a path with a space is
+//! quoted (`@"my dir/a.rs"`), a folder's quote left open (`@"my dir/`) so the popup goes on
+//! reading it. The folder is the same `SessionFiles` read the Files tab makes, one per folder;
+//! where corrald cut that listing short, what is typed is searched by corrald's own filter. A
+//! session without a worktree the app can read keeps the popup open with why. Esc closes it on
+//! that text and keeps the text. While the dock takes the text as a reason or an answer there is
+//! no popup.
 
 use corral_protocol::detail::{DetailBody, DetailRef, SessionFiles};
 
@@ -94,28 +98,64 @@ impl MentionMenu {
 }
 
 /// The typed mention: the draft before it, the folder it names (without its trailing `/`) and
-/// the text after that folder's `/`. None unless the draft's last word starts with `@`; a `/`
-/// command or a `!` shell command takes none.
+/// the text after that folder's `/`. None unless the draft ends in a mention: its last word
+/// starting with `@`, or a quoted `@"…` (which may hold spaces) not yet closed, or closed with
+/// nothing after it. A `/` command or a `!` shell command takes none.
 pub(super) fn typed(draft: &str) -> Option<(&str, &str, &str)> {
-    if draft.starts_with('/') || draft.starts_with('!') {
+    if draft.starts_with('/') || super::composer::shell_typed(draft) {
         return None;
     }
-    let start = draft
-        .char_indices()
-        .rev()
-        .find(|(_, c)| c.is_whitespace())
-        .map_or(0, |(at, c)| at + c.len_utf8());
-    let word = draft[start..].strip_prefix('@')?;
+    let (start, word) = quoted(draft).or_else(|| {
+        let start = draft
+            .char_indices()
+            .rev()
+            .find(|(_, c)| c.is_whitespace())
+            .map_or(0, |(at, c)| at + c.len_utf8());
+        Some((start, draft[start..].strip_prefix('@')?))
+    })?;
     let (folder, query) = word.rsplit_once('/').unwrap_or(("", word));
     Some((&draft[..start], folder.trim_start_matches("./"), query))
 }
 
-fn listing(session: &Id, folder: &str) -> DetailRef {
+/// The draft's last `@"…` mention, where it starts and what it quotes so far, while it is open
+/// or closed with nothing after it.
+fn quoted(draft: &str) -> Option<(usize, &str)> {
+    let start = draft.rfind("@\"")?;
+    if draft[..start]
+        .chars()
+        .next_back()
+        .is_some_and(|c| !c.is_whitespace())
+    {
+        return None;
+    }
+    let inner = &draft[start + 2..];
+    let inner = inner.strip_suffix('"').unwrap_or(inner);
+    (!inner.contains(['"', '\n'])).then_some((start, inner))
+}
+
+/// The listing of `folder`, narrowed by corrald to names holding `filter` when given.
+fn listing(session: &Id, folder: &str, filter: Option<&str>) -> DetailRef {
     DetailRef::SessionFiles {
         id: session.to_string(),
         path: folder.to_owned(),
-        filter: None,
+        filter: filter.map(str::to_owned),
     }
+}
+
+/// The search corrald runs for `query` in a folder whose whole listing it cut short, so a name
+/// past its bound can still be found; none while the listing is whole or nothing is typed, or
+/// for text corrald would refuse as a filter.
+fn search<'q>(feed: &Feed, whole: &DetailRef, query: &'q str) -> Option<&'q str> {
+    let cut = served(feed, whole).is_some_and(|listing| listing.truncated);
+    (cut && !query.is_empty() && query.len() <= 128 && !query.chars().any(char::is_control))
+        .then_some(query)
+}
+
+/// Whether the popup is the composer's now: not while the dock takes the text as a reason or an
+/// answer, whose Enter gives it.
+fn offered(cx: &Cx<'_>) -> bool {
+    cx.ui.dock.compose.is_none()
+        && cx.ui.mention.closed.as_deref() != Some(cx.ui.draft.as_str())
 }
 
 fn served<'f>(feed: &'f Feed, target: &DetailRef) -> Option<&'f SessionFiles> {
@@ -144,21 +184,22 @@ fn rank(name: &str, query: &str) -> Option<u8> {
     }
 }
 
-/// `@path`, quoted where the path holds a space, as Pi reads it.
-fn mention(path: &str) -> String {
-    if path.contains(char::is_whitespace) {
-        format!("@\"{path}\"")
-    } else {
-        format!("@{path}")
+/// `@path`, quoted where the path holds a space, as Pi reads it. A folder's (its `/` kept) quote
+/// stays open, so what is typed next is still inside the mention and the popup goes on listing.
+fn mention(path: &str, directory: bool) -> String {
+    match (path.contains(char::is_whitespace), directory) {
+        (false, _) => format!("@{path}"),
+        (true, true) => format!("@\"{path}"),
+        (true, false) => format!("@\"{path}\""),
     }
 }
 
-/// The popup of the session `cx` reads; none while the draft's last word is not an `@` mention
-/// or after Esc closed it on this text.
+/// The popup of the session `cx` reads; none while the draft does not end in an `@` mention,
+/// after Esc closed it on this text, or while the dock takes the text.
 pub fn menu(cx: &Cx<'_>) -> Option<MentionMenu> {
     let draft = cx.ui.draft.as_str();
     let (before, folder, query) = typed(draft)?;
-    if cx.ui.mention.closed.as_deref() == Some(draft) {
+    if !offered(cx) {
         return None;
     }
     let shown_folder = if folder.is_empty() {
@@ -185,7 +226,14 @@ pub fn menu(cx: &Cx<'_>) -> Option<MentionMenu> {
         ));
         return Some(menu);
     }
-    let target = listing(cx.id, folder);
+    let query = query.to_lowercase();
+    let whole = listing(cx.id, folder, None);
+    // corrald's search of a cut-short folder once it answers; its whole listing meanwhile.
+    let searched = search(cx.feed, &whole, &query)
+        .map(|query| listing(cx.id, folder, Some(query)))
+        .filter(|target| served(cx.feed, target).is_some());
+    let filtered = searched.is_some();
+    let target = searched.unwrap_or(whole);
     let Some(listing) = served(cx.feed, &target) else {
         menu.note = Some(match ReadState::of(cx.feed.detail(&target), cx.feed) {
             ReadState::Failed(why) => (Hue::Fail, format!("Could not read {shown_folder}: {why}")),
@@ -193,7 +241,6 @@ pub fn menu(cx: &Cx<'_>) -> Option<MentionMenu> {
         });
         return Some(menu);
     };
-    let query = query.to_lowercase();
     let mut ranked: Vec<(u8, &str, bool)> = listing
         .entries
         .iter()
@@ -218,9 +265,17 @@ pub fn menu(cx: &Cx<'_>) -> Option<MentionMenu> {
         return Some(menu);
     }
     if listing.truncated {
+        let first = listing.entries.len();
+        let folder = or_root(&shown_folder);
         menu.note = Some((
             Hue::Neutral,
-            "This folder is large; keep typing to narrow it.".into(),
+            if filtered {
+                format!("Only the first {first} names in {folder} holding {query} are searched.")
+            } else if query.is_empty() {
+                format!("Only the first {first} entries of {folder} are listed; type to search.")
+            } else {
+                format!("Only the first {first} entries of {folder} are searched so far.")
+            },
         ));
     }
     let at = cx.ui.mention.at.min(total - 1);
@@ -232,11 +287,10 @@ pub fn menu(cx: &Cx<'_>) -> Option<MentionMenu> {
         .iter()
         .enumerate()
         .map(|(offset, (_, name, directory))| {
-            let path = format!("{shown_folder}{name}");
             let text = if *directory {
-                format!("{before}{}/", mention(&path))
+                format!("{before}{}", mention(&format!("{shown_folder}{name}/"), true))
             } else {
-                format!("{before}{} ", mention(&path))
+                format!("{before}{} ", mention(&format!("{shown_folder}{name}"), false))
             };
             MentionRow {
                 id: format!("mention-{}", first + offset),
@@ -267,13 +321,20 @@ fn or_root(folder: &str) -> &str {
     }
 }
 
-/// The folder's read while the popup lists it: once, while nothing was read.
+/// The folder's read while the popup lists it: once, while nothing was read; then, where that
+/// listing was cut short, corrald's search of the folder for what is typed.
 pub(super) fn fetch(cx: &Cx<'_>) -> Option<Action> {
-    let (_, folder, _) = typed(&cx.ui.draft)?;
-    if cx.ui.mention.closed.as_deref() == Some(cx.ui.draft.as_str()) || !files::applies(cx) {
+    let (_, folder, query) = typed(&cx.ui.draft)?;
+    if !offered(cx) || !files::applies(cx) {
         return None;
     }
-    tabs::load(cx, Ok(listing(cx.id, folder)), None)
+    let whole = listing(cx.id, folder, None);
+    let query = query.to_lowercase();
+    let target = match search(cx.feed, &whole, &query) {
+        Some(query) => listing(cx.id, folder, Some(query)),
+        None => whole,
+    };
+    tabs::load(cx, Ok(target), None)
 }
 
 pub(super) fn act(state: &mut State, action: MentionAction, _feed: &Feed) -> Vec<Effect> {
@@ -296,6 +357,7 @@ mod tests {
     use crate::model::daemon::{DetailCache, detail_key};
     use crate::model::health::daemon_env;
     use crate::model::nav::Form;
+    use crate::model::session::dock::Compose;
     use crate::model::session::{Facts, SessionRole, Ui};
 
     fn entry(name: &str, directory: bool) -> SessionFileEntry {
@@ -303,6 +365,16 @@ mod tests {
             name: name.into(),
             directory,
         }
+    }
+
+    /// A folder with a space went in as `@"my dir"/`, which no longer read as a mention, so the
+    /// popup could not descend into it.
+    #[test]
+    fn a_quoted_folder_mention_still_reads_as_one() {
+        let picked = format!("see {}", mention("my dir/", true));
+        assert_eq!(typed(&picked), Some(("see ", "my dir", "")));
+        assert_eq!(typed("see @\"my dir/ma"), Some(("see ", "my dir", "ma")));
+        assert_eq!(typed("see @\"my dir/main.rs\" "), None);
     }
 
     /// The popup listed the worktree's root for `@src/`, so a file inside a folder could never
@@ -323,7 +395,7 @@ mod tests {
                 ],
             ),
         ] {
-            let target = listing(&id, folder);
+            let target = listing(&id, folder, None);
             feed.details.insert(
                 detail_key(&target),
                 DetailCache {
@@ -344,10 +416,21 @@ mod tests {
             role: SessionRole::Worker,
             task: Some(Id::from("T-1")),
         };
-        let ui = Ui {
+        let mut ui = Ui {
             draft: "look at @src/mo".into(),
             ..Ui::default()
         };
+        // While the dock takes the text as a reason, Enter must give it, not choose a file.
+        ui.dock.compose = Some(Compose::Reason {
+            card: "c1".into(),
+            option: "land".into(),
+            label: "Land".into(),
+            why: String::new(),
+        });
+        let cx = Cx::new(&feed, &ui, &id, daemon_env(&feed, Form::Desktop), &facts);
+        assert_eq!(menu(&cx), None);
+        assert_eq!(fetch(&cx), None);
+        ui.dock.compose = None;
         let cx = Cx::new(&feed, &ui, &id, daemon_env(&feed, Form::Desktop), &facts);
         let shown = menu(&cx).map(|menu| menu.rows);
         let names: Vec<(String, Action)> = shown

@@ -13,7 +13,7 @@ use corral_protocol::session_host::SessionAction;
 use corral_protocol::session_state::SendPolicy;
 
 use crate::model::agents::Control;
-use crate::model::daemon::Link;
+use crate::model::daemon::{Feed, Link};
 use crate::model::hue::Hue;
 
 use super::activity::{self, ActivityLine};
@@ -74,17 +74,40 @@ pub fn shell_action(draft: &str) -> Option<SessionAction> {
     })
 }
 
-/// Shell mode for the draft of `cx`, with why the host cannot run it, as the catalog says of a
-/// host action it does not serve.
+/// Whether the draft is a `!command`, leading spaces aside: the one test shell mode and the `@`
+/// popup share.
+pub(super) fn shell_typed(draft: &str) -> bool {
+    draft.trim_start().starts_with('!')
+}
+
+/// Whether the host of `session` declares now that it runs owner shell commands: only then does
+/// a `!command` leave, so one is never run on a host that has not said it takes them.
+pub(super) fn shell_runs(feed: &Feed, session: &str) -> bool {
+    feed.live
+        .get(session)
+        .and_then(|live| live.state.as_ref())
+        .is_some_and(|state| {
+            state
+                .can
+                .iter()
+                .any(|capability| capability.id == "shell" && capability.unavailable.is_none())
+        })
+}
+
+/// Shell mode for the draft of `cx`, with why the host cannot run it: it runs only where the
+/// host declares `shell` usable now.
 fn shell(cx: &Cx<'_>, refused: Option<&String>) -> Option<ShellMode> {
     let draft = cx.ui.draft.trim_start();
-    if !draft.starts_with('!') || cx.ui.dock.compose.is_some() {
+    if !shell_typed(draft) || cx.ui.dock.compose.is_some() {
         return None;
     }
     let unavailable = refused.cloned().or_else(|| match cx.can("shell") {
         Can::Absent => Some("this session's host does not run owner shell commands".into()),
+        Can::Unknown => {
+            Some("this session's host has not said it runs owner shell commands".into())
+        }
         Can::Unavailable(why) => Some(why),
-        Can::Yes | Can::Unknown => match cx.host {
+        Can::Yes => match cx.host {
             Host::NotRunning | Host::Ended => Some("the host is not running".into()),
             Host::Unreachable => Some("corrald cannot reach the host".into()),
             Host::Running | Host::Unknown => None,
@@ -546,26 +569,51 @@ pub fn composer(cx: &Cx<'_>) -> Option<SessionComposer> {
 #[cfg(test)]
 mod tests {
     use corral_protocol::session_host::SessionActionRequest;
+    use corral_protocol::session_state::{Capability, SessionState};
 
     use super::*;
     use crate::model::Id;
-    use crate::model::daemon::Feed;
     use crate::model::effect::Effect;
     use crate::model::session::State;
+    use crate::model::session::transcript::LiveSession;
 
     /// `!!ls` went to the agent as a message, so a command the owner meant to keep out of the
-    /// agent's context was put in it.
+    /// agent's context was put in it; and a `!command` ran on a host that never declared
+    /// `shell`, clearing the draft.
     #[test]
     fn double_bang_runs_the_shell_command_kept_out_of_context() {
         let id = Id::from("B-1");
+        let shell = |state: &mut State, feed: &Feed| {
+            state.act(
+                Action::Draft {
+                    session: id.clone(),
+                    text: "!!ls -la".into(),
+                },
+                feed,
+            );
+            state.act(
+                Action::Shell {
+                    session: id.clone(),
+                    text: "!!ls -la".into(),
+                },
+                feed,
+            )
+        };
         let mut state = State::default();
-        let effects = state.act(
-            Action::Shell {
-                session: id.clone(),
-                text: "!!ls -la".into(),
-            },
-            &Feed::default(),
-        );
+        assert!(shell(&mut state, &Feed::default()).is_empty());
+        assert_eq!(state.ui(id.as_str()).draft, "!!ls -la");
+
+        let mut feed = Feed::default();
+        let mut live = LiveSession::default();
+        live.replace_state(Some(Box::new(SessionState {
+            can: vec![Capability {
+                id: "shell".into(),
+                unavailable: None,
+            }],
+            ..SessionState::default()
+        })));
+        feed.live.insert(id.clone(), live);
+        let effects = shell(&mut state, &feed);
         let sent: Vec<&SessionAction> = effects
             .iter()
             .filter_map(|effect| match effect {

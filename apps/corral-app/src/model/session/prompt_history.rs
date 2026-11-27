@@ -126,7 +126,7 @@ pub(super) fn recall(state: &mut State, session: &Id, older: bool, feed: &Feed) 
             ui.recall = None;
         }
     }
-    ui.picker.slash_at = 0;
+    ui.picker.slash_at = None;
     ui.mention.at = 0;
     Vec::new()
 }

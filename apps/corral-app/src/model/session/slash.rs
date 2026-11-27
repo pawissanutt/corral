@@ -2,7 +2,8 @@
 //! rows whose terminal command starts with the typed name (or, before any argument, whose label
 //! holds it), then the host's own commands (`DetailRef::SessionCommands`: extension commands,
 //! prompt templates, skills and the host's commands the catalog does not run itself). A catalog
-//! row runs its action (Compact takes what follows the name as its instructions); a host
+//! row runs its action (Compact takes what follows the name as its instructions; Rewind… reads
+//! it as the send does, `keys::rewind_typed`, and claims no other text); a host
 //! command is sent as the typed text through the normal send, where the host runs it. One whose
 //! argument is required fills the draft with its name instead, so the argument can be typed.
 //! Commands the app does not carry stay listed with why. Esc closes the menu and keeps the text;
@@ -14,6 +15,7 @@ use corral_protocol::detail::{
 use corral_protocol::session_host::SessionAction;
 use corral_protocol::session_state::SendPolicy;
 
+use crate::model::agents::{Control, control_label, kind};
 use crate::model::hue::Hue;
 use crate::model::session::{Action, Can, Cx, ReadState, SessionActions};
 
@@ -219,17 +221,43 @@ pub fn slash(cx: &Cx<'_>, catalog: &SessionActions) -> Option<SlashMenu> {
                 action: SessionAction::Compact {
                     instructions: Some(instructions.to_owned()),
                 },
-                what: *what,
+                what,
             }),
+            // Read as the send reads it, so Enter here and Enter on the closed menu agree; text
+            // that is no rewind is not this row's and goes to the host as typed.
+            (
+                Action::Control {
+                    session,
+                    control: Control::Rewinds,
+                },
+                _,
+            ) => match super::super::keys::rewind_typed(draft) {
+                Some(turn) => Action::Control {
+                    session: session.clone(),
+                    control: turn.map_or(Control::Rewinds, Control::Rewind),
+                },
+                None => continue,
+            },
             (action, _) => action.clone(),
+        };
+        let label = match &action {
+            Action::Control {
+                control: control @ Control::Rewind(_),
+                ..
+            } => control_label(*control, kind(cx.feed, cx.id.as_str())),
+            _ => found.label.clone(),
         };
         ranked.push((
             rank,
             SlashRow {
                 id: format!("cmd-{}", found.id.trim_start_matches("act-")),
-                label: found.label.clone(),
+                label,
                 command: found.command.map(str::to_owned).unwrap_or_default(),
-                args: (found.id == "act-compact").then(|| "[instructions]".to_owned()),
+                args: match found.id.as_str() {
+                    "act-compact" => Some("[instructions]".to_owned()),
+                    "act-rewind" => Some("[turn]".to_owned()),
+                    _ => None,
+                },
                 source: None,
                 unavailable: found.unavailable.clone(),
                 run: vec![clear(cx), action],
@@ -269,15 +297,14 @@ pub fn slash(cx: &Cx<'_>, catalog: &SessionActions) -> Option<SlashMenu> {
         return None;
     }
     let total = rows.len();
-    // The highlight over every matched row; the window follows it.
-    let selected = (total > 0).then(|| {
-        if cx.ui.picker.slash_at == 0 {
-            rows.iter()
-                .position(|row| row.unavailable.is_none())
-                .unwrap_or(0)
-        } else {
-            cx.ui.picker.slash_at.min(total - 1)
-        }
+    // The highlight over every matched row (the first that runs until the owner walks, so a
+    // walk can still reach an unavailable first row); the window follows it.
+    let selected = (total > 0).then(|| match cx.ui.picker.slash_at {
+        Some(at) => at.min(total - 1),
+        None => rows
+            .iter()
+            .position(|row| row.unavailable.is_none())
+            .unwrap_or(0),
     });
     let first = selected
         .map_or(0, |at| at.saturating_sub(SHOWN / 2))
@@ -293,6 +320,13 @@ pub fn slash(cx: &Cx<'_>, catalog: &SessionActions) -> Option<SlashMenu> {
         note,
         close: Action::Command(CommandAction::CloseMenu(cx.id.clone())),
     })
+}
+
+/// The read of the host's commands while the draft is a `/` command: once, while nothing was
+/// read and the host serves them.
+pub(super) fn fetches(cx: &Cx<'_>) -> Option<Action> {
+    typed(&cx.ui.draft)?;
+    crate::model::session::tabs::load(cx, Ok(target(cx)), Some("commands"))
 }
 
 #[cfg(test)]
@@ -342,7 +376,7 @@ mod tests {
             draft: draft.into(),
             ..Ui::default()
         };
-        ui.picker.slash_at = at;
+        ui.picker.slash_at = Some(at);
         let cx = Cx::new(&feed, &ui, &id, daemon_env(&feed, Form::Desktop), &facts);
         slash(&cx, &actions(&cx)).expect("the host's commands open the menu")
     }
@@ -368,11 +402,4 @@ mod tests {
         assert_eq!(found, ["/skill:foo"]);
         assert_eq!(menu.rows[0].source, Some("skill"));
     }
-}
-
-/// The read of the host's commands while the draft is a `/` command: once, while nothing was
-/// read and the host serves them.
-pub(super) fn fetches(cx: &Cx<'_>) -> Option<Action> {
-    typed(&cx.ui.draft)?;
-    crate::model::session::tabs::load(cx, Ok(target(cx)), Some("commands"))
 }
