@@ -181,9 +181,10 @@ impl AppState {
     /// A held move waits for a Tasks subscription opened after its answer, which corrald does
     /// not send on its own (it sends no walk when the rows are unchanged). Whenever the link is
     /// up and a move is held behind the board, Tasks is closed and opened again in order: once
-    /// per board batch, and again every `REFRESH_AGAIN` while it stays held, since a refresh
-    /// can fail without a word (the core turns it away at its request bound, or its open
-    /// expires waiting for the close). Time only asks for a fresh board again; only the board
+    /// per board batch, and again every `REFRESH_AGAIN` while no Tasks open has been admitted
+    /// since the hold, since a refresh can fail without a word (the core turns it away at its
+    /// request bound, or its open expires waiting for the close). An admitted open's snapshot
+    /// is left to finish, however slow. Time only asks for a fresh board again; only the board
     /// releases the move, and nothing resends it.
     fn refresh_while_held(self) {
         let asked = stored(None::<(u64, u64, u64)>);
@@ -199,18 +200,23 @@ impl AppState {
                 )
             });
             // A hold the board already passed is about to settle: no refresh for it.
-            let held = self.catching_up.with(|waiting| {
+            let fence = self.catching_up.with(|waiting| {
                 waiting
                     .values()
-                    .any(|(_, behind)| subscription <= behind.fence)
+                    .map(|(_, behind)| behind.fence)
+                    .filter(|fence| subscription <= *fence)
+                    .max()
             });
-            if !held || !up || untracked(|| self.fixture()) {
+            let Some(fence) = fence.filter(|_| up && !untracked(|| self.fixture())) else {
                 if let Some(old) = timer.replace(None) {
                     old.cancel();
                 }
                 return;
-            }
-            let key = (subscription, batches, round);
+            };
+            // Once a Tasks open was admitted after the hold, its snapshot is on its way, however
+            // many pages it takes: time asks again only while none was.
+            let admitted = crate::client::walks::opens() > fence;
+            let key = (subscription, batches, if admitted { 0 } else { round });
             if asked.with(|asked| *asked == Some(key)) {
                 return;
             }
