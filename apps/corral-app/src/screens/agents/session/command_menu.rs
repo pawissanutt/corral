@@ -80,7 +80,9 @@ fn sized(form: Form, words: Text, mono: bool) -> Text {
 fn slash_list(app: AppState, menu: &SlashMenu, session: Id, ask: bool) -> AnyElement {
     let form = app.form;
     if let Some(at) = menu.at {
-        let len = menu.rows.len();
+        // The walk covers every matched row, not only the window drawn.
+        let at = menu.first + at;
+        let len = menu.total;
         // Not while a side pane it is drawn in is set aside: the page keeps its arrows.
         let session = session.clone();
         app.bind_while_shown(move || {
@@ -120,10 +122,17 @@ fn slash_list(app: AppState, menu: &SlashMenu, session: Id, ask: bool) -> AnyEle
             line.px(px(8.0)).py(px(3.0)).into_element()
         }
     };
+    let above = (menu.first > 0).then(|| {
+        pad(sized(
+            form,
+            text(format!("{} above · ↑ for more", menu.first)).text_color(color(Token::Ink3)),
+            false,
+        ))
+    });
     let more = (menu.more > 0).then(|| {
         pad(sized(
             form,
-            text(format!("{} more · keep typing to narrow", menu.more))
+            text(format!("{} more · ↓ or keep typing to narrow", menu.more))
                 .text_color(color(Token::Ink3)),
             false,
         ))
@@ -143,6 +152,7 @@ fn slash_list(app: AppState, menu: &SlashMenu, session: Id, ask: bool) -> AnyEle
         .test_id("session-commands")
         .role(AccessibilityRole::List)
         .label("Commands")
+        .children(above)
         .children(items)
         .children(more)
         .children(note);
@@ -233,6 +243,9 @@ fn item(app: AppState, row: &SlashRow, highlighted: bool, session: Id, ask: bool
     });
     let actions = row.run.clone();
     let mut accessible = format!("{} {}", row.command, row.label);
+    if let Some(source) = row.source {
+        accessible.push_str(&format!(", {source}"));
+    }
     if let Some(why) = &row.unavailable {
         accessible.push_str(&format!(", unavailable: {why}"));
     }

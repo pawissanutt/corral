@@ -93,6 +93,24 @@ pub fn line(
             elapsed: since(started, feed).map(duration),
         });
     }
+    // Work the host reports with no turn open (compaction, idle or after a turn): its phase
+    // alone, as the host says it.
+    if let Some(activity) = state.and_then(|state| state.activity.as_ref()) {
+        let (hue, glyph, spinner) = tone(&activity.phase);
+        let mut letters = activity.phase.chars();
+        let phase: String = letters
+            .next()
+            .map(|first| first.to_uppercase().chain(letters).collect())
+            .unwrap_or_default();
+        return Some(ActivityLine {
+            spinner,
+            glyph,
+            hue,
+            phase,
+            short: short(&activity.phase),
+            elapsed: since(Some(activity.since.as_str()), feed).map(duration),
+        });
+    }
     let live = live?;
     let end = live.ended.as_ref()?;
     let ended = crate::model::agents::unix(live.ended_at.as_deref()?)?;
@@ -118,4 +136,30 @@ pub fn line(
         short: word.to_owned(),
         elapsed: ran,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use corral_protocol::session_state::Activity;
+
+    use super::*;
+
+    /// Compaction runs outside any turn (a manual `/compact` while idle, or after a turn ends).
+    /// The host reports it as the session's activity with no open turn, and the indicator
+    /// stayed blank, so the owner never saw it.
+    #[test]
+    fn an_idle_session_with_compacting_activity_shows_an_indicator() {
+        let state = SessionState {
+            open: false,
+            activity: Some(Activity {
+                phase: "compacting".into(),
+                since: "2026-01-01T00:00:00Z".into(),
+            }),
+            ..SessionState::default()
+        };
+        let line = line(Some(&state), None, &Feed::default())
+            .expect("compaction with no open turn is shown");
+        assert!(line.spinner);
+        assert_eq!(line.short, "compacting");
+    }
 }

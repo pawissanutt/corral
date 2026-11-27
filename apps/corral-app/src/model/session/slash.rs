@@ -25,10 +25,15 @@ pub const SHOWN: usize = 8;
 /// The menu as it shows.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SlashMenu {
+    /// The window of matched rows shown, around the highlighted one.
     pub rows: Vec<SlashRow>,
-    /// The highlighted row: what Enter runs.
+    /// The highlighted row within `rows`: what Enter runs.
     pub at: Option<usize>,
-    /// Matched rows beyond those shown.
+    /// Matched rows above the window.
+    pub first: usize,
+    /// Every matched row; ↑ ↓ walk all of them.
+    pub total: usize,
+    /// Matched rows below the window.
     pub more: usize,
     /// Where the read of the host's commands stands, while it says something.
     pub note: Option<(Hue, String)>,
@@ -89,14 +94,34 @@ fn served<'f>(cx: &Cx<'f>) -> Option<&'f SessionCommands> {
     }
 }
 
-/// Whether the command `command` (with its `/`) matches the typed name: exactly once an
-/// argument follows, else by its start.
-fn named(command: &str, name: &str, args: bool) -> bool {
+/// Whether `name`'s letters appear in `command` in order.
+fn subsequence(command: &str, name: &str) -> bool {
+    let mut rest = command.chars();
+    name.chars().all(|letter| rest.any(|c| c == letter))
+}
+
+/// How well the command `command` (with its `/`) matches the typed name, best first: `0` its
+/// start, `1` the start of a `:`-separated segment after the first (`skill:foo` for `foo`), `2`
+/// the typed letters in order, `3` its description holds the text. Once an argument follows only
+/// the exact name matches (`0`). The looser ranks need two typed characters.
+fn rank(command: &str, description: &str, name: &str, args: bool) -> Option<u8> {
     let command = command.trim_start_matches('/').to_lowercase();
     if args {
-        command == name
+        return (command == name).then_some(0);
+    }
+    if command.starts_with(name) {
+        return Some(0);
+    }
+    if command.split(':').skip(1).any(|part| part.starts_with(name)) {
+        return Some(1);
+    }
+    if name.chars().count() < 2 {
+        return None;
+    }
+    if subsequence(&command, name) {
+        Some(2)
     } else {
-        command.starts_with(name)
+        description.to_lowercase().contains(name).then_some(3)
     }
 }
 
@@ -171,15 +196,16 @@ pub fn slash(cx: &Cx<'_>, catalog: &SessionActions) -> Option<SlashMenu> {
         return None;
     }
     let argued = args.is_some();
-    let mut rows: Vec<SlashRow> = Vec::new();
+    let mut ranked: Vec<(u8, SlashRow)> = Vec::new();
     for found in catalog.rows() {
         let matched = match found.command {
-            Some(command) => named(command, &name, argued),
-            None => !argued && !name.is_empty() && found.label.to_lowercase().contains(&name),
+            Some(command) => rank(command, &found.label, &name, argued),
+            None => (!argued && !name.is_empty() && found.label.to_lowercase().contains(&name))
+                .then_some(3),
         };
-        if !matched {
+        let Some(rank) = matched else {
             continue;
-        }
+        };
         let action = match (&found.action, args.as_deref()) {
             (
                 Action::Command(CommandAction::Host {
@@ -197,15 +223,18 @@ pub fn slash(cx: &Cx<'_>, catalog: &SessionActions) -> Option<SlashMenu> {
             }),
             (action, _) => action.clone(),
         };
-        rows.push(SlashRow {
-            id: format!("cmd-{}", found.id.trim_start_matches("act-")),
-            label: found.label.clone(),
-            command: found.command.map(str::to_owned).unwrap_or_default(),
-            args: (found.id == "act-compact").then(|| "[instructions]".to_owned()),
-            source: None,
-            unavailable: found.unavailable.clone(),
-            run: vec![clear(cx), action],
-        });
+        ranked.push((
+            rank,
+            SlashRow {
+                id: format!("cmd-{}", found.id.trim_start_matches("act-")),
+                label: found.label.clone(),
+                command: found.command.map(str::to_owned).unwrap_or_default(),
+                args: (found.id == "act-compact").then(|| "[instructions]".to_owned()),
+                source: None,
+                unavailable: found.unavailable.clone(),
+                run: vec![clear(cx), action],
+            },
+        ));
     }
     let claimed: Vec<&str> = catalog
         .rows()
@@ -213,15 +242,18 @@ pub fn slash(cx: &Cx<'_>, catalog: &SessionActions) -> Option<SlashMenu> {
         .map(|command| command.trim_start_matches('/'))
         .collect();
     if let Some(commands) = served(cx) {
-        rows.extend(
-            commands
-                .commands
-                .iter()
-                .filter(|command| !claimed.contains(&command.name.as_str()))
-                .filter(|command| named(&command.name, &name, argued))
-                .map(|command| host_command(cx, command, args.as_deref())),
-        );
+        for command in &commands.commands {
+            if claimed.contains(&command.name.as_str()) {
+                continue;
+            }
+            if let Some(rank) = rank(&command.name, &command.description, &name, argued) {
+                ranked.push((rank, host_command(cx, command, args.as_deref())));
+            }
+        }
     }
+    // Stable: catalog rows, then the host's, keep their order within a rank.
+    ranked.sort_by_key(|(rank, _)| *rank);
+    let mut rows: Vec<SlashRow> = ranked.into_iter().map(|(_, row)| row).collect();
     let read = ReadState::of(cx.feed.detail(&target(cx)), cx.feed);
     let note = match read {
         ReadState::Reading if !matches!(cx.can("commands"), Can::Absent) => {
@@ -236,25 +268,106 @@ pub fn slash(cx: &Cx<'_>, catalog: &SessionActions) -> Option<SlashMenu> {
     if rows.is_empty() && note.is_none() {
         return None;
     }
-    let more = rows.len().saturating_sub(SHOWN);
-    rows.truncate(SHOWN);
-    let at = (!rows.is_empty()).then(|| {
-        let wanted = cx.ui.picker.slash_at.min(rows.len() - 1);
+    let total = rows.len();
+    // The highlight over every matched row; the window follows it.
+    let selected = (total > 0).then(|| {
         if cx.ui.picker.slash_at == 0 {
             rows.iter()
                 .position(|row| row.unavailable.is_none())
                 .unwrap_or(0)
         } else {
-            wanted
+            cx.ui.picker.slash_at.min(total - 1)
         }
     });
+    let first = selected
+        .map_or(0, |at| at.saturating_sub(SHOWN / 2))
+        .min(total.saturating_sub(SHOWN));
+    let rows: Vec<SlashRow> = rows.drain(first..total.min(first + SHOWN)).collect();
+    let more = total - first - rows.len();
     Some(SlashMenu {
+        at: selected.map(|at| at - first),
+        first,
+        total,
         rows,
-        at,
         more,
         note,
         close: Action::Command(CommandAction::CloseMenu(cx.id.clone())),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use corral_protocol::detail::{SessionCommands, SlashCommand};
+
+    use super::*;
+    use crate::model::daemon::{DetailCache, Feed, detail_key};
+    use crate::model::health::daemon_env;
+    use crate::model::nav::Form;
+    use crate::model::session::{Facts, SessionRole, Ui, actions};
+    use crate::model::Id;
+
+    fn skill(name: &str) -> SlashCommand {
+        SlashCommand {
+            name: name.into(),
+            description: String::new(),
+            source: CommandSource::Skill,
+            args_hint: None,
+        }
+    }
+
+    /// The menu for `draft` with the highlight at `at` over a host serving `names` as skills.
+    fn menu_over(names: &[String], draft: &str, at: usize) -> SlashMenu {
+        let id = Id::from("B-k3x9");
+        let mut feed = Feed::default();
+        let target = DetailRef::SessionCommands { id: id.to_string() };
+        feed.details.insert(
+            detail_key(&target),
+            DetailCache {
+                transcript_seams: Default::default(),
+                target,
+                pages: Vec::new(),
+                loading: false,
+                stale: false,
+                error: None,
+                merged: Some(DetailBody::SessionCommands(SessionCommands {
+                    commands: names.iter().map(|name| skill(name)).collect(),
+                })),
+            },
+        );
+        let facts = Facts {
+            role: SessionRole::Build,
+            task: None,
+        };
+        let mut ui = Ui {
+            draft: draft.into(),
+            ..Ui::default()
+        };
+        ui.picker.slash_at = at;
+        let cx = Cx::new(&feed, &ui, &id, daemon_env(&feed, Form::Desktop), &facts);
+        slash(&cx, &actions(&cx)).expect("the host's commands open the menu")
+    }
+
+    /// The menu cut itself to its first eight rows and ↑ ↓ stopped there, so a skill past them
+    /// could never be highlighted or run.
+    #[test]
+    fn skills_beyond_the_first_rows_are_reachable_by_walking() {
+        let names: Vec<String> = (0..20).map(|n| format!("skill:s{n:02}")).collect();
+        let menu = menu_over(&names, "/skill:", 19);
+        assert_eq!(menu.total, names.len());
+        assert!(menu.rows.len() <= SHOWN);
+        let at = menu.at.expect("a row is highlighted");
+        assert_eq!(menu.rows[at].command, "/skill:s19");
+    }
+
+    /// Prefix-only matching never found a skill by its own name.
+    #[test]
+    fn a_typed_skill_name_matches_its_namespaced_command() {
+        let names = vec!["skill:foo".to_owned(), "skill:bar".to_owned()];
+        let menu = menu_over(&names, "/foo", 0);
+        let found: Vec<&str> = menu.rows.iter().map(|row| row.command.as_str()).collect();
+        assert_eq!(found, ["/skill:foo"]);
+        assert_eq!(menu.rows[0].source, Some("skill"));
+    }
 }
 
 /// The read of the host's commands while the draft is a `/` command: once, while nothing was
