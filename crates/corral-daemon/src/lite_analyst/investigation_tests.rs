@@ -36,6 +36,37 @@ fn a_forbidden_or_malformed_call_rejects_the_whole_batch_before_dispatch() {
     assert!(plan_calls(&json!({"tool_calls":[search]}), &mut seen).is_err());
 }
 
+#[cfg(feature = "lite-analyst-faults")]
+#[test]
+fn sandbox_barrier_pump_does_not_apply_already_readable_work_after_cutoff() {
+    let dir = state_root();
+    let wall = test_wall_ms();
+    let mut store = Store::enroll(dir.path(), &enrollment(), wall).unwrap();
+    let start = wire::params(approval(wall, "sandbox_cutoff", "Public fixture")).unwrap();
+    let run = store.start(&start, wall).unwrap().snapshot.run_id;
+    let binding = store.binding(&run).unwrap();
+    let (work, peer, _life) = work_pair();
+    peer.send(
+        &Message::Request {
+            v: 1,
+            id: "stop".into(),
+            op: "cancel_investigation".into(),
+            params: json!({"run_id":run,"generation":1}),
+        },
+        deadline(),
+    )
+    .unwrap();
+    assert!(work.readable(Instant::now()).unwrap());
+    let mut session = new_session(&mut store, &work);
+    assert!(
+        session
+            .pump_run_before(&binding, "admitted", Some(Instant::now()))
+            .is_err()
+    );
+    assert_eq!(session.store.read(&run).unwrap().state, "admitted");
+    assert!(!peer.readable(Instant::now()).unwrap());
+}
+
 #[test]
 fn pi_eof_after_consumption_blocks_provider_and_settles_once_without_replay() {
     let dir = state_root();

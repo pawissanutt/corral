@@ -299,7 +299,7 @@ impl Session<'_> {
             if let Some(case) = case
                 && self
                     .work
-                    .barrier(case, deadline, || self.work.check_live())?
+                    .barrier(case, deadline, |_| self.work.check_live())?
             {
                 self.work.drop_response()?;
                 anyhow::bail!("fixture committed response intentionally dropped");

@@ -192,15 +192,15 @@ impl Session<'_> {
             ensure!(
                 matches!(
                     io.receive(startup, &mut || {
-                        self.pump_run(binding, "admitted")?;
+                        self.pump_run_before(binding, "admitted", Some(startup))?;
                         broker.check_live()
                     })?,
                     PiFrame::SandboxDenied
                 ) && io.buffer.is_empty(),
                 "fixture Pi denial was not observed"
             );
-            work.barrier(Case::SandboxDenied, startup, || {
-                self.pump_run(binding, "admitted")?;
+            work.barrier(Case::SandboxDenied, startup, |cutoff| {
+                self.pump_run_before(binding, "admitted", Some(cutoff))?;
                 broker.check_live()
             })?;
             anyhow::bail!("fixture sandbox denial probe ended");
@@ -390,7 +390,7 @@ impl Session<'_> {
                     if work.barrier(
                         Case::BrokerAfterAdmission,
                         deadline.min(lease.send_deadline()),
-                        || work.check_live(),
+                        |_| work.check_live(),
                     )? {
                         broker.disconnect_for_fault()?;
                     }
@@ -452,10 +452,11 @@ impl Session<'_> {
         Ok(received)
     }
 
-    fn pump_run(&mut self, binding: &Binding, state: &str) -> Result<()> {
+    pub(super) fn pump_work(&mut self, cutoff: Option<Instant>) -> Result<()> {
         self.tick()?;
         if self.work.readable(Instant::now())? {
-            let deadline = Instant::now() + FRAME_TIMEOUT;
+            let frame_deadline = Instant::now() + FRAME_TIMEOUT;
+            let deadline = cutoff.map_or(frame_deadline, |cutoff| cutoff.min(frame_deadline));
             let handled = self
                 .work
                 .receive_message(deadline)
@@ -465,6 +466,20 @@ impl Session<'_> {
             }
             handled?;
         }
+        Ok(())
+    }
+
+    fn pump_run(&mut self, binding: &Binding, state: &str) -> Result<()> {
+        self.pump_run_before(binding, state, None)
+    }
+
+    fn pump_run_before(
+        &mut self,
+        binding: &Binding,
+        state: &str,
+        cutoff: Option<Instant>,
+    ) -> Result<()> {
+        self.pump_work(cutoff)?;
         let snapshot = self
             .store
             .read(&binding.run_id)

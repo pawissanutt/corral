@@ -74,7 +74,7 @@ impl Work {
         &self,
         at: super::faults::Case,
         deadline: Instant,
-        pump: impl FnMut() -> anyhow::Result<()>,
+        pump: impl FnMut(Instant) -> anyhow::Result<()>,
     ) -> anyhow::Result<bool> {
         match &self.faults {
             Some(control) => control.reach(at, deadline, pump),

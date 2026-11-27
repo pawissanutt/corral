@@ -18,6 +18,10 @@ pub(super) const CONTRACT: &[u8] =
     include_bytes!("../../../../docs/contracts/lite-analyst-fault-v1/README.md");
 const CAP: Duration = Duration::from_secs(15);
 const STEP: Duration = Duration::from_millis(25);
+const PEER_LOST: PollFlags = PollFlags::ERR
+    .union(PollFlags::NVAL)
+    .union(PollFlags::HUP)
+    .union(PollFlags::RDHUP);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Case {
@@ -89,12 +93,13 @@ impl FaultControl {
     }
 
     /// A selected barrier consumes its channel even on failure. The caller may poll
-    /// real work/lifetime during the wait, but no product data travels on this fd.
+    /// real work/lifetime within the supplied effective cutoff, but no product data
+    /// travels on this fd.
     pub(super) fn reach(
         &self,
         at: Case,
         deadline: Instant,
-        mut pump: impl FnMut() -> Result<()>,
+        mut pump: impl FnMut(Instant) -> Result<()>,
     ) -> Result<bool> {
         if self.case != at {
             return Ok(false);
@@ -124,7 +129,15 @@ impl FaultControl {
                 && bytes.get(..msg.bytes) == Some(at.action()),
             "invalid fixture barrier action"
         );
-        pump()?;
+        pump(deadline)?;
+        // A disconnect may become observable between polling for input and
+        // processing the action, including during the last Work pump.
+        let mut fds = [PollFd::new(&fd, PollFlags::RDHUP)];
+        poll(&mut fds, Some(&Timespec::default())).context("check fixture barrier peer")?;
+        ensure!(
+            !fds[0].revents().intersects(PEER_LOST),
+            "fixture barrier disconnected"
+        );
         ensure!(
             Instant::now() < deadline,
             "fixture barrier deadline elapsed"
@@ -137,11 +150,15 @@ fn wait(
     fd: &OwnedFd,
     events: PollFlags,
     deadline: Instant,
-    pump: &mut impl FnMut() -> Result<()>,
+    pump: &mut impl FnMut(Instant) -> Result<()>,
 ) -> Result<()> {
-    let mut fds = [PollFd::new(fd, events)];
+    let mut fds = [PollFd::new(fd, events | PollFlags::RDHUP)];
     loop {
-        pump()?;
+        ensure!(
+            Instant::now() < deadline,
+            "fixture barrier deadline elapsed"
+        );
+        pump(deadline)?;
         let remaining = deadline.saturating_duration_since(Instant::now()).min(STEP);
         ensure!(!remaining.is_zero(), "fixture barrier deadline elapsed");
         let ts = Timespec {
@@ -153,9 +170,7 @@ fn wait(
             Ok(_) => {
                 let got = fds[0].revents();
                 ensure!(
-                    got.contains(events)
-                        && !got.intersects(PollFlags::ERR | PollFlags::NVAL)
-                        && (events == PollFlags::IN || !got.contains(PollFlags::HUP)),
+                    got.contains(events) && !got.intersects(PEER_LOST),
                     "fixture barrier disconnected"
                 );
                 ensure!(
@@ -196,7 +211,7 @@ impl super::Session<'_> {
         );
         if self
             .work
-            .barrier(Case::SettleDuplicate, deadline, || self.work.check_live())?
+            .barrier(Case::SettleDuplicate, deadline, |_| self.work.check_live())?
         {
             let replay = self.exchange::<Value>(&request, deadline)?;
             ensure!(
@@ -213,7 +228,7 @@ impl super::Session<'_> {
         let deadline = deadline.min(Instant::now() + super::FRAME_TIMEOUT);
         if self
             .work
-            .barrier(Case::ForeignSession, deadline, || self.work.check_live())?
+            .barrier(Case::ForeignSession, deadline, |_| self.work.check_live())?
         {
             let absent = wire::fresh_id()?;
             ensure!(
@@ -238,24 +253,10 @@ impl super::Session<'_> {
     }
 
     pub(super) fn finish_barrier(&mut self, at: Case, deadline: Instant) -> Result<()> {
-        let work = self.work;
-        let deadline = deadline.min(Instant::now() + CAP);
-        work.barrier(at, deadline, || {
-            self.tick()?;
-            // Stop may itself await a real work reply. Service it while paused,
-            // then let the unchanged final admission gate choose the winner.
-            if work.readable(Instant::now())? {
-                let request_deadline = deadline.min(Instant::now() + super::FRAME_TIMEOUT);
-                let handled = work
-                    .receive_message(request_deadline)
-                    .and_then(|request| self.handle(request, request_deadline));
-                if handled.is_err() {
-                    work.poison();
-                }
-                handled?;
-            }
-            Ok(())
-        })?;
+        // Stop may itself await a real work reply. Service it while paused,
+        // then let the unchanged final admission gate choose the winner.
+        self.work
+            .barrier(at, deadline, |cutoff| self.pump_work(Some(cutoff)))?;
         Ok(())
     }
 }

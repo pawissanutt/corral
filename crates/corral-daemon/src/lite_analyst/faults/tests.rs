@@ -7,12 +7,13 @@ use std::{io::IoSlice, mem::MaybeUninit, os::fd::AsFd};
 
 #[test]
 fn selected_barrier_is_one_packet_one_use_and_fails_closed() {
-    for (action, rights) in [
-        (Some(b"drop\n".as_slice()), false),
-        (Some(b"continue\n"), false),
-        (Some(b"drop\nextra bytes"), false),
-        (None, false),
-        (Some(b"drop\n"), true),
+    for (action, rights, disconnect) in [
+        (Some(b"drop\n".as_slice()), false, false),
+        (Some(b"continue\n"), false, false),
+        (Some(b"drop\nextra bytes"), false, false),
+        (None, false, true),
+        (Some(b"drop\n"), true, false),
+        (Some(b"drop\n"), false, true),
     ] {
         let (fd, driver) = socketpair(
             AddressFamily::UNIX,
@@ -25,11 +26,12 @@ fn selected_barrier_is_one_packet_one_use_and_fails_closed() {
         let deadline = Instant::now() + Duration::from_secs(1);
         assert!(
             !control
-                .reach(Case::AckCommitted, deadline, || Ok(()))
+                .reach(Case::AckCommitted, deadline, |_| Ok(()))
                 .unwrap()
         );
         std::thread::scope(|scope| {
-            scope.spawn(move || {
+            let (closed, observed) = std::sync::mpsc::channel();
+            let driver = scope.spawn(move || {
                 let mut bytes = [0u8; 64];
                 let (_, len) = recv(&driver, &mut bytes[..], RecvFlags::empty()).unwrap();
                 assert_eq!(&bytes[..len], b"corral.start.committed\n");
@@ -51,18 +53,38 @@ fn selected_barrier_is_one_packet_one_use_and_fails_closed() {
                         action.len()
                     );
                 }
+                if disconnect {
+                    drop(driver);
+                    closed.send(()).unwrap();
+                    None
+                } else {
+                    // Keep a live peer until reach has consumed the action.
+                    Some(driver)
+                }
             });
+            let mut checks = 0;
             assert_eq!(
                 control
-                    .reach(Case::StartCommitted, deadline, || Ok(()))
+                    .reach(Case::StartCommitted, deadline, |cutoff| {
+                        assert_eq!(cutoff, deadline);
+                        checks += 1;
+                        if disconnect && checks == 2 {
+                            // Ensure the queued packet's peer is already closed before polling.
+                            observed
+                                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                                .unwrap();
+                        }
+                        Ok(())
+                    })
                     .ok(),
-                (action == Some(b"drop\n") && !rights).then_some(true)
+                (action == Some(b"drop\n") && !rights && !disconnect).then_some(true)
             );
+            drop(driver.join().unwrap());
         });
         assert!(!control.armed(Case::StartCommitted));
         assert!(
             !control
-                .reach(Case::StartCommitted, deadline, || Ok(()))
+                .reach(Case::StartCommitted, deadline, |_| Ok(()))
                 .unwrap()
         );
     }
@@ -109,7 +131,7 @@ fn duplicate_requires_matching_receipt_and_replays_the_same_frame() {
                 let reply = json!({"recorded":true,"settle_digest": if good { digest } else { "1".repeat(64) }});
                 peer.respond(id.clone(), Ok(reply.clone()), end).unwrap();
                 if good {
-                    wait(&driver, PollFlags::IN, end, &mut || Ok(())).unwrap();
+                    wait(&driver, PollFlags::IN, end, &mut |_| Ok(())).unwrap();
                     let mut bytes = [0u8; 64];
                     let (_, len) = recv(&driver, &mut bytes[..], RecvFlags::empty()).unwrap();
                     assert_eq!(&bytes[..len], b"corral.settle.duplicate\n");
