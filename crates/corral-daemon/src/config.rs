@@ -14,6 +14,7 @@ use crate::state::Shared;
 
 pub(crate) mod pi_hosted_tool_models;
 pub(crate) mod pi_hosted_tools;
+pub(crate) mod pi_skills;
 pub(crate) mod pi_startup;
 
 fn path(root: &Path) -> PathBuf {

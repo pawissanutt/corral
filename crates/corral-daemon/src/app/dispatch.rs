@@ -69,6 +69,7 @@ pub(crate) fn welcome(shared: &Shared, hello: wire::Hello) -> wire::Welcome {
                         | wire::AUTOMATION_V1
                         | settings::PI_STARTUP_V1
                         | settings::PI_HOSTED_TOOLS_V1
+                        | settings::PI_SKILLS_V1
                         | settings::PI_HOSTED_TOOL_MODELS_V1
                         | wire::CLOSED_V1
                         | app::CITATIONS_V1
@@ -236,6 +237,18 @@ pub(crate) fn serve(
             })?;
             config::pi_hosted_tools::handle(shared.root(), request).map_err(invalid)
         }),
+        settings::PI_SKILLS => {
+            answer!(config::pi_skills::catalog(shared.root(), decode(params)?).map_err(invalid))
+        }
+        settings::PI_SKILL_GET => {
+            answer!(config::pi_skills::get(shared.root(), decode(params)?).map_err(invalid))
+        }
+        settings::PI_SKILL_PUT => {
+            answer!(config::pi_skills::put(shared.root(), decode(params)?).map_err(invalid))
+        }
+        settings::PI_SKILL_TOGGLE => {
+            answer!(config::pi_skills::toggle(shared.root(), decode(params)?).map_err(invalid))
+        }
         settings::PI_HOSTED_TOOL_MODELS => match serde_json::from_value(params) {
             Ok(request) => topics
                 .model_discovery
