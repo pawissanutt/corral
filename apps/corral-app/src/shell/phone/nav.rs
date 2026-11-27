@@ -151,8 +151,9 @@ impl Nav {
     /// Tells the app which Settings section the stack has open, for the address to name.
     fn tell_section(self) {
         effect(move || {
+            let shown = self.visible_len();
             let section = self.stack.with(|s| {
-                s.iter().rev().find_map(|entry| match entry {
+                s[..shown].iter().rev().find_map(|entry| match entry {
                     Entry::Section(section) => Some(*section),
                     Entry::Page(_) | Entry::Destination(_) => None,
                 })
@@ -212,12 +213,16 @@ impl Nav {
             );
             return;
         }
-        if now.pages == was.pages || now.pages == self.stack.with_untracked(|s| pages_of(s)) {
+        if now.pages == was.pages || now.pages == pages_of(&self.visible()) {
             return;
         }
         match pushed(&was.pages, &now.pages) {
             Some(page) if global => self.land(home(&page), vec![Entry::Page(page)]),
-            _ => self.stack.update(|stack| follow_pages(stack, &now.pages)),
+            _ => {
+                // A page still sliding out goes first: the model's pages are those under it.
+                self.release();
+                self.stack.update(|stack| follow_pages(stack, &now.pages));
+            }
         }
     }
 
@@ -230,10 +235,45 @@ impl Nav {
     /// The browser's back took the page at `depth` away on the web: what shows (and the address)
     /// is the stack under it from now on, while it slides out until its dismissal.
     pub fn leave(self, depth: usize) {
-        if os() == Os::Web {
-            self.leaving
-                .update(|at| *at = Some(at.map_or(depth, |at| at.min(depth))));
+        if os() != Os::Web {
+            return;
         }
+        let visible = self.visible();
+        if visible.len() <= depth {
+            return;
+        }
+        let pages = pages_of(&visible[depth..]).len();
+        self.leaving.set(Some(depth));
+        self.went_back(pages);
+    }
+
+    /// The entries that show: the stack without a page sliding out after the browser's back.
+    fn visible(self) -> Vec<Entry> {
+        let at = self.leaving.get_untracked();
+        self.stack.with_untracked(|s| {
+            let shown = at.map_or(s.len(), |at| at.min(s.len()));
+            s[..shown].to_vec()
+        })
+    }
+
+    /// Lets a page sliding out go at once (its screen leaves now), and makes whatever is pushed
+    /// from its depth up a new screen rather than the one the browser already took away.
+    fn release(self) {
+        let Some(at) = self.leaving.get_untracked() else {
+            return;
+        };
+        self.leaving.set(None);
+        self.stack.update(|s| s.truncate(at));
+        let round = self.last_gen.with(|last| {
+            *last += 1;
+            *last
+        });
+        self.gens.update(|gens| {
+            gens.resize(gens.len().max(at + 1), 0);
+            for slot in &mut gens[at..] {
+                *slot = round;
+            }
+        });
     }
 
     /// Before the stack changes to `entries` on `tab`: a page sliding out stays until its
@@ -248,28 +288,21 @@ impl Nav {
             && self
                 .stack
                 .with_untracked(|s| s.get(..at).is_some_and(|under| under == entries));
-        if kept {
-            return true;
+        if !kept {
+            self.release();
         }
-        self.leaving.set(None);
-        // The screen going keeps its key; whatever is pushed from its depth up mounts anew.
-        let round = self.last_gen.with(|last| {
-            *last += 1;
-            *last
-        });
-        let deepest = self.stack.with_untracked(Vec::len).max(at + entries.len());
-        self.gens.update(|gens| {
-            gens.resize(gens.len().max(deepest), 0);
-            for slot in &mut gens[at..] {
-                *slot = round;
-            }
-        });
-        false
+        kept
     }
 
     /// Tracked: the key of the page `entry` at `depth`: its depth, route and generation.
     pub fn key(self, depth: usize, entry: &Entry) -> String {
-        let round = self.gens.with(|gens| gens.get(depth).copied().unwrap_or(0));
+        // A depth past those released takes the last round, so deeper pages mount anew too.
+        let round = self.gens.with(|gens| {
+            gens.get(depth)
+                .or(gens.last().filter(|_| depth >= gens.len()))
+                .copied()
+                .unwrap_or(0)
+        });
         let key = key_of(depth, entry);
         if round == 0 {
             key
@@ -294,9 +327,7 @@ impl Nav {
 
     /// The destination on screen: the one in the stack, or the tab's own.
     fn shown(self) -> Option<Destination> {
-        self.stack
-            .with_untracked(|s| stacked(s))
-            .or_else(|| self.tab.get_untracked().destination())
+        stacked(&self.visible()).or_else(|| self.tab.get_untracked().destination())
     }
 
     /// The user chose `tab`: its root, with nothing over it, as the mock's tab bar does.
@@ -329,6 +360,16 @@ impl Nav {
     /// Configuration stays and its profile list shows again; leaving Configuration with unsaved
     /// edits asks first, as leaving it any other way does.
     pub fn back_to(self, depth: usize) {
+        // The dismissal of a page the browser's back already left: the model went back then.
+        if let Some(at) = self.leaving.get_untracked()
+            && at <= depth
+        {
+            self.stack.update(|s| s.truncate(depth));
+            if self.stack.with_untracked(Vec::len) <= at {
+                self.leaving.set(None);
+            }
+            return;
+        }
         let Some((pages, config)) = self.stack.with_untracked(|s| {
             (s.len() > depth).then(|| {
                 let leaving = &s[depth..];
@@ -343,6 +384,12 @@ impl Nav {
         }
         self.stack.update(|s| s.truncate(depth));
         self.leaving.set(None);
+        self.went_back(pages);
+    }
+
+    /// The model follows a back past `pages` of its pages: they go, and the destination is
+    /// what shows again.
+    fn went_back(self, pages: usize) {
         if pages > 0 {
             self.app.nav.update(|n| {
                 for _ in 0..pages {
@@ -362,10 +409,10 @@ impl Nav {
         {
             return;
         }
-        let section = self.stack.with_untracked(|s| match s.last() {
+        let section = match self.visible().last() {
             Some(Entry::Section(section)) => Some(*section),
             _ => None,
-        });
+        };
         match section {
             Some(section) => self.app.go_settings(section),
             None => self.app.go(destination),
@@ -440,11 +487,18 @@ impl Nav {
     /// goes leaves the one under it drawn at once. Every change of tab or stack also starts the
     /// new page's scroll afresh, so a tucked Ask button comes back.
     fn track_drawn(self) {
-        let last = stored(self.stack.with_untracked(Vec::len));
+        let top = move || {
+            let top = self.stack.with(|s| s.last().cloned());
+            let len = self.stack.with(Vec::len);
+            (len, top.map(|entry| self.key(len - 1, &entry)))
+        };
+        let last = stored(untracked(top));
         effect(move || {
             let _tab = self.tab.get();
-            let len = self.stack.with(Vec::len);
-            let grew = last.replace(len) < len;
+            let (len, key) = top();
+            // A page pushed again at the same depth (Forward right after Back) slides in too.
+            let (was, was_key) = last.replace((len, key.clone()));
+            let grew = was < len || (was == len && len > 0 && was_key != key);
             let turn = self.turn.with(|turn| {
                 *turn += 1;
                 *turn
