@@ -188,8 +188,12 @@ impl super::Session<'_> {
             Ok(original) => original,
             Err(fault) => return Ok(Err(fault)),
         };
-        let typed = wire::params(original.clone())
+        let typed: super::turns::SettlementReceipt = wire::params(original.clone())
             .map_err(|_| anyhow::anyhow!("invalid fixture settlement receipt"))?;
+        ensure!(
+            typed.settle_digest == settlement.settle_digest,
+            "fixture settlement receipt does not match request"
+        );
         if self
             .work
             .barrier(Case::SettleDuplicate, deadline, || self.work.check_live())?
