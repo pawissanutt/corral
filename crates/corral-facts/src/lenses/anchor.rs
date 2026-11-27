@@ -1,3 +1,4 @@
+use corral_types::lenses::SpanBasis;
 use std::{
     collections::{BTreeMap, BTreeSet},
     ops::Range,
@@ -147,7 +148,7 @@ pub(super) fn resolve<'a>(
     tree: &TreeFacts,
     coverage: Option<LensCoverage<'_>>,
     source: impl Fn(&str) -> Option<&'a Source>,
-) -> Result<(String, Range<u64>, bool), Issue> {
+) -> Result<(String, Range<u64>, SpanBasis), Issue> {
     use Issue::{Failed, Unchecked};
     let path = match anchor {
         EvidenceAnchor::Path { path }
@@ -176,7 +177,12 @@ pub(super) fn resolve<'a>(
                 {
                     return Err(Unchecked("entry source range unavailable".into()));
                 }
-                return Ok((entry.path.clone(), entry.line..entry.line + 1, false));
+                let basis = if coverage.is_some_and(|c| c.provider.provides("entries")) {
+                    SpanBasis::MixedEntry
+                } else {
+                    SpanBasis::Anchor
+                };
+                return Ok((entry.path.clone(), entry.line..entry.line + 1, basis));
             }
             let covered = points.entries.iter().any(|e| e.kind == *entry_kind)
                 || points.coverage.values().flatten().any(|d| match d {
@@ -205,7 +211,7 @@ pub(super) fn resolve<'a>(
             "source unavailable in {path:?}: unreadable or beyond scan budget"
         ))
     })?;
-    let mut definition_range = false;
+    let mut basis = SpanBasis::Anchor;
     let span = match anchor {
         EvidenceAnchor::Path { .. } if text.lines > 0 => 1..text.lines + 1,
         EvidenceAnchor::Path { .. } => return Err(Unchecked(format!("empty source at {path:?}"))),
@@ -237,7 +243,7 @@ pub(super) fn resolve<'a>(
                 if offset.is_some_and(|o| !(def.line..=def.end_line).contains(&text.line_of(o))) {
                     return Err(Failed(format!("conflicting symbol locations for {name:?}")));
                 }
-                definition_range = true;
+                basis = SpanBasis::DefinitionRange;
                 def.line..def.end_line + 1
             } else if let Some(offset) = offset {
                 let line = text.line_of(offset);
@@ -256,7 +262,7 @@ pub(super) fn resolve<'a>(
         }
         EvidenceAnchor::Entry { .. } => unreachable!(),
     };
-    Ok((path.to_owned(), span, definition_range))
+    Ok((path.to_owned(), span, basis))
 }
 
 #[cfg(test)]

@@ -47,12 +47,20 @@ pub struct BoundSpan {
     pub binding: usize,
     /// Inclusive last line.
     pub end_line: u64,
-    /// True for a provider-supplied definition range, not a declaration-line fallback.
-    #[serde(default)]
-    pub definition_range: bool,
+    pub basis: SpanBasis,
     /// Blob ID for a Path, SHA-256 of complete resolved lines otherwise.
     /// None when the pinned bytes could not be checked within bounds.
     pub digest: Option<String>,
+}
+
+/// The extent and provenance of a resolved source span.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SpanBasis {
+    Anchor,
+    DefinitionRange,
+    /// The entry overlay cannot attribute individual locations to a detector.
+    MixedEntry,
 }
 
 /// A few committed source lines around a located element, read from the Git object at the

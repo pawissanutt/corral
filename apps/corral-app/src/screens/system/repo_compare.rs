@@ -105,12 +105,14 @@ pub(super) fn compare(head: &Diagram, base: &Diagram) -> (Touch, Touch) {
             if let (Some(a), Some(b)) = (after, before)
                 && let (Some(x), Some(y)) = (&a.span, &b.span)
             {
+                if x.basis != y.basis || x.basis == corral_types::lenses::SpanBasis::MixedEntry {
+                    return false;
+                }
                 return a.path != b.path
-                    || x.definition_range == y.definition_range
-                        && x.digest
-                            .as_ref()
-                            .zip(y.digest.as_ref())
-                            .is_some_and(|(a, b)| a != b);
+                    || x.digest
+                        .as_ref()
+                        .zip(y.digest.as_ref())
+                        .is_some_and(|(a, b)| a != b);
             }
             false
         }) || base
@@ -149,7 +151,7 @@ mod tests {
             line: 1,
             span: Some(BoundSpan {
                 binding: 0,
-                definition_range: false,
+                basis: corral_types::lenses::SpanBasis::Anchor,
                 end_line: 3,
                 digest: Some("abc".into()),
             }),
@@ -159,10 +161,10 @@ mod tests {
         head.evidence.insert(key.clone(), None);
         assert!(compare(&head, &base).0.touched.is_empty());
         loc.span.as_mut().unwrap().digest = Some("xyz".into());
-        loc.span.as_mut().unwrap().definition_range = true;
+        loc.span.as_mut().unwrap().basis = corral_types::lenses::SpanBasis::DefinitionRange;
         head.evidence.insert(key.clone(), Some(loc.clone()));
         assert!(compare(&head, &base).0.touched.is_empty());
-        loc.span.as_mut().unwrap().definition_range = false;
+        loc.span.as_mut().unwrap().basis = corral_types::lenses::SpanBasis::Anchor;
         head.evidence.insert(key, Some(loc));
         assert_eq!(compare(&head, &base).1.touched, [id.clone()]);
         head.evidence.clear();

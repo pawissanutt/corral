@@ -256,7 +256,7 @@ fn check_evidence(
         match anchor::resolve(&binding.anchor, tree, coverage, |path| {
             sources.sources.get(path)
         }) {
-            Ok((path, span, definition_range)) => {
+            Ok((path, span, basis)) => {
                 let digest = sources
                     .sources
                     .get(&path)
@@ -274,7 +274,7 @@ fn check_evidence(
                     span: Some(BoundSpan {
                         binding: index,
                         end_line: span.end - 1,
-                        definition_range,
+                        basis,
                         digest,
                     }),
                 });
