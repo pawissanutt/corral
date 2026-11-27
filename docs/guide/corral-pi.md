@@ -25,6 +25,23 @@ A skill supplies guidance, not permission: a read-only reviewer can use `fronten
 assess a change, but loading it does not grant editing tools. A user or project skill
 with the same name does not replace the built-in one.
 
+Use **Settings → Configuration → Skills** in the app to read a skill or change its
+availability. Switches apply by name to new Pi sessions throughout this workspace;
+turning off `debugging` does not expose a shadowed project copy. Required role
+procedures cannot be switched off. Built-in text is read-only.
+
+Select a project to manage its `.agents/skills` files. User skill directories must
+be explicitly listed under `[skills]` in `.corral-next/pi.toml`, for example:
+
+```toml
+[skills]
+user_dirs = ["~/.agents/skills"]
+```
+
+Check the displayed destination before saving Markdown. Editing a project skill
+changes the project file, not just a setting; editing a shared user skill can affect
+other workspaces. A conflicting save requires reloading the current version.
+
 ## Command reference
 
 ```text

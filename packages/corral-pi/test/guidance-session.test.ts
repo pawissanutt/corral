@@ -439,7 +439,8 @@ test("workspace skill policy applies to new runtimes and hides disabled winners 
     ].sort());
     expect(old.host.session.systemPrompt).not.toContain("<name>debugging</name>");
     expect(old.host.session.systemPrompt).not.toContain("<name>project-policy-skill</name>");
-    expect(old.host.runtime.services.resourceLoader.getSkills().diagnostics).toEqual([]);
+    // The enabled user/project collision is still reported; disabled names stay hidden.
+    expect(old.host.runtime.services.resourceLoader.getSkills().diagnostics.map(item => item.collision?.name)).toEqual(["explicit-skill"]);
     await turn(old, "/skill:explicit-skill");
     expect(userTexts(old.host).join("\n")).toContain("EXPLICIT-POLICY-TEXT");
     expect(userTexts(old.host).join("\n")).not.toContain("PROJECT-EXPLICIT-IMPOSTOR");
