@@ -175,10 +175,35 @@ impl AppState {
         })
     }
 
+    /// An unknown outcome waits for a later Tasks subscription, which nothing else may bring:
+    /// whenever the link is up and one is held, Tasks is closed and opened again in order, once
+    /// per board subscription (a refresh that brings none is not repeated until the board moves
+    /// on, as a reconnect does). Only the move is held back; nothing resends it.
+    fn refresh_for_unknown(self) {
+        let asked = stored(None::<u64>);
+        effect(move || {
+            let held = self
+                .catching_up
+                .with(|waiting| waiting.values().any(|(_, behind)| !behind.confirmed));
+            let (up, subscription) = self
+                .feed
+                .with(|feed| (feed.link == Link::Up, feed.board.walk.0));
+            if !held || !up || untracked(|| self.fixture()) {
+                return;
+            }
+            if asked.with(|asked| *asked == Some(subscription)) {
+                return;
+            }
+            let _ = asked.replace(Some(subscription));
+            _ = requests::send(requests::ClientRequest::RefreshTasks);
+        });
+    }
+
     /// A move that may have been applied stays under way until the board shows a walk taken
     /// after its reply (`act::board_caught_up`). A stalled board keeps it waiting; nothing
     /// resends it.
     fn settle_catching_up(self) {
+        self.refresh_for_unknown();
         effect(move || {
             let caught: Vec<Id> = self.catching_up.with(|confirmed| {
                 self.feed.with(|feed| {
@@ -345,22 +370,16 @@ impl AppState {
                 return;
             }
             untracked(move || {
+                let opens = crate::client::walks::opens();
                 let behind: Vec<(Act, act::Behind)> = self.feed.with(|feed| {
                     settled
                         .iter()
                         .filter_map(|(act, status)| {
-                            act::board_behind(feed, act, status).map(|from| (act.clone(), from))
+                            act::board_behind(feed, act, status, opens)
+                                .map(|from| (act.clone(), from))
                         })
                         .collect()
                 });
-                // An unknown outcome waits for a later Tasks subscription: closed and opened
-                // again now, or the next connection's after a lost link.
-                let fresh = behind.iter().any(|(_, behind)| !behind.confirmed)
-                    && !self.fixture()
-                    && self.feed.with(|feed| feed.link == Link::Up);
-                if fresh {
-                    _ = requests::send(requests::ClientRequest::RefreshTasks);
-                }
                 batch(|| {
                     self.catching_up.update(|confirmed| {
                         for (act, from) in behind {

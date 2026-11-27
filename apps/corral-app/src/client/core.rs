@@ -90,6 +90,9 @@ struct PageBatch {
     rows: BTreeMap<String, Value>,
     left: BTreeSet<String>,
     bytes: usize,
+    /// For a Tasks replacement: the number its open was given when admitted
+    /// (`walks::opened`), taken up at its first page.
+    subscription: Option<u64>,
 }
 
 pub(super) struct Core {
@@ -274,6 +277,7 @@ impl Core {
                 key,
                 PageBatch {
                     replacement: true,
+                    subscription: (open.topic == Topic::Tasks).then(super::walks::opened),
                     ..PageBatch::default()
                 },
             );
@@ -447,9 +451,6 @@ impl Core {
                     self.prepare_open(&open, false);
                     self.outbox.push_back(frame);
                 }
-            }
-            if pending.method == wire::SUB_OPEN && pending.params["topic"] == "tasks" {
-                super::walks::subscribed();
             }
             if pending.method == wire::HELLO {
                 let welcome: Welcome = serde_json::from_value(result).map_err(decode)?;
@@ -632,6 +633,13 @@ impl Core {
         }
         let cursor = serde_json::from_value(value["cursor"].clone()).map_err(decode)?;
         if topic == Topic::Tasks {
+            // A replacement batch starts once the open is admitted, after a close is answered
+            // or a reset retired the old subscriber: its first page is the new subscription's.
+            if batch.replacement
+                && let Some(subscription) = batch.subscription.take()
+            {
+                super::walks::subscribed(subscription);
+            }
             super::walks::page(value["more"].as_bool() == Some(true));
         }
         if value["more"].as_bool() != Some(true) {
