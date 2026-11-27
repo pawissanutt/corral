@@ -354,13 +354,24 @@ fn resolve(root: &Path, project: Option<&str>, id: &str) -> Result<Entry> {
         .context("Unknown Pi skill identity")
 }
 
+// Refuse clearly rather than emitting a control frame the app cannot receive.
+fn within_frame(value: &impl serde::Serialize) -> Result<()> {
+    ensure!(
+        serde_json::to_vec(value)?.len() <= corral_protocol::app::APP_CONTROL_MAX - 2048,
+        "Pi skill data exceeds the app control frame limit"
+    );
+    Ok(())
+}
+
 pub(crate) fn catalog(root: &Path, req: PiSkillsRequest) -> Result<PiSkillsCatalog> {
     let (revision, doc) = pi_preferences::read(root)?;
     let skills = select(root, req.project.as_deref(), &policy(&doc)?)?
         .into_iter()
         .map(|entry| entry.row)
         .collect();
-    Ok(PiSkillsCatalog { skills, revision })
+    let result = PiSkillsCatalog { skills, revision };
+    within_frame(&result)?;
+    Ok(result)
 }
 
 fn local_revision(text: &str, meta: &Metadata) -> String {
@@ -393,11 +404,13 @@ pub(crate) fn get(root: &Path, req: PiSkillGet) -> Result<PiSkillDetail> {
             (text, revision)
         }
     };
-    Ok(PiSkillDetail {
+    let result = PiSkillDetail {
         id: req.id,
         text,
         revision,
-    })
+    };
+    within_frame(&result)?;
+    Ok(result)
 }
 
 struct Candidate<'a> {
@@ -414,7 +427,7 @@ impl Drop for Candidate<'_> {
 }
 
 pub(crate) fn put(root: &Path, req: PiSkillPut) -> Result<PiSkillDetail> {
-    ensure!(req.text.len() <= LIMIT, "Skill Markdown exceeds 256 KiB");
+    within_frame(&req)?;
     let entry = resolve(root, req.project.as_deref(), &req.id)?;
     ensure!(entry.row.editable, "This Pi skill is read-only");
     let Backing::Local(path) = entry.backing else {
@@ -491,7 +504,11 @@ pub(crate) fn put(root: &Path, req: PiSkillPut) -> Result<PiSkillDetail> {
 }
 
 pub(crate) fn toggle(root: &Path, req: PiSkillToggle) -> Result<PiSkillsCatalog> {
-    pi_preferences::save(
+    let mut result = PiSkillsCatalog {
+        skills: Vec::new(),
+        revision: "0".repeat(64),
+    };
+    let revision = pi_preferences::save(
         root,
         &req.revision,
         "Pi skill policy changed; reload the catalog before saving",
@@ -506,7 +523,16 @@ pub(crate) fn toggle(root: &Path, req: PiSkillToggle) -> Result<PiSkillsCatalog>
                 !entry.row.required,
                 "Role procedures cannot be switched off"
             );
-            if req.enabled == entry.row.enabled {
+            let unchanged = req.enabled == entry.row.enabled;
+            result.skills = entries.into_iter().map(|entry| entry.row).collect();
+            for row in &mut result.skills {
+                if row.name == req.name && !row.shadowed {
+                    row.enabled = req.enabled;
+                }
+            }
+            // Reserve room for the revision and result fields before committing the write.
+            within_frame(&result)?;
+            if unchanged {
                 return Ok(());
             }
             policy.disabled.retain(|name| *name != req.name);
@@ -528,12 +554,8 @@ pub(crate) fn toggle(root: &Path, req: PiSkillToggle) -> Result<PiSkillsCatalog>
             Ok(())
         },
     )?;
-    catalog(
-        root,
-        PiSkillsRequest {
-            project: req.project,
-        },
-    )
+    result.revision = revision;
+    Ok(result)
 }
 
 #[cfg(test)]
