@@ -155,33 +155,8 @@ fn read_markdown(dir: &File, name: &std::ffi::OsStr) -> Result<(String, Metadata
     Ok((text, meta))
 }
 
-// Pi requires a nonempty description and falls back to the directory name.
-fn skill_name(text: &str, path: &Path) -> Option<String> {
-    let mut lines = text.trim_start_matches('\u{feff}').split_inclusive('\n');
-    if lines.next()?.trim_end_matches(['\n', '\r']) != "---" {
-        return None;
-    }
-    let mut yaml = String::new();
-    for line in lines {
-        if yaml.len() + line.len() + 5 > HEADER_LIMIT {
-            return None;
-        }
-        if line.trim_end_matches(['\n', '\r']) == "---" {
-            let header: serde_yaml_ng::Value = serde_yaml_ng::from_str(&yaml).ok()?;
-            if header.get("description")?.as_str()?.trim().is_empty() {
-                return None;
-            }
-            return header
-                .get("name")
-                .and_then(|n| n.as_str())
-                .filter(|s| !s.is_empty())
-                .map(str::to_owned)
-                .or_else(|| Some(path.parent()?.file_name()?.to_str()?.to_owned()));
-        }
-        yaml.push_str(line);
-    }
-    None
-}
+mod frontmatter;
+use frontmatter::skill_name;
 
 fn packaged_path(path: &Path) -> bool {
     SHIPPED
@@ -191,6 +166,7 @@ fn packaged_path(path: &Path) -> bool {
 struct Scan {
     entries: Vec<Entry>,
     paths: HashSet<PathBuf>,
+    roots: HashSet<PathBuf>,
     visited: usize,
 }
 impl Scan {
@@ -246,9 +222,12 @@ impl Scan {
         ensure!(depth <= 16, "Pi skill directory nesting is too deep");
         let mut children = Vec::new();
         for child in Dir::read_from(dir)? {
+            let child = child?;
+            if matches!(child.file_name().to_bytes(), b"." | b"..") {
+                continue;
+            }
             self.visited += 1;
             ensure!(self.visited <= 4096, "too many Pi skill directory entries");
-            let child = child?;
             let Ok(name) = child.file_name().to_str() else {
                 continue;
             };
@@ -279,7 +258,9 @@ impl Scan {
     fn root(&mut self, path: &Path, source: PiSkillSource) -> Result<()> {
         if let Ok(dir) = open_dir(path) {
             let normalized: PathBuf = path.components().collect();
-            self.directory(&dir, &normalized, source, 0)?;
+            if self.roots.insert(normalized.clone()) {
+                self.directory(&dir, &normalized, source, 0)?;
+            }
         }
         Ok(())
     }
@@ -289,6 +270,7 @@ fn select(root: &Path, project: Option<&str>, policy: &Policy) -> Result<Vec<Ent
     let mut scan = Scan {
         entries: Vec::new(),
         paths: HashSet::new(),
+        roots: HashSet::new(),
         visited: 0,
     };
     for &(name, required, relative, text) in SHIPPED {
@@ -596,6 +578,72 @@ mod tests {
     use super::*;
     use std::{fs, os::unix::fs::symlink};
     const BODY: &str = "---\nname: programming\ndescription: Test skill\n---\nOriginal\n";
+
+    #[test]
+    fn duplicate_user_root_spends_its_entry_budget_once() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        fs::write(root.path().join("SKILL.md"), BODY)?;
+        let mut scan = Scan {
+            entries: Vec::new(),
+            paths: HashSet::new(),
+            roots: HashSet::new(),
+            visited: 4095,
+        };
+        scan.root(root.path(), PiSkillSource::User)?;
+        scan.root(&root.path().join("."), PiSkillSource::User)?;
+        assert_eq!(scan.visited, 4096);
+        assert_eq!(scan.entries.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn catalog_save_and_toggle_use_pis_plain_scalar_name() -> Result<()> {
+        const SKILL: &str =
+            include_str!("../../../../packages/corral-pi/test/fixtures/skills/team/SKILL.md");
+        let temp = tempfile::tempdir()?;
+        let root = temp.path();
+        let state = root.join(crate::STATE_DIR);
+        fs::create_dir(&state)?;
+        let skills = root.join("custom");
+        fs::create_dir_all(skills.join("team"))?;
+        let path = skills.join("team/SKILL.md");
+        fs::write(&path, SKILL)?;
+        fs::write(
+            state.join("pi.toml"),
+            format!(
+                "[skills]\nuser_dirs = [{}]\n",
+                toml_edit::Value::from(skills.to_str().unwrap())
+            ),
+        )?;
+        let before = catalog(root, PiSkillsRequest { project: None })?;
+        let row = before.skills.iter().find(|r| r.name == "0b101").unwrap();
+        let detail = get(
+            root,
+            PiSkillGet {
+                project: None,
+                id: row.id.clone(),
+            },
+        )?;
+        let put_req = |text: String| PiSkillPut {
+            project: None,
+            id: row.id.clone(),
+            revision: detail.revision.clone(),
+            text,
+        };
+        assert!(put(root, put_req(SKILL.replace("name: 0b101", "name: team"))).is_err());
+        put(root, put_req(format!("{SKILL}\nUpdated.")))?;
+        toggle(
+            root,
+            PiSkillToggle {
+                project: None,
+                name: row.name.clone(),
+                enabled: false,
+                revision: before.revision,
+            },
+        )?;
+        assert_eq!(policy(&pi_preferences::read(root)?.1)?.disabled, ["0b101"]);
+        Ok(())
+    }
 
     #[test]
     fn project_edit_is_revision_checked_and_refuses_links() -> Result<()> {
