@@ -145,6 +145,30 @@ fn document() -> Value {
             false,
             &common,
         ),
+        method::<config::PiSkillsRequest, config::PiSkillsCatalog>(
+            &mut generator,
+            config::PI_SKILLS,
+            false,
+            &common,
+        ),
+        method::<config::PiSkillGet, config::PiSkillDetail>(
+            &mut generator,
+            config::PI_SKILL_GET,
+            false,
+            &common,
+        ),
+        method::<config::PiSkillPut, config::PiSkillDetail>(
+            &mut generator,
+            config::PI_SKILL_PUT,
+            false,
+            &common,
+        ),
+        method::<config::PiSkillToggle, config::PiSkillsCatalog>(
+            &mut generator,
+            config::PI_SKILL_TOGGLE,
+            false,
+            &common,
+        ),
         method::<config::PiHostedToolsRequest, config::PiHostedToolsConfig>(
             &mut generator,
             config::PI_HOSTED_TOOLS,

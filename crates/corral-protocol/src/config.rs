@@ -1,4 +1,7 @@
 //! The owner reads and replaces the TOML document; the daemon validates it before writing.
+mod skills;
+pub use skills::*;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

@@ -57,7 +57,7 @@ fn parse(text: &str) -> Result<DocumentMut> {
         .map_err(|_| anyhow::anyhow!("pi.toml contains invalid TOML"))
 }
 
-pub(crate) fn read(root: &Path) -> Result<(String, DocumentMut)> {
+pub fn read(root: &Path) -> Result<(String, DocumentMut)> {
     let state = open_state(root)?;
     let (text, metadata) = read_file(&state)?;
     Ok((revision(&text, metadata.is_some()), parse(&text)?))
@@ -98,7 +98,7 @@ impl Drop for SaveLock<'_> {
     }
 }
 
-pub(crate) fn save(
+pub fn save(
     root: &Path,
     expected: &str,
     stale_error: &str,
