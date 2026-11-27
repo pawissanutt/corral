@@ -15,7 +15,7 @@ from approval import Approval, fresh
 from child import ARGS, Daemon, exec_daemon
 from environment import (DAEMON_ENV, PACKAGE, SCRATCH, Teardown, Unsupported, assert_no_workers,
                          observe_payloads, preflight, seed_canaries, wait_namespace_empty)
-from protocol import CANARY, PORT, PROFILE_SHA, Failure, Fixture, hex_digest, ident, keys, load, need, sha, wire
+from protocol import CANARY, FAULT_SCENARIOS, PORT, PROFILE_SHA, SCENARIOS, Failure, Fixture, hex_digest, ident, keys, load, need, sha, wire
 from responder import Conversation, ScriptedHTTP
 
 FIXTURE = Path("/fixture/meta")
@@ -261,9 +261,16 @@ def main():
         plan = load((FIXTURE / "qa-lock.json").read_bytes())
         lock = sha((FIXTURE / "qa-lock.json").read_bytes())
         need(plan["manifest_sha256"] == pin, "manifest_lock")
+        lane = scenario
+        allowed = SCENARIOS
+        if plan.get("variant") == "corral-fault-v1":
+            from fault import scenario as fault_scenario
+            lane = fault_scenario
+            allowed = FAULT_SCENARIOS
+        need(bool(plan["scenarios"]) and set(plan["scenarios"]) <= set(allowed), "scenario_variant_mismatch")
         for active in plan["scenarios"]:
             # C2 requires exactly /state. Reset it only after confirmed teardown.
-            result["lanes"][active] = scenario(STATE, active, fixture, pin, lock)
+            result["lanes"][active] = lane(STATE, active, fixture, pin, lock)
             for path in STATE.iterdir():
                 if path.name == "reports":
                     # Explicit disposable fixture cleanup, not product deletion through ack.

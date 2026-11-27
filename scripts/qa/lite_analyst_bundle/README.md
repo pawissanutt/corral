@@ -22,6 +22,36 @@ cat "$OUT/corral-pin.json"
 
 USTAR member order, permissions, ownership and timestamps and gzip metadata/level are deterministic. Rust/C path prefixes are remapped, Bun's embedded output basename is fixed, and `SOURCE_DATE_EPOCH` comes from the commit. For a reproducibility receipt build twice with the same commit and environment into separate fresh output directories; compare archive bytes (`cmp`) and reported raw manifest/whole-archive pins. A build on an unpinned toolchain is not a substitute.
 
+## Build the separate Corral fault variant
+
+For reviewed fault experiments only, repeat the pinned build command above with
+`--with-faults` and new output names (for example `corral-fault-fixture.tar.gz`
+and `corral-fault-pin.json`). This adds Cargo feature `lite-analyst-faults`,
+uses `src/lite-analyst/fault-worker.ts` as Bun's entry, and copies the committed
+[fault ABI](../../../docs/contracts/lite-analyst-fault-v1/README.md) to
+`provenance/corral-fault-v1.md`. That asset marks the variant without changing
+C1's manifest schema or entrypoint paths. The pin receipt also names
+`variant: corral-fault-v1`, `fault_contract_sha256`, and the exact SHA-256 for
+each of `components.daemon`, `components.pi`, and `components.shim`. The bundle
+still requires independent archive and raw-manifest pins. The producer may export
+the already round-trip-verified raw manifest with:
+
+```sh
+tar -xOf "$OUT/corral-fault-fixture.tar.gz" build-manifest.json > "$OUT/corral-fault-manifest.json"
+```
+
+Check its hash against the receipt before handoff. Keep these pins, raw manifest
+and archive separate from the normal build and the E1 lock.
+
+Use `verify.py --with-faults` when staging this variant. The default verifier
+rejects the fault asset; fault verification rejects its absence. The same C1
+argv and FDs apply, plus `--fault-fd 9 --fault-case <barrier-id>` on the Corral
+daemon **only** in the fault variant. FD 9 is a preconnected `AF_UNIX` /
+`SOCK_SEQPACKET` endpoint for just the fixed ASCII barrier/action records plus LF.
+It does not carry Work, broker or provider messages. See the [isolated component
+canaries](../lite_analyst_host/README.md#fault-variant-canaries) for a synthetic
+Lite test, not a joined fault result or authorization.
+
 ## Verify and hand off
 
 The E1 runner independently provisions the archive SHA-256, raw `build-manifest.json` SHA-256 and exact revision from the producer's authenticated/reviewed pin receipt, not from the received archive itself. It checks the complete [joint lock](../../../docs/contracts/lite-analyst-launcher-v1/joint-lock-v1.schema.json), including the independently chosen Lite build, seed eligibility, provider and external runtime tools. This helper verifies only the Corral archive, not the host's namespace preflight or the joint lock. The helper is stdlib-only and may be copied as a separate trusted runner input; it needs no checkout at launch.

@@ -48,6 +48,45 @@ teardown; 64 means disabled/invalid inputs, 69 means isolation unavailable, 70
 means a fixture check failed, and 74 means teardown was not confirmed (the
 private `corral-c3-qa-*` directory is quarantined instead of removed).
 
+## Fault variant canaries
+
+Use the separate [fault package and producer pins](../lite_analyst_bundle/README.md#build-the-separate-corral-fault-variant),
+not a local binary or normal C4/E1 archive. Run the same isolated controller:
+
+```sh
+python3 -B scripts/qa/lite_analyst_host/run.py \
+  --enable-public-fixture-e2e --with-faults --bundle "$archive" \
+  --archive-sha256 "$archive_pin" --manifest-sha256 "$manifest_pin" \
+  --revision "$revision" --packet "$packet"
+```
+
+`--with-faults` selects only these three lanes by default. The controller uses
+FD 9 to check the named barrier and return its fixed action. The Corral
+component itself acts; the controller never relays or substitutes for Work or
+broker traffic. The endpoint peer is still **synthetic Lite**, not the joined
+runner or evidence about Lite's behavior.
+
+- **`corral.start.committed` / `drop`**: read the committed Start identity in
+  SQLite before release, with no launch submitted or worker present. Observe
+  Work EOF without receiving any reply bytes or closing the peer socket.
+  Require the exact same run, now cancelled and cleaned; no bind, broker attach,
+  permit, report or provider connection.
+- **`corral.broker.after_admission` / `drop`**: confirm both real broker routes
+  negotiated and one exact permit durably consumed, with no settlement at the
+  barrier. Release, then observe EOF on both broker data sockets before
+  stopping the daemon. Require one exact indeterminate settlement and observed
+  receipt at the full 1000 µUSD charge, fencing and cleanup. The provider TCP
+  connection is opened before reserve; require it to close with zero bytes
+  and no broker effects.
+- **`corral.sandbox.denied` / `continue`**: accept the product barrier only
+  after launch submission and broker negotiation. The product emits it only
+  after its supervisor and actual sandboxed Pi worker pass their fixed denial
+  checks. Require no permit, provider connection, broker effect or report,
+  and confirmed fence and physical teardown.
+
+These lanes do not run the joined fault matrix, first-party Lite, report import
+or compute. Other Corral fault barriers are not selected by this controller.
+
 ## What is measured
 
 - Every run uses a new private, non-repo `/scratch`, `/state`, loopback-only

@@ -26,6 +26,8 @@ impl std::fmt::Display for LifetimeEnded {
 impl std::error::Error for LifetimeEnded {}
 
 pub(super) struct Work {
+    #[cfg(feature = "lite-analyst-faults")]
+    faults: Option<super::faults::FaultControl>,
     socket: UnixStream,
     lifetime: OwnedFd,
     broker: Option<OwnedFd>,
@@ -39,6 +41,8 @@ impl Work {
             .set_nonblocking(true)
             .context("configure fixture work socket")?;
         Ok(Self {
+            #[cfg(feature = "lite-analyst-faults")]
+            faults: None,
             socket,
             lifetime,
             broker: None,
@@ -50,6 +54,40 @@ impl Work {
     pub(super) fn with_broker(mut self, broker: OwnedFd) -> Self {
         self.broker = Some(broker);
         self
+    }
+
+    #[cfg(feature = "lite-analyst-faults")]
+    pub(super) fn with_faults(mut self, faults: Option<super::faults::FaultControl>) -> Self {
+        self.faults = faults;
+        self
+    }
+
+    #[cfg(feature = "lite-analyst-faults")]
+    pub(super) fn fault_armed(&self, at: super::faults::Case) -> bool {
+        self.faults
+            .as_ref()
+            .is_some_and(|control| control.armed(at))
+    }
+
+    #[cfg(feature = "lite-analyst-faults")]
+    pub(super) fn barrier(
+        &self,
+        at: super::faults::Case,
+        deadline: Instant,
+        pump: impl FnMut() -> anyhow::Result<()>,
+    ) -> anyhow::Result<bool> {
+        match &self.faults {
+            Some(control) => control.reach(at, deadline, pump),
+            None => Ok(false),
+        }
+    }
+
+    #[cfg(feature = "lite-analyst-faults")]
+    pub(super) fn drop_response(&self) -> anyhow::Result<()> {
+        self.poison();
+        self.socket
+            .shutdown(std::net::Shutdown::Both)
+            .context("shut down fixture work")
     }
 
     pub(super) fn check_live(&self) -> anyhow::Result<()> {

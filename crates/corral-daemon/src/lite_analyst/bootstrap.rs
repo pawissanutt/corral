@@ -37,6 +37,8 @@ const MANIFEST_MAX: usize = 16 * 1024 * 1024;
 const PIPEFS_MAGIC: fs::FsWord = 0x50495045; // Linux <linux/magic.h>
 
 pub(super) struct Bootstrap {
+    #[cfg(feature = "lite-analyst-faults")]
+    pub(super) faults: Option<super::faults::FaultControl>,
     pub(super) enrollment: Enrollment,
     pub(super) work: UnixStream,
     pub(super) lifetime: OwnedFd,
@@ -159,21 +161,27 @@ impl Resources {
 }
 
 impl Bootstrap {
-    /// Take the six prescribed descriptors exactly once. Failure is terminal for this CLI.
+    /// Take the prescribed descriptors exactly once. Failure is terminal for this CLI.
     ///
     /// # Safety
     /// Call from dedicated binary startup only. The calling process must exclusively own
-    /// the descriptor slots 3–8 with no wrappers or concurrent table mutation (including
-    /// between validating the inventory and constructing the owners). The slots need not
+    /// slots 3–8 (and slot 9 when a fault case is configured) with no wrappers or concurrent
+    /// table mutation (including between inventory validation and ownership). The slots need not
     /// be open or contain valid inputs; the inventory checks that before taking ownership.
-    pub(super) unsafe fn inherit() -> Result<Self> {
+    pub(super) unsafe fn inherit(
+        #[cfg(feature = "lite-analyst-faults")] case: Option<super::faults::Case>,
+    ) -> Result<Self> {
         static CONSUMED: AtomicBool = AtomicBool::new(false);
         ensure!(
             !CONSUMED.swap(true, Ordering::Relaxed),
             "fixture launch already consumed"
         );
         let deadline = Instant::now() + BOOTSTRAP_TIMEOUT;
-        check_inventory()?;
+        #[cfg(feature = "lite-analyst-faults")]
+        let fault_enabled = case.is_some();
+        #[cfg(not(feature = "lite-analyst-faults"))]
+        let fault_enabled = false;
+        check_inventory(if fault_enabled { 10 } else { 9 })?;
         // SAFETY: F_GETFD verified these slots are open. The caller guarantees
         // the table stays stable and has no other Rust owners for the six slots.
         let [enrollment, work, broker, ready, lifetime, credential] =
@@ -183,6 +191,30 @@ impl Bootstrap {
             io::fcntl_setfd(fd, FdFlags::CLOEXEC).context("set fixture descriptor CLOEXEC")?;
         }
         check_sandbox_basics()?;
+        #[cfg(feature = "lite-analyst-faults")]
+        let faults = case
+            .map(|case| -> Result<_> {
+                use super::faults::{FD, FaultControl};
+                // SAFETY: inventory verified slot 9; the launch caller transfers it
+                // exclusively with the same guarantee as slots 3–8.
+                let fd = unsafe { OwnedFd::from_raw_fd(FD) };
+                io::fcntl_setfd(&fd, FdFlags::CLOEXEC).context("set fixture barrier CLOEXEC")?;
+                check_distinct(&[
+                    &enrollment,
+                    &work,
+                    &broker,
+                    &ready,
+                    &lifetime,
+                    &credential,
+                    &fd,
+                ])?;
+                check_socket(&fd, SocketType::SEQPACKET)?;
+                let flags = fs::fcntl_getfl(&fd).context("query fixture barrier flags")?;
+                fs::fcntl_setfl(&fd, flags | OFlags::NONBLOCK)
+                    .context("configure fixture barrier")?;
+                Ok(FaultControl::new(case, fd))
+            })
+            .transpose()?;
         check_distinct(&fds)?;
         for fd in [&enrollment, &lifetime, &credential] {
             check_pipe(fd, OFlags::RDONLY)?;
@@ -209,6 +241,8 @@ impl Bootstrap {
                 .context("retain fixture lifetime for ready")?,
         };
         Ok(Self {
+            #[cfg(feature = "lite-analyst-faults")]
+            faults,
             enrollment,
             work: UnixStream::from(work),
             lifetime,
@@ -222,10 +256,10 @@ impl Bootstrap {
     }
 }
 
-fn check_inventory() -> Result<()> {
+fn check_inventory(count: RawFd) -> Result<()> {
     // First check openness at the kernel FD table, independently of the procfs mount.
     // This also prevents the scan's directory open from filling a missing slot.
-    for fd in 0..9 {
+    for fd in 0..count {
         // SAFETY: The F_GETFD form accepts any integer and takes no further arguments.
         if unsafe { libc::fcntl(fd, libc::F_GETFD) } < 0 {
             return Err(std::io::Error::last_os_error())
@@ -246,7 +280,7 @@ fn check_inventory() -> Result<()> {
         "fixture descriptor inventory is not procfs"
     );
     let scan = fd.as_raw_fd();
-    let mut seen = [false; 9];
+    let mut seen = [false; 10];
     for entry in fs::Dir::new(fd).context("read fixture descriptor inventory")? {
         let entry = entry.context("scan fixture descriptor inventory")?;
         let name = entry.file_name();
@@ -262,13 +296,13 @@ fn check_inventory() -> Result<()> {
             continue;
         }
         ensure!(
-            (0..9).contains(&number),
+            (0..count).contains(&number),
             "unexpected inherited fixture descriptor"
         );
         seen[number as usize] = true;
     }
     ensure!(
-        seen.into_iter().all(|present| present),
+        seen[..count as usize].iter().all(|present| *present),
         "missing inherited fixture descriptor"
     );
     Ok(())
@@ -540,7 +574,8 @@ fn check_pins(enrollment: &Enrollment, profile: &[u8], manifest: &[u8]) -> Resul
         "wrong fixture route or policy pin"
     );
     let manifest: Manifest = decode(manifest).context("decode fixture build manifest")?;
-    manifest.check(&enrollment.profile_sha256)
+    manifest.check(&enrollment.profile_sha256)?;
+    manifest.check_build_variant()
 }
 
 fn lower_hex(bytes: &[u8]) -> bool {
@@ -608,6 +643,30 @@ enum Role {
 }
 
 impl Manifest {
+    fn check_build_variant(&self) -> Result<()> {
+        #[cfg(feature = "lite-analyst-faults")]
+        {
+            use super::faults::{CONTRACT, MANIFEST_PATH};
+            ensure!(
+                self.components
+                    .get(MANIFEST_PATH)
+                    .is_some_and(|item| item.role == Role::Asset
+                        && !item.executable
+                        && item.bytes == CONTRACT.len() as u64
+                        && item.sha256 == sha256(CONTRACT)),
+                "fault build contract mismatch"
+            );
+        }
+        #[cfg(not(feature = "lite-analyst-faults"))]
+        ensure!(
+            !self
+                .components
+                .contains_key("provenance/corral-fault-v1.md"),
+            "fault manifest requires separate build"
+        );
+        Ok(())
+    }
+
     /// Check the sealed metadata, not the archive/tree (that remains runner-owned).
     fn check(&self, profile: &str) -> Result<()> {
         ensure!(

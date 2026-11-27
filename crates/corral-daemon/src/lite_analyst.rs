@@ -2,6 +2,8 @@
 mod bootstrap;
 mod broker;
 mod clock;
+#[cfg(feature = "lite-analyst-faults")]
+mod faults;
 mod investigation;
 mod isolation;
 mod policy;
@@ -33,12 +35,47 @@ use work::{FRAME_TIMEOUT, Work};
 /// ownership of any open descriptors in slots 3–8, provisioned by the trusted launcher.
 #[doc(hidden)]
 pub unsafe fn run_fixture(enabled: bool) -> anyhow::Result<()> {
+    // SAFETY: as required by run_fixture's documented caller contract.
+    unsafe {
+        run_fixture_configured(
+            enabled,
+            #[cfg(feature = "lite-analyst-faults")]
+            None,
+        )
+    }
+}
+
+/// Enter a separately built fixture with one named experiment.
+///
+/// # Safety
+/// Same as `run_fixture`, additionally transferring exclusive ownership of slot 9.
+#[cfg(feature = "lite-analyst-faults")]
+#[doc(hidden)]
+pub unsafe fn run_fixture_with_fault(enabled: bool, case: &str, fd: i32) -> anyhow::Result<()> {
+    ensure!(
+        fd == faults::FD,
+        "wrong Corral fixture fault descriptor slot"
+    );
+    let case = faults::Case::parse(case)?;
+    // SAFETY: the caller also transfers the fixed barrier slot.
+    unsafe { run_fixture_configured(enabled, Some(case)) }
+}
+
+unsafe fn run_fixture_configured(
+    enabled: bool,
+    #[cfg(feature = "lite-analyst-faults")] case: Option<faults::Case>,
+) -> anyhow::Result<()> {
     ensure!(
         enabled,
         "public Lite fixture requires explicit per-launch opt-in"
     );
     // SAFETY: the CLI transfers its preconnected fixture-only descriptor table here.
-    let bootstrap = unsafe { Bootstrap::inherit() };
+    let bootstrap = unsafe {
+        Bootstrap::inherit(
+            #[cfg(feature = "lite-analyst-faults")]
+            case,
+        )
+    };
     // Do not log private paths, peer bytes, tokens, or SQL details to the driver.
     bootstrap
         .and_then(serve)
@@ -58,6 +95,8 @@ fn serve(mut bootstrap: Bootstrap) -> anyhow::Result<()> {
     let e = &bootstrap.enrollment;
     let work = Work::new(bootstrap.work, bootstrap.lifetime)?
         .with_broker(bootstrap.resources.broker_handle()?);
+    #[cfg(feature = "lite-analyst-faults")]
+    let work = work.with_faults(bootstrap.faults);
     let bootstrap_deadline = bootstrap.resources.deadline();
     work.send(&e.link_ready(), bootstrap_deadline)?;
     e.check_link_ready(wire::decode(&work.receive(bootstrap_deadline)?)?)?;
@@ -245,7 +284,27 @@ impl Session<'_> {
             "fixture request direction or phase is invalid"
         );
         self.work.check_live()?;
+        #[cfg(feature = "lite-analyst-faults")]
+        let already_pending = self.pending_bind.is_some();
         let result = self.apply(&op, params, self.clock.times()?);
+        #[cfg(feature = "lite-analyst-faults")]
+        if result.is_ok() {
+            let case = match op.as_str() {
+                "start_investigation" if !already_pending && self.pending_bind.is_some() => {
+                    Some(faults::Case::StartCommitted)
+                }
+                "ack_report" => Some(faults::Case::AckCommitted),
+                _ => None,
+            };
+            if let Some(case) = case
+                && self
+                    .work
+                    .barrier(case, deadline, || self.work.check_live())?
+            {
+                self.work.drop_response()?;
+                anyhow::bail!("fixture committed response intentionally dropped");
+            }
+        }
         self.work.respond(id, result, deadline)
     }
 
@@ -297,7 +356,21 @@ impl Session<'_> {
         params: &impl Serialize,
         deadline: Instant,
     ) -> anyhow::Result<wire::Result<T>> {
-        let result = self.call_inner(op, params, deadline);
+        let request = Message::Request {
+            v: 1,
+            id: wire::fresh_id()?,
+            op: op.to_owned(),
+            params: serde_json::to_value(params)?,
+        };
+        self.exchange(&request, deadline)
+    }
+
+    fn exchange<T: DeserializeOwned>(
+        &mut self,
+        request: &Message,
+        deadline: Instant,
+    ) -> anyhow::Result<wire::Result<T>> {
+        let result = self.exchange_inner(request, deadline);
         if result
             .as_ref()
             .is_err_and(|e| !e.is::<work::LifetimeEnded>())
@@ -307,22 +380,15 @@ impl Session<'_> {
         result
     }
 
-    fn call_inner<T: DeserializeOwned>(
+    fn exchange_inner<T: DeserializeOwned>(
         &mut self,
-        op: &str,
-        params: &impl Serialize,
+        request: &Message,
         deadline: Instant,
     ) -> anyhow::Result<wire::Result<T>> {
-        let id = wire::fresh_id()?;
-        self.work.send(
-            &Message::Request {
-                v: 1,
-                id: id.clone(),
-                op: op.to_owned(),
-                params: serde_json::to_value(params)?,
-            },
-            deadline,
-        )?;
+        let Message::Request { id, .. } = request else {
+            anyhow::bail!("invalid fixture outgoing work request");
+        };
+        self.work.send(request, deadline)?;
         loop {
             // No DB transaction is held over I/O. A new incoming request is serviced
             // while the opposite-direction request is outstanding; no nested calls.
@@ -332,12 +398,12 @@ impl Session<'_> {
             match message {
                 Message::Success {
                     id: got, result, ..
-                } if got == id => {
+                } if got == *id => {
                     let typed = wire::params(result)
                         .map_err(|_| anyhow::anyhow!("invalid fixture reverse result"))?;
                     return Ok(Ok(typed));
                 }
-                Message::Failure { id: got, error, .. } if got == id => return Ok(Err(error)),
+                Message::Failure { id: got, error, .. } if got == *id => return Ok(Err(error)),
                 request @ Message::Request { .. } => self.handle(request, deadline)?,
                 _ => anyhow::bail!("uncorrelated fixture response"),
             }
@@ -513,9 +579,16 @@ impl Session<'_> {
 
     fn record_settlement(&mut self, settlement: &SettleTurn) -> anyhow::Result<()> {
         self.drain_control()?;
-        let receipt = self
-            .call("settle_turn", settlement, Instant::now() + FRAME_TIMEOUT)?
-            .map_err(|_| anyhow::anyhow!("fixture settlement was refused"))?;
+        let deadline = Instant::now() + FRAME_TIMEOUT;
+        #[cfg(feature = "lite-analyst-faults")]
+        let receipt = if self.work.fault_armed(faults::Case::SettleDuplicate) {
+            self.duplicate_settlement(settlement, deadline)?
+        } else {
+            self.call("settle_turn", settlement, deadline)?
+        };
+        #[cfg(not(feature = "lite-analyst-faults"))]
+        let receipt = self.call("settle_turn", settlement, deadline)?;
+        let receipt = receipt.map_err(|_| anyhow::anyhow!("fixture settlement was refused"))?;
         let (earliest, latest) = self.clock.times()?;
         self.store
             .observe_settlement_at(settlement, &receipt, earliest, latest)

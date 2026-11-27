@@ -6,7 +6,7 @@ import socket
 import time
 
 from approval import now_ms
-from protocol import (FRAME, POLICY_REF, Failure, digest, hex_digest, ident, keys, load, need,
+from protocol import (FAULT_BROKER, FRAME, POLICY_REF, Failure, digest, hex_digest, ident, keys, load, need,
                       recv_frame, send_frame, wire)
 
 
@@ -25,6 +25,7 @@ class LitePeer:
         self.handshakes = {"evidence": 0, "host_poll": 0}
         self.sequence = 0
         self.dropped_settlement = False
+        self.fences = 0
 
     def close(self):
         self.work.close()
@@ -46,10 +47,14 @@ class LitePeer:
              and digest(policy["manifest"]) == POLICY_REF, "work_hello_policy")
         self.work.settimeout(3)
 
-    def ask(self, op, args, error=None):
+    def send(self, op, args):
         self.sequence += 1
         call_id = f"qa_peer_{self.sequence}"
         send_frame(self.work, {"v": 1, "type": "request", "id": call_id, "op": op, "params": args})
+        return call_id
+
+    def ask(self, op, args, error=None):
+        call_id = self.send(op, args)
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
             result = self.pump(min(0.2, max(0, deadline - time.monotonic())))
@@ -109,7 +114,7 @@ class LitePeer:
             step = b.get("step") if isinstance(b, dict) else None
             need(type(step) is int and 1 <= step <= len(approval.reserves), "work_settle_step")
             reserve, permit = approval.reserves[step - 1]
-            indeterminate = approval.scenario in ("forbidden", "reconnect", "crash") or (
+            indeterminate = approval.scenario in ("forbidden", "reconnect", "crash", FAULT_BROKER) or (
                 approval.scenario == "repeated_id" and step == 2
             )
             outcome = "indeterminate" if indeterminate else "completed"
@@ -117,8 +122,11 @@ class LitePeer:
                        "permit_id": permit["permit_id"], "reserve_digest": permit["reserve_digest"],
                        "outcome": outcome, "charged_microusd": 760 if outcome == "completed" else 1000}
                  and p["settle_digest"] == digest(b), "work_settlement")
-            need(len(self.script.digests) == step and
-                 self.script.digests[step - 1] == reserve["body"]["input_digest"], "work_final_body_digest")
+            if approval.scenario == FAULT_BROKER:
+                need(step == 1 and not self.script.digests, "broker_drop_sent_body")
+            else:
+                need(len(self.script.digests) == step and
+                     self.script.digests[step - 1] == reserve["body"]["input_digest"], "work_final_body_digest")
             if self.reconnect:
                 previous = [] if approval.scenario == "crash" else [p]
                 need(approval.settles == previous, "work_settlement_replay_mismatch")
@@ -135,6 +143,7 @@ class LitePeer:
             result = {"recorded": True, "settle_digest": p["settle_digest"]}
         elif op == "fence_session":
             need(p == {"run_id": approval.run, "generation": 1, "reason": "stopped"}, "work_fence_notice")
+            self.fences += 1
             result = {"fenced": True}
         else:
             raise Failure("work_unknown_reverse_op")

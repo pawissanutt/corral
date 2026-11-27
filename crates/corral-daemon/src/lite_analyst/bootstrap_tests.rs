@@ -75,6 +75,13 @@ fn runnable_metadata() -> Value {
             component["sha256"] = sha256(name.as_bytes()).into();
         }
     }
+    #[cfg(feature = "lite-analyst-faults")]
+    {
+        use super::super::faults::{CONTRACT, MANIFEST_PATH};
+        manifest["components"][MANIFEST_PATH] = json!({
+            "role":"asset", "executable":false, "bytes": CONTRACT.len(), "sha256":sha256(CONTRACT)
+        });
+    }
     manifest
 }
 
@@ -89,6 +96,20 @@ fn matching_raw_digests_do_not_make_an_unreviewed_profile_or_bad_build_valid() {
     let bytes = serde_json::to_vec(&manifest).unwrap();
     assert!(check_pins(&expected, REVIEWED_PROFILE, &bytes).is_err());
     verify(&mut expected, &bytes).unwrap();
+    let mut other_variant = manifest.clone();
+    let components = other_variant["components"].as_object_mut().unwrap();
+    let marker = "provenance/corral-fault-v1.md";
+    if cfg!(feature = "lite-analyst-faults") {
+        components.remove(marker);
+    } else {
+        components.insert(
+            marker.into(),
+            json!({
+                "role": "asset", "executable": false, "bytes": 8, "sha256": sha256(b"contract")
+            }),
+        );
+    }
+    assert!(verify(&mut expected, &serde_json::to_vec(&other_variant).unwrap()).is_err());
     assert!(verify(&mut expected, TEMPLATE).is_err());
     for (entry, field, changed) in [
         ("bin/corrald-next", "executable", false.into()),

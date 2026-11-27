@@ -27,6 +27,13 @@ pub mod client;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod lite_analyst;
+#[cfg(all(
+    feature = "lite-analyst-faults",
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+#[doc(hidden)]
+pub use lite_analyst::run_fixture_with_fault;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[doc(hidden)]
 pub use lite_analyst::{run_fixture, run_shim};

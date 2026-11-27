@@ -13,8 +13,8 @@ import tarfile
 import tempfile
 from pathlib import Path
 
-from verify import (ARCHIVE_LIMIT, ASSETS, ENTRYPOINTS, MANIFEST, PROFILE_SHA, canonical, file_sha,
-                    need, runtime_abi, sha, staged_copy, strict_json, validate)
+from verify import (ARCHIVE_LIMIT, ASSETS, ENTRYPOINTS, FAULT_ASSET, FAULT_VARIANT, MANIFEST, PROFILE_SHA,
+                    canonical, file_sha, need, runtime_abi, sha, staged_copy, strict_json, validate)
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[2]
@@ -63,7 +63,7 @@ def check_environment(source, tools, env):
          "build a provisioned Ubuntu 24.04 sysroot matching build-environment.json")
 
 
-def compile_programs(root, source, tools, env):
+def compile_programs(root, source, tools, env, *, with_faults=False):
     pi = source / "packages/corral-pi"
     cargo = str(tools["cargo"])
     bun = str(tools["bun"])
@@ -71,12 +71,14 @@ def compile_programs(root, source, tools, env):
     # Same pinned baseline runtime as the compiler; prevents a compile-time runtime download.
     shutil.copyfile(bun, root / "bun-cache" / PI_RUNTIME)
     (root / "bun-cache" / PI_RUNTIME).chmod(0o555)
+    features = ["--features", "lite-analyst-faults"] if with_faults else []
+    pi_entry = "src/lite-analyst/fault-worker.ts" if with_faults else "src/lite-analyst/main.ts"
     commands = [
         (source, [cargo, "fetch", "--locked", "--target", TARGET]),
         (pi, [bun, "install", "--frozen-lockfile", "--ignore-scripts"]),
         (source, [cargo, "build", "--frozen", "--release", "--target", TARGET, "-j1", "-p", "corral-daemon",
-                  "--bin", "corrald-next", "--bin", "corral-lite-mcp-shim"]),
-        (pi, [bun, "build", "src/lite-analyst/main.ts", *PI_FLAGS, f"--metafile={root}/pi-metafile.json",
+                  "--bin", "corrald-next", "--bin", "corral-lite-mcp-shim", *features]),
+        (pi, [bun, "build", pi_entry, *PI_FLAGS, f"--metafile={root}/pi-metafile.json",
               f"--outfile={root}/bin/corral-pi-lite-analyst"]),
     ]
     for directory, argv in commands:
@@ -86,7 +88,8 @@ def compile_programs(root, source, tools, env):
     need(len(outputs) == 1 and not outputs[0]["imports"], "Pi build emitted outside runtime dependencies")
     # Audit the actual emitted sources (not the unused dev/provider dependency graph).
     inputs = outputs[0]["inputs"]
-    need(inputs and all(p.startswith(("src/lite-analyst/", "node_modules/@earendil-works/")) for p in inputs),
+    need(pi_entry in inputs and ("src/lite-analyst/fault-worker.ts" in inputs) == with_faults
+         and all(p.startswith(("src/lite-analyst/", "node_modules/@earendil-works/")) for p in inputs),
          "review changed Pi bundle closure")
     compile_inputs = {p: file_sha(pi / p) for p in inputs}
     rust_output = root / "target" / TARGET / "release"
@@ -115,7 +118,7 @@ def archive(pkg, output, manifest):
                     tar.addfile(info, data)
 
 
-def package(root, source, revision, programs, provenance):
+def package(root, source, revision, programs, provenance, *, with_faults=False):
     pkg = root / "package"
     components = {}
     runtime_origins = {}
@@ -153,6 +156,9 @@ def package(root, source, revision, programs, provenance):
     for p, digest in SOURCE_PINS.items():
         need(file_sha(source / p) == digest, "upstream launcher input bytes changed")
         add(f"provenance/{Path(p).name}", "asset", source_file=source / p)
+    if with_faults:
+        add(FAULT_ASSET, "asset", source_file=source / "docs/contracts/lite-analyst-fault-v1/README.md")
+        provenance["variant"] = FAULT_VARIANT
     for p in (ENVIRONMENT, "Cargo.lock", ".cargo/config.toml", "packages/corral-pi/bun.lock",
               "packages/corral-pi/package.json", "LICENSE"):
         add(f"provenance/{Path(p).name}", "asset", source_file=source / p)
@@ -168,7 +174,7 @@ def package(root, source, revision, programs, provenance):
                 "host_requirements": {"landlock_tcp_abi_min": 4, "sysroot_abi": runtime_abi(components),
                                       "sandbox_backend": "rootless-bubblewrap"}}
     raw = canonical(manifest) + b"\n"
-    validate(raw, revision)
+    validate(raw, revision, with_faults=with_faults)
     (pkg / MANIFEST).write_bytes(raw)
     (pkg / MANIFEST).chmod(0o444)
     return pkg, manifest, sha(raw)
@@ -200,22 +206,27 @@ def build(a):
         for p in ([HERE / n for n in names] + [HERE.parent / "lite_analyst_host" / n for n in ("staging.py", "protocol.py")]):
             need(file_sha(source / p.relative_to(REPO)) == file_sha(p), "run the builder from the pinned commit")
         check_environment(source, tools, env)
-        programs, pi_inputs, commands, compile_env = compile_programs(root, source, tools, env)
+        programs, pi_inputs, commands, compile_env = compile_programs(root, source, tools, env, with_faults=a.with_faults)
         provenance = {"purpose": "C4 public-only Corral build; not a joint E1 result or authorization",
                       "recipe": "scripts/qa/lite_analyst_bundle/README.md at corral_revision",
                       "commands": commands, "build_environment": compile_env,
                       "pi_runtime": PI_RUNTIME, "pi_embedded_input_sha256": pi_inputs,
                       "archive_format": "manifest-first USTAR, gzip level 6 mtime 0; no directory records"}
-        pkg, manifest, manifest_pin = package(root, source, a.revision, programs, provenance)
+        pkg, manifest, manifest_pin = package(root, source, a.revision, programs, provenance, with_faults=a.with_faults)
         built = root / "corral-fixture.tar.gz"
         archive(pkg, built, manifest)
         need(built.stat().st_size <= ARCHIVE_LIMIT, "archive exceeds local size limit")
         archive_pin = file_sha(built)
-        staged_copy(built, root / "roundtrip", archive_pin, manifest_pin, a.revision)
+        staged_copy(built, root / "roundtrip", archive_pin, manifest_pin, a.revision, with_faults=a.with_faults)
         with built.open("rb") as src, a.output.open("xb") as dest:
             shutil.copyfileobj(src, dest)
-        return {"revision": a.revision, "archive_sha256": archive_pin, "manifest_sha256": manifest_pin,
-                "archive_bytes": built.stat().st_size, "launcher_profile_sha256": PROFILE_SHA}
+        receipt = {"revision": a.revision, "archive_sha256": archive_pin, "manifest_sha256": manifest_pin,
+                   "archive_bytes": built.stat().st_size, "launcher_profile_sha256": PROFILE_SHA}
+        if a.with_faults:
+            components = manifest["components"]
+            receipt.update(variant=FAULT_VARIANT, fault_contract_sha256=components[FAULT_ASSET]["sha256"],
+                           components={role: components[p]["sha256"] for role, p in ENTRYPOINTS.items()})
+        return receipt
 
 
 def main():
@@ -224,6 +235,7 @@ def main():
     p.add_argument("--rust-bin", required=True, type=Path, help="pinned Rust toolchain's real bin directory")
     p.add_argument("--bun", required=True, type=Path, help="pinned standalone Bun baseline executable")
     p.add_argument("--output", required=True, type=Path, help="new .tar.gz file in a private output directory")
+    p.add_argument("--with-faults", action="store_true", help="build the separate Corral fault variant, not E1 bytes")
     a = p.parse_args()
     try:
         print(canonical(build(a)).decode())

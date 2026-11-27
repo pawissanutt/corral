@@ -4,7 +4,7 @@ import re
 import socketserver
 import threading
 
-from protocol import CANARY, HTTP_BODY, PORT, URL_PATH, Failure, ident, keys, load, need, sha, wire
+from protocol import CANARY, FAULT_BROKER, FAULT_SANDBOX, FAULT_START, HTTP_BODY, PORT, URL_PATH, Failure, ident, keys, load, need, sha, wire
 
 METRIC_LINE = "\nApproved metric selector: "
 
@@ -22,7 +22,8 @@ class Conversation:
         self.question = question
         self.observe = observe
         self.available_turns = {"happy": 3, "pending": 3, "forbidden": 1, "repeated_id": 2,
-                                "registry": 0, "reconnect": 1, "crash": 1}[scenario]
+                                "registry": 0, "reconnect": 1, "crash": 1,
+                                FAULT_START: 0, FAULT_BROKER: 1, FAULT_SANDBOX: 0}[scenario]
         self.calls = []
         self.digests = []
         self.derived = False
@@ -141,8 +142,15 @@ def make_sse(step, calls, truncated=False):
 
 class HTTPHandler(socketserver.BaseRequestHandler):
     def handle(self):
-        self.request.settimeout(2)
+        broker_drop = self.server.conversation.scenario == FAULT_BROKER
+        # Connect precedes reserve/consume. The broker-drop controller can hold
+        # this socket through the bounded permit deadline, but must see no bytes.
+        self.request.settimeout(8 if broker_drop else 2)
         try:
+            if broker_drop:
+                need(self.request.recv(1) == b"", "broker_drop_provider_byte")
+                self.server.empty_closes += 1
+                return
             with self.request.makefile("rb") as reader:
                 need(reader.readline(8193) == f"POST {URL_PATH} HTTP/1.1\r\n".encode(), "provider_request_line")
                 headers = {}
@@ -193,9 +201,16 @@ class ScriptedHTTP(socketserver.TCPServer):
         self.conversation = conversation
         self.authorization = b"Bearer " + bearer
         self.error = None
+        self.accepted = 0
+        self.empty_closes = 0
         self.stop = stop
         super().__init__(("127.0.0.1", PORT), HTTPHandler)
         self.thread = threading.Thread(target=self.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
+
+    def get_request(self):
+        request = super().get_request()
+        self.accepted += 1
+        return request
 
     def handle_error(self, _request, _address):
         self.error = Failure("provider_handler")  # Never echo headers, body, or tracebacks.

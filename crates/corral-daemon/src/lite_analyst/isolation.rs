@@ -58,6 +58,42 @@ pub(super) fn protect_supervisor() -> Result<()> {
     install_filter(&socket_filter(true))
 }
 
+/// Run on the actual supervisor thread after loopback-only namespace verification,
+/// seccomp and Landlock. Even if the restriction is broken, send no data and
+/// never connect off loopback or to the provider port.
+#[cfg(feature = "lite-analyst-faults")]
+pub(super) fn probe_supervisor_denial() -> Result<()> {
+    use rustix::net::{self, AddressFamily, SocketFlags, SocketType, ipproto};
+    use std::net::{Ipv4Addr, SocketAddrV4};
+
+    let flags = SocketFlags::CLOEXEC | SocketFlags::NONBLOCK;
+    let tcp = net::socket_with(
+        AddressFamily::INET,
+        SocketType::STREAM,
+        flags,
+        Some(ipproto::TCP),
+    )
+    .context("open fixture supervisor probe socket")?;
+    let unused = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 43174);
+    ensure!(
+        net::connect(&tcp, &unused) == Err(Errno::ACCESS),
+        "fixture supervisor probe did not observe Landlock TCP denial"
+    );
+    ensure!(
+        matches!(
+            net::socket_with(
+                AddressFamily::INET,
+                SocketType::DGRAM,
+                flags,
+                Some(ipproto::UDP),
+            ),
+            Err(Errno::PERM)
+        ),
+        "fixture supervisor probe did not observe seccomp UDP socket denial"
+    );
+    Ok(())
+}
+
 fn install_filter(filter: &[libc::sock_filter]) -> Result<()> {
     let program = libc::sock_fprog {
         len: filter.len().try_into().context("fixture BPF size")?,
@@ -80,13 +116,25 @@ fn install_filter(filter: &[libc::sock_filter]) -> Result<()> {
 pub(super) enum Payload {
     Shim,
     Pi,
+    #[cfg(feature = "lite-analyst-faults")]
+    PiProbe,
 }
 
 impl Payload {
-    fn entrypoint(&self) -> &'static str {
+    fn is_pi(&self) -> bool {
         match self {
-            Self::Shim => "/fixture/corral/bin/corral-lite-mcp-shim",
-            Self::Pi => "/fixture/corral/bin/corral-pi-lite-analyst",
+            Self::Shim => false,
+            Self::Pi => true,
+            #[cfg(feature = "lite-analyst-faults")]
+            Self::PiProbe => true,
+        }
+    }
+
+    fn entrypoint(&self) -> &'static str {
+        if self.is_pi() {
+            "/fixture/corral/bin/corral-pi-lite-analyst"
+        } else {
+            "/fixture/corral/bin/corral-lite-mcp-shim"
         }
     }
 }
@@ -187,7 +235,7 @@ impl Sandbox {
                 "--sync-fd",
                 &inherited[3].to_string(),
             ]);
-        if matches!(payload, Payload::Pi) {
+        if payload.is_pi() {
             for (key, value) in [
                 ("LC_ALL", "C.UTF-8"),
                 ("PATH", "/nonexistent"),
@@ -203,6 +251,10 @@ impl Sandbox {
             }
         }
         cmd.args(["--", entry]);
+        #[cfg(feature = "lite-analyst-faults")]
+        if matches!(payload, Payload::PiProbe) {
+            cmd.arg("--probe-sandbox");
+        }
         // SAFETY: only async-signal-safe libc calls, no allocations or locks in
         // the successful path. Preserve Command's exec-error pipe until exec.
         unsafe {

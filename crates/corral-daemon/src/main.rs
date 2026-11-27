@@ -34,6 +34,20 @@ mod unix {
         LiteAnalystFixtureV1 {
             #[arg(long)]
             enable_public_fixture_e2e: bool,
+            #[cfg(all(
+                feature = "lite-analyst-faults",
+                target_os = "linux",
+                target_arch = "x86_64"
+            ))]
+            #[arg(long, requires = "fault_fd")]
+            fault_case: Option<String>,
+            #[cfg(all(
+                feature = "lite-analyst-faults",
+                target_os = "linux",
+                target_arch = "x86_64"
+            ))]
+            #[arg(long, requires = "fault_case")]
+            fault_fd: Option<i32>,
         },
         Run {
             #[arg(long)]
@@ -85,12 +99,35 @@ mod unix {
         let cli = Cli::parse();
         if let Command::LiteAnalystFixtureV1 {
             enable_public_fixture_e2e,
+            #[cfg(all(
+                feature = "lite-analyst-faults",
+                target_os = "linux",
+                target_arch = "x86_64"
+            ))]
+            fault_case,
+            #[cfg(all(
+                feature = "lite-analyst-faults",
+                target_os = "linux",
+                target_arch = "x86_64"
+            ))]
+            fault_fd,
         } = cli.command
         {
             anyhow::ensure!(
                 cli.root.is_none(),
                 "public Lite fixture does not accept a workspace root"
             );
+            #[cfg(all(
+                feature = "lite-analyst-faults",
+                target_os = "linux",
+                target_arch = "x86_64"
+            ))]
+            if let (Some(case), Some(fd)) = (fault_case, fault_fd) {
+                // SAFETY: fresh fixture CLI; the launcher provisions the whole FD table.
+                return unsafe {
+                    corral_daemon::run_fixture_with_fault(enable_public_fixture_e2e, &case, fd)
+                };
+            }
             #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
             // SAFETY: this is the fresh CLI, not the owner daemon. It has not opened
             // other resources or started threads; the launcher owns provisioning.

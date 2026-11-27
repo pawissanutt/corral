@@ -213,6 +213,24 @@ impl Broker {
         Ok(())
     }
 
+    #[cfg(feature = "lite-analyst-faults")]
+    pub(super) fn disconnect_for_fault(&mut self) -> Result<()> {
+        let pipes = self
+            .pipes
+            .take()
+            .context("fixture broker is already closed")?;
+        // Make loss observable at the actual peers even if a fork briefly
+        // inherited a descriptor. Dropping control tears down the shim's
+        // separately owned evidence endpoint via its normal EOF handling.
+        let mut result = Ok(());
+        for fd in pipes.idle() {
+            let closed = rustix::net::shutdown(fd, rustix::net::Shutdown::Both)
+                .context("shut down retained fixture broker endpoint");
+            result = result.and(closed);
+        }
+        result
+    }
+
     /// Nonblocking observation for an idle broker. The shim continuously
     /// watches evidence and closes its retained channels when it detects loss.
     pub(super) fn check_live(&self) -> Result<()> {

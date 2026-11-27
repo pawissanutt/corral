@@ -7,7 +7,7 @@ import sys
 import tarfile
 from pathlib import Path
 
-from protocol import PACKET_SHA, PROFILE_SHA, PROMPT_SHA, RAW_POLICY_SHA, SCENARIOS, checked_file, file_sha, load, need, sha, wire
+from protocol import PACKET_SHA, PROFILE_SHA, PROMPT_SHA, RAW_POLICY_SHA, checked_file, file_sha, load, need, sha, wire
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[2]
@@ -119,23 +119,28 @@ def stage_local(pkg, opts, loader_pin):
 
 def stage_bundle(pkg, opts, host):
     sys.path.insert(0, str(HERE.parent / "lite_analyst_bundle"))
-    from verify import staged_copy, validate
+    from verify import FAULT_ASSET, FAULT_VARIANT, staged_copy, validate
 
     try:
-        staged_copy(opts.bundle, pkg, opts.archive_sha256, opts.manifest_sha256, opts.revision)
+        staged_copy(opts.bundle, pkg, opts.archive_sha256, opts.manifest_sha256, opts.revision,
+                    with_faults=opts.with_faults)
     except (EOFError, OSError, ValueError, tarfile.TarError):
         need(False, "c4_archive_or_manifest_pin_invalid")
     raw = (pkg / "build-manifest.json").read_bytes()
-    components = validate(raw, opts.revision)["components"]
+    components = validate(raw, opts.revision, with_faults=opts.with_faults)["components"]
     recipe = load((pkg / "BUILD.txt").read_bytes())
     need(recipe["sandbox_observed_sha256"] == host["bwrap_sha256"], "c4_bundle_sandbox_abi_mismatch")
+    fault = {}
+    if opts.with_faults:
+        need(recipe.get("variant") == FAULT_VARIANT, "fault_build_recipe_variant")
+        fault = {"variant": FAULT_VARIANT, "fault_contract_sha256": components[FAULT_ASSET]["sha256"]}
     # The component controller needs its host Python stdlib in /usr. Require the
     # outer sandbox's read-only /usr to supply the same verified ELF closure.
     base = "runtime/host/"
     for path, pin in components.items():
         if path.startswith(base):
             need(file_sha(Path("/" + path[len(base):])) == pin["sha256"], "c4_bundle_host_abi_mismatch")
-    return raw, components
+    return raw, components, fault
 
 
 def stage(root, opts):
@@ -144,8 +149,9 @@ def stage(root, opts):
     pkg = root / "corral"
     host = {"bwrap_sha256": file_sha(BWRAP), "loader_sha256": file_sha(Path(LOADER))}
     profile = REPO / "docs/contracts/lite-analyst-launcher-v1/launcher-v1.json"
+    fault = {}
     if opts.bundle:
-        raw, components = stage_bundle(pkg, opts, host)
+        raw, components, fault = stage_bundle(pkg, opts, host)
         profile = pkg / "provenance/launcher-v1.json"
     else:
         raw, components = stage_local(pkg, opts, host["loader_sha256"])
@@ -153,18 +159,19 @@ def stage(root, opts):
     checked_file(opts.packet, PACKET_SHA)
     install(profile, meta / "launcher-v1.json")
     install(opts.packet, meta / "february.json")
-    for file in QA_FILES:
+    qa_files = (*QA_FILES, "fault.py") if opts.with_faults else QA_FILES
+    for file in qa_files:
         install(HERE / file, qa / file)
     (meta / "build-manifest.json").write_bytes(raw)
     install(BWRAP, root / "bwrap", True)
     need(file_sha(root / "bwrap") == host["bwrap_sha256"], "bwrap_copy_pin")
     runtime_pins = {str(p): file_sha(p) for p in elf_dependencies(BWRAP)}
-    lock = {"kind": "corral_component_qa_only", "scenarios": opts.scenario or SCENARIOS, "manifest_sha256": sha(raw),
+    lock = {"kind": "corral_component_qa_only", "scenarios": opts.scenario, "manifest_sha256": sha(raw),
             "profile_sha256": PROFILE_SHA, "packet_sha256": PACKET_SHA, "host": host,
-            "bwrap_dependencies": runtime_pins, "qa": {file: file_sha(qa / file) for file in QA_FILES}}
+            "bwrap_dependencies": runtime_pins, "qa": {file: file_sha(qa / file) for file in qa_files}, **fault}
     pins = {"profile_sha256": PROFILE_SHA, "packet_sha256": PACKET_SHA, "manifest_sha256": sha(raw),
             "bwrap_sha256": host["bwrap_sha256"],
-            "components": {role: components[path]["sha256"] for role, path in ENTRYPOINTS.items()}}
+            "components": {role: components[path]["sha256"] for role, path in ENTRYPOINTS.items()}, **fault}
     if opts.bundle:
         pins["archive_sha256"] = lock["archive_sha256"] = opts.archive_sha256
     (meta / "qa-lock.json").write_bytes(wire(lock))

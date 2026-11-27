@@ -1,0 +1,26 @@
+# Corral / Lite investigation fault controls v1
+
+This is a **separate public-fixture build**, not a change to the normal C1/E1 profile, build lock or approval. Use the independently reviewed Corral and Lite manifests, source commits, complete published archives and raw binary pins in a **distinct joint fault lock**. Keep the ordinary C1 work/bootstrap/ready/provider encodings, fixture seed, isolation, exclusive capability custody, and teardown. Never use live spend, private data or normal owner surfaces. This interface is not exposed in default builds.
+
+## Driver-only channel
+
+Use a new, unnamed, connected `AF_UNIX SOCK_SEQPACKET` pair for the selected product, with close-on-exec everywhere except initial provisioning to that product. Corral adds `--fault-case <id> --fault-fd 9` to the normal fixture host argv; Lite's separately pinned `mitimind-analyst-fixture-fault` uses `--fault-case <id> --fault-fd 8`. Both still require `--enable-public-fixture-e2e`. Without a selected case, pass neither flag nor FD (including when reconnecting for receipt reconciliation). Only one selected case per component launch; a selected barrier fires at most once. Never give the driver a duplicate of work, broker, stdio or credential endpoints, and never inherit the fault FD in Pi or shim.
+
+Each rendezvous is exactly one packet of case ID followed by LF from product to driver, then exactly one packet of the listed action followed by LF back to product. IDs/actions are fixed ASCII and case-sensitive. No JSON, payload bytes, peer IDs, paths, credentials or ancillary data. Unknown actions, truncation, ancillary data, lost peers and elapsed deadlines fail closed; no retries, extended product deadlines or unbounded wait. The barrier ceiling is 15 seconds monotonic, shortened by the current product deadline. Unselected or already consumed cases do not wait. Arrange the Stop winner by starting the first-party Stop operation while paused and awaiting its completion before responding `continue`; Corral pumps ordinary control requests at its finish barriers without holding a store transaction. Use only the selected fixed experiment, not a general fault scripting interface.
+
+| Corral case | Action | Actual boundary and consequence |
+|---|---|---|
+| `corral.start.committed` | `drop` | Successful fresh durable Start, before its work response. Shut down work with no response and no bind. |
+| `corral.ack.committed` | `drop` | Durable Ack of the actual offer, before its work response. Shut down work without retracting the report or ack. |
+| `corral.finish.before` | `continue` | Actual provider-directed finish, before the final broker/admission recheck and report transaction. A Stop that wins the recheck prevents publication. |
+| `corral.finish.after` | `continue` | Corral report transaction committed, before the private local Pi receipt. A later Stop cannot retract the publication. |
+| `corral.settle.duplicate` | `continue` | Corral has received the matching successful Settle reply. It sends the exact same work request again (same ID and bytes, one in flight), compares the complete correlated receipt, then observes it locally once. No second provider handoff. |
+| `corral.session.foreign` | `continue` | During a legitimate working binding, real Corral work sender issues one fence for a locally generated, unrelated run ID and requires correlated `not_found` before continuing. Driver provides no IDs. |
+| `corral.broker.after_admission` | `drop` | After durable provider-permit consume but before any HTTP body handoff. Close the actual per-run retained broker pipes, not the enrollment bootstrap socket. Normal liveness gate refuses handoff and settles conservatively as indeterminate before teardown. |
+| `corral.sandbox.denied` | `continue` | Actual sending supervisor and actual isolated Pi worker have observed the expected kernel denials. No permit, provider POST, or worker tool call is made. Close in the ordinary stop/teardown path. |
+
+Lite companion IDs: `lite.permit.committed` and `lite.settle.committed` (`drop`), `lite.disclosure.before` and `lite.disclosure.after` (`continue`, real `read_evidence` disclosure), `lite.report.before` and `lite.report.after` (`continue`, Lite intake/retention, not Corral finish), and `lite.report.foreign` (`continue`, actual authenticated fetch with just a locally generated foreign report ID after a valid offer; no import on the negative request). Use the Lite producer's pinned handoff for its exact receipt and boundary details.
+
+The Corral package retains C1 component-map shape and adds exactly the fault contract asset `provenance/corral-fault-v1.md` (this document); the fault daemon verifies its digest, and the normal daemon rejects a manifest containing it. The fault build recipe explicitly selects the feature and the separate Pi root module. Report the separate raw manifest/archive and entrypoint SHA-256 values. Do not update or relabel the original E1 pins.
+
+Barrier arrival is not acceptance. Confirm the observable missing response/negative reply, unchanged canonical data, durable attempt/receipt counts, and retained wrapper and namespace exit, with separate joined receipts. A Corral-only run using a synthetic Lite peer is endpoint/teardown evidence only. It does not prove joined behavior, launcher runner correctness, or fresh computation.

@@ -11,6 +11,8 @@ use super::{
     wire::{self, Binding, FenceReason, StartBody},
     work::FRAME_TIMEOUT,
 };
+#[cfg(feature = "lite-analyst-faults")]
+use super::{faults::Case, isolation::probe_supervisor_denial};
 use anyhow::{Context, Result, ensure};
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
@@ -159,7 +161,17 @@ impl Session<'_> {
         let broker = children.broker.as_mut().context("fixture broker missing")?;
         self.pump_run(binding, "admitted")?;
         broker.check_live()?;
-        let (pi, io) = Sandbox::spawn(Payload::Pi)?;
+        #[cfg(feature = "lite-analyst-faults")]
+        let sandbox_probe = work.fault_armed(Case::SandboxDenied);
+        #[cfg(feature = "lite-analyst-faults")]
+        let payload = if sandbox_probe {
+            Payload::PiProbe
+        } else {
+            Payload::Pi
+        };
+        #[cfg(not(feature = "lite-analyst-faults"))]
+        let payload = Payload::Pi;
+        let (pi, io) = Sandbox::spawn(payload)?;
         children.pi = Some(pi);
         children.io = Some(PiIo {
             io,
@@ -174,6 +186,25 @@ impl Session<'_> {
                 broker.check_live()
             })?;
         let io = children.io.as_mut().context("fixture Pi missing")?;
+        #[cfg(feature = "lite-analyst-faults")]
+        if sandbox_probe {
+            probe_supervisor_denial()?;
+            ensure!(
+                matches!(
+                    io.receive(startup, &mut || {
+                        self.pump_run(binding, "admitted")?;
+                        broker.check_live()
+                    })?,
+                    PiFrame::SandboxDenied
+                ) && io.buffer.is_empty(),
+                "fixture Pi denial was not observed"
+            );
+            work.barrier(Case::SandboxDenied, startup, || {
+                self.pump_run(binding, "admitted")?;
+                broker.check_live()
+            })?;
+            anyhow::bail!("fixture sandbox denial probe ended");
+        }
         let mut starting = || self.pump_run(binding, "admitted");
         io.send(
             &json!({"type":"start", "question":body.question, "prompt":policy::prompt()?,
@@ -201,6 +232,8 @@ impl Session<'_> {
                 self.clock.now()?,
             )
             .map_err(|_| anyhow::anyhow!("fixture launch attachment refused"))?;
+        #[cfg(feature = "lite-analyst-faults")]
+        self.probe_foreign_session(deadline)?;
         let mut evidence = Vec::new();
         let mut call_ids = HashSet::new();
         for turn in 1..=body.limits.turns {
@@ -245,6 +278,8 @@ impl Session<'_> {
                 if name == "finish_report" {
                     let report = Sealed::new(args)
                         .map_err(|_| anyhow::anyhow!("fixture report arguments refused"))?;
+                    #[cfg(feature = "lite-analyst-faults")]
+                    self.finish_barrier(Case::FinishBefore, deadline)?;
                     broker.prove_live(deadline, &mut || self.pump_run(binding, "working"))?;
                     self.pump_run(binding, "working")?;
                     let offer = self
@@ -265,6 +300,8 @@ impl Session<'_> {
                             },
                         )
                         .map_err(|_| anyhow::anyhow!("fixture report publication refused"))?;
+                    #[cfg(feature = "lite-analyst-faults")]
+                    self.finish_barrier(Case::FinishAfter, deadline)?;
                     // Host-local acknowledgement only. Its loss cannot undo the
                     // committed winner, and no subsequent turn may see it.
                     let mut finishing = || self.work.check_live();
@@ -324,7 +361,7 @@ impl Session<'_> {
         launch_id: &str,
         deadline: Instant,
         body: &[u8],
-        broker: &Broker,
+        broker: &mut Broker,
         io: &PiIo,
         call_ids: &mut HashSet<String>,
     ) -> Result<(Value, Vec<Call>)> {
@@ -340,6 +377,8 @@ impl Session<'_> {
         let (reserve, lease) = self
             .reserve_turn(&binding.run_id, binding.generation, launch_id, body)?
             .map_err(|_| anyhow::anyhow!("fixture permit unavailable"))?;
+        #[cfg(feature = "lite-analyst-faults")]
+        let work = self.work;
         let admission = (|| {
             broker.prove_live(deadline, &mut || self.pump_run(binding, "working"))?;
             io.check_waiting()?;
@@ -347,6 +386,14 @@ impl Session<'_> {
                 &lease,
                 body,
                 || {
+                    #[cfg(feature = "lite-analyst-faults")]
+                    if work.barrier(
+                        Case::BrokerAfterAdmission,
+                        deadline.min(lease.send_deadline()),
+                        || work.check_live(),
+                    )? {
+                        broker.disconnect_for_fault()?;
+                    }
                     broker.check_live()?;
                     io.check_waiting()
                 },
@@ -445,6 +492,8 @@ enum PiFrame {
         args: Value,
     },
     Done,
+    #[cfg(feature = "lite-analyst-faults")]
+    SandboxDenied,
 }
 
 struct PiIo {

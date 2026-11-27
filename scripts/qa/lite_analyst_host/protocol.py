@@ -19,6 +19,10 @@ CANARY = "ZZ_QA_UNAPPROVED_OWNER_CANARY_ZZ"
 DAEMON = "/fixture/corral/bin/corrald-next"
 OPT_IN = "--enable-public-fixture-e2e"
 SCENARIOS = ("happy", "pending", "forbidden", "repeated_id", "registry", "reconnect", "crash")
+FAULT_START = "corral.start.committed"
+FAULT_BROKER = "corral.broker.after_admission"
+FAULT_SANDBOX = "corral.sandbox.denied"
+FAULT_SCENARIOS = (FAULT_START, FAULT_BROKER, FAULT_SANDBOX)
 
 
 class Failure(Exception):

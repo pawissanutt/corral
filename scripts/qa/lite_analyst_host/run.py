@@ -15,7 +15,7 @@ import time
 from contextlib import ExitStack
 from pathlib import Path
 
-from protocol import OPT_IN, SCENARIOS, Failure, load, need, wire
+from protocol import FAULT_SCENARIOS, OPT_IN, SCENARIOS, Failure, load, need, wire
 from staging import BWRAP, CLEAN_ENV, ENTRYPOINTS, LOADER, REPO, checked_program, stage
 
 
@@ -164,13 +164,17 @@ def main():
     parser.add_argument("--revision", help="40 lowercase hex digits naming the Corral build revision")
     parser.add_argument("--packet", type=Path, default=REPO / ".evidence/lite-fixtures/docs/protocol/analyst-february-close-v1.json",
                         help="raw pinned T-2073:3 packet")
-    parser.add_argument("--scenario", action="append", choices=SCENARIOS, help="select lanes; default: all")
+    parser.add_argument("--with-faults", action="store_true", help="run only the separately pinned Corral fault variant")
+    parser.add_argument("--scenario", action="append", choices=(*SCENARIOS, *FAULT_SCENARIOS),
+                        help="select lanes within the chosen variant; default: all in that variant")
     opts = parser.parse_args()
     if not opts.enable_public_fixture_e2e:
         print(wire({"status": "disabled", "scope": "corral_component_only", "joined_e1": "not_run"}).decode())
         return 64
     receipt = {"scope": "corral_component_only", "lite": "synthetic_contract_peer", "joined_e1": "not_run",
                "report_import": "not_run", "fresh_compute": "not_run", "status": "fail"}
+    if opts.with_faults:
+        receipt["joined_fault_matrix"] = "not_run"
     root = None
     exit_code = 64
     try:
@@ -180,8 +184,12 @@ def main():
         need((opts.bundle is not None and not any(local) and opts.archive_sha256 and opts.manifest_sha256)
              or (opts.bundle is None and all(local) and not opts.archive_sha256 and not opts.manifest_sha256),
              "select_pinned_archive_or_three_trusted_local_binaries")
-        selected = opts.scenario or SCENARIOS
+        need(not opts.with_faults or opts.bundle is not None, "fault_bundle_required")
+        allowed = FAULT_SCENARIOS if opts.with_faults else SCENARIOS
+        selected = opts.scenario or allowed
+        need(set(selected) <= set(allowed), "scenario_variant_mismatch")
         need(len(set(selected)) == len(selected), "duplicate_scenario")
+        opts.scenario = selected
         if platform.system() != "Linux" or platform.machine() != "x86_64" or os.getuid() == 0 or os.geteuid() == 0:
             raise IsolationUnavailable("rootless_linux_x86_64_required")
         if (BWRAP.is_symlink() or not BWRAP.is_file() or not Path(LOADER).is_file() or

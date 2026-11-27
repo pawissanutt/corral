@@ -20,6 +20,8 @@ ROLES = {*ENTRYPOINTS, "runtime", "asset", "build_recipe", "prompt", "tool_polic
 ASSETS = {"prompt": ("assets/synthetic-prompt.txt", PROMPT_SHA),
           "tool_policy": ("assets/tool-policy.json", RAW_POLICY_SHA)}
 MANIFEST = "build-manifest.json"
+FAULT_VARIANT = "corral-fault-v1"
+FAULT_ASSET = f"provenance/{FAULT_VARIANT}.md"
 PATH = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9_.-]*(/[A-Za-z0-9_-][A-Za-z0-9_.-]*)*")
 ABI_PREFIX = "glibc-2.39-noble-elf-closure-sha256:"
 ARCHIVE_LIMIT = 256 << 20
@@ -80,7 +82,7 @@ def runtime_abi(components):
     return ABI_PREFIX + sha(canonical({p: c["sha256"] for p, c in components.items() if c["role"] == "runtime"}))
 
 
-def validate(raw, revision):
+def validate(raw, revision, *, with_faults=False):
     m = strict_json(raw)
     need(keys(m, "v", "kind", "status", "target", "corral_revision", "launcher_profile_sha256", "build_recipe",
               "host_requirements", "entrypoints", "components")
@@ -114,11 +116,15 @@ def validate(raw, revision):
     profile = components.get("provenance/launcher-v1.json", {})
     need(profile.get("role") == "asset" and profile.get("sha256") == PROFILE_SHA and not profile["executable"],
          "missing pinned launcher profile")
+    need((FAULT_ASSET in components) == with_faults, "wrong Corral fixture variant")
+    if with_faults:
+        fault = components[FAULT_ASSET]
+        need(fault["role"] == "asset" and not fault["executable"], "invalid fault contract asset")
     need(sum(c["bytes"] for c in components.values()) <= TOTAL_LIMIT, "package exceeds local size limit")
     return m
 
 
-def staged_copy(archive, destination, archive_pin, manifest_pin, revision):
+def staged_copy(archive, destination, archive_pin, manifest_pin, revision, *, with_faults=False):
     """Read the archive only through a private hash-checked snapshot; caller mounts read-only."""
     need(sha_ok(archive_pin) and sha_ok(manifest_pin), "archive and raw manifest pins required")
     dest = Path(destination)
@@ -137,7 +143,7 @@ def staged_copy(archive, destination, archive_pin, manifest_pin, revision):
             need(digest.hexdigest() == archive_pin, "archive digest mismatch")
             checked.seek(0)
             with gzip.GzipFile(fileobj=checked) as tar:
-                extract(tar, dest, manifest_pin, revision)
+                extract(tar, dest, manifest_pin, revision, with_faults=with_faults)
         # Check both exact raw custody (above) and the policy's canonical pin.
         policy = dest / ASSETS["tool_policy"][0]
         need(sha(canonical(strict_json(policy.read_bytes()))) == JCS_POLICY_SHA, "canonical policy mismatch")
@@ -156,7 +162,7 @@ def padding(reader, size):
     need(not any(exact(reader, -size % 512)), "nonzero archive padding")
 
 
-def extract(tar, dest, manifest_pin, revision):
+def extract(tar, dest, manifest_pin, revision, *, with_faults=False):
     # Parse physical USTAR headers, so library normalization cannot hide long-name,
     # link, sparse or PAX extension records, aliases or trailing extra members.
     def header():
@@ -173,7 +179,7 @@ def extract(tar, dest, manifest_pin, revision):
     raw = exact(tar, info.size)
     padding(tar, info.size)
     need(sha(raw) == manifest_pin, "raw manifest digest mismatch")
-    components = validate(raw, revision)["components"]
+    components = validate(raw, revision, with_faults=with_faults)["components"]
     (dest / MANIFEST).write_bytes(raw)
     (dest / MANIFEST).chmod(0o444)
     found = set()
@@ -208,9 +214,10 @@ def main():
     p.add_argument("--manifest-sha256", required=True)
     p.add_argument("--revision", required=True)
     p.add_argument("--stage", type=Path, required=True, help="new directory inside a private staging root")
+    p.add_argument("--with-faults", action="store_true", help="expect the separately pinned Corral fault variant")
     a = p.parse_args()
     try:
-        staged_copy(a.archive, a.stage, a.archive_sha256, a.manifest_sha256, a.revision)
+        staged_copy(a.archive, a.stage, a.archive_sha256, a.manifest_sha256, a.revision, with_faults=a.with_faults)
     except (EOFError, OSError, ValueError, RecursionError, tarfile.TarError) as e:
         p.exit(64, f"Corral package rejected: {e}\n")
 

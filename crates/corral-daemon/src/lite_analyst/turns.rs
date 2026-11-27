@@ -242,6 +242,11 @@ pub(super) struct PermitLease {
 }
 
 impl PermitLease {
+    #[cfg(feature = "lite-analyst-faults")]
+    pub(super) fn send_deadline(&self) -> Instant {
+        self.deadline
+    }
+
     /// Recheck immediately at I/O, after the durable consume may have waited on disk.
     /// This is a time check, not send authorization: the runtime still holds the
     /// current-channel/stop gate and must have just successfully consumed once.

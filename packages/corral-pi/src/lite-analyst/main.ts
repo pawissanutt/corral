@@ -260,7 +260,7 @@ async function run(pipe: FixturePipe): Promise<void> {
   await pipe.send({ type: "done" });
 }
 
-async function main(): Promise<void> {
+export async function main(): Promise<void> {
   // The supervisor enforces the actual (possibly shorter) deadline and owns teardown.
   // This independent ceiling also bounds a stalled stdio peer.
   const timer = setTimeout(() => {
@@ -279,4 +279,4 @@ async function main(): Promise<void> {
   }
 }
 
-await main();
+if (import.meta.main) await main();
