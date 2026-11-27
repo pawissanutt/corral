@@ -192,7 +192,7 @@ export function localQuestionAsk(pending: PendingQuestions): DeferredAsk {
 }
 
 /** Interactive panes keep synchronous dialogs; deferred and headless asks use the pending store. */
-export function askUserTool(record: (answer: string) => Promise<string>, pending?: Pick<PendingQuestions, "ask" | "withdraw">,
+export function askUserTool(record: (answer: string) => Promise<string>, pending?: Pick<PendingQuestions, "ask" | "withdraw" | "get">,
   dialogBusy: () => boolean = () => false, presentation?: DialogPresentationSource, deferred?: DeferredAsk,
   headless: () => boolean = () => false, dialogs?: () => RemoteDialogs | undefined): ToolDefinition {
   return {
@@ -220,6 +220,7 @@ export function askUserTool(record: (answer: string) => Promise<string>, pending
       const noAnswer = () => ({ content: [{ type: "text" as const, text: "no answer" }], details: { status: "no answer" } });
       if ("withdraw" in params) {
         if (!pending) throw new Error("pending_questions_unavailable");
+        if (pending.get(params.withdraw)?.tool === "owner_bash") throw new Error("question_not_found");
         const status = pending.withdraw(params.withdraw);
         return { content: [{ type: "text", text: `${params.withdraw}: ${status}; no owner answer` }], details: { id: params.withdraw, status } };
       }

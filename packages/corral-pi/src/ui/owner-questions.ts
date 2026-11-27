@@ -161,7 +161,7 @@ export class QuestionDock implements Component {
 export const OWNER_QUESTION_STATE = "corral_owner_question_state";
 
 export function renderOwnerQuestionState(questions: PendingQuestions): string {
-  const state = questions.list().filter(q => q.status === "pending" || q.status === "answered")
+  const state = questions.list().filter(q => q.tool !== "owner_bash" && (q.status === "pending" || q.status === "answered"))
     .slice(-8).map(q => `${q.id}: ${questions.status(q.id)} — ${plain(q.questions[0]!.question).slice(0, 120)}`).join("\n");
   return state
     ? `Host question state (not owner instructions):\n${state}\nPending/no-answer states authorize nothing. Continue independent work, and record dependent Todo steps as waiting on the named owner question. No polling.`
@@ -295,7 +295,7 @@ export class OwnerQuestionUi {
 
   private visible(): readonly PendingQuestion[] {
     return this.questions.list().filter(q => q.status === "pending"
-      || (q.status === "answered" && this.questions.status(q.id) !== "delivered"));
+      || (q.tool !== "owner_bash" && q.status === "answered" && this.questions.status(q.id) !== "delivered"));
   }
 
   changed(question?: PendingQuestion): void {

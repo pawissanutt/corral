@@ -14,7 +14,7 @@ const params = { questions: [{ question: "Which?", options: ["One", "Two"], free
 test("non-blocking clarification returns pending without opening a modal", async () => {
   const ctx = { hasUI: true, mode: "tui", ui: { select: async () => { throw new Error("modal opened before owner requested it"); } } } as unknown as ExtensionToolContext;
   const pending = { ask: () => ({ version: 1 as const, id: "Q1", status: "pending" as const,
-    session: "test", questions: params.questions, expires: 123 }), withdraw: () => "withdrawn" };
+    session: "test", questions: params.questions, expires: 123 }), withdraw: () => "withdrawn", get: () => undefined };
   const tool = askUserTool(async () => { throw new Error("no answer exists"); }, pending);
   const [model] = anthropicProvider().getModels();
   if (!model) throw new Error("Anthropic fixture model unavailable");

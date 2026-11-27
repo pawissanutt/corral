@@ -5,6 +5,7 @@ import { EventLog } from "../src/bridge/events.ts";
 import { installToolControls } from "../src/host/tool-controls.ts";
 import { ToolApprovals } from "../src/host/tool-approvals.ts";
 import { PendingQuestions } from "../src/host/pending-questions.ts";
+import { renderOwnerQuestionState } from "../src/ui/owner-questions.ts";
 import { registerShell } from "../src/host/remote/shell.ts";
 import { capabilities } from "../src/host/remote/state.ts";
 import { codeHost } from "./support/code-host.ts";
@@ -40,6 +41,7 @@ test("owner approval is isolated from model approval and is not delivered to the
   const input = { command: "echo hello" };
   expect(approvals.shell("bash", input, true)).toContain("Waiting for owner approval");
   const owner = questions.pending()[0]!;
+  expect(renderOwnerQuestionState(questions)).not.toContain("echo hello");
   await questions.answer(owner.id, [{ option: "allow" }]);
   expect(delivered).toBe(0);
   expect(approvals.shell("bash", input)).toContain("Waiting for owner approval");
