@@ -1,7 +1,10 @@
 //! `git.history.v1`: a project's commit graph a page at a time, read straight from Git, with
 //! links only where a run record names the exact commit.
 use anyhow::{Context, Result, ensure};
-use corral_engine::{Engine, Outcome, Role, git_history::HistoryLink};
+use corral_engine::{
+    Engine, Outcome, Role,
+    git_history::{HistoryLink, LinkBasis},
+};
 use corral_protocol::detail::{
     DetailBody, DetailGet, DetailReply, GIT_HISTORY_PAGE, GitCommit, GitCommitLink, GitHistoryPage,
     GitLinkRelation,
@@ -54,7 +57,9 @@ pub(super) fn read(
         more = true;
     }
     let next = match (&page.tip, more) {
-        (Some(tip), true) => Some(format!("{selector}:{tip}:{}", skip + page.commits.len())),
+        (Some(tip), true) if skip + page.commits.len() <= SKIP_MAX => {
+            Some(format!("{selector}:{tip}:{}", skip + page.commits.len()))
+        }
         _ => None,
     };
     let etag = fingerprint(&(&selector, &page))?;
@@ -113,10 +118,11 @@ fn commit(commit: corral_engine::git_history::HistoryCommit) -> GitCommit {
 
 fn link(link: HistoryLink) -> GitCommitLink {
     let run = link.run;
-    let relation = match (run.role, run.outcome) {
-        (Role::Worker, Some(Outcome::Landed)) => GitLinkRelation::Landed,
-        (Role::Worker, _) => GitLinkRelation::Candidate,
-        (Role::Reviewer, _) => GitLinkRelation::Reviewed,
+    let relation = match (link.basis, run.role, run.outcome) {
+        (LinkBasis::Submitted, ..) => GitLinkRelation::Candidate,
+        (_, Role::Worker, Some(Outcome::Landed)) => GitLinkRelation::Landed,
+        (_, Role::Worker, _) => GitLinkRelation::Candidate,
+        (_, Role::Reviewer, _) => GitLinkRelation::Reviewed,
     };
     GitCommitLink {
         session: run

@@ -72,3 +72,27 @@ fn pages_follow_git_ancestry_across_a_merge() {
     assert_eq!(labels[&main], ["tag: v1"]);
     assert!(!labels.contains_key(&root));
 }
+
+/// A shallow clone's boundary commit keeps its recorded parent (absent here, never a root).
+#[test]
+fn shallow_boundary_keeps_its_real_parent() {
+    let dir = tempfile::tempdir().unwrap();
+    let origin = dir.path().join("origin");
+    std::fs::create_dir(&origin).unwrap();
+    crate::git(&origin, &["init", "-q", "-b", "main"]).unwrap();
+    crate::git(&origin, &["config", "user.name", "Fixture"]).unwrap();
+    crate::git(&origin, &["config", "user.email", "fixture@example.test"]).unwrap();
+    let root = commit(&origin, "root");
+    let tip = commit(&origin, "tip");
+    let url = format!("file://{}", origin.display());
+    let clone = dir.path().join("clone");
+    let clone_arg = clone.to_string_lossy().into_owned();
+    crate::git(
+        dir.path(),
+        &["clone", "-q", "--depth", "1", &url, &clone_arg],
+    )
+    .unwrap();
+    let page = log_page(&clone, &tip, 0, 10).unwrap();
+    assert_eq!(page.len(), 1);
+    assert_eq!(page[0].parents, [root]);
+}

@@ -552,7 +552,7 @@ impl Store {
         let list = serde_json::to_string(shas).context("encode commit list")?;
         let mut statement = self
             .connection
-            .prepare("SELECT document FROM runs WHERE json_extract(document,'$.head_sha') IN (SELECT value FROM json_each(?1)) ORDER BY task,CAST(substr(id,2) AS INTEGER)")
+            .prepare("SELECT document FROM runs WHERE json_extract(document,'$.head_sha') IN (SELECT value FROM json_each(?1)) ORDER BY task,CAST(substr(id,2) AS INTEGER) LIMIT 1000")
             .context("prepare runs by head")?;
         documents(&mut statement, [list])
     }

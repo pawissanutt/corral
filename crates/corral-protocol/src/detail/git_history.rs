@@ -64,9 +64,11 @@ pub struct GitCommitLink {
 pub enum GitLinkRelation {
     /// The worker run landed: the target branch was fast-forwarded to this commit.
     Landed,
-    /// The worker run submitted this commit as its review candidate; it has not landed.
+    /// The worker run submitted this commit for review (a recorded submission, or its current
+    /// head when it has not landed). The run may have landed a different, rebased commit.
     Candidate,
-    /// The reviewer run's verdict was recorded against this candidate commit.
+    /// The reviewer run was bound to this candidate when a verdict on it was recorded; the
+    /// verdict may have been the owner's.
     Reviewed,
     #[serde(other)]
     Other,

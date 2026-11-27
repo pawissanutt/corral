@@ -92,6 +92,20 @@ fn history_pages_follow_git_from_a_pinned_tip_and_link_only_recorded_commits() {
         ))
         .unwrap();
 
+    // The landed task first submitted an older commit, which landing later rebased away.
+    let submitted = head(&repo, "main~3");
+    store
+        .transaction(|store| {
+            store.append_event(&corral_engine::events::NewEvent {
+                task: Some(landed.clone()),
+                run: Some("R1".into()),
+                kind: corral_engine::EventKind::Done,
+                actor: corral_engine::model::Actor::Owner,
+                detail: serde_json::json!({"sha": submitted, "project": "demo"}),
+            })
+        })
+        .unwrap();
+
     let get = |branch: Option<&str>, page: Option<String>| {
         detail(
             &fixture.shared,

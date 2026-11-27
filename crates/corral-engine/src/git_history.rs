@@ -31,6 +31,18 @@ pub struct HistoryCommit {
 pub struct HistoryLink {
     pub run: Run,
     pub title: String,
+    pub basis: LinkBasis,
+}
+
+/// Which record names the commit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkBasis {
+    /// The run's current `head_sha`: its landed tip, its latest submission or, for a
+    /// reviewer, the candidate its verdict was recorded on.
+    Head,
+    /// A `done` event: the worker submitted this commit for review. It stays even when a
+    /// later landing rebased the run to another head.
+    Submitted,
 }
 
 impl Engine {
@@ -90,24 +102,51 @@ impl Engine {
     ) -> Result<BTreeMap<String, Vec<HistoryLink>>> {
         let wanted: Vec<&str> = shas.iter().map(String::as_str).collect();
         let runs = self.store.runs_with_heads(&wanted)?;
-        let ids: BTreeSet<&str> = runs.iter().map(|run| run.task.as_str()).collect();
+        let submissions = self.store.submissions_of(project, &wanted)?;
+        let ids: BTreeSet<&str> = runs
+            .iter()
+            .map(|run| run.task.as_str())
+            .chain(submissions.iter().map(|(task, _, _)| task.as_str()))
+            .collect();
         let tasks: BTreeMap<String, crate::Task> = self
             .store
             .tasks_by_ids(&ids.into_iter().collect::<Vec<_>>())?
             .into_iter()
-            .filter(|task| task.project.as_deref() == Some(project))
             .map(|task| (task.id.clone(), task))
             .collect();
         let mut links: BTreeMap<String, Vec<HistoryLink>> = BTreeMap::new();
         for run in runs {
-            let (Some(task), Some(sha)) = (tasks.get(&run.task), run.head_sha.clone()) else {
+            let task = tasks.get(&run.task);
+            // A run's head names a commit of the task's current project only.
+            let (Some(task), Some(sha)) = (
+                task.filter(|task| task.project.as_deref() == Some(project)),
+                run.head_sha.clone(),
+            ) else {
                 continue;
             };
             links.entry(sha).or_default().push(HistoryLink {
                 title: task.title.clone(),
                 run,
+                basis: LinkBasis::Head,
             });
         }
+        // The submission recorded its project, so it holds even if the task moved since.
+        for (task, run, sha) in submissions {
+            let entry = links.entry(sha).or_default();
+            if entry.iter().any(|l| l.run.task == task && l.run.id == run) {
+                continue;
+            }
+            let (Some(found), Some(run)) = (tasks.get(&task), self.store.get_run(&task, &run)?)
+            else {
+                continue;
+            };
+            entry.push(HistoryLink {
+                title: found.title.clone(),
+                run,
+                basis: LinkBasis::Submitted,
+            });
+        }
+        links.retain(|_, list| !list.is_empty());
         Ok(links)
     }
 }

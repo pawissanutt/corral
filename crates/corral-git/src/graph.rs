@@ -5,8 +5,16 @@ use std::path::Path;
 
 use anyhow::{Result, bail};
 
-use crate::history::{is_full_oid, validate_commit};
-use crate::{fail, git_raw, validate_branch_name};
+use crate::history::is_full_oid;
+use crate::{fail, git_raw_env, validate_branch_name};
+
+/// Browsing must neither fetch missing objects into a partial clone (`GIT_NO_LAZY_FETCH`,
+/// Git 2.44+) nor show replacement objects in place of the recorded commits.
+const READ_ONLY: &[(&str, &str)] = &[("GIT_NO_LAZY_FETCH", "1"), ("GIT_NO_REPLACE_OBJECTS", "1")];
+
+fn read(repo: &Path, args: &[&str]) -> Result<std::process::Output> {
+    git_raw_env(repo, args, READ_ONLY)
+}
 
 /// Longest subject or author name kept, in characters.
 const TEXT_MAX: usize = 300;
@@ -45,7 +53,7 @@ pub fn resolve_tip(repo: &Path, branch: Option<&str>) -> Result<(String, Option<
         "--end-of-options",
         &peeled,
     ];
-    let out = git_raw(repo, &args)?;
+    let out = read(repo, &args)?;
     if !out.status.success() {
         if out.status.code() == Some(1) && out.stdout.is_empty() {
             return Ok((reference, None));
@@ -66,7 +74,13 @@ pub fn resolve_tip(repo: &Path, branch: Option<&str>) -> Result<(String, Option<
 /// # Errors
 /// Returns an error for an invalid tip, a Git failure or malformed output.
 pub fn log_page(repo: &Path, tip: &str, skip: usize, limit: usize) -> Result<Vec<GraphCommit>> {
-    validate_commit(repo, tip)?;
+    if !is_full_oid(tip) {
+        bail!("expected a full commit ID, got {tip:?}");
+    }
+    let kind = read(repo, &["cat-file", "-t", tip])?;
+    if !kind.status.success() || kind.stdout != b"commit\n" {
+        bail!("expected an existing full commit ID, got {tip:?}");
+    }
     let skip = format!("--skip={skip}");
     let limit = format!("--max-count={limit}");
     let args = [
@@ -81,7 +95,7 @@ pub fn log_page(repo: &Path, tip: &str, skip: usize, limit: usize) -> Result<Vec
         tip,
         "--",
     ];
-    let out = git_raw(repo, &args)?;
+    let out = read(repo, &args)?;
     if !out.status.success() {
         return Err(fail(repo, &args, &out));
     }
@@ -105,7 +119,41 @@ pub fn log_page(repo: &Path, tip: &str, skip: usize, limit: usize) -> Result<Vec
             committed: committed.to_owned(),
         });
     }
+    real_parents_at_shallow_boundary(repo, &mut commits)?;
     Ok(commits)
+}
+
+/// A shallow clone's boundary commits show no parents in `git log`, yet they have some that
+/// are simply not here. Read those from the commit objects so none is drawn as a root.
+fn real_parents_at_shallow_boundary(repo: &Path, commits: &mut [GraphCommit]) -> Result<()> {
+    let args = ["rev-parse", "--is-shallow-repository"];
+    let out = read(repo, &args)?;
+    if !out.status.success() {
+        return Err(fail(repo, &args, &out));
+    }
+    if out.stdout != b"true\n" {
+        return Ok(());
+    }
+    for commit in commits
+        .iter_mut()
+        .filter(|commit| commit.parents.is_empty())
+    {
+        let args = ["cat-file", "commit", &commit.sha];
+        let out = read(repo, &args)?;
+        if !out.status.success() {
+            return Err(fail(repo, &args, &out));
+        }
+        let text = String::from_utf8_lossy(&out.stdout);
+        for line in text.lines().take_while(|line| !line.is_empty()) {
+            if let Some(parent) = line.strip_prefix("parent ") {
+                if !is_full_oid(parent) {
+                    bail!("malformed parent in commit {}", commit.sha);
+                }
+                commit.parents.push(parent.to_owned());
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The local branches (`main`), tags (`tag: v1`) and `HEAD` pointing at each of `shas`.
@@ -117,7 +165,7 @@ pub fn ref_labels(repo: &Path, shas: &BTreeSet<String>) -> Result<BTreeMap<Strin
     if shas.is_empty() {
         return Ok(labels);
     }
-    let head = git_raw(repo, &["rev-parse", "--verify", "--quiet", "HEAD^{commit}"])?;
+    let head = read(repo, &["rev-parse", "--verify", "--quiet", "HEAD^{commit}"])?;
     if head.status.success() {
         let head = String::from_utf8_lossy(&head.stdout).trim_end().to_owned();
         if shas.contains(&head) {
@@ -130,7 +178,7 @@ pub fn ref_labels(repo: &Path, shas: &BTreeSet<String>) -> Result<BTreeMap<Strin
         "refs/heads",
         "refs/tags",
     ];
-    let out = git_raw(repo, &args)?;
+    let out = read(repo, &args)?;
     if !out.status.success() {
         return Err(fail(repo, &args, &out));
     }

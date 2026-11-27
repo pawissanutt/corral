@@ -359,6 +359,34 @@ impl Store {
         .collect()
     }
 
+    /// `(task, run, sha)` of every submission (`done` event) that recorded one of `shas` for
+    /// exactly `project`. Unlike a run's `head_sha`, a landing rebase never rewrites these.
+    pub fn submissions_of(
+        &self,
+        project: &str,
+        shas: &[&str],
+    ) -> Result<Vec<(String, String, String)>> {
+        if shas.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut statement = self
+            .connection
+            .prepare_cached(
+                "SELECT DISTINCT task, run, json_extract(detail,'$.sha') FROM events
+                 WHERE kind='done' AND task IS NOT NULL AND run IS NOT NULL
+                 AND json_extract(detail,'$.project')=?1
+                 AND json_extract(detail,'$.sha') IN (SELECT value FROM json_each(?2))
+                 ORDER BY task, run LIMIT 1000",
+            )
+            .context("prepare submissions by commit")?;
+        let rows = statement
+            .query_map(params![project, encode(&shas)?], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
+            .context("query submissions by commit")?;
+        rows.map(|row| row.context("read submission row")).collect()
+    }
+
     pub fn events_after(&self, filter: &EventFilter, after_seq: u64) -> Result<Vec<Event>> {
         self.query_events(filter, after_seq, -1)
     }
