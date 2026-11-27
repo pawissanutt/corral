@@ -5,6 +5,7 @@
 
 use nsh_core::prelude::*;
 
+use crate::model::history::DRAWN_LANES;
 use crate::model::history::graph::{GraphRow, Line};
 use crate::model::{Form, Hue};
 use crate::state::AppState;
@@ -17,8 +18,8 @@ use crate::ui::tokens::Token;
 const LANE: f32 = 14.0;
 const ROW: f32 = 30.0;
 const DOT: f32 = 4.0;
-/// Lanes a desktop row draws at most; wider graphs are rare and still list every commit.
-const MOST: usize = 16;
+/// Lanes a desktop row draws at most; the page says how many more there are.
+const MOST: usize = DRAWN_LANES;
 /// The hues lanes take in turn, so neighbouring lines tell apart.
 const HUES: [Hue; 5] = [Hue::Worker, Hue::Corral, Hue::Held, Hue::Ok, Hue::You];
 

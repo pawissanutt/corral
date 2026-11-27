@@ -1,11 +1,10 @@
 //! The sample's commit history, served as corrald serves `git_history`: a small graph per
 //! project with a branch that diverged and was merged back by hand, a backport merge and a root,
-//! in pages of five so Load older is walked. Links come from the sample's own run records: its
-//! landed worker runs land the mainline commits, and a submitted, unlanded worker run names the
-//! merged-by-hand branch's tip as its candidate. Every other commit has none.
+//! in pages of five so Load older is walked. Links are fixed: each names one sample task's run
+//! on one commit (`MAIN_LINKS`, `BRANCH_LINKS`), landed, candidate or reviewed, so they never
+//! move between commits as the sample's tasks change. Every other commit has none.
 
 use corral_protocol::detail::*;
-use corral_types::{Outcome, Role, Status};
 
 use super::{records, stamp};
 use crate::model::daemon::{DetailCache, Feed, detail_key};
@@ -227,43 +226,76 @@ fn commit(feed: &Feed, project: &str, at: usize, sample: &Sample) -> GitCommit {
     }
 }
 
-/// Worker runs of `project`'s tasks with `outcome`, newest first.
-fn runs<'a>(
-    all: &'a [TaskDetail],
+/// A fixed link: the task, its run, what Corral did and whether the run's session is named.
+type Linked = (&'static str, &'static str, GitLinkRelation, bool);
+
+/// The links on a project's mainline by commit key: each names one sample task's run, so a link
+/// stays on its commit whatever the sample's tasks do later. Every other commit has none.
+const MAIN_LINKS: &[(&str, &str, Linked)] = &[
+    (
+        "corral",
+        "land-1",
+        ("T-2", "R1", GitLinkRelation::Landed, true),
+    ),
+    (
+        "corral",
+        "land-2",
+        ("T-4", "R1", GitLinkRelation::Landed, true),
+    ),
+    (
+        "corral",
+        "land-3",
+        ("T-5", "R1", GitLinkRelation::Landed, false),
+    ),
+    // The owner merged this branch by hand: Corral only ever saw it as a candidate.
+    (
+        "corral",
+        "side-2",
+        ("T-9", "R1", GitLinkRelation::Candidate, true),
+    ),
+    (
+        "site",
+        "land-1",
+        ("T-6", "R1", GitLinkRelation::Landed, false),
+    ),
+];
+
+/// The links on a local branch's own tip commit, by branch name.
+const BRANCH_LINKS: &[(&str, &str, Linked)] = &[
+    (
+        "corral",
+        "corral/T-11",
+        ("T-11", "R1", GitLinkRelation::Candidate, true),
+    ),
+    (
+        "corral",
+        "corral/T-11",
+        ("T-11", "R2", GitLinkRelation::Reviewed, true),
+    ),
+];
+
+/// The links `table` holds for `project` at `at`, titled by the sample task when it is known.
+fn links(
+    all: &[TaskDetail],
+    table: &[(&str, &str, Linked)],
     project: &str,
-    outcome: Outcome,
-) -> Vec<(&'a TaskDetail, &'a corral_types::Run)> {
-    let mut found: Vec<_> = all
+    at: &str,
+) -> Vec<GitCommitLink> {
+    table
         .iter()
-        .filter(|record| record.task.project.as_deref() == Some(project))
-        .flat_map(|record| record.runs.iter().map(move |run| (record, run)))
-        .filter(|(_, run)| run.role == Role::Worker && run.outcome == Some(outcome))
-        .collect();
-    found.sort_by_key(|(_, run)| std::cmp::Reverse(run.ended));
-    found
-}
-
-fn link(record: &TaskDetail, run: &corral_types::Run, relation: GitLinkRelation) -> GitCommitLink {
-    GitCommitLink {
-        task: record.task.id.clone(),
-        title: record.task.title.clone(),
-        run: run.id.clone(),
-        relation,
-        session: run
-            .session
-            .is_some()
-            .then(|| format!("{}_{}", record.task.id, run.id)),
-    }
-}
-
-/// The newest submitted worker run whose task has not landed: a candidate.
-fn candidate<'a>(
-    all: &'a [TaskDetail],
-    project: &str,
-) -> Option<(&'a TaskDetail, &'a corral_types::Run)> {
-    runs(all, project, Outcome::Done)
-        .into_iter()
-        .find(|(record, _)| !matches!(record.task.status, Status::Done | Status::Dropped))
+        .filter(|(owner, place, _)| *owner == project && *place == at)
+        .map(|(_, _, (task, run, relation, session))| GitCommitLink {
+            task: (*task).into(),
+            title: all
+                .iter()
+                .find(|record| record.task.id == *task)
+                .map(|record| record.task.title.clone())
+                .unwrap_or_default(),
+            run: (*run).into(),
+            relation: *relation,
+            session: session.then(|| format!("{task}_{run}")),
+        })
+        .collect()
 }
 
 /// HEAD's history; `head` marks its tip as HEAD and the base branch.
@@ -276,29 +308,14 @@ fn mainline(feed: &Feed, all: &[TaskDetail], project: &str, head: bool) -> Vec<G
     if head && let Some(tip) = commits.first_mut() {
         tip.refs = vec!["HEAD".into(), "main".into()];
     }
-    let landed = runs(all, project, Outcome::Landed);
-    for (key, (record, run)) in ["land-1", "land-2", "land-3"].iter().zip(&landed) {
-        let sha = sha(project, key);
-        if let Some(commit) = commits.iter_mut().find(|commit| commit.sha == sha) {
-            commit
-                .links
-                .push(link(record, run, GitLinkRelation::Landed));
-        }
-    }
-    // The owner merged this branch by hand: Corral only ever saw it as a candidate.
-    if let Some((record, run)) = candidate(all, project) {
-        let sha = sha(project, "side-2");
-        if let Some(commit) = commits.iter_mut().find(|commit| commit.sha == sha) {
-            commit
-                .links
-                .push(link(record, run, GitLinkRelation::Candidate));
-        }
+    for (row, (key, ..)) in commits.iter_mut().zip(&MAIN) {
+        row.links = links(all, MAIN_LINKS, project, key);
     }
     commits
 }
 
 /// A local branch: `main` is HEAD's history; any other has one commit of its own on the
-/// mainline before the hand merge, the candidate's when a run worked on it.
+/// mainline before the hand merge, linked as `BRANCH_LINKS` names.
 fn on_branch(feed: &Feed, all: &[TaskDetail], project: &str, name: &str) -> Vec<GitCommit> {
     let mut mainline = mainline(feed, all, project, false);
     if name == "main" {
@@ -313,7 +330,7 @@ fn on_branch(feed: &Feed, all: &[TaskDetail], project: &str, name: &str) -> Vec<
         .skip_while(|commit| commit.sha != base)
         .collect();
     let when = stamp(feed.now.saturating_sub(2 * HOUR));
-    let mut tip = GitCommit {
+    let tip = GitCommit {
         sha: sha(project, &format!("branch/{name}")),
         parents: vec![base],
         subject: format!("Work in progress on {name}"),
@@ -321,19 +338,7 @@ fn on_branch(feed: &Feed, all: &[TaskDetail], project: &str, name: &str) -> Vec<
         authored: when.clone(),
         committed: when,
         refs: vec![name.into()],
-        links: Vec::new(),
+        links: links(all, BRANCH_LINKS, project, name),
     };
-    let worked = all
-        .iter()
-        .filter(|record| record.task.project.as_deref() == Some(project))
-        .filter(|record| !matches!(record.task.status, Status::Done | Status::Dropped))
-        .flat_map(|record| record.runs.iter().map(move |run| (record, run)))
-        .find(|(_, run)| {
-            run.role == Role::Worker && run.branch == name && run.outcome == Some(Outcome::Done)
-        });
-    if let Some((record, run)) = worked {
-        tip.links
-            .push(link(record, run, GitLinkRelation::Candidate));
-    }
     std::iter::once(tip).chain(rest).collect()
 }

@@ -44,21 +44,14 @@ impl AppState {
                 .unwrap_or_default()
         });
         let chain = self.detail_pages.remove(&key).unwrap_or_default();
-        // A branch refresh starts a new window, not a replay of the old walked depth. A commit
-        // walk's later pages follow its first page's tip: an unchanged first page keeps them all,
-        // a changed one (a moved ref) starts the walk again, so pages never mix two tips.
+        // A branch or commit refresh starts a new window holding only the first page, not a
+        // replay of the old walked depth. Even an unchanged first page drops a commit walk's
+        // older pages: their links and ref labels were not read again, so they cannot show as
+        // current, and Load older reads them anew from the same tip.
         if windowed(&request.target) && request.page.is_none() {
-            let history = matches!(request.target, DetailRef::GitHistory { .. });
             let current = if page.body.is_some() {
                 page
             } else if let Some(kept) = saved.first().filter(|kept| kept.etag == page.etag) {
-                if history {
-                    let mut pages = saved.clone();
-                    pages[0].as_of = page.as_of;
-                    pages[0].seq = page.seq;
-                    self.publish(feed, &key, &id, &request.target, pages);
-                    return vec![];
-                }
                 DetailReply {
                     as_of: page.as_of,
                     seq: page.seq,
@@ -71,7 +64,7 @@ impl AppState {
                     &id,
                     ClientError {
                         code: "invalid_reply".into(),
-                        message: "Uncached branch page marked unchanged.".into(),
+                        message: "Uncached first page marked unchanged.".into(),
                     },
                 );
                 return vec![];

@@ -12,15 +12,15 @@ use corral_protocol::detail::{
 };
 
 use crate::model::daemon::Feed;
-use crate::model::projects::{Scope, branch_page, known_projects};
+use crate::model::projects::{Scope, branch_page, known_projects, suggest};
 use crate::model::work as when;
 use crate::model::{Hue, Id};
 use graph::{Graph, GraphRow};
 
 /// Pages a walk keeps at most; past them Load older stops and Refresh starts again.
 pub const MAX_PAGES: usize = 20;
-/// Branches offered beside HEAD.
-const SHOWN_BRANCHES: usize = 8;
+/// Lanes a desktop row's canvas draws; past them `Page.overflow` says what is not drawn.
+pub const DRAWN_LANES: usize = 16;
 /// Characters of a short SHA, and of the SHA in a row's test id.
 const SHORT: usize = 7;
 const ROW_ID: usize = 12;
@@ -31,6 +31,8 @@ pub const ASK_WORDS: &str =
     "Git history shows one project's commits. Choose a project, or pick one in the scope switcher.";
 pub const HEAD_LABEL: &str = "HEAD";
 pub const BRANCH_CAPTION: &str = "Ref";
+pub const BRANCH_FIELD: &str = "Branch";
+pub const BRANCH_PLACEHOLDER: &str = "Branch name, Enter reads";
 pub const REFRESH: &str = "Refresh";
 pub const LOAD_OLDER: &str = "Load older";
 pub const LOADING_OLDER: &str = "Loading older commits…";
@@ -67,6 +69,8 @@ pub struct State {
     pub project: Option<String>,
     /// A local branch; none for the project checkout's HEAD.
     pub branch: Option<String>,
+    /// What the branch field holds: it narrows the branches offered, and Enter reads it.
+    pub typed: String,
     pub selected: Option<String>,
 }
 
@@ -76,6 +80,11 @@ pub enum Action {
     Follow(String),
     /// Read another ref: HEAD (none) or a local branch. The selection goes with the old ref.
     Branch(Option<String>),
+    /// The branch field's words changed.
+    Type(String),
+    /// Enter in the branch field: read the branch it names (HEAD when empty). corrald decides
+    /// whether it exists; an unknown name shows as unavailable.
+    Submit,
     /// Select a commit by its full SHA.
     Select(String),
 }
@@ -96,6 +105,12 @@ impl State {
                     self.branch = branch;
                     self.selected = None;
                 }
+            }
+            Action::Type(words) => self.typed = words,
+            Action::Submit => {
+                let name = self.typed.trim();
+                let branch = (!name.is_empty() && name != HEAD_LABEL).then(|| name.to_owned());
+                self.act(Action::Branch(branch));
             }
             Action::Select(sha) => self.selected = Some(sha),
         }
@@ -208,6 +223,8 @@ pub struct Page {
     pub continuing: Option<(String, String)>,
     /// The lanes that continue below the last row.
     pub below: Vec<usize>,
+    /// The graph is wider than a canvas draws: what is left out, for the forms that draw one.
+    pub overflow: Option<String>,
     pub more: Option<More>,
     pub inspector: Option<Inspector>,
 }
@@ -223,7 +240,7 @@ pub fn page(state: &State, feed: &Feed, scope: &Scope) -> Page {
     let project = project.to_string();
     let branch = state.branch_of(&project);
     let target = target(&project, branch.as_deref());
-    let branches = branch_choices(feed, &project, branch.as_deref());
+    let branches = branch_choices(feed, &project, branch.as_deref(), &state.typed);
     let cache = feed.detail(&target);
     let body = cache.and_then(|cache| match cache.body() {
         Some(DetailBody::GitHistory(page)) => Some(page),
@@ -256,6 +273,12 @@ pub fn page(state: &State, feed: &Feed, scope: &Scope) -> Page {
     let graph = graph::lanes(&commits);
     out.pinned = pinned(walk);
     out.lanes = graph.lanes;
+    out.overflow = (graph.lanes > DRAWN_LANES).then(|| {
+        format!(
+            "+{} lanes not drawn: the graph shows its first {DRAWN_LANES} lanes, and every commit is still listed.",
+            graph.lanes - DRAWN_LANES
+        )
+    });
     out.continuing = continuing(&graph);
     out.below = graph.continuing.iter().map(|open| open.lane).collect();
     out.rows = walk
@@ -296,17 +319,24 @@ pub fn page(state: &State, feed: &Feed, scope: &Scope) -> Page {
 }
 
 /// HEAD, then the project's local branches newest first (as corrald lists them, else the
-/// project row's), the chosen one always among them.
-fn branch_choices(feed: &Feed, project: &str, chosen: Option<&str>) -> Vec<BranchChoice> {
+/// project row's) that the typed words narrow to, a listed name typed whole first, the chosen
+/// one always among them. A branch past those listed is reached by typing its name.
+fn branch_choices(
+    feed: &Feed,
+    project: &str,
+    chosen: Option<&str>,
+    typed: &str,
+) -> Vec<BranchChoice> {
     let listed = branch_page(feed, project).branches;
     let listed = if listed.is_empty() {
         crate::model::projects::branches(feed, Some(project))
     } else {
         listed
     };
+    let whole = listed.iter().find(|name| name.as_str() == typed.trim());
     let mut names: Vec<String> = Vec::new();
-    for name in listed {
-        if names.len() < SHOWN_BRANCHES && !names.contains(&name) {
+    for name in whole.cloned().into_iter().chain(suggest(&listed, typed)) {
+        if !names.contains(&name) {
             names.push(name);
         }
     }
@@ -429,7 +459,7 @@ pub fn link_words(link: &GitCommitLink) -> String {
         }
         GitLinkRelation::Reviewed => {
             format!(
-                "Reviewed: reviewer run {run} of task {task} recorded its verdict on this commit"
+                "Reviewed: reviewer run {run} of task {task} was reviewing this candidate when its verdict was recorded"
             )
         }
         GitLinkRelation::Other => format!("Linked: run {run} of task {task} names this commit"),

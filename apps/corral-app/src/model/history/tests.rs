@@ -41,3 +41,59 @@ fn a_merge_keeps_both_parent_edges_and_a_missing_parent_continues_below() {
     let root = lanes(&[("first", &[][..])]);
     assert!(root.rows[0].root && root.continuing.is_empty());
 }
+
+/// Only the newest eight branches were offered, with no way to read an older one.
+#[test]
+fn typing_reaches_a_branch_past_those_offered() {
+    use super::{Action, State, page};
+    use crate::model::daemon::Feed;
+    use crate::model::projects::Scope;
+    use corral_protocol::rows::ProjectRow;
+    let names: Vec<String> = (0..20).map(|n| format!("topic/{n:02}")).collect();
+    let mut feed = Feed::default();
+    feed.capabilities
+        .insert(corral_protocol::PROJECTS_V1.into());
+    feed.projects.insert(
+        "corral".into(),
+        ProjectRow {
+            id: "corral".into(),
+            local_branches: Some(names),
+            ..ProjectRow::default()
+        },
+    );
+    let scope = Scope::Project("corral".into());
+    let offered = |state: &State| -> Vec<String> {
+        page(state, &feed, &scope)
+            .branches
+            .into_iter()
+            .map(|choice| choice.id)
+            .collect()
+    };
+    let mut state = State::default();
+    state.act(Action::Follow("corral".into()));
+    let first = offered(&state);
+    assert!(first.contains(&"seg-history-branch-topic/00".to_owned()));
+    assert!(!first.contains(&"seg-history-branch-topic/19".to_owned()));
+    state.act(Action::Type("19".into()));
+    assert_eq!(
+        offered(&state),
+        ["seg-history-branch-HEAD", "seg-history-branch-topic/19"]
+    );
+    state.act(Action::Type("gone/branch".into()));
+    state.act(Action::Submit);
+    assert_eq!(state.branch.as_deref(), Some("gone/branch"));
+    let shown = page(&state, &feed, &scope);
+    assert_eq!(
+        shown.target,
+        Some(super::target("corral", Some("gone/branch")))
+    );
+    assert!(
+        shown
+            .branches
+            .iter()
+            .any(|choice| choice.chosen && choice.id == "seg-history-branch-gone/branch")
+    );
+    state.act(Action::Type(String::new()));
+    state.act(Action::Submit);
+    assert_eq!(state.branch, None);
+}

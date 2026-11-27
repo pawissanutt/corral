@@ -1,15 +1,17 @@
 //! Insight › Git history: one project's commits on one ref, read-only. The head offers Refresh;
-//! under it the refs (HEAD and the project's local branches) and the walk's pinned tip, then the
+//! under it the branch field, the refs (HEAD and the project's local branches the field narrows
+//! to) and the walk's pinned tip, then the
 //! commits as rows beside their lane graph (`graph.rs`), Load older under them, and the
 //! selected commit's inspector beside the rows (under them on the phone and on a narrow
 //! terminal). With All projects in scope the page asks for one. Every word, number and branch
 //! is `model::history`'s.
 //!
 //! Test ids: "page-title", "btn-history-refresh", "btn-history-retry", "history",
-//! "history-tip", "seg-history-branch-<HEAD|branch>", "system-pick-<project>",
-//! "commit-<sha12>", "history-below", "btn-history-more", "inspector", "inspector-title",
+//! "history-tip", "field-history-branch", "seg-history-branch-<HEAD|branch>",
+//! "system-pick-<project>", "history-overflow", "commit-<sha12>", "history-below", "btn-history-more", "inspector", "inspector-title",
 //! "history-link-<n>", "btn-history-task-<task>", "btn-history-session-<session>".
 
+mod branch;
 mod graph;
 
 use nsh_core::prelude::*;
@@ -211,6 +213,7 @@ fn refs_bar(app: AppState, data: Memo<Page>) -> AnyElement {
                 .border_b(px(1.0))
                 .border_color(color(Token::Rule))
         })
+        .child(branch::field(app))
         .child(choices)
         .child(tip)
         .into_element()
@@ -402,10 +405,20 @@ fn commits(app: AppState, data: Memo<Page>) -> AnyElement {
         .when(app.form == Form::Terminal, |v| v.pl(term::cells(1.0)))
         .child(more)
         .into_element();
+    // Only the desktop canvas caps its lanes; glyph rows draw them all.
+    let overflow = computed(move || data.with(|page| page.overflow.clone()));
+    let overflow = dynamic(move || {
+        let words = overflow.get().filter(|_| app.form == Form::Desktop)?;
+        Some(untracked(|| {
+            quiet(app, words).test_id("history-overflow").into_element()
+        }))
+    });
+    let overflow = view().px(px(16.0)).child(overflow).into_element();
     view()
         .flex_col()
         .min_w(px(0.0))
         .child(state_block(app, data))
+        .child(overflow)
         .child(list)
         .child(below)
         .child(more)
