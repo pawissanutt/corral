@@ -1,0 +1,118 @@
+{
+  "schema": "corral.repo-diagram",
+  "version": 1,
+  "id": "submit-work",
+  "title": "Submit work: recording a candidate",
+  "layout": "ordered_lanes",
+  "nodes": [
+    {
+      "id": "cli",
+      "label": "corral-next"
+    },
+    {
+      "id": "engine",
+      "label": "Submission engine"
+    },
+    {
+      "id": "store",
+      "label": "Task store"
+    },
+    {
+      "id": "pipeline",
+      "label": "Review pipeline"
+    }
+  ],
+  "edges": [
+    {
+      "id": "request",
+      "label": "Submit the worker summary",
+      "from": "cli",
+      "to": "engine"
+    },
+    {
+      "id": "record",
+      "label": "Persist the submitted run",
+      "from": "engine",
+      "to": "store"
+    },
+    {
+      "id": "transition",
+      "label": "Move the task to Review",
+      "from": "engine",
+      "to": "store"
+    },
+    {
+      "id": "advance",
+      "label": "Advance after commit",
+      "from": "engine",
+      "to": "pipeline",
+      "note": "Only a new submission advances the pipeline."
+    }
+  ],
+  "evidence": [
+    {
+      "element": "cli",
+      "anchor": {
+        "kind": "text",
+        "path": "crates/corral-next/src/main.rs",
+        "text": "Command::Done { id, summary }"
+      }
+    },
+    {
+      "element": "engine",
+      "anchor": {
+        "kind": "text",
+        "path": "crates/corral-engine/src/review.rs",
+        "text": "pub fn done("
+      }
+    },
+    {
+      "element": "store",
+      "anchor": {
+        "kind": "text",
+        "path": "crates/corral-engine/src/store.rs",
+        "text": "pub fn update_run(&self, run: &Run) -> Result<()>"
+      }
+    },
+    {
+      "element": "pipeline",
+      "anchor": {
+        "kind": "text",
+        "path": "crates/corral-engine/src/pipeline.rs",
+        "text": "fn kick_pipeline("
+      }
+    },
+    {
+      "element": "request",
+      "anchor": {
+        "kind": "text",
+        "path": "crates/corral-next/src/main.rs",
+        "text": "apply(&engine, out, Op::Done { id, summary }, false)?"
+      }
+    },
+    {
+      "element": "record",
+      "anchor": {
+        "kind": "text",
+        "path": "crates/corral-engine/src/review.rs",
+        "text": "store.update_run(&run)?;"
+      }
+    },
+    {
+      "element": "transition",
+      "anchor": {
+        "kind": "text",
+        "path": "crates/corral-engine/src/review.rs",
+        "text": "store.update_run(&run)?;\n                set_lifecycle(&mut task, Status::Review);"
+      }
+    },
+    {
+      "element": "advance",
+      "anchor": {
+        "kind": "text",
+        "path": "crates/corral-engine/src/review.rs",
+        "text": "if submitted {\n            self.kick_pipeline(id)?;"
+      }
+    }
+  ]
+}

@@ -50,6 +50,10 @@ Adapt the example to the actual project and workflow. Set `subject.project` to t
 
 Run `corral-next --json artifact validate-diagram workflow.json`. Exit 0 means structurally valid only, 2 means refused (fix the diagnostic and revalidate), and 1 means CLI/I/O failure. Validation does not resolve the project, commit, source, entities or relationship. Before attaching, inspect the pinned commit and requested paths/spans using Git in the correct repository where possible; report each binding you cannot verify as unresolved, including missing commit/path/span or unchecked definitions. Git inspection is not the daemon's entity resolution and does not verify edges. Do not claim a provider result, coverage, or absence of relationships without observing it. If resolution is unavailable, say so rather than claiming success.
 
+## Reusing an artifact as a repository lens
+
+Attaching a diagram never publishes it to Insight → Lenses. If the owner requests a project lens, propose an ordinary repository change in the configured lens directory (default `.corral/lenses/`). Start from one of its `corral.repo-diagram` JSON examples, not a copy of the artifact envelope. Keep stable element IDs; use plain labels and durable source anchors rather than transplanting artifact line numbers. The repository commit supplies the revision, so do not embed the artifact subject or a moving ref. Check the recipe at the proposed commit, inspect the evidence, report unchecked bindings, and submit it for normal code review. The original artifact remains independently pinned.
+
 ## Attach and report
 
 After successful structural validation for JSON (and any required owner authorization), attach the exact validated bytes to a task belonging to `subject.project`, or to that project's library. In a corral-pi worker, use `corral_artifact` as required by its run contract; pass the path, kind and title, and `to` only for an authorized different target. In an external CLI harness use the same artifact service through the CLI:

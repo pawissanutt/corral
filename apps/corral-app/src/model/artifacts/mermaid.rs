@@ -7,7 +7,7 @@
 //! type, a line it does not understand, a diagram past its bounds) is an error the view shows
 //! beside the source.
 
-use corral_types::lenses::{LensKind, LensStatus};
+use corral_types::lenses::{LensStatus, RecipeLayout};
 
 use crate::model::system::lens::{Diagram, Element};
 
@@ -56,24 +56,24 @@ pub fn parse(source: &str) -> Result<Diagram, String> {
             for (number, line) in std::iter::once((first, tail)).chain(lines) {
                 flow_line(&mut built, line).map_err(|why| at(number, &why))?;
             }
-            LensKind::State
+            RecipeLayout::Graph
         }
         "stateDiagram" | "stateDiagram-v2" => {
             let mut in_note = false;
             for (number, line) in lines {
                 state_line(&mut built, line, &mut in_note).map_err(|why| at(number, &why))?;
             }
-            LensKind::State
+            RecipeLayout::Graph
         }
         "erDiagram" => {
             er::lines(&mut built, lines)?;
-            LensKind::State
+            RecipeLayout::Graph
         }
         "sequenceDiagram" => {
             for (number, line) in lines {
                 sequence_line(&mut built, line).map_err(|why| at(number, &why))?;
             }
-            LensKind::Sequence
+            RecipeLayout::OrderedLanes
         }
         _ => return Err(format!("“{kind}” diagrams are not drawn here")),
     };
@@ -154,14 +154,14 @@ impl Built {
         Ok(())
     }
 
-    fn diagram(self, kind: LensKind) -> Diagram {
+    fn diagram(self, kind: RecipeLayout) -> Diagram {
         Diagram {
             kind,
             id: LANGUAGE.into(),
             title: "Mermaid diagram".into(),
             file: String::new(),
             status: LensStatus::Current,
-            read_at: String::new(),
+            derived: Vec::new(),
             commit: None,
             nodes: self.nodes,
             edges: self.edges,
@@ -182,8 +182,8 @@ fn element(name: String, what: &str, label: String) -> Element {
         label,
         ends: None,
         detail: None,
-        anchor: None,
-        location: None,
+        authored: Vec::new(),
+        group: None,
         marks: Vec::new(),
     }
 }

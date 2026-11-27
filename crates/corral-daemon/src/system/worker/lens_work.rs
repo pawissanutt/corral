@@ -153,22 +153,32 @@ pub(super) fn review_lenses(
     let (before, after) = if enrich {
         let mut before = before.clone();
         let mut after = after.clone();
-        // Compare enriched definitions only when both snapshot requests succeeded.
-        // These are the same tree-keyed answers used for maps and entry impact.
-        let Some(old_report) = reader
-            .enrich_tree(base, &mut before)
-            .filter(|r| r.error.is_none())
-        else {
+        // Do not compare missing provider facts on one side to a covered answer on the other.
+        // Use the same exact-commit answers that supply evidence when either side opens.
+        let (old_report, old_unread) = reader.enrich_lens_tree(base, &mut before);
+        let (new_report, new_unread) = reader.enrich_lens_tree(head, &mut after);
+        let (Some(old_report), Some(new_report)) = (old_report, new_report) else {
             return Ok(None);
         };
-        let Some(new_report) = reader
-            .enrich_tree(head, &mut after)
-            .filter(|r| r.error.is_none())
-        else {
+        if !old_unread.is_empty()
+            || !new_unread.is_empty()
+            || old_report.error.is_some()
+            || new_report.error.is_some()
+        {
             return Ok(None);
+        }
+        let provided = |report: &corral_engine::facts::FactsReport| {
+            ["definitions", "entries"].map(|kind| report.coverage.provides(kind))
         };
-        if !old_report.coverage.provides("definitions")
-            && !new_report.coverage.provides("definitions")
+        let partial = |report: &corral_engine::facts::FactsReport| {
+            let c = &report.coverage;
+            c.dropped_unknown_files > 0
+                || c.skipped.values().chain(c.omitted.values()).any(|n| *n > 0)
+        };
+        if provided(&old_report) == [false, false]
+            || provided(&old_report) != provided(&new_report)
+            || partial(&old_report)
+            || partial(&new_report)
         {
             return Ok(None);
         }

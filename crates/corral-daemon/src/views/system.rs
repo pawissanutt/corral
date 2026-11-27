@@ -117,7 +117,7 @@ pub(super) fn read(
                         file: result.file.clone(),
                         id: result.lens.as_ref().map(|lens| lens.id().to_owned()),
                         title: result.lens.as_ref().map(|lens| lens.title().to_owned()),
-                        kind: result.lens.as_ref().map(|lens| lens.kind()),
+                        layout: result.lens.as_ref().map(|lens| lens.layout),
                         status: result.status,
                     })
                     .collect()

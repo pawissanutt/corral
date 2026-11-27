@@ -3371,7 +3371,7 @@
             "type": "object"
           },
           {
-            "description": "`system.v1`: impact of the latest submitted worker change. Runtime rows\nand summaries require `system.runtime.v1`; entry point changes and\nsummaries require `system.entries.v1`; lens impact requires `system.lenses.v1`;\ndata model changes and summaries require `system.data.v1`.",
+            "description": "`system.v1`: impact of the latest submitted worker change. Runtime rows\nand summaries require `system.runtime.v1`; entry point changes and\nsummaries require `system.entries.v1`; lens impact requires `system.lenses.v2`;\ndata model changes and summaries require `system.data.v1`.",
             "properties": {
               "at": {
                 "anyOf": [

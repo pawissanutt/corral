@@ -56,7 +56,7 @@ futures-channel = "0.3"
 futures-core = "0.3"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-nsh-platform-linux = { version = "0.6.1", optional = true, default-features = false, features = ["shader", "editor", "emoji-picker", "highlight", "math", "plot", "rich-editor", "term"] }
+nsh-platform-linux = { version = "0.6.1", optional = true, default-features = false, features = ["shader", "editor", "emoji-picker", "highlight", "math", "plot", "rich-editor", "term", "webview"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 nsh-platform-macos = { version = "0.6.1", optional = true, default-features = false, features = ["shader", "editor", "emoji-picker", "highlight", "math", "plot", "rich-editor", "term"] }

@@ -2,131 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::facts::EntryKind;
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum Lens {
-    State {
-        id: String,
-        title: String,
-        read_at: String,
-        states_from: StatesFrom,
-        #[serde(default)]
-        states: Vec<LensNode>,
-        #[serde(default)]
-        transitions: Vec<LensTransition>,
-    },
-    Sequence {
-        id: String,
-        title: String,
-        read_at: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        entry: Option<LensEntry>,
-        #[serde(default)]
-        participants: Vec<LensNode>,
-        #[serde(default)]
-        messages: Vec<LensMessage>,
-    },
-}
-
-impl Lens {
-    pub fn id(&self) -> &str {
-        match self {
-            Self::State { id, .. } | Self::Sequence { id, .. } => id,
-        }
-    }
-
-    pub fn title(&self) -> &str {
-        match self {
-            Self::State { title, .. } | Self::Sequence { title, .. } => title,
-        }
-    }
-
-    pub fn kind(&self) -> LensKind {
-        match self {
-            Self::State { .. } => LensKind::State,
-            Self::Sequence { .. } => LensKind::Sequence,
-        }
-    }
-
-    pub fn read_at(&self) -> &str {
-        match self {
-            Self::State { read_at, .. } | Self::Sequence { read_at, .. } => read_at,
-        }
-    }
-}
-
-/// The diagram a lens describes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LensKind {
-    State,
-    Sequence,
-}
-
-impl LensKind {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::State => "state",
-            Self::Sequence => "sequence",
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct StatesFrom {
-    pub path: String,
-    pub name: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LensEntry {
-    pub kind: EntryKind,
-    pub name: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LensAnchor {
-    pub path: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub text: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LensNode {
-    pub id: String,
-    pub label: String,
-    pub anchor: LensAnchor,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LensTransition {
-    pub from: String,
-    pub to: String,
-    pub label: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub guard: Option<String>,
-    pub anchor: LensAnchor,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LensMessage {
-    pub from: String,
-    pub to: String,
-    pub label: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub note: Option<String>,
-    pub anchor: LensAnchor,
-}
+mod recipe;
+pub use recipe::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -178,13 +55,22 @@ pub struct LensExcerpt {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LensResult {
     pub file: String,
-    pub lens: Option<Lens>,
+    pub lens: Option<RepoRecipe>,
     pub status: LensStatus,
     pub failures: Vec<LensDiagnostic>,
     pub not_checked: Vec<LensDiagnostic>,
     pub locations: Vec<LensLocation>,
     pub missing_states: Vec<String>,
     pub extra_states: Vec<String>,
+    /// File-level references derived by Corral, not claims authored in the recipe.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub derived: Vec<InboundReference>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InboundReference {
+    pub element: String,
+    pub reference: crate::facts::Reference<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -193,16 +79,16 @@ pub struct LensImpact {
     pub path: String,
     pub id: String,
     pub title: String,
-    /// Head-side names of elements whose anchor the change edits. Names follow each side's own
-    /// numbering of repeats, so a name is only meaningful on the revision it was read at.
+    /// Stable IDs of head elements whose evidence the change edits.
     pub touched: Vec<String>,
-    /// Head-side names.
+    /// Stable IDs added on the head side.
     pub added: Vec<String>,
-    /// Base-side names.
+    /// Stable IDs removed on the base side.
     pub removed: Vec<String>,
-    /// Base-side names of elements the head does not have (removed, or the head lens is
-    /// unreadable) whose anchor the change edits. Absent from older daemons, which put these
-    /// names in `touched`.
+    /// Base-side IDs whose bound source or binding the change edits. Inspect at the base commit.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub touched_base: Vec<String>,
 }
+
+#[cfg(test)]
+mod recipe_tests;

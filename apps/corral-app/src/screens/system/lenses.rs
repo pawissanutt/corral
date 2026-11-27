@@ -1,15 +1,5 @@
-//! Insight › Lenses: the project's lenses (kind, title, and whether each is
-//! current, stale, incomplete or malformed) with Draft a lens under them, the selected lens
-//! drawn with its failing and unchecked checks listed, and the inspector for the picked
-//! element (its anchor, its committed line and its checks). Desktop and web draw the lens on a
-//! canvas (`lens_canvas.rs`); the phone and a terminal list it: states then transitions, or
-//! participants then numbered messages, so execution order survives any width. Every word is
-//! `model::system::lens`'s.
-//!
-//! Test ids: "lens-list", "lens-<n>", "btn-lens-draft", "seg-lens-kind-<n>",
-//! "field-lens-about", "btn-lens-draft-send", "btn-lens-draft-cancel", "lens-filed",
-//! "btn-lens-filed-open", "lens-head", "btn-lens-repair", "lens-fail-<n>",
-//! "lens-unchecked-<n>", "lens-line-<section>-<n>", "lens-inspector", and `lens_canvas.rs`'s.
+//! Insight › Lenses: the project's reviewed recipes. The shared first-party viewer and
+//! accessible list select the same stable element ID. Evidence stays in the app.
 
 use std::rc::Rc;
 
@@ -17,8 +7,9 @@ use corral_types::Op;
 use corral_types::lenses::LensStatus;
 use nsh_core::prelude::*;
 
-use super::lens_canvas::{self, OnPick};
+use super::lens_canvas::OnPick;
 use super::lens_draft;
+use super::{repo_compare, repo_view};
 use crate::model::list::inspector_width;
 use crate::model::system::Action;
 use crate::model::system::lens::{self, Diagram, HINT, LEAD, NONE, REPAIR_LEAD, Row, Touch};
@@ -31,15 +22,19 @@ use crate::ui::kit::marks::hue_ink;
 use crate::ui::kit::notice::notice;
 use crate::ui::kit::page::{Width, body, columns, context, pane};
 use crate::ui::kit::rows::list_row;
-use crate::ui::kit::text::{h3, label_value, plain};
+use crate::ui::kit::text::{h3, plain};
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
+
+pub(crate) const UNSUPPORTED: &str =
+    "Repository diagrams need a connected daemon that supports system.lenses.v2.";
 
 /// What the list's read gives the page.
 #[derive(Debug, Clone, PartialEq)]
 struct Listed {
     status: Status,
     rows: Vec<Row>,
+    revision: Option<String>,
     notices: Vec<(Hue, String)>,
     /// The lens drawn: the one chosen, else the first.
     selected: Option<String>,
@@ -72,6 +67,7 @@ fn status_of(cache: Option<&crate::model::daemon::DetailCache>) -> Status {
 
 /// The Lenses view of `project`.
 pub(super) fn page(app: AppState, project: String) -> AnyElement {
+    let pins = signal(None::<repo_compare::Pins>);
     let listed = {
         let project = project.clone();
         computed(move || {
@@ -79,9 +75,11 @@ pub(super) fn page(app: AppState, project: String) -> AnyElement {
             app.feed.with(|feed| {
                 let list = lens::list_of(feed, &project);
                 let rows = list.map(lens::rows).unwrap_or_default();
-                let selected = chosen
-                    .filter(|key| rows.iter().any(|r| &r.key == key))
-                    .or_else(|| rows.first().map(|r| r.key.clone()));
+                let selected = pins.get().map(|p| p.file).or_else(|| {
+                    chosen
+                        .filter(|key| rows.iter().any(|r| &r.key == key))
+                        .or_else(|| rows.first().map(|r| r.key.clone()))
+                });
                 Listed {
                     status: status_of(feed.detail(&lens::list_request(&project))),
                     notices: lens::notices(list, feed.systems.get(project.as_str()))
@@ -89,6 +87,7 @@ pub(super) fn page(app: AppState, project: String) -> AnyElement {
                         .map(|n| (n.hue, n.words))
                         .collect(),
                     rows,
+                    revision: list.and_then(|l| l.head.clone()),
                     selected,
                 }
             })
@@ -97,28 +96,54 @@ pub(super) fn page(app: AppState, project: String) -> AnyElement {
     let target = {
         let project = project.clone();
         computed(move || {
-            listed
-                .with(|l| l.selected.clone())
-                .map(|key| lens::lens_request(&project, &key, None))
+            listed.with(|l| {
+                let key = l.selected.as_deref()?;
+                let pin = pins
+                    .get()
+                    .filter(|p| p.file == key)
+                    .map(|p| p.head)
+                    .or_else(|| l.revision.clone())?;
+                Some(lens::lens_request(&project, key, Some(&pin)))
+            })
         })
     };
-    // Pinned while shown, so neither read is evicted from under the page.
+    let base = {
+        let project = project.clone();
+        computed(move || pins.get().map(|p| repo_compare::target(&project, &p)))
+    };
     let kept = {
         let project = project.clone();
         computed(move || {
             let mut targets = vec![lens::list_request(&project)];
             targets.extend(target.get());
+            targets.extend(base.get());
             targets
         })
     };
     crate::screens::task::keep::keep_details(app, kept, None);
-    let read = computed(move || {
-        let Some(target) = target.get() else {
-            return Read::Loading;
-        };
-        app.feed
-            .with(|feed| read_of(feed, &target, &Touch::default()))
+    let raw_read = move |t: Memo<Option<corral_protocol::detail::DetailRef>>| {
+        computed(move || {
+            t.get()
+                .map_or(Read::Loading, |t| repo_compare::read(app, &t))
+        })
+    };
+    let head_raw = raw_read(target);
+    let base_raw = raw_read(base);
+    let marks = computed(move || match (head_raw.get(), base_raw.get()) {
+        (Read::Ready(h, _), Read::Ready(b, _)) => repo_compare::compare(&h, &b),
+        _ => Default::default(),
     });
+    let marked = move |t: Memo<Option<corral_protocol::detail::DetailRef>>, is_head: bool| {
+        computed(move || {
+            let (h, b) = marks.get();
+            t.get().map_or(Read::Loading, |t| {
+                app.feed
+                    .with(|f| read_of(f, &t, if is_head { &h } else { &b }))
+            })
+        })
+    };
+    let read = marked(target, true);
+    let base_read = marked(base, false);
     let shown = computed(move || match read.get() {
         Read::Ready(d, _) => Some(*d),
         _ => None,
@@ -126,13 +151,25 @@ pub(super) fn page(app: AppState, project: String) -> AnyElement {
     let picked = computed(move || app.system.with(|s| s.element.clone()));
     let on_pick: OnPick = Rc::new(move |name| app.system_act(Action::Element(name)));
     let form = app.form;
-    let list = list_column(app, listed, project.clone());
+    let list = list_column(app, listed, project.clone(), pins);
     let main = view()
         .flex_col()
         .min_w(px(0.0))
         .gap(px(if form == Form::Terminal { 0.0 } else { 10.0 }))
         .when(form != Form::Terminal, |v| v.px(px(16.0)).py(px(12.0)))
+        .child(repo_compare::bar(app, target, pins))
         .child(drawn_lens(app, project, read, shown, picked, on_pick))
+        .child(dynamic(move || {
+            base.get().map(|_| {
+                untracked(|| {
+                    super::lens_impact::marked_lens(
+                        app,
+                        base_read,
+                        Some("Base revision · select an element for its evidence"),
+                    )
+                })
+            })
+        }))
         .into_element();
     let side = context(app, "inspector", inspector(app, shown, picked));
     match form {
@@ -186,6 +223,9 @@ pub(crate) fn read_of(
     target: &corral_protocol::detail::DetailRef,
     touch: &Touch,
 ) -> Read {
+    if !feed.capable(corral_protocol::app::SYSTEM_LENSES_V2) {
+        return Read::Failed(UNSUPPORTED.into());
+    }
     let cache = feed.detail(target);
     let stale = matches!(status_of(cache), Status::Stale);
     match (
@@ -196,6 +236,9 @@ pub(crate) fn read_of(
             (_, Some(error)) => Read::Failed(error.clone()),
             // The app asks by file; corrald falls back to a lens whose ID equals the text, and
             // that is another lens, not this file at this commit.
+            (Some(_), None) if matches!(target, corral_protocol::detail::DetailRef::SystemLens { at: Some(pin), .. } if served.commit.as_deref() != Some(pin.as_str())) => {
+                Read::Failed("Response does not match the pinned revision.".into())
+            }
             (Some(result), None) if !asks_for(target, &result.file) => Read::Missing,
             (Some(result), None) => {
                 match lens::diagram(result, served.commit.as_deref(), &served.excerpts, touch) {
@@ -234,7 +277,12 @@ pub(super) fn hued(app: AppState, hue: Hue, words: impl Into<SharedString>) -> A
     plain(app, words).text_color(hue_ink(hue)).into_element()
 }
 
-fn list_column(app: AppState, listed: Memo<Listed>, project: String) -> AnyElement {
+fn list_column(
+    app: AppState,
+    listed: Memo<Listed>,
+    project: String,
+    pins: Signal<Option<repo_compare::Pins>>,
+) -> AnyElement {
     let form = app.form;
     let rows = dynamic(move || {
         let Listed {
@@ -279,7 +327,7 @@ fn list_column(app: AppState, listed: Memo<Listed>, project: String) -> AnyEleme
                 .children(
                     rows.into_iter()
                         .enumerate()
-                        .map(|(n, row)| lens_row(app, listed, n, row)),
+                        .map(|(n, row)| lens_row(app, listed, n, row, pins)),
                 )
                 .into_element()
         })
@@ -295,7 +343,13 @@ fn list_column(app: AppState, listed: Memo<Listed>, project: String) -> AnyEleme
         .into_element()
 }
 
-fn lens_row(app: AppState, listed: Memo<Listed>, n: usize, row: Row) -> AnyElement {
+fn lens_row(
+    app: AppState,
+    listed: Memo<Listed>,
+    n: usize,
+    row: Row,
+    pins: Signal<Option<repo_compare::Pins>>,
+) -> AnyElement {
     let key = row.key.clone();
     let selected = {
         let key = key.clone();
@@ -313,7 +367,10 @@ fn lens_row(app: AppState, listed: Memo<Listed>, n: usize, row: Row) -> AnyEleme
         label,
         format!("lens-{n}"),
         selected,
-        move || app.system_act(Action::Lens(key.clone())),
+        move || {
+            pins.set(None);
+            app.system_act(Action::Lens(key.clone()));
+        },
         vec![
             view()
                 .flex_shrink_0()
@@ -371,10 +428,7 @@ fn drawn_lens(
         let project = project.clone();
         Some(untracked(|| head(app, d, project)))
     });
-    let picture = match form {
-        Form::Desktop => lens_canvas::diagram(app, shown, picked, on_pick.clone()),
-        Form::Phone | Form::Terminal => listing(app, shown, picked, on_pick.clone()),
-    };
+    let picture = repo_view::picture(app, shown, picked, on_pick.clone());
     let checks = dynamic(move || {
         let d = shown.get()?;
         let on_pick = on_pick.clone();
@@ -509,25 +563,17 @@ pub(super) fn listing(
         let d = shown.get()?;
         let on_pick = on_pick.clone();
         Some(untracked(|| {
-            let sections = lens::listing(&d)
-                .into_iter()
-                .enumerate()
-                .map(|(s, section)| {
-                    let count = section.lines.len().to_string();
-                    let rows = section.lines.into_iter().enumerate().map(|(n, line)| {
-                        line_row(
-                            app,
-                            format!("lens-line-{s}-{n}"),
-                            line,
-                            picked,
-                            on_pick.clone(),
-                        )
-                    });
-                    view()
-                        .child(h3(app, section.title, Some(count)))
-                        .children(rows)
-                        .into_element()
-                });
+            let sections = lens::listing(&d).into_iter().map(|section| {
+                let count = section.lines.len().to_string();
+                let rows = section
+                    .lines
+                    .into_iter()
+                    .map(|line| line_row(app, line, picked, on_pick.clone()));
+                view()
+                    .child(h3(app, section.title, Some(count)))
+                    .children(rows)
+                    .into_element()
+            });
             view()
                 .test_id("lens-diagram")
                 .children(sections)
@@ -541,7 +587,6 @@ pub(super) fn listing(
 /// guard or a note under them.
 fn line_row(
     app: AppState,
-    test_id: String,
     line: lens::Line,
     picked: Memo<Option<String>>,
     on_pick: OnPick,
@@ -556,32 +601,24 @@ fn line_row(
         Some(lead) => format!("{lead} {}", line.main),
         None => line.main.clone(),
     };
-    let spoken = format!("{main}{}", line.words);
-    let glyph = text(line.glyphs.clone().unwrap_or_default())
-        .text_color(hue_ink(mark.map_or(Hue::Neutral, |m| m.hue())));
-    list_row(
+    let entry = crate::model::artifacts::diagram::Entry {
+        id: name.clone(),
+        words: main,
+        sub: format!(
+            "{} {} {}",
+            line.glyphs.unwrap_or_default(),
+            line.words.trim_start_matches(", "),
+            line.sub.unwrap_or_default()
+        )
+        .trim()
+        .to_owned(),
+    };
+    crate::screens::artifacts::diagram::element_row(
         app,
-        spoken,
-        test_id,
+        entry,
         selected,
         move || on_pick(name.clone()),
-        vec![
-            view()
-                .flex_shrink_0()
-                .w(if app.form == Form::Terminal {
-                    term::cells(3.0)
-                } else {
-                    px(24.0)
-                })
-                .child(glyph)
-                .into_element(),
-            view()
-                .flex_1()
-                .min_w(px(0.0))
-                .child(plain(app, main))
-                .children(line.sub.map(|sub| quiet(app, sub)))
-                .into_element(),
-        ],
+        mark.map_or(Hue::Neutral, |m| m.hue()),
     )
 }
 
@@ -591,46 +628,32 @@ pub(crate) fn inspector(
     shown: Memo<Option<Diagram>>,
     picked: Memo<Option<String>>,
 ) -> AnyElement {
-    let form = app.form;
     let inspected = computed(move || {
         let name = picked.get()?;
-        shown.with(|d| d.as_ref().and_then(|d| lens::inspect(d, &name)))
+        shown.with(|d| {
+            let d = d.as_ref()?;
+            Some((lens::inspect(d, &name)?, d.commit.clone()))
+        })
     });
     dynamic(move || {
-        let Some(i) = inspected.get() else {
+        let Some((i, commit)) = inspected.get() else {
             return untracked(|| quiet(app, HINT).into_element());
         };
         untracked(|| {
-            view()
-                .test_id("lens-inspector")
-                .gap(px(if form == Form::Terminal { 0.0 } else { 8.0 }))
-                .child(quiet(app, i.what))
-                .child(
-                    text(i.title)
-                        .test_id("inspector-title")
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(color(Token::Ink))
-                        .when(form != Form::Terminal, |t| {
-                            t.font_family(FONT_MONO).text_size(px(15.0))
-                        }),
-                )
-                .children(i.rows.into_iter().map(|(label, value)| {
-                    label_value(app, label, plain(app, value).into_element())
-                }))
-                .child(h3(app, "Source", None))
-                .child(source(
-                    app,
-                    i.source,
-                    "lens-source",
-                    lens::SOURCE_UNAVAILABLE,
-                ))
-                .child(h3(app, "Checks", None))
-                .children(
-                    i.checks
-                        .into_iter()
-                        .map(|(hue, words)| hued(app, hue, words)),
-                )
-                .into_element()
+            crate::screens::artifacts::diagram::inspected(
+                app,
+                crate::model::artifacts::diagram::Inspector {
+                    title: i.title,
+                    what: i.what,
+                    facts: i.rows,
+                    state: crate::model::artifacts::diagram::Evidence::Repository {
+                        sources: i.sources,
+                        derived: i.derived,
+                        checks: i.checks,
+                        pin: commit.unwrap_or_else(|| "unknown revision".into()),
+                    },
+                },
+            )
         })
     })
     .into_element()

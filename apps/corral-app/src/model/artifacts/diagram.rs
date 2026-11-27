@@ -26,7 +26,7 @@ const SPREAD: f32 = 64.0;
 
 pub const LIST_HINT: &str = "Select a step or a link to read its evidence.";
 pub const VIEWER_OPENING: &str = "Opening the diagram viewer…";
-pub const VIEWER_READY: &str = "Click a step or a link; the list below shares the selection.";
+pub const VIEWER_READY: &str = "Select an element; the list below shares the selection.";
 pub const VIEWER_FAILED: &str =
     "The diagram viewer could not draw this recipe. The list below shows every element.";
 /// Said where no graph is drawn (a phone or a terminal) or the WebView cannot run.
@@ -451,6 +451,12 @@ pub struct Inspector {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Evidence {
+    Repository {
+        sources: Vec<Source>,
+        derived: Vec<String>,
+        checks: Vec<(crate::model::Hue, String)>,
+        pin: String,
+    },
     Loading,
     Failed(String),
     /// corrald is preparing facts for the commit; the same selection is asked again.

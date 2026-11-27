@@ -1,505 +1,214 @@
 use super::Repo;
 use crate::{
-    DefinitionFact, EntryDetector, EntryKind, EntryPoint, FactsCache, ProviderCoverage, ReadStatus,
-    Revision, RuntimeSource, TreeFacts,
+    FactsCache, Revision, TreeFacts,
     lenses::{self, LensCoverage},
     provider::Reply,
 };
-use corral_types::lenses::{LensResult, LensStatus};
+use corral_types::lenses::LensStatus;
+use serde_json::{Value, json};
 
+const DIR: &str = ".corral/lenses";
 const DATE: &str = "2026-11-23T12:00:00Z";
-const DIR: &str = "diagrams/lenses";
-const CODE: &str = r#"pub enum Status {
-    Ready,
-}
-fn run() {
-    execute();
-}
-fn other() { execute(); }
-"#;
-
-fn write(repo: &Repo, file: &str, kind: &str, id: &str, at: &Revision, body: &str) {
-    repo.put(
-        &format!("{DIR}/{file}.toml"),
-        &format!(
-            "id = {id:?}\ntitle = {id:?}\nkind = {kind:?}\nread_at = {:?}\n{body}",
-            at.commit()
-        ),
-    );
-}
-
 fn tree(repo: &Repo, rev: &Revision) -> TreeFacts {
     FactsCache::new(repo.path())
         .tree_facts(repo.path(), rev.tree())
         .unwrap()
 }
-
 fn load(repo: &Repo, rev: &Revision) -> lenses::LensSources {
     lenses::load(repo.path(), rev, DIR).unwrap()
 }
-
-fn definitions(tree: &mut TreeFacts, start: u64, end: u64) {
-    let file = tree
-        .files
-        .iter_mut()
-        .find(|file| file.path == "code.rs")
-        .unwrap();
-    file.definitions.push(DefinitionFact {
-        name: "run".into(),
-        line: start,
-        end_line: end,
-        kind: "function".into(),
-    });
+fn recipe(id: &str, bindings: &[(&str, Value)]) -> Value {
+    json!({"schema":"corral.repo-diagram","version":1,"id":id,"title":id,"layout":"graph",
+        "nodes":bindings.iter().map(|(id,_)| json!({"id":id,"label":id})).collect::<Vec<_>>(),
+        "evidence":bindings.iter().filter(|(_,v)|!v.is_null()).map(|(id,anchor)|json!({"element":id,"anchor":anchor})).collect::<Vec<_>>()})
 }
-
-fn by_id<'a>(rows: &'a [LensResult], id: &str) -> &'a LensResult {
-    rows.iter()
-        .find(|r| r.lens.as_ref().is_some_and(|lens| lens.id() == id))
-        .unwrap()
+fn put(repo: &Repo, file: &str, v: &Value) {
+    repo.put(&format!("{DIR}/{file}.json"), &v.to_string());
 }
-
-const STATE: &str = r#"
-states_from = { path = "code.rs", name = "Status" }
-[[states]]
-id = "ready"
-label = "Ready"
-anchor = { path = "code.rs", name = "Status::Ready" }
-"#;
-
-const SEQUENCE: &str = r#"
-entry = { kind = "command", name = "dispatch" }
-[[participants]]
-id = "cli"
-label = "CLI"
-anchor = { path = "package.json" }
-[[participants]]
-id = "engine"
-label = "Engine"
-anchor = { path = "code.rs" }
-[[messages]]
-from = "cli"
-to = "engine"
-label = "execute"
-anchor = { path = "code.rs", name = "run", text = "execute();" }
-"#;
 
 #[test]
-fn checks_committed_anchors_scoped_text_and_variant_coverage() {
+fn checks_pinned_git_source_uniqueness_selected_enum_and_real_inbound_references() {
     let repo = Repo::new();
-    repo.put("code.rs", CODE);
-    repo.put(
-        "package.json",
-        r#"{"name":"fixture","bin":{"dispatch":"./dispatch.js"}}"#,
+    repo.put("Cargo.toml", "[package]\nname='sample'\nversion='0.1.0'\n");
+    repo.put("src/lib.rs", "mod gate;\nuse crate::gate::Status;\n");
+    let code = "pub enum Status { Ready, NotYet }\npub fn gate() { do_it(); }\n";
+    repo.put("src/gate.rs", code);
+    let mut v = recipe(
+        "test",
+        &[
+            (
+                "gate",
+                json!({"kind":"symbol","path":"src/gate.rs","name":"gate"}),
+            ),
+            (
+                "ready",
+                json!({"kind":"symbol","path":"src/gate.rs","name":"Status::Ready"}),
+            ),
+            ("unused", json!(null)),
+            (
+                "call",
+                json!({"kind":"text","path":"src/gate.rs","text":"do_it();"}),
+            ),
+            ("not_yet", json!(null)),
+        ],
     );
-    let code = repo.commit(DATE, "source");
-    write(&repo, "state", "state", "lifecycle", &code, STATE);
-    write(&repo, "flow", "sequence", "dispatch", &code, SEQUENCE);
-    let confirmed = repo.commit(DATE, "lenses");
-
-    // A dirty worktree neither supplies nor invalidates any checked facts.
-    repo.put("code.rs", "dirty");
-    repo.put(&format!("{DIR}/flow.toml"), "also dirty");
-    let mut current_tree = tree(&repo, &confirmed);
-    let sources = load(&repo, &confirmed);
-    definitions(&mut current_tree, 4, 6);
-    let rows = lenses::check(&sources, &current_tree, None);
-    let state = by_id(&rows, "lifecycle");
-    let flow = by_id(&rows, "dispatch");
-    assert_eq!(state.status, LensStatus::Current);
-    assert_eq!(flow.status, LensStatus::Current);
-    assert!(
-        state
-            .not_checked
-            .iter()
-            .any(|issue| issue.element == "state ready")
-    );
-    assert_eq!(
-        state
-            .locations
-            .iter()
-            .find(|loc| loc.element == "state ready")
+    v["coverage"] = json!({"path":"src/gate.rs","name":"Status","nodes":["ready","not_yet"]});
+    put(&repo, "workflow", &v);
+    let old = repo.commit(DATE, "old");
+    repo.put("src/gate.rs", &format!("// shifted\n{code}"));
+    let shifted = repo.commit(DATE, "move code");
+    repo.put("src/gate.rs","enum Status { Ready, Done }\nmod a { fn gate() { do_it(); } }\nmod b { fn gate() { do_it(); } }\n");
+    let head = repo.commit(DATE, "ambiguous anchors");
+    repo.put("src/gate.rs", "dirty");
+    let check = |rev| {
+        lenses::check(&load(&repo, rev), &tree(&repo, rev), None)
+            .pop()
             .unwrap()
-            .line,
-        2
-    );
-    assert!(
-        flow.locations
-            .iter()
-            .any(|loc| loc.element == "entry" && loc.path == "package.json")
-    );
-    let coverage = ProviderCoverage {
-        provided: vec!["files".into(), "definitions".into()],
-        ..ProviderCoverage::unavailable(&[])
     };
-    let no_file_rows = LensCoverage {
-        provider: &coverage,
-        unread_files: &Default::default(),
+    let r = check(&old);
+    assert_eq!(r.status, LensStatus::Current, "{r:?}");
+    assert!(
+        r.locations
+            .iter()
+            .any(|l| l.element == "gate" && l.line == 2)
+    );
+    assert!(r.derived.iter().any(|r| r.element == "gate"
+        && r.reference.from == "src/lib.rs"
+        && r.reference.to == "src/gate.rs"));
+    assert!(r.not_checked.iter().any(|d| d.element == "unused"));
+    let r = check(&shifted);
+    assert!(
+        r.locations
+            .iter()
+            .any(|l| l.element == "call" && l.line == 3)
+    );
+    let r = check(&head);
+    assert_eq!(r.status, LensStatus::Stale);
+    for id in ["gate", "call"] {
+        assert!(
+            r.failures
+                .iter()
+                .any(|f| f.element == id && f.message.contains("ambiguous"))
+        );
+        assert!(!r.locations.iter().any(|l| l.element == id));
+        assert!(!r.derived.iter().any(|l| l.element == id));
+    }
+    assert_eq!(r.missing_states, ["Done"]);
+    assert_eq!(r.extra_states, ["not_yet"]);
+    let impact = |a, b| {
+        lenses::impact(
+            repo.path(),
+            a,
+            b,
+            &load(&repo, a),
+            &load(&repo, b),
+            &tree(&repo, a),
+            &tree(&repo, b),
+        )
+        .unwrap()
     };
-    let rows = lenses::check(&sources, &current_tree, Some(no_file_rows));
-    let flow = by_id(&rows, "dispatch");
-    assert_eq!(flow.status, LensStatus::Current);
-    assert!(flow.not_checked.is_empty());
-
-    let file = current_tree
-        .files
-        .iter_mut()
-        .find(|file| file.path == "code.rs")
-        .unwrap();
-    file.definitions.clear();
-    file.read_status = ReadStatus::Unsupported;
-    let rows = lenses::check(&sources, &current_tree, Some(no_file_rows));
-    assert_eq!(by_id(&rows, "dispatch").status, LensStatus::Stale);
-    let reply = Reply::parse(
-        br#"{"type":"file","path":"code.rs","read":"unsupported"}
-{"type":"done","provided":["files","definitions"],"skipped":{},"omitted":{}}
-"#,
-        &["files", "definitions"],
-    )
-    .unwrap();
-    let unread_files = reply.unread_files();
-    let partial = reply.merge_snapshot(&mut current_tree);
-    let rows = lenses::check(
-        &sources,
-        &current_tree,
-        Some(LensCoverage {
-            provider: &partial,
-            unread_files: &unread_files,
-        }),
-    );
-    let flow = by_id(&rows, "dispatch");
-    assert_eq!(flow.status, LensStatus::Current);
-    assert!(
-        flow.not_checked
-            .iter()
-            .any(|issue| issue.element.starts_with("message "))
-    );
-
-    current_tree.entry_points.coverage = [(".".into(), [EntryDetector::Extension].into())].into();
-    current_tree.entry_points.entries = vec![EntryPoint {
-        kind: EntryKind::Route,
-        name: "GET /tasks".into(),
-        path: "code.rs".into(),
-        line: 4,
-        owner: RuntimeSource::Container { path: ".".into() },
-    }];
-    let rows = lenses::check(&sources, &current_tree, None);
-    let flow = by_id(&rows, "dispatch");
-    assert_eq!(flow.status, LensStatus::Current);
-    assert!(
-        flow.not_checked
-            .iter()
-            .any(|issue| issue.element == "entry")
-    );
-
-    let edits = CODE
-        .replace("    Ready,", "    Ready,\n    Waiting,")
-        .replace("    execute();", "    queue();");
-    repo.put("code.rs", &edits);
-    repo.put("language.txt", &edits);
-    write(&repo, "flow", "sequence", "dispatch", &code, SEQUENCE);
-    let variants = repo.commit(DATE, "add variant and remove anchored call");
-    let mut variants_tree = tree(&repo, &variants);
-    definitions(&mut variants_tree, 5, 7);
-    // There is still a matching literal in another function. Only the named
-    // definition can establish whether the anchored call survived.
-    let results = lenses::check(&load(&repo, &variants), &variants_tree, Some(no_file_rows));
-    let sequence = by_id(&results, "dispatch");
-    assert_eq!(sequence.status, LensStatus::Stale);
-    assert_eq!(sequence.failures.len(), 1);
-    assert!(sequence.failures[0].element.starts_with("message "));
-    assert!(sequence.failures[0].message.contains("execute();"));
-    let state = by_id(
-        &lenses::check(&load(&repo, &variants), &variants_tree, None),
-        "lifecycle",
-    )
-    .clone();
-    assert_eq!(state.status, LensStatus::Incomplete);
-    assert_eq!(state.missing_states, ["Waiting"]);
-    assert!(state.extra_states.is_empty());
-
-    write(
-        &repo,
-        "state",
-        "state",
-        "lifecycle",
-        &code,
-        &STATE.replace("code.rs", "language.txt"),
-    );
-    let unavailable = repo.commit(DATE, "unsupported enum source");
-    let results = lenses::check(&load(&repo, &unavailable), &tree(&repo, &unavailable), None);
-    let state = by_id(&results, "lifecycle");
-    assert_eq!(state.status, LensStatus::Current);
-    assert!(
-        state
-            .not_checked
-            .iter()
-            .any(|issue| issue.element == "states_from")
-    );
+    assert!(impact(&old, &shifted).is_empty());
+    let rows = impact(&shifted, &head);
+    assert!(rows[0].touched.contains(&"gate".into()));
+    assert!(rows[0].touched_base.contains(&"gate".into()));
 }
 
 #[test]
-fn partial_entry_facts_cannot_rule_out_a_sequence_entry() {
+fn unsupported_coverage_partial_entry_facts_and_malformed_siblings() {
     let repo = Repo::new();
-    repo.put("routes.txt", "GET /wanted\n");
-    let at = repo.commit(DATE, "source");
-    write(
-        &repo,
-        "route",
-        "sequence",
-        "route",
-        &at,
-        r#"entry = { kind = "route", name = "GET /wanted" }
-[[participants]]
-id = "routes"
-label = "Routes"
-anchor = { path = "routes.txt", text = "GET /wanted" }
-"#,
+    repo.put("routes.txt", "/ok\n");
+    let mut v = recipe(
+        "routes",
+        &[(
+            "route",
+            json!({"kind":"entry","entry_kind":"route","name":"GET /wanted"}),
+        )],
     );
-    let rev = repo.commit(DATE, "route lens");
+    v["coverage"] = json!({"path":"routes.txt","name":"Route","nodes":["route"]});
+    put(&repo, "routes", &v);
+    repo.put(&format!("{DIR}/old.toml"), "legacy");
+    repo.put(&format!("{DIR}/broken.json"), "bad json");
+    repo.put(&format!("{DIR}/sub/nested.json"), "not scanned");
+    let duplicate = recipe("duplicate", &[("x", Value::Null)]);
+    put(&repo, "a", &duplicate);
+    put(&repo, "b", &duplicate);
+    let rev = repo.commit(DATE, "recipes");
     let sources = load(&repo, &rev);
-    let builtin = tree(&repo, &rev);
     let check = |name: &str, omitted: u64| {
-        let mut facts = builtin.clone();
-        let output = format!(
+        let mut facts = tree(&repo, &rev);
+        let input = format!(
             r#"{{"type":"entry","path":"routes.txt","line":1,"kind":"route","name":{name:?}}}
-{{"type":"done","provided":["entries"],"skipped":{{}},"omitted":{{"limit":{omitted}}}}}
-"#,
+{{"type":"done","provided":["entries"],"skipped":{{}},"omitted":{{"limit":{omitted}}}}}"#
         );
-        let reply = Reply::parse(output.as_bytes(), &["entries"]).unwrap();
+        let reply = Reply::parse(input.as_bytes(), &["entries"]).unwrap();
         let unread_files = reply.unread_files();
         let coverage = reply.merge_snapshot(&mut facts);
-        lenses::check(
+        let mut rows = lenses::check(
             &sources,
             &facts,
             Some(LensCoverage {
                 provider: &coverage,
                 unread_files: &unread_files,
             }),
-        )
-        .pop()
-        .unwrap()
+        );
+        assert_eq!(rows.len(), 4);
+        assert_eq!(
+            rows.iter()
+                .filter(|r| r.status == LensStatus::Malformed)
+                .count(),
+            3
+        );
+        rows.pop().unwrap()
     };
-
-    let unverified = check("GET /other", 1);
-    assert_eq!(unverified.status, LensStatus::Current);
-    assert!(unverified.failures.is_empty());
+    let r = check("GET /other", 1);
+    assert!(r.failures.is_empty());
+    assert!(r.not_checked.iter().any(|i| i.element == "route"));
+    assert!(r.not_checked.iter().any(|i| i.element == "$coverage"));
     assert!(
-        unverified
-            .not_checked
-            .iter()
-            .any(|issue| issue.element == "entry")
-    );
-
-    let matched = check("GET /wanted", 1);
-    assert_eq!(matched.status, LensStatus::Current);
-    assert!(matched.not_checked.is_empty());
-    assert!(
-        matched
+        check("GET /wanted", 0)
             .locations
             .iter()
-            .any(|location| location.element == "entry")
+            .any(|i| i.element == "route")
     );
-
-    let unknown = check("GET /other", 0);
-    assert_eq!(unknown.status, LensStatus::Stale);
-    assert!(
-        unknown
-            .failures
-            .iter()
-            .any(|issue| issue.element == "entry")
-    );
+    assert!(check("GET /wanted", 1).locations.is_empty());
+    assert_eq!(check("GET /other", 0).status, LensStatus::Stale);
 }
 
 #[test]
-fn malformed_files_do_not_hide_other_lenses() {
+fn impact_keeps_stable_ids_across_label_edits_multiple_bindings_and_removed_recipes() {
     let repo = Repo::new();
-    repo.put("code.rs", CODE);
-    let at = repo.commit(DATE, "source");
-    write(&repo, "sub/good", "state", "good", &at, STATE);
-    write(&repo, "kind", "flow", "unknown-kind", &at, "");
-    write(
+    repo.put("first", "changed line\n");
+    repo.put("second", "stable\n");
+    let path = |p| json!({"kind":"path","path":p});
+    let v = recipe("kept", &[("key", path("second")), ("del", path("first"))]);
+    put(&repo, "kept", &v);
+    put(
         &repo,
-        "key",
-        "state",
-        "unknown-key",
-        &at,
-        &format!("unexpected = true\n{STATE}"),
+        "removed",
+        &recipe("removed", &[("old", path("first"))]),
     );
-    write(
+    put(
         &repo,
-        "nested",
-        "state",
-        "unknown-nested-key",
-        &at,
-        &STATE.replace("Status::Ready\"", "Status::Ready\", line = 2"),
+        "replaced",
+        &recipe("other", &[("same", path("second"))]),
     );
-    write(
-        &repo,
-        "endpoint",
-        "sequence",
-        "unknown-endpoint",
-        &at,
-        &SEQUENCE.replace("to = \"engine\"", "to = \"unknown\""),
-    );
-    write(
-        &repo,
-        "element",
-        "sequence",
-        "duplicate-element",
-        &at,
-        &SEQUENCE.replace("id = \"engine\"", "id = \"cli\""),
-    );
-    write(&repo, "duplicate/a", "sequence", "duplicate-lens", &at, "");
-    write(&repo, "b", "sequence", "duplicate-lens", &at, "");
-    write(
-        &repo,
-        "path",
-        "state",
-        "noncanonical-path",
-        &at,
-        &STATE.replace("code.rs", "sub/../code.rs"),
-    );
-    let rev = repo.commit(DATE, "one valid and several independent invalid lenses");
-    let rows = lenses::check(&load(&repo, &rev), &tree(&repo, &rev), None);
-    assert_eq!(rows.len(), 9);
-    assert_eq!(by_id(&rows, "good").status, LensStatus::Current);
-    for row in rows.iter().filter(|row| row.status != LensStatus::Current) {
-        assert_eq!(row.status, LensStatus::Malformed);
-        assert!(row.lens.is_none());
-        assert_eq!(row.failures.len(), 1, "{}", row.file);
-    }
-}
-
-#[test]
-fn review_uses_edited_lines_in_each_snapshot_and_reports_element_changes() {
-    let repo = Repo::new();
-    repo.put("code.rs", CODE);
-    repo.put("package.json", "{}");
-    let at = repo.commit(DATE, "source");
-    // Give the participant a specific source line as well: removing the
-    // prepended comments would touch a path-only anchor at line one.
-    let flow = SEQUENCE.replace(
-        "anchor = { path = \"code.rs\" }",
-        "anchor = { path = \"code.rs\", text = \"pub enum Status {\" }",
-    );
-    write(&repo, "flow", "sequence", "dispatch", &at, &flow);
-    let base = repo.commit(DATE, "lens");
-    let compare = |base: &Revision, head: &Revision, before_def, after_def| {
-        let mut before = tree(&repo, base);
-        let mut after = tree(&repo, head);
-        if let Some((start, end)) = before_def {
-            definitions(&mut before, start, end);
-        }
-        if let Some((start, end)) = after_def {
-            definitions(&mut after, start, end);
-        }
-        lenses::impact(
-            repo.path(),
-            base,
-            head,
-            &load(&repo, base),
-            &load(&repo, head),
-            &before,
-            &after,
-        )
+    let base = repo.commit(DATE, "base");
+    let mut v = recipe("kept", &[("new", path("second")), ("key", path("second"))]);
+    v["nodes"][1]["label"] = json!("new label");
+    v["evidence"]
+        .as_array_mut()
         .unwrap()
-    };
-
-    let shifted_code = format!("// one\n// two\n// three\n// four\n// five\n{CODE}");
-    repo.put("code.rs", &shifted_code);
-    let shifted = repo.commit(DATE, "insert lines above every anchor");
-    assert!(compare(&base, &shifted, Some((4, 6)), Some((9, 11))).is_empty());
-    assert!(compare(&shifted, &base, Some((9, 11)), Some((4, 6))).is_empty());
-
-    let extended_code = shifted_code.replace("    execute();", "    debug();\n    execute();");
-    repo.put("code.rs", &extended_code);
-    let extended = repo.commit(DATE, "edit inside definition without editing anchor line");
-    assert!(compare(&shifted, &extended, None, None).is_empty());
-    let impact = compare(&shifted, &extended, Some((9, 11)), Some((9, 12)));
-    assert_eq!(impact.len(), 1);
-    assert_eq!(impact[0].touched.len(), 1);
-    assert!(impact[0].touched[0].contains("execute"));
-
-    // Delete the anchored literal (leave another occurrence elsewhere) and
-    // replace one participant. The old coordinate proves the message was touched.
-    repo.put("code.rs", &extended_code.replace("    execute();\n", ""));
-    repo.put("new-path.txt", "newly added line\n");
-    let edited_lens = flow
-        .replace(
-            "anchor = { path = \"package.json\" }",
-            "anchor = { path = \"new-path.txt\" }",
-        )
-        .replace("id = \"cli\"", "id = \"driver\"")
-        .replace("from = \"cli\"", "from = \"driver\"");
-    let (_, message) = edited_lens.split_once("[[messages]]").unwrap();
-    write(
+        .push(json!({"element":"key","anchor":path("first")}));
+    put(&repo, "kept", &v);
+    repo.put("first", "edited line\n");
+    std::fs::remove_file(repo.path().join(format!("{DIR}/removed.json"))).unwrap();
+    put(
         &repo,
-        "flow",
-        "sequence",
-        "dispatch",
-        &at,
-        &format!("{edited_lens}\n[[messages]]{message}"),
+        "replaced",
+        &recipe("different", &[("same", path("second"))]),
     );
-    let edited = repo.commit(DATE, "delete anchored call and switch lens participant");
-    let impact = compare(&extended, &edited, None, None);
-    assert_eq!(impact.len(), 1);
-    let row = &impact[0];
-    assert_eq!(row.path, format!("{DIR}/flow.toml"));
-    assert!(row.touched.iter().any(|item| item == "participant driver"));
-    // The removed message's deleted literal is a base-side touch.
-    assert!(row.touched_base.iter().any(|item| item.contains("execute")));
-    assert!(row.added.iter().any(|item| item == "participant driver"));
-    assert_eq!(
-        row.added
-            .iter()
-            .filter(|item| item.starts_with("message "))
-            .count(),
-        2
-    );
-    assert!(row.removed.iter().any(|item| item == "participant cli"));
-
-    repo.put("new-path.txt", "\0binary replacement");
-    let binary = repo.commit(DATE, "replace anchored source with binary");
-    let impact = compare(&edited, &binary, None, None);
-    assert_eq!(impact.len(), 1);
-    assert_eq!(impact[0].touched, ["participant driver"]);
-}
-
-/// Removing the first of two same-labelled messages renumbers the survivor: at the head it
-/// takes the removed message's unsuffixed name. A touch on the removed one must stay on the
-/// base side, or Impact marks the surviving message as touched.
-#[test]
-fn a_removed_repeat_is_touched_at_the_base_not_on_the_surviving_head_repeat() {
-    let repo = Repo::new();
-    repo.put("code.rs", CODE);
-    repo.put("package.json", "{}");
-    let at = repo.commit(DATE, "source");
-    let message = |text: &str| {
-        format!(
-            "[[messages]]\nfrom = \"cli\"\nto = \"engine\"\nlabel = \"call\"\nanchor = {{ path = \"code.rs\", text = {text:?} }}\n"
-        )
-    };
-    let nodes = r#"
-[[participants]]
-id = "cli"
-label = "CLI"
-anchor = { path = "package.json" }
-[[participants]]
-id = "engine"
-label = "Engine"
-anchor = { path = "code.rs" }
-"#;
-    let both = format!("{nodes}{}{}", message("fn run() {"), message("fn other()"));
-    write(&repo, "flow", "sequence", "flow", &at, &both);
-    let base = repo.commit(DATE, "two repeats");
-    repo.put(
-        "code.rs",
-        &CODE.replace("fn run() {\n    execute();\n}\n", ""),
-    );
-    let survivor = format!("{nodes}{}", message("fn other()"));
-    write(&repo, "flow", "sequence", "flow", &at, &survivor);
-    let head = repo.commit(DATE, "remove the first repeat and its code");
-    let impact = lenses::impact(
+    let head = repo.commit(DATE, "head");
+    let rows = lenses::impact(
         repo.path(),
         &base,
         &head,
@@ -509,9 +218,13 @@ anchor = { path = "code.rs" }
         &tree(&repo, &head),
     )
     .unwrap();
-    let name = r#"message "cli" -> "engine": "call""#;
-    assert_eq!(impact.len(), 1);
-    assert!(impact[0].touched.is_empty(), "{:?}", impact[0]);
-    assert_eq!(impact[0].touched_base, [name]);
-    assert_eq!(impact[0].removed, [name]);
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[0].added, ["new"]);
+    assert_eq!(rows[0].removed, ["del"]);
+    assert_eq!(rows[0].touched, ["key"]);
+    assert_eq!(rows[0].touched_base, ["del"]);
+    assert_eq!(rows[1].removed, ["old"]);
+    assert_eq!(rows[1].touched_base, ["old"]);
+    assert_eq!(rows[2].removed, ["same"]);
+    assert_eq!(rows[2].added, ["same"]);
 }

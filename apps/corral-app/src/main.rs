@@ -9,7 +9,7 @@ use nsh_platform_macos as platform;
 #[cfg(target_os = "windows")]
 use nsh_platform_windows as platform;
 
-/// The app's root. Windows launches the binary directly, without `nsh run` reading `nsh.json`'s
+/// Direct desktop launches on Windows and Linux bypass `nsh run` reading `nsh.json`'s
 /// `"theme"`, so the root carries the embedded `theme.json` itself; without it every custom
 /// token (`ui::tokens::color`) falls back to the foreground and text vanishes into its fill.
 /// The app id names its support directory.
@@ -17,7 +17,9 @@ use nsh_platform_windows as platform;
 fn root() -> Result<platform::Root, String> {
     let root = platform::Root::of::<nsh_app_corral::App>();
     #[cfg(target_os = "windows")]
-    let root = root.app_id("com.github.pawissanutt.corral").tokens(
+    let root = root.app_id("com.github.pawissanutt.corral");
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    let root = root.tokens(
         nsh_base::tokens_of(Some(include_str!("../theme.json")))
             .map_err(|error| format!("the embedded theme.json is unreadable: {error}"))?,
     );

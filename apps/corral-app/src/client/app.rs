@@ -55,7 +55,7 @@ pub(super) const CAPS: &[&str] = &[
     SYSTEM_V1,
     SYSTEM_RUNTIME_V1,
     SYSTEM_ENTRIES_V1,
-    SYSTEM_LENSES_V1,
+    SYSTEM_LENSES_V2,
     SYSTEM_DATA_V1,
     corral_protocol::app::ARTIFACT_DIAGRAM_V1,
     corral_protocol::app::ARTIFACT_DIAGRAM_COMPARE_V1,

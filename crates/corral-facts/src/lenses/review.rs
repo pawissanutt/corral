@@ -1,13 +1,13 @@
 use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
+    collections::{BTreeMap, BTreeSet},
     ops::Range,
     path::Path,
 };
 
 use anyhow::{Context, Result, ensure};
-use corral_types::lenses::{Lens, LensAnchor, LensImpact};
+use corral_types::lenses::{EvidenceAnchor, LensImpact, RepoRecipe};
 
-use super::{Element, ElementKey, LensSources, Source, SourceBudget, anchor, elements};
+use super::{LensSources, Source, SourceBudget, anchor, ids};
 use crate::{
     Revision, TreeFacts,
     git::{self, LineDiff, LineHunk},
@@ -35,11 +35,32 @@ pub fn impact(
         !before.files_limited && !after.files_limited,
         "could not compare lens files beyond the scan budget"
     );
+    // Entries are addressed by kind/name, so their paths are not known at recipe load time.
+    let mut entry_paths = BTreeSet::new();
+    for (sources, tree) in [(before, before_tree), (after, after_tree)] {
+        let wanted: BTreeSet<_> = sources
+            .lenses
+            .values()
+            .filter_map(|r| r.as_ref().ok())
+            .flat_map(|r| r.evidence.iter())
+            .filter_map(|e| match &e.anchor {
+                EvidenceAnchor::Entry { entry_kind, name } => Some((*entry_kind, name.as_str())),
+                _ => None,
+            })
+            .collect();
+        entry_paths.extend(
+            tree.entry_points
+                .entries
+                .iter()
+                .filter(|e| wanted.contains(&(e.kind, e.name.as_str())))
+                .map(|e| e.path.as_str()),
+        );
+    }
     let mut review = Review {
         repo,
         head,
-        before: Snapshot::new(repo, base, before, after, before_tree)?,
-        after: Snapshot::new(repo, head, after, before, after_tree)?,
+        before: Snapshot::new(repo, base, before, after, before_tree, &entry_paths)?,
+        after: Snapshot::new(repo, head, after, before, after_tree, &entry_paths)?,
         diff: None,
         hunks: BTreeMap::new(),
     };
@@ -63,43 +84,48 @@ pub fn impact(
         // A malformed file has unknown contents, not an empty diagram.
         let know_old = left.is_none_or(Result::is_ok);
         let know_new = right.is_none_or(Result::is_ok);
-        let mut matches = group(old);
-        for (key, mut next) in group(new) {
-            let prev = matches.remove(&key).unwrap_or_default();
-            let mut unmatched = Vec::new();
-            // Match repeats by anchor/qualifier before pairing edited elements.
-            for (identity, elements) in prev {
-                for element in elements {
-                    if let Some(other) = next.get_mut(&identity).and_then(VecDeque::pop_front) {
-                        review.element(&mut row, Some(element), Some(other), know_old, know_new)?;
-                    } else {
-                        unmatched.push(element);
-                    }
-                }
-            }
-            let mut prev = unmatched.into_iter();
-            let mut next = next.into_values().flatten();
-            loop {
-                let (left, right) = (prev.next(), next.next());
-                if left.is_none() && right.is_none() {
-                    break;
-                }
-                review.element(&mut row, left, right, know_old, know_new)?;
-            }
-        }
-        for element in matches
-            .into_values()
-            .flat_map(BTreeMap::into_values)
-            .flatten()
+        // Element IDs are local to a recipe. A different recipe replacing the same
+        // file can legitimately reuse every spelling without sharing any identity.
+        let old = bindings(old);
+        let new = bindings(new);
+        for key @ (_, id) in old
+            .keys()
+            .chain(new.keys())
+            .copied()
+            .collect::<BTreeSet<_>>()
         {
-            review.element(&mut row, Some(element), None, know_old, know_new)?;
+            let previous = old.get(&key);
+            let next = new.get(&key);
+            if previous.is_none() && know_old {
+                row.added.push(id.to_owned());
+            }
+            if next.is_none() && know_new {
+                row.removed.push(id.to_owned());
+            }
+            let anchors = previous
+                .into_iter()
+                .chain(next)
+                .flatten()
+                .copied()
+                .collect::<BTreeSet<_>>();
+            let mut touched = false;
+            let mut base_touched = false;
+            for anchor in anchors {
+                let was = previous.is_some_and(|set| set.contains(anchor));
+                let now = next.is_some_and(|set| set.contains(anchor));
+                // A rebind is itself an evidence edit, even with identical source blobs.
+                let rebind = previous.is_some() && next.is_some() && was != now;
+                let changed = rebind || review.touched(anchor, was, now)?;
+                touched |= changed;
+                base_touched |= was && changed;
+            }
+            if touched && next.is_some() {
+                row.touched.push(id.to_owned());
+            }
+            if base_touched {
+                row.touched_base.push(id.to_owned());
+            }
         }
-        row.touched.sort_unstable();
-        row.touched.dedup();
-        row.touched_base.sort_unstable();
-        row.touched_base.dedup();
-        row.added.sort_unstable();
-        row.removed.sort_unstable();
         if !row.touched.is_empty()
             || !row.added.is_empty()
             || !row.removed.is_empty()
@@ -111,20 +137,18 @@ pub fn impact(
     Ok(result)
 }
 
-type Repeats<'a> = BTreeMap<(Option<&'a str>, &'a LensAnchor), VecDeque<Element<'a>>>;
-type Groups<'a> = BTreeMap<ElementKey<'a>, Repeats<'a>>;
-
-fn group(lens: Option<&Lens>) -> Groups<'_> {
-    let mut groups = Groups::new();
-    for element in lens.into_iter().flat_map(elements) {
-        groups
-            .entry(element.key)
-            .or_default()
-            .entry((element.qualifier, element.anchor))
-            .or_default()
-            .push_back(element);
+fn bindings(recipe: Option<&RepoRecipe>) -> BTreeMap<(&str, &str), BTreeSet<&EvidenceAnchor>> {
+    let mut by_id = BTreeMap::new();
+    if let Some(recipe) = recipe {
+        by_id.extend(ids(recipe).map(|id| ((recipe.id(), id), BTreeSet::new())));
+        for binding in &recipe.evidence {
+            by_id
+                .entry((recipe.id(), &binding.element))
+                .or_default()
+                .insert(&binding.anchor);
+        }
     }
-    groups
+    by_id
 }
 
 struct Snapshot<'a> {
@@ -140,6 +164,7 @@ impl<'a> Snapshot<'a> {
         lenses: &'a LensSources,
         other: &LensSources,
         tree: &'a TreeFacts,
+        entry_paths: &BTreeSet<&str>,
     ) -> Result<Self> {
         // A newly added/removed lens may reference a path the other snapshot
         // didn't need for checks. Read those counterparts to compare safely.
@@ -147,6 +172,12 @@ impl<'a> Snapshot<'a> {
             .requested
             .difference(&lenses.requested)
             .map(String::as_str)
+            .chain(
+                entry_paths
+                    .iter()
+                    .copied()
+                    .filter(|p| !lenses.requested.contains(*p)),
+            )
             .collect();
         let mut extra = BTreeMap::new();
         if !paths.is_empty() {
@@ -175,29 +206,9 @@ impl<'a> Snapshot<'a> {
             .or_else(|| self.extra.get(path))
     }
 
-    fn resolve(&self, anchor: &LensAnchor) -> Option<Resolved> {
-        let source = self.source(&anchor.path)?;
-        let text = source.text.as_ref()?;
-        let defs = anchor::definitions(self.tree, anchor);
-        let line = if let Some(needle) = &anchor.text {
-            text.occurrence(needle, &defs)
-        } else if let Some(name) = &anchor.name {
-            source.syntax_line(name).map(|line| line..line + 1)
-        } else {
-            (text.lines > 0).then_some(1..2)
-        };
-        let definitions = defs
-            .into_iter()
-            .filter(|def| def.line > 0 && def.end_line >= def.line && def.end_line <= text.lines)
-            .map(|def| def.line..def.end_line + 1)
-            .collect();
-        Some(Resolved { line, definitions })
+    fn resolve(&self, anchor: &EvidenceAnchor) -> Option<(String, Range<u64>)> {
+        anchor::resolve(anchor, self.tree, None, |path| self.source(path)).ok()
     }
-}
-
-struct Resolved {
-    line: Option<Range<u64>>,
-    definitions: Vec<Range<u64>>,
 }
 
 struct Review<'a> {
@@ -210,104 +221,42 @@ struct Review<'a> {
 }
 
 impl Review<'_> {
-    fn element(
-        &mut self,
-        row: &mut LensImpact,
-        old: Option<Element<'_>>,
-        new: Option<Element<'_>>,
-        know_old: bool,
-        know_new: bool,
-    ) -> Result<()> {
-        if let Some(old) = &old
-            && new.is_none()
-            && know_new
-        {
-            row.removed.push(old.name.clone());
-        }
-        if let Some(new) = &new
-            && old.is_none()
-            && know_old
-        {
-            row.added.push(new.name.clone());
-        }
-        let old_anchor = old.as_ref().map(|element| element.anchor);
-        let new_anchor = new.as_ref().map(|element| element.anchor);
-        // A removed element's base-side name can equal a surviving repeat's head-side name, so
-        // each side's touches are kept apart.
-        if self.touched(old_anchor, new_anchor)? {
-            match (new, old) {
-                (Some(element), _) => row.touched.push(element.name),
-                (None, Some(element)) => row.touched_base.push(element.name),
-                (None, None) => {}
-            }
-        }
-        Ok(())
-    }
-
-    fn touched(&mut self, old: Option<&LensAnchor>, new: Option<&LensAnchor>) -> Result<bool> {
-        // An unreadable changed text blob is not a zero-line diff. Fail this
-        // category closed rather than reporting a clean review for that lens.
-        for anchor in old.into_iter().chain(new) {
-            let left = self.before.source(&anchor.path);
-            let right = self.after.source(&anchor.path);
+    fn touched(&mut self, anchor: &EvidenceAnchor, was: bool, now: bool) -> Result<bool> {
+        let old = was.then(|| self.before.resolve(anchor)).flatten();
+        let new = now.then(|| self.after.resolve(anchor)).flatten();
+        let path = match anchor {
+            EvidenceAnchor::Path { path }
+            | EvidenceAnchor::Text { path, .. }
+            | EvidenceAnchor::Symbol { path, .. } => Some(path),
+            EvidenceAnchor::Entry { .. } => old.as_ref().or(new.as_ref()).map(|r| &r.0),
+        };
+        if let Some(path) = path {
+            let left = self.before.source(path);
+            let right = self.after.source(path);
             ensure!(
-                !(left.is_some_and(|source| source.limited)
-                    || right.is_some_and(|source| source.limited))
-                    || left.and_then(|source| source.blob.as_ref())
-                        == right.and_then(|source| source.blob.as_ref()),
-                "could not diff anchor source {:?} beyond the scan budget",
-                anchor.path
+                !(left.is_some_and(|s| s.limited) || right.is_some_and(|s| s.limited))
+                    || left.and_then(|s| s.blob.as_ref()) == right.and_then(|s| s.blob.as_ref()),
+                "could not diff anchor source {path:?} beyond the scan budget"
             );
         }
-        let mut old_line = None;
-        if let Some(anchor) = old
-            && let Some(location) = self.before.resolve(anchor)
-        {
-            let hunks = self.hunks(&anchor.path)?;
-            for hunk in hunks {
-                if location
-                    .definitions
-                    .iter()
-                    .chain(&location.line)
-                    .any(|span| overlaps(span, &hunk.old))
-                {
-                    return Ok(true);
-                }
-                if old == new
-                    && hunk.old.is_empty()
-                    && location.line.as_ref().is_some_and(|span| {
-                        // Inserting inside a multiline literal edits that anchor, but
-                        // inserting at its first line just moves it down.
-                        span.start < hunk.old.start && hunk.old.start < span.end
-                    })
-                {
-                    return Ok(true);
-                }
-            }
-            old_line = location.line;
+        if was && now && old.as_ref().map(|r| &r.0) != new.as_ref().map(|r| &r.0) {
+            return Ok(true);
         }
-        if let Some(anchor) = new
-            && let Some(location) = self.after.resolve(anchor)
+        if let Some((path, span)) = old
+            && self.hunks(&path)?.iter().any(|h| {
+                overlaps(&span, &h.old)
+                    || h.old.is_empty() && span.start < h.old.start && h.old.start < span.end
+            })
         {
-            let hunks = self.hunks(&anchor.path)?;
-            // For an unchanged anchor whose old location survives, don't hook it
-            // onto an unrelated newly inserted occurrence of the same text.
-            let line = if old == new && old_line.is_some() {
-                None
-            } else {
-                location.line
-            };
-            return Ok(hunks.iter().any(|hunk| {
-                location
-                    .definitions
-                    .iter()
-                    .chain(&line)
-                    .any(|span| overlaps(span, &hunk.new))
-            }));
+            return Ok(true);
+        }
+        if let Some((path, span)) = new
+            && self.hunks(&path)?.iter().any(|h| overlaps(&span, &h.new))
+        {
+            return Ok(true);
         }
         Ok(false)
     }
-
     fn hunks(&mut self, path: &str) -> Result<&[LineHunk]> {
         use std::collections::btree_map::Entry;
         let hunks = match self.hunks.entry(path.to_owned()) {

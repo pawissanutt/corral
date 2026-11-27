@@ -16,6 +16,8 @@ pub(crate) mod lens_canvas;
 mod lens_draft;
 pub(crate) mod lens_impact;
 pub(crate) mod lenses;
+mod repo_compare;
+mod repo_view;
 pub(crate) mod tree;
 
 use nsh_core::element::color as for_appearance;
@@ -126,12 +128,17 @@ pub fn screen(app: AppState) -> AnyElement {
             .then(|| data.with(|shown| shown.project.clone()))
             .flatten()
     });
+    let recipes = computed(move || app.capable(corral_protocol::app::SYSTEM_LENSES_V2));
     let head = page_head(app, data);
     let content = dynamic(move || {
         if asking.get() {
             untracked(|| picker(app, data))
         } else if let Some(project) = lensing.get() {
-            untracked(|| lenses::page(app, project))
+            if recipes.get() {
+                untracked(|| lenses::page(app, project))
+            } else {
+                untracked(|| plain(app, lenses::UNSUPPORTED).into_element())
+            }
         } else {
             untracked(|| map_page(app, data))
         }
@@ -166,6 +173,12 @@ fn keep_loaded(app: AppState, data: Memo<Shown>) {
         let target = app
             .system
             .with(|state| view_request(state, &project, at.as_ref()));
+        if matches!(
+            target,
+            corral_protocol::detail::DetailRef::SystemLenses { .. }
+        ) {
+            return None;
+        }
         app.daemon().then_some(target)
     });
     effect(move || {

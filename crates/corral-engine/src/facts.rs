@@ -35,7 +35,7 @@ const MAX_STDOUT: usize = 64 * 1024 * 1024;
 #[derive(Clone, Copy)]
 enum ProviderMode {
     AllowStart,
-    CachedOnly,
+    ExactCachedOnly,
     ExactSnapshot,
 }
 
@@ -141,14 +141,20 @@ impl<'a> FactsReader<'a> {
     }
 
     pub fn lens_sources(&self, rev: &Revision) -> Result<lenses::LensSources> {
-        lenses::load(&self.repo, rev, self.lens_dir())
+        // A configured subdirectory is not permission to inspect its containing repository.
+        let local = self.resolve_local_commit(rev.commit())?;
+        lenses::load(&self.repo, &local, self.lens_dir())
     }
 
     /// Recover a malformed lens header from a blob already reported by the checker.
-    pub(crate) fn lens_header(&self, rev: &Revision, file: &str) -> Result<Option<toml::Table>> {
+    pub(crate) fn lens_header(
+        &self,
+        rev: &Revision,
+        file: &str,
+    ) -> Result<Option<serde_json::Map<String, serde_json::Value>>> {
         // Match the checker's per-file budget; the caller skips files rejected
         // by the checker for budget or non-regular file reasons.
-        const MAX_LENS_BYTES: u64 = 256 * 1024;
+        const MAX_LENS_BYTES: u64 = corral_types::lenses::MAX_REPO_RECIPE_BYTES as u64;
         if !lenses::valid_path(file) {
             return Ok(None);
         }
@@ -164,14 +170,12 @@ impl<'a> FactsReader<'a> {
             bytes.extend_from_slice(chunk);
             Ok(())
         })?;
-        Ok(std::str::from_utf8(&bytes)
-            .ok()
-            .and_then(|text| toml::from_str(text).ok()))
+        Ok(serde_json::from_slice(&bytes).ok())
     }
 
     /// Check only committed lenses and source, with optional definition and entry facts.
     pub fn check_lenses(&self, rev: &Revision) -> Result<(Vec<LensResult>, Option<FactsReport>)> {
-        self.check_lenses_with(rev, ProviderMode::AllowStart)
+        self.check_lenses_with(rev, ProviderMode::ExactSnapshot)
     }
 
     /// Engine operations may reuse a provider answer, but never start a provider.
@@ -179,7 +183,7 @@ impl<'a> FactsReader<'a> {
         &self,
         rev: &Revision,
     ) -> Result<(Vec<LensResult>, Option<FactsReport>)> {
-        self.check_lenses_with(rev, ProviderMode::CachedOnly)
+        self.check_lenses_with(rev, ProviderMode::ExactCachedOnly)
     }
 
     fn check_lenses_with(
@@ -282,7 +286,7 @@ impl<'a> FactsReader<'a> {
         rev: &Revision,
         tree: &mut TreeFacts,
     ) -> (Option<FactsReport>, BTreeSet<String>) {
-        self.enrich_lens_tree_with(rev, tree, ProviderMode::AllowStart)
+        self.enrich_lens_tree_with(rev, tree, ProviderMode::ExactSnapshot)
     }
 
     fn enrich_lens_tree_with(
@@ -470,13 +474,16 @@ impl<'a> FactsReader<'a> {
                 want,
             ))
             .context("encode facts provider cache namespace")?;
-            if matches!(mode, ProviderMode::ExactSnapshot) {
+            if matches!(
+                mode,
+                ProviderMode::ExactSnapshot | ProviderMode::ExactCachedOnly
+            ) {
                 namespace.push(0); // Disjoint from the existing JSON-only namespaces.
                 namespace.extend_from_slice(revision.commit().as_bytes());
             }
             let reply = self.cache.provider_reply(&namespace, revision, base, || {
                 anyhow::ensure!(
-                    !matches!(mode, ProviderMode::CachedOnly),
+                    !matches!(mode, ProviderMode::ExactCachedOnly),
                     "no cached facts provider answer for this revision"
                 );
                 let mut request = Map::from_iter([

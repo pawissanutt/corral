@@ -4,112 +4,72 @@ use std::fmt::Write;
 
 use anyhow::Result;
 use corral_facts::Revision;
-use corral_types::lenses::{Lens, LensResult, LensStatus};
+use corral_types::lenses::{LensResult, LensStatus, RecipeLayout};
 
 use crate::{
     Engine, Status, Task, config::shell_quote, facts::FactsReader, refuse, tasks::NewTask,
 };
 
-const FORMAT: &str = "Use a unique `id`, a descriptive `title`, and the full Git commit ID of the code you inspected as `read_at`. Every state, transition, participant and message must have a source anchor verified against that code. An `anchor` has a repository-relative `path` and may include a definition `name` and/or literal `text` from that file (within the named definition when known). All `from` and `to` values must refer to nodes declared in the same file.";
-
-const STATE_FORMAT: &str = r#"`states_from` must point to the source enum that defines the states: use its repository-relative `path` and enum `name`. Include every enum variant, using exact variant names (or their Rust snake_case equivalents); don't invent extra states. A transition may include a plain-text `guard`.
-
-```toml
-id = "job-lifecycle"
-title = "Job lifecycle"
-kind = "state"
-read_at = "<full-commit-id>"
-states_from = { path = "src/job.rs", name = "JobStatus" }
-
-[[states]]
-id = "queued"
-label = "Queued"
-anchor = { path = "src/job.rs", name = "JobStatus::Queued" }
-
-[[states]]
-id = "running"
-label = "Running"
-anchor = { path = "src/job.rs", name = "JobStatus::Running" }
-
-[[transitions]]
-from = "queued"
-to = "running"
-label = "Start job"
-anchor = { path = "src/job.rs", text = "job.start()" }
-```"#;
-
-const SEQUENCE_FORMAT: &str = r#"List messages in execution order. A message may include a plain-text `note`. If known, name the entry point using `entry = { kind, name }` with a `command`, `route` or `operation` kind.
-
-```toml
-id = "job-submission"
-title = "Job submission"
-kind = "sequence"
-read_at = "<full-commit-id>"
-entry = { kind = "command", name = "submit" }
-
-[[participants]]
-id = "cli"
-label = "CLI"
-anchor = { path = "src/cli.rs" }
-
-[[participants]]
-id = "worker"
-label = "Worker"
-anchor = { path = "src/worker.rs" }
-
-[[messages]]
-from = "cli"
-to = "worker"
-label = "Submit job"
-anchor = { path = "src/cli.rs", text = "worker.submit(job)" }
-```"#;
-
+// Presets guide the author; the file and viewer only use layout primitives.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum LensKind {
+enum Preset {
+    Graph,
     State,
+    Lanes,
     Sequence,
 }
 
-impl LensKind {
+impl Preset {
+    const ALL: [Self; 4] = [Self::Graph, Self::State, Self::Lanes, Self::Sequence];
     fn parse(kind: &str) -> Option<Self> {
-        match kind {
-            "state" => Some(Self::State),
-            "sequence" => Some(Self::Sequence),
-            _ => None,
-        }
+        Self::ALL.into_iter().find(|preset| preset.name() == kind)
     }
-
-    fn from_lens(lens: &Lens) -> Self {
-        match lens {
-            Lens::State { .. } => Self::State,
-            Lens::Sequence { .. } => Self::Sequence,
-        }
-    }
-
     fn name(self) -> &'static str {
         match self {
+            Self::Graph => "graph",
             Self::State => "state",
+            Self::Lanes => "ordered_lanes",
             Self::Sequence => "sequence",
         }
     }
-
-    fn template(self) -> String {
-        let example = match self {
-            Self::State => STATE_FORMAT,
-            Self::Sequence => SEQUENCE_FORMAT,
-        };
-        format!(
-            "## Lens format\n\n{FORMAT}\n\n{example}\n\n\
-             ## Acceptance\n\nCommit the lens change, then run `corral-next lens check --project <project> --at <task-head-sha> <lens-file>` \
-             using the full commit ID of the task worktree's HEAD and the changed lens file. \
-             `lens check` must pass; fix failed checks and report any checks that could not run separately. \
-             Submit only the lens file change for review; do not change any other files."
-        )
+    fn layout(self) -> RecipeLayout {
+        match self {
+            Self::Graph | Self::State => RecipeLayout::Graph,
+            _ => RecipeLayout::OrderedLanes,
+        }
     }
-
     fn draft_key(self, about: &str) -> String {
         format!("draft:{}:{}", self.name(), about.trim())
     }
+}
+
+fn template(layout: RecipeLayout) -> String {
+    let hint = match layout {
+        RecipeLayout::Graph => {
+            "Optional coverage: use `coverage` with the enum's `path`, `name`, and selected state node IDs in `nodes`."
+        }
+        RecipeLayout::OrderedLanes => {
+            "List participants in lane order in `nodes`, and messages in execution order in `edges`."
+        }
+    };
+    format!(
+        r#"## Recipe format
+
+Start from this minimal example and replace the placeholders with verified project evidence:
+
+```json
+{{"schema":"corral.repo-diagram","version":1,"id":"job","title":"Job","layout":"{}",
+ "nodes":[{{"id":"worker","label":"Worker"}}],"edges":[],
+ "evidence":[{{"element":"worker","anchor":{{"kind":"text","path":"src/job.rs","text":"struct Worker {{"}}}}]}}
+```
+
+Use unique stable IDs. Edges need an ID, declared node endpoints (`from`, `to`), and label. Use plain labels only. Verify durable bindings against committed source. {hint}
+
+## Acceptance
+
+Commit the JSON recipe, then run `corral-next lens check --project <project> --at <task-head-sha> <lens-file>` with the full commit ID. Fix failures; report unchecked evidence separately. Submit only the recipe change for review. Publishing a task artifact does not promote a repository lens."#,
+        layout.as_str()
+    )
 }
 
 impl Engine {
@@ -120,8 +80,12 @@ impl Engine {
         about: &str,
         ready: bool,
     ) -> Result<Task> {
-        let kind = LensKind::parse(kind)
-            .ok_or_else(|| refuse("lens kind must be state or sequence", vec![]))?;
+        let kind = Preset::parse(kind).ok_or_else(|| {
+            refuse(
+                "lens preset must be graph, ordered_lanes, state or sequence",
+                vec![],
+            )
+        })?;
         let about = about.trim();
         if about.is_empty() {
             return Err(refuse("lens draft requires a nonempty subject", vec![]));
@@ -148,9 +112,9 @@ impl Engine {
                     .iter()
                     .enumerate()
                     .filter(|(_, identity)| {
-                        identity
-                            .as_ref()
-                            .is_some_and(|lens| lens.kind == kind && lens.title.trim() == about)
+                        identity.as_ref().is_some_and(|lens| {
+                            lens.layout == kind.layout() && lens.title.trim() == about
+                        })
                     })
                     .map(|(index, _)| index)
                     .collect::<Vec<_>>();
@@ -163,7 +127,7 @@ impl Engine {
                 .filter(|index| {
                     identities[*index]
                         .as_ref()
-                        .is_some_and(|lens| lens.kind == kind)
+                        .is_some_and(|lens| lens.layout == kind.layout())
                 })
                 .map(|index| format!("repair-file:{:?}", results[index].file)))
         })()
@@ -182,10 +146,10 @@ impl Engine {
             let title = format!("Draft {} lens: {subject}", kind.name());
             let body = format!(
                 "Draft a {} lens about the following behaviour:\n\n{about}\n\n\
-                 Inspect the project code and add a single `.toml` lens under {dir:?}. \
+                 Inspect the project code and add a single `.json` lens under {dir:?}. \
                  Choose a new ID and path; do not overwrite an existing lens.\n\n{}",
                 kind.name(),
-                kind.template(),
+                template(kind.layout()),
             );
             self.insert_new_task(store, new_lens_task(project, title, body, ready), &keys)
         })
@@ -225,7 +189,7 @@ impl Engine {
                 .map_or("unknown error", |failure| &failure.message);
             refuse(
                 format!(
-                    "cannot identify the ID and kind of malformed lens {:?}: {diagnostic}",
+                    "cannot identify the ID and layout of malformed lens {:?}: {diagnostic}",
                     result.file
                 ),
                 vec![],
@@ -257,12 +221,17 @@ impl Engine {
                 None => !identities.iter().enumerate().any(|(index, other)| {
                     index != selected
                         && other.as_ref().is_some_and(|other| {
-                            other.kind == lens.kind && other.title.trim() == alias
+                            other.layout == lens.layout && other.title.trim() == alias
                         })
                 }),
             };
             if points_to_result {
-                draft_keys.push(lens.kind.draft_key(alias));
+                draft_keys.extend(
+                    Preset::ALL
+                        .into_iter()
+                        .filter(|p| p.layout() == lens.layout)
+                        .map(|p| p.draft_key(alias)),
+                );
             }
         }
         let provider_unavailable = provider.is_some_and(|report| report.error.is_some());
@@ -294,7 +263,7 @@ impl Engine {
                 "Repair the existing {} lens {:?} in {:?}. {id_instruction} Fix the failed checks \
                  and verify its anchors and elements against the code; do not add a replacement lens.\n\n\
                  ## Failed checks at {tip} ({})\n",
-                lens.kind.name(),
+                lens.layout.as_str(),
                 lens.id,
                 result.file,
                 result.status.as_str(),
@@ -308,7 +277,7 @@ impl Engine {
             for state in &result.extra_states {
                 writeln!(body, "- Extra state: {state}")?;
             }
-            write!(body, "{unchecked}\n\n{}", lens.kind.template())?;
+            write!(body, "{unchecked}\n\n{}", template(lens.layout))?;
             let new = new_lens_task(project, title, body, ready);
             let draft = store.open_draft_lens_task(project, &draft_keys)?;
             let keys = repair_keys.into_iter().chain(draft_keys).collect::<Vec<_>>();
@@ -324,7 +293,7 @@ impl Engine {
 struct LensIdentity {
     id: String,
     title: String,
-    kind: LensKind,
+    layout: RecipeLayout,
 }
 
 impl LensIdentity {
@@ -333,24 +302,28 @@ impl LensIdentity {
             return Ok(Some(Self {
                 id: lens.id().to_owned(),
                 title: lens.title().to_owned(),
-                kind: LensKind::from_lens(lens),
+                layout: lens.layout,
             }));
         }
         if result.failures.iter().any(|failure| {
             matches!(
                 failure.message.as_str(),
-                "lens file exceeded the lens scan budget" | "expected a regular UTF-8 TOML file"
+                "lens file exceeded the lens scan budget" | "expected a regular UTF-8 JSON file"
             )
         }) {
             return Ok(None);
         }
         Ok(reader.lens_header(rev, &result.file)?.and_then(|table| {
-            let get = |key| table.get(key).and_then(toml::Value::as_str);
+            let get = |key| table.get(key).and_then(serde_json::Value::as_str);
             let id = get("id").filter(|id| !id.trim().is_empty())?;
             Some(Self {
                 id: id.to_owned(),
                 title: get("title").unwrap_or_default().to_owned(),
-                kind: LensKind::parse(get("kind")?)?,
+                layout: match get("layout")? {
+                    "graph" => RecipeLayout::Graph,
+                    "ordered_lanes" => RecipeLayout::OrderedLanes,
+                    _ => return None,
+                },
             })
         }))
     }

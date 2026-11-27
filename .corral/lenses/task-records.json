@@ -1,0 +1,81 @@
+{
+  "schema": "corral.repo-diagram",
+  "version": 1,
+  "id": "task-records",
+  "title": "Task storage: run and artifact ownership",
+  "layout": "graph",
+  "nodes": [
+    {
+      "id": "task",
+      "label": "Task"
+    },
+    {
+      "id": "run",
+      "label": "Run"
+    },
+    {
+      "id": "artifact",
+      "label": "Artifact"
+    }
+  ],
+  "edges": [
+    {
+      "id": "owns-runs",
+      "label": "has",
+      "from": "task",
+      "to": "run",
+      "from_label": "1",
+      "to_label": "0..*"
+    },
+    {
+      "id": "owns-artifacts",
+      "label": "has",
+      "from": "task",
+      "to": "artifact",
+      "from_label": "1",
+      "to_label": "0..*"
+    }
+  ],
+  "evidence": [
+    {
+      "element": "task",
+      "anchor": {
+        "kind": "text",
+        "path": "crates/corral-engine/src/store.rs",
+        "text": "CREATE TABLE tasks("
+      }
+    },
+    {
+      "element": "run",
+      "anchor": {
+        "kind": "text",
+        "path": "crates/corral-engine/src/store.rs",
+        "text": "CREATE TABLE runs("
+      }
+    },
+    {
+      "element": "artifact",
+      "anchor": {
+        "kind": "text",
+        "path": "crates/corral-engine/src/store.rs",
+        "text": "CREATE TABLE artifacts("
+      }
+    },
+    {
+      "element": "owns-runs",
+      "anchor": {
+        "kind": "text",
+        "path": "crates/corral-engine/src/store.rs",
+        "text": "CREATE TABLE runs(task TEXT NOT NULL REFERENCES tasks(id)"
+      }
+    },
+    {
+      "element": "owns-artifacts",
+      "anchor": {
+        "kind": "text",
+        "path": "crates/corral-engine/src/store.rs",
+        "text": "CREATE TABLE artifacts(task TEXT NOT NULL REFERENCES tasks(id)"
+      }
+    }
+  ]
+}

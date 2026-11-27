@@ -3,7 +3,7 @@
 mod entries;
 mod variants;
 
-pub(crate) use variants::{RustEnum, rust_enums};
+pub(crate) use variants::{RustEnum, rust_declarations};
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 

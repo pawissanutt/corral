@@ -81,7 +81,7 @@ pub(crate) fn welcome(shared: &Shared, hello: wire::Hello) -> wire::Welcome {
                         cap.as_str(),
                         app::SYSTEM_RUNTIME_V1
                             | app::SYSTEM_ENTRIES_V1
-                            | app::SYSTEM_LENSES_V1
+                            | app::SYSTEM_LENSES_V2
                             | app::SYSTEM_DATA_V1
                     )
                     || cfg!(target_os = "linux")
@@ -275,6 +275,16 @@ pub(crate) fn serve(
             ) && !topics.has_system()
             {
                 return Err(Failure::new(ErrorCode::InvalidParams, "system.v1 required"));
+            }
+            if matches!(
+                query.target,
+                DetailRef::SystemLens { .. } | DetailRef::SystemLenses { .. }
+            ) && !topics.system_features().lenses
+            {
+                return Err(Failure::new(
+                    ErrorCode::InvalidParams,
+                    "system.lenses.v2 required",
+                ));
             }
             if matches!(
                 query.target,

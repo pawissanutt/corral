@@ -57,7 +57,19 @@ pub(super) fn diagram(app: AppState, graph: Memo<Option<Graph>>) -> AnyElement {
         let (reference, payload, ids) = structure.get()?;
         Some(untracked(|| {
             if app.form == Form::Desktop {
-                viewer(app, reference, payload, ids, selected, marks)
+                viewer(
+                    app,
+                    payload,
+                    ids,
+                    selected,
+                    marks,
+                    std::rc::Rc::new(move |element| {
+                        app.artifacts_act(Action::Pick {
+                            reference: reference.clone(),
+                            element,
+                        })
+                    }),
+                )
             } else {
                 dim(app, NO_VIEWER).into_element()
             }
@@ -127,13 +139,13 @@ fn retry_pending(app: AppState, graph: Memo<Option<Graph>>) {
 
 /// The first-party WebView: the bundled G6 page with only the recipe's IDs and labels. A
 /// message selects only an ID this recipe holds; the selection is posted back as it moves.
-fn viewer(
+pub(crate) fn viewer(
     app: AppState,
-    reference: String,
     payload: String,
     ids: Vec<String>,
     selected: Memo<Option<String>>,
     marks: Memo<String>,
+    pick: std::rc::Rc<dyn Fn(String)>,
 ) -> AnyElement {
     // The data's marker comes before the bundle's in the page, and each is replaced once, so a
     // label can name neither.
@@ -174,7 +186,7 @@ fn viewer(
                     web_view_html(page, None)
                         .element_ref(&handle)
                         .test_id("diagram-webview")
-                        .label("Workflow diagram")
+                        .label("Recipe diagram")
                         .w_full()
                         .h(px(GRAPH_HEIGHT))
                         .scrollable(false)
@@ -186,10 +198,7 @@ fn viewer(
                             "failed" => status.set(VIEWER_FAILED.into()),
                             message => {
                                 if let Some(element) = diagram::picked(message, &ids) {
-                                    app.artifacts_act(Action::Pick {
-                                        reference: reference.clone(),
-                                        element,
-                                    });
+                                    pick(element);
                                 }
                             }
                         })
@@ -235,10 +244,9 @@ fn list(app: AppState, graph: Memo<Option<Graph>>) -> AnyElement {
 fn row(app: AppState, graph: Memo<Option<Graph>>, reference: String, entry: Entry) -> AnyElement {
     let id = entry.id.clone();
     let chosen = id.clone();
-    list_row(
+    element_row(
         app,
-        format!("{}, {}", entry.words, entry.sub),
-        format!("diagram-el-{id}"),
+        entry,
         move || graph.with(|g| g.as_ref().and_then(|g| g.selected.as_deref()) == Some(&chosen)),
         move || {
             app.artifacts_act(Action::Pick {
@@ -246,6 +254,24 @@ fn row(app: AppState, graph: Memo<Option<Graph>>, reference: String, entry: Entr
                 element: id.clone(),
             })
         },
+        Hue::Neutral,
+    )
+}
+
+/// Native, focusable counterpart of a graph element; both recipe sources use the same row.
+pub(crate) fn element_row(
+    app: AppState,
+    entry: Entry,
+    selected: impl Fn() -> bool + 'static,
+    pick: impl Fn() + 'static,
+    hue: Hue,
+) -> AnyElement {
+    list_row(
+        app,
+        format!("{}, {}", entry.words, entry.sub),
+        format!("diagram-el-{}", entry.id),
+        selected,
+        pick,
         vec![
             view()
                 .flex_1()
@@ -253,7 +279,11 @@ fn row(app: AppState, graph: Memo<Option<Graph>>, reference: String, entry: Entr
                 .flex_row()
                 .gap(px(8.0))
                 .child(plain(app, entry.words).number_of_lines(1u32))
-                .child(dim(app, entry.sub).number_of_lines(1u32))
+                .child(
+                    dim(app, entry.sub)
+                        .text_color(hue_ink(hue))
+                        .number_of_lines(1u32),
+                )
                 .into_element(),
         ],
     )
@@ -295,18 +325,67 @@ fn inspector(app: AppState, graph: Memo<Option<Graph>>) -> AnyElement {
     .into_element()
 }
 
-fn inspected(app: AppState, i: Inspector) -> AnyElement {
+pub(crate) fn inspected(app: AppState, i: Inspector) -> AnyElement {
     let gap = if app.form == Form::Terminal { 0.0 } else { 8.0 };
     let head = view()
         .gap(px(2.0))
         .child(dim(app, i.what))
         .child(plain(app, i.title).font_weight(FontWeight::BOLD))
-        .child(dim(app, AUTHORED_NOTE));
+        .child(dim(
+            app,
+            if matches!(i.state, Evidence::Repository { .. }) {
+                "Authored labels and evidence bindings"
+            } else {
+                AUTHORED_NOTE
+            },
+        ));
     let facts = i
         .facts
         .into_iter()
         .map(|(label, value)| label_value(app, label, plain(app, value).into_element()));
     let evidence = match i.state {
+        Evidence::Repository {
+            sources,
+            derived,
+            checks,
+            pin,
+        } => {
+            let mut lines = vec![
+                h3(app, "Committed source", None),
+                dim(app, format!("Checked at {pin}")).into_element(),
+            ];
+            if sources.is_empty() {
+                lines.push(dim(app, crate::model::system::lens::SOURCE_UNAVAILABLE).into_element());
+            }
+            lines.extend(
+                sources
+                    .into_iter()
+                    .map(|s| source_block(app, Ok(s), "diagram-source")),
+            );
+            lines.push(h3(app, DERIVED_HEAD, None));
+            if derived.is_empty() {
+                lines.push(
+                    dim(
+                        app,
+                        "No inbound file references served; coverage may be unavailable.",
+                    )
+                    .into_element(),
+                );
+            }
+            lines.push(
+                view()
+                    .test_id("diagram-derived")
+                    .children(derived.into_iter().map(|r| plain(app, r).into_element()))
+                    .into_element(),
+            );
+            lines.push(h3(app, "Checks", None));
+            lines.extend(
+                checks
+                    .into_iter()
+                    .map(|(h, s)| plain(app, s).text_color(hue_ink(h)).into_element()),
+            );
+            lines
+        }
         Evidence::Loading => vec![dim(app, LOADING_CONTENT).into_element()],
         Evidence::Failed(why) => vec![dim(app, why).text_color(hue_ink(Hue::Fail)).into_element()],
         Evidence::Pending { source, note } => vec![

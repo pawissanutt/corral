@@ -17,10 +17,11 @@ pub(crate) enum LensCommand {
         #[arg(long, short)]
         project: Option<String>,
     },
-    /// File an ordinary task to draft a behaviour lens.
+    /// File an ordinary task to draft a reviewed JSON diagram recipe.
     Draft {
         project: String,
-        #[arg(long, value_parser = ["state", "sequence"])]
+        /// Authoring preset; named presets are not recipe types.
+        #[arg(long = "preset", visible_alias = "kind", default_value = "graph", value_parser = ["graph", "ordered_lanes", "state", "sequence"])]
         kind: String,
         #[arg(long)]
         about: String,

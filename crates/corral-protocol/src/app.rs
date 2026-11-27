@@ -30,8 +30,8 @@ pub const SYSTEM_RUNTIME_V1: &str = "system.runtime.v1";
 /// Opt into entry point changes in `system_review`. With `system.runtime.v1`,
 /// also opt into entries and per-container detector coverage in `system_runtime`.
 pub const SYSTEM_ENTRIES_V1: &str = "system.entries.v1";
-/// Opt into lens impact rows and the Lenses category in `system_review`.
-pub const SYSTEM_LENSES_V1: &str = "system.lenses.v1";
+/// Generic repository diagram summaries, pinned evidence details, and stable-ID Impact rows.
+pub const SYSTEM_LENSES_V2: &str = "system.lenses.v2";
 /// Data model impact rows in `system_review`.
 pub const SYSTEM_DATA_V1: &str = "system.data.v1";
 /// Bounded artifact workflow recipes and per-element evidence through `detail.get`.

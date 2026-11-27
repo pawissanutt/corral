@@ -604,7 +604,7 @@ NSH installs under `~/.nsh` and is linked at `~/.local/bin/nsh`. NSH 0.6.1 crate
 
 `.cargo/config.toml` disables the host's crashing global sccache wrapper and sets `CC_wasm32_unknown_unknown` and `AR_wasm32_unknown_unknown` to clang 18 unpacked under `~/.local/opt/llvm18`. This host has no system clang and no sudo. On a machine where `sudo apt install clang llvm` is available, the `[env]` table can be removed.
 
-Native desktop backends are behind the off-by-default `desktop` Cargo feature because this host lacks GTK 4 development packages. On macOS or a Linux machine with them (`sudo apt install libgtk-4-dev`), `cargo run --features desktop` starts the window. For a direct Windows Cargo build, stage the contents of `assets/` under `assets\@nsh-app-corral\` beside the executable; the release installer does this automatically. Do not build the `desktop` feature or the Linux or GPUI targets on this WSL host.
+Native desktop backends are behind the off-by-default `desktop` Cargo feature because this host lacks GTK 4 development packages. On macOS or a Linux machine with GTK 4 and WebKitGTK 6 development packages (`libgtk-4-dev` and `libwebkitgtk-6.0-dev` on Ubuntu), `cargo run --features desktop` starts the window. The Linux backend uses WebKitGTK for the bundled evidence diagram; terminal and headless builds do not require it. For a direct Windows Cargo build, stage the contents of `assets/` under `assets\@nsh-app-corral\` beside the executable; the release installer does this automatically. Do not build the `desktop` feature or the Linux or GPUI targets on this WSL host.
 
 ## Not built
 

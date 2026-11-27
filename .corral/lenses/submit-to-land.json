@@ -1,0 +1,117 @@
+{
+  "schema": "corral.repo-diagram",
+  "version": 1,
+  "id": "submit-to-land",
+  "title": "Submit to land",
+  "layout": "graph",
+  "nodes": [
+    {
+      "id": "submit",
+      "label": "Submit candidate"
+    },
+    {
+      "id": "gate",
+      "label": "Gate"
+    },
+    {
+      "id": "review",
+      "label": "Reviewer verdict"
+    },
+    {
+      "id": "land",
+      "label": "Land approved candidate"
+    }
+  ],
+  "edges": [
+    {
+      "id": "submit-to-gate",
+      "label": "Configured gate",
+      "from": "submit",
+      "to": "gate"
+    },
+    {
+      "id": "gate-to-review",
+      "label": "Passing candidate",
+      "from": "gate",
+      "to": "review"
+    },
+    {
+      "id": "retry",
+      "label": "Fix failed checks",
+      "from": "gate",
+      "to": "submit"
+    },
+    {
+      "id": "approved",
+      "label": "Approved",
+      "from": "review",
+      "to": "land"
+    }
+  ],
+  "evidence": [
+    {
+      "element": "submit",
+      "anchor": {
+        "kind": "text",
+        "path": "crates/corral-engine/src/review.rs",
+        "text": "pub fn done("
+      }
+    },
+    {
+      "element": "gate",
+      "anchor": {
+        "kind": "text",
+        "path": "crates/corral-engine/src/review.rs",
+        "text": "pub fn gate(&self, id: &str) -> Result<Check> {"
+      }
+    },
+    {
+      "element": "review",
+      "anchor": {
+        "kind": "text",
+        "path": "crates/corral-engine/src/review.rs",
+        "text": "pub fn verdict("
+      }
+    },
+    {
+      "element": "land",
+      "anchor": {
+        "kind": "text",
+        "path": "crates/corral-engine/src/land.rs",
+        "text": "pub fn approve("
+      }
+    },
+    {
+      "element": "retry",
+      "anchor": {
+        "kind": "text",
+        "path": "crates/corral-engine/src/pipeline.rs",
+        "text": "return self.send_back(id, &gate_notes(&check));"
+      }
+    },
+    {
+      "element": "approved",
+      "anchor": {
+        "kind": "text",
+        "path": "crates/corral-engine/src/pipeline.rs",
+        "text": "self.approve_as(id, None, false, Actor::Auto)?;"
+      }
+    },
+    {
+      "element": "submit-to-gate",
+      "anchor": {
+        "kind": "text",
+        "path": "crates/corral-engine/src/pipeline.rs",
+        "text": "if let Some(project) = project.as_ref().filter(|p| !p.gate.is_empty())"
+      }
+    },
+    {
+      "element": "gate-to-review",
+      "anchor": {
+        "kind": "text",
+        "path": "crates/corral-engine/src/pipeline.rs",
+        "text": "self.review_as(id, None, Actor::Auto)?;"
+      }
+    }
+  ]
+}

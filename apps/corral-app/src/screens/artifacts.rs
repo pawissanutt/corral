@@ -10,7 +10,7 @@
 //! result), "artifacts-count", "btn-load-more", "btn-retry-artifacts", and those of `shown`.
 
 mod browser;
-mod diagram;
+pub(crate) mod diagram;
 mod diagram_compare;
 mod save;
 mod shown;

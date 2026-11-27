@@ -1,5 +1,5 @@
-use corral_protocol::app::SYSTEM_LENSES_V1;
-use corral_types::lenses::{LensKind, LensStatus};
+use corral_protocol::app::SYSTEM_LENSES_V2;
+use corral_types::lenses::{LensStatus, RecipeLayout};
 
 use super::*;
 
@@ -7,66 +7,32 @@ use super::*;
 fn socket_lenses_follow_the_landed_head_and_review_rows_are_opt_in() {
     let fixture = Fixture::with_repository();
     let repo = fixture.root().join("repo");
-    let read_at = corral_facts::resolve_revision(&repo, "HEAD").unwrap();
     fs::create_dir_all(repo.join("diagrams")).unwrap();
-    let diagram = |id: &str, anchor: &str, note: &str| {
-        format!(
-            r#"
-id = "{id}"
-title = "Worker run"
-kind = "sequence"
-read_at = "{}"
-
-[[participants]]
-id = "worker"
-label = "Worker"
-anchor = {anchor}
-
-[[messages]]
-from = "worker"
-to = "worker"
-label = "Runs"
-note = "{note}"
-anchor = {anchor}
-"#,
-            read_at.commit(),
-        )
+    let diagram = |id: &str, repeats: bool, first: bool| {
+        use serde_json::json;
+        let mut edges = vec![];
+        let mut evidence = vec![
+            json!({"element":"worker","anchor": if repeats {json!({"kind":"path","path":".gitignore"})} else {json!({"kind":"text","path":"note","text":"base"})}}),
+        ];
+        if repeats {
+            for (id, path) in [("first", "note"), ("second", ".gitignore")] {
+                if !first && id == "first" {
+                    continue;
+                }
+                edges.push(json!({"id":id,"from":"worker","to":"worker","label":"Runs"}));
+                evidence.push(json!({"element":id,"anchor":{"kind":"path","path":path}}));
+            }
+        }
+        json!({"schema":"corral.repo-diagram","version":1,"id":id,"title":"Worker run","layout":"ordered_lanes","nodes":[{"id":"worker","label":"Worker"}],"edges":edges,"evidence":evidence}).to_string()
     };
+    fs::write(repo.join("diagrams/run.json"), diagram("run", false, false)).unwrap();
+    const MALFORMED: &str = "diagrams/broken.json";
+    fs::write(repo.join(MALFORMED), "bad recipe").unwrap();
     fs::write(
-        repo.join("diagrams/run.toml"),
-        diagram("run", r#"{path = "note", text = "base"}"#, ""),
+        repo.join("diagrams/repeats.json"),
+        diagram("repeats", true, true),
     )
     .unwrap();
-    fs::write(
-        repo.join("diagrams/oversized.toml"),
-        diagram(
-            "oversized",
-            r#"{path = ".gitignore"}"#,
-            &"x".repeat(corral_protocol::app::APP_CONTROL_MAX),
-        ),
-    )
-    .unwrap();
-    const MALFORMED: &str = "diagrams/broken.toml";
-    fs::write(repo.join(MALFORMED), "kind = 'nonsense'\n").unwrap();
-    // Two same-labelled messages: removing the first renumbers the second at the head.
-    let repeats = |first: bool| {
-        let message = |anchor: &str| {
-            format!(
-                "[[messages]]\nfrom = \"worker\"\nto = \"worker\"\nlabel = \"Runs\"\nanchor = {anchor}\n"
-            )
-        };
-        format!(
-            "id = \"repeats\"\ntitle = \"Repeats\"\nkind = \"sequence\"\nread_at = \"{}\"\n[[participants]]\nid = \"worker\"\nlabel = \"Worker\"\nanchor = {{ path = \".gitignore\" }}\n{}{}",
-            read_at.commit(),
-            if first {
-                message(r#"{ path = "note", text = "base" }"#)
-            } else {
-                String::new()
-            },
-            message(r#"{ path = ".gitignore" }"#),
-        )
-    };
-    fs::write(repo.join("diagrams/repeats.toml"), repeats(true)).unwrap();
     git(&repo, &["add", "diagrams"]);
     git(&repo, &["commit", "-m", "add lens examples"]);
     let base = corral_facts::resolve_revision(&repo, "HEAD").unwrap();
@@ -93,7 +59,11 @@ anchor = {anchor}
         .id;
     let run = engine.apply(dispatch(&task), false).unwrap().run.unwrap();
     fs::write(run.worktree.join("note"), "changed\n").unwrap();
-    fs::write(run.worktree.join("diagrams/repeats.toml"), repeats(false)).unwrap();
+    fs::write(
+        run.worktree.join("diagrams/repeats.json"),
+        diagram("repeats", true, false),
+    )
+    .unwrap();
     let submitted = engine
         .apply(
             Op::Done {
@@ -118,16 +88,23 @@ anchor = {anchor}
         id: id.into(),
         at: at.map(str::to_owned),
     };
-    let (mut unsupported, welcome) = connect(&path, vec![SYSTEM_LENSES_V1.into()]);
-    assert!(!welcome.caps.iter().any(|cap| cap == SYSTEM_LENSES_V1));
+    let (mut unsupported, welcome) = connect(&path, vec![SYSTEM_LENSES_V2.into()]);
+    assert!(!welcome.caps.iter().any(|cap| cap == SYSTEM_LENSES_V2));
     for target in [list.clone(), lens("run", None)] {
         let error = unsupported.call(DETAIL_GET, query(target)).unwrap_err();
         assert_eq!(error.code, rpc::ErrorCode::InvalidParams);
     }
     let (mut system, _) = connect(&path, vec![SYSTEM_V1.into()]);
-    let (mut opted_in, welcome) = connect(&path, vec![SYSTEM_V1.into(), SYSTEM_LENSES_V1.into()]);
-    assert!(welcome.caps.iter().any(|cap| cap == SYSTEM_LENSES_V1));
-    let initial = await_detail(&mut system, list.clone(), |body| match body {
+    let (mut opted_in, welcome) = connect(&path, vec![SYSTEM_V1.into(), SYSTEM_LENSES_V2.into()]);
+    assert!(welcome.caps.iter().any(|cap| cap == SYSTEM_LENSES_V2));
+    assert_eq!(
+        system
+            .call(DETAIL_GET, query(list.clone()))
+            .unwrap_err()
+            .code,
+        rpc::ErrorCode::InvalidParams
+    );
+    let initial = await_detail(&mut opted_in, list.clone(), |body| match body {
         DetailBody::SystemLenses(list) if list.status == SystemStatus::Ready => Some(list),
         _ => None,
     });
@@ -138,26 +115,22 @@ anchor = {anchor}
             .iter()
             .any(|row| row.id.as_deref() == Some("run")
                 && row.status == LensStatus::Current
-                && row.kind == Some(LensKind::Sequence))
+                && row.layout == Some(RecipeLayout::OrderedLanes))
     );
     assert!(
         initial
             .rows
             .iter()
-            .any(|row| row.file == MALFORMED && row.id.is_none() && row.kind.is_none())
+            .any(|row| row.file == MALFORMED && row.id.is_none() && row.layout.is_none())
     );
-    let error = system
-        .call(DETAIL_GET, query(lens("oversized", None)))
-        .unwrap_err();
-    assert_eq!(error.code, rpc::ErrorCode::TooLarge);
-    let malformed = lens_detail(&mut system, lens(MALFORMED, None));
+    let malformed = lens_detail(&mut opted_in, lens(MALFORMED, None));
     assert!(malformed.excerpts.is_empty());
     assert_eq!(malformed.lens.unwrap().file, MALFORMED);
-    let historical = lens_detail(&mut system, lens("run", Some(base.commit())));
+    let historical = lens_detail(&mut opted_in, lens("run", Some(base.commit())));
     assert_eq!(historical.commit.as_deref(), Some(base.commit()));
     // The anchored line comes from the selected commit's object, not the working tree.
     assert!(historical.excerpts.iter().any(|e| {
-        e.element == "participant worker"
+        e.element == "worker"
             && e.lines
                 .get((e.line - e.first) as usize)
                 .is_some_and(|line| line.contains("base"))
@@ -167,10 +140,10 @@ anchor = {anchor}
     // A symbolic selector that failed must recover after a Git change with
     // no Corral event. Observe the recovered revision, not a fixed sleep.
     let late = lens("run", Some("late-tag"));
-    let unavailable = lens_detail(&mut system, late.clone());
+    let unavailable = lens_detail(&mut opted_in, late.clone());
     assert!(unavailable.error.is_some());
     git(&repo, &["tag", "late-tag", base.commit()]);
-    let recovered = await_detail(&mut system, late, |body| match body {
+    let recovered = await_detail(&mut opted_in, late, |body| match body {
         DetailBody::SystemLens(lens) if lens.commit.as_deref() == Some(base.commit()) => Some(lens),
         _ => None,
     });
@@ -195,9 +168,8 @@ anchor = {anchor}
     assert!(accepted.rows.iter().any(|row| matches!(row,
         SystemReviewRow::Lens { impact } if impact.id == "run" && !impact.touched.is_empty()
     )));
-    // The removed repeat's touch stays on the base side; the survivor, unsuffixed at the
-    // head, is not marked touched.
-    let removed = r#"message "worker" -> "worker": "Runs""#;
+    // Stable IDs keep both same-labelled messages independent at either revision.
+    let removed = "first";
     assert!(
         accepted.rows.iter().any(|row| matches!(row,
             SystemReviewRow::Lens { impact } if impact.id == "repeats"
@@ -207,6 +179,13 @@ anchor = {anchor}
         )),
         "{:?}",
         accepted.rows
+    );
+    let historical_repeat = lens_detail(&mut opted_in, lens("repeats", Some(base.commit())));
+    assert!(
+        historical_repeat
+            .excerpts
+            .iter()
+            .any(|e| e.element == removed && e.lines.iter().any(|l| l == "base"))
     );
     let ordinary: DetailReply = system.ok(DETAIL_GET, query(review));
     let Some(DetailBody::SystemReview(ordinary)) = ordinary.body else {
@@ -234,7 +213,7 @@ anchor = {anchor}
             false,
         )
         .unwrap();
-    let landed = await_detail(&mut system, list, |body| match body {
+    let landed = await_detail(&mut opted_in, list, |body| match body {
         DetailBody::SystemLenses(list) if list.head.as_deref() == Some(head.as_str()) => Some(list),
         _ => None,
     });
@@ -244,10 +223,10 @@ anchor = {anchor}
             .iter()
             .any(|row| row.id.as_deref() == Some("run") && row.status == LensStatus::Stale)
     );
-    let current = lens_detail(&mut system, lens("run", None));
+    let current = lens_detail(&mut opted_in, lens("run", None));
     assert_eq!(current.commit.as_deref(), Some(head.as_str()));
     assert_eq!(current.lens.unwrap().status, LensStatus::Stale);
-    let historical = lens_detail(&mut system, lens("run", Some(base.commit())));
+    let historical = lens_detail(&mut opted_in, lens("run", Some(base.commit())));
     assert_eq!(historical.lens.unwrap().status, LensStatus::Current);
 }
 

@@ -133,7 +133,9 @@ fn keep(app: AppState, task: Memo<Id>, trail: Memo<Vec<SystemAt>>, listing: Memo
                 targets.extend(impact::wanted(project.as_str(), target));
             }
             // A touched lens is drawn as checked at the commit the item names.
-            if let Some(touched) = selected.and_then(|i| i.lens.as_ref()) {
+            if let Some(touched) = selected.and_then(|i| i.lens.as_ref())
+                && app.capable(corral_protocol::app::SYSTEM_LENSES_V2)
+            {
                 for at in [&touched.head, &touched.base] {
                     targets.push(lens::lens_request(
                         project.as_str(),

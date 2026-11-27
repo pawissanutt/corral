@@ -227,3 +227,9 @@ file's patch page (`PatchPage.head`) and each drilled Impact level name that sub
 that run's own summary and the named file expanded once the task has loaded; otherwise they say
 why and offer the current submission. The expectation lasts for that visit: any other navigation
 lets it go.
+
+## From a task artifact to a project lens
+
+Publishing keeps this artifact pinned. To propose a durable, project-wide diagram, follow
+[Author a repository lens](repository-lenses.md): author and validate a separate repository
+recipe and land it through review. The artifact is neither rewritten nor promoted automatically.

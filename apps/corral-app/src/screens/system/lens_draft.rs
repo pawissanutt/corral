@@ -3,7 +3,7 @@
 //! task corrald filed, with a way to open it.
 
 use corral_types::Op;
-use corral_types::lenses::LensKind;
+use corral_types::lenses::RecipeLayout;
 use nsh_core::element::color as for_appearance;
 use nsh_core::prelude::*;
 
@@ -46,7 +46,7 @@ pub(super) fn draft(app: AppState, project: String) -> AnyElement {
                     "btn-lens-draft",
                     move || {
                         app.system_act(Action::Draft(Some(Draft {
-                            kind: LensKind::State,
+                            kind: RecipeLayout::Graph,
                             about: String::new(),
                         })))
                     },
@@ -61,7 +61,7 @@ pub(super) fn draft(app: AppState, project: String) -> AnyElement {
 fn draft_now(app: AppState) -> Draft {
     app.system.with_untracked(|s| {
         s.draft.clone().unwrap_or(Draft {
-            kind: LensKind::State,
+            kind: RecipeLayout::Graph,
             about: String::new(),
         })
     })
@@ -74,7 +74,7 @@ fn draft_form(app: AppState, project: String) -> AnyElement {
         &KINDS,
         move || {
             app.system
-                .with(|s| s.draft.as_ref().map_or(LensKind::State, |d| d.kind))
+                .with(|s| s.draft.as_ref().map_or(RecipeLayout::Graph, |d| d.kind))
         },
         move |kind| {
             let mut d = draft_now(app);

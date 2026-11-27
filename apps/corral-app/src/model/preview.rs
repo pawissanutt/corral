@@ -151,7 +151,7 @@ fn base(now: u64, date: String, clock: String, time_zone: Option<jiff::tz::TimeZ
         corral_protocol::app::SYSTEM_V1,
         corral_protocol::app::SYSTEM_RUNTIME_V1,
         corral_protocol::app::SYSTEM_ENTRIES_V1,
-        corral_protocol::app::SYSTEM_LENSES_V1,
+        corral_protocol::app::SYSTEM_LENSES_V2,
         corral_protocol::host::HOST_V1,
         USAGE_V1,
         corral_protocol::config::PI_HOSTED_TOOLS_V1,

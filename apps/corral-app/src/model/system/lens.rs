@@ -1,5 +1,4 @@
-//! Insight › Lenses: a project's saved behaviour diagrams (a state lens or a
-//! sequence lens), each checked against the code by corrald. The view reads `system_lenses`
+//! Insight › Lenses: generic repository diagrams checked against an immutable revision. The view reads `system_lenses`
 //! for the list and `system_lens` for the one drawn; a task's Impact reads `system_lens` at its
 //! head for a lens the change touches. A served lens becomes a [`Diagram`]: its elements in
 //! file order, each with the checker's name for it (so a failure, a location or a touch lands
@@ -7,7 +6,7 @@
 
 use corral_protocol::detail::{DetailBody, DetailRef};
 use corral_types::lenses::{
-    Lens, LensAnchor, LensDiagnostic, LensExcerpt, LensKind, LensResult, LensStatus,
+    EvidenceAnchor, LensDiagnostic, LensExcerpt, LensResult, LensStatus, RecipeLayout,
 };
 use corral_types::{SystemLens, SystemLenses, SystemRow, SystemStatus};
 
@@ -68,10 +67,10 @@ pub const fn status_glyph(status: LensStatus) -> &'static str {
     }
 }
 
-pub const fn kind_word(kind: Option<LensKind>) -> &'static str {
+pub const fn kind_word(kind: Option<RecipeLayout>) -> &'static str {
     match kind {
-        Some(LensKind::State) => "State",
-        Some(LensKind::Sequence) => "Sequence",
+        Some(RecipeLayout::Graph) => "Graph",
+        Some(RecipeLayout::OrderedLanes) => "Ordered lanes",
         None => "Unreadable",
     }
 }
@@ -82,13 +81,13 @@ pub struct Row {
     /// What `system_lens` is asked for: the lens id, or the file of one that has none.
     pub key: String,
     pub title: String,
-    pub kind: Option<LensKind>,
+    pub kind: Option<RecipeLayout>,
     pub status: LensStatus,
     pub file: String,
 }
 
 impl Row {
-    /// Its kind; a readable lens an older corrald served without one is just a lens.
+    /// Its kind; a readable lens an older corrald served without one is just a recipe.
     pub const fn kind_word(&self) -> &'static str {
         match (self.kind, self.status) {
             (None, LensStatus::Malformed) | (Some(_), _) => kind_word(self.kind),
@@ -104,7 +103,7 @@ pub fn rows(list: &SystemLenses) -> Vec<Row> {
             // The file names one lens exactly; an ID could equal another lens's path.
             key: row.file.clone(),
             title: row.title.clone().unwrap_or_else(|| row.file.clone()),
-            kind: row.kind,
+            kind: row.layout,
             status: row.status,
             file: row.file.clone(),
         })
@@ -156,8 +155,7 @@ impl Mark {
     }
 }
 
-/// A state, a participant, a transition, a message, or a lens-level element (`states_from`,
-/// `entry`, `file`).
+/// A recipe node, edge or group. Its ID is independent of labels and array position.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Element {
     /// The checker's name for it.
@@ -169,9 +167,8 @@ pub struct Element {
     pub ends: Option<(usize, usize)>,
     /// A transition's guard or a message's note.
     pub detail: Option<String>,
-    pub anchor: Option<LensAnchor>,
-    /// Where the checker found it: path and one-based line at the checked commit.
-    pub location: Option<(String, u64)>,
+    pub authored: Vec<(&'static str, String)>,
+    pub group: Option<String>,
     pub marks: Vec<Mark>,
 }
 
@@ -198,19 +195,19 @@ pub struct Issue {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Diagram {
-    pub kind: LensKind,
+    pub kind: RecipeLayout,
     pub id: String,
     pub title: String,
     pub file: String,
     pub status: LensStatus,
-    pub read_at: String,
+    pub derived: Vec<corral_types::lenses::InboundReference>,
     /// The commit it was checked at.
     pub commit: Option<String>,
     /// States or participants, in file order.
     pub nodes: Vec<Element>,
     /// Transitions or messages, in file order (a sequence's order).
     pub edges: Vec<Element>,
-    /// `states_from` and `entry`: checked, not drawn.
+    /// Selectable groups.
     pub about: Vec<Element>,
     pub failures: Vec<Issue>,
     pub not_checked: Vec<Issue>,
@@ -230,190 +227,97 @@ pub struct Touch {
     pub removed: Vec<String>,
 }
 
-fn node_name(kind: LensKind, id: &str) -> String {
-    match kind {
-        LensKind::State => format!("state {id}"),
-        LensKind::Sequence => format!("participant {id}"),
-    }
-}
-
-/// The checker's names for edges: a repeat of the same ends and label is numbered from its
-/// second occurrence (`corral-facts` `lenses::elements`).
-fn edge_names<'a>(
-    word: &str,
-    edges: impl Iterator<Item = (&'a str, &'a str, &'a str)>,
-) -> Vec<String> {
-    let mut seen: Vec<((&str, &str, &str), usize)> = Vec::new();
-    edges
-        .map(|key| {
-            let n = match seen.iter_mut().find(|(k, _)| *k == key) {
-                Some((_, n)) => {
-                    *n += 1;
-                    *n
-                }
-                None => {
-                    seen.push((key, 1));
-                    1
-                }
-            };
-            let (from, to, label) = key;
-            let mut name = format!("{word} {from:?} -> {to:?}: {label:?}");
-            if n > 1 {
-                name.push_str(&format!(" (#{n})"));
-            }
-            name
-        })
-        .collect()
-}
-
-/// A served, readable lens as a diagram, with `touch`'s marks; none for a malformed file.
+/// Project the checked recipe without manufacturing identities from display labels.
 pub fn diagram(
     result: &LensResult,
     commit: Option<&str>,
     excerpts: &[LensExcerpt],
     touch: &Touch,
 ) -> Option<Diagram> {
-    let lens = result.lens.as_ref()?;
-    let kind = lens.kind();
-    let (nodes, raw_edges, node_word) = match lens {
-        Lens::State {
-            states,
-            transitions,
-            ..
-        } => (
-            states,
-            transitions
-                .iter()
-                .map(|t| (&t.from, &t.to, &t.label, &t.guard, &t.anchor))
-                .collect::<Vec<_>>(),
-            "State",
-        ),
-        Lens::Sequence {
-            participants,
-            messages,
-            ..
-        } => (
-            participants,
-            messages
-                .iter()
-                .map(|m| (&m.from, &m.to, &m.label, &m.note, &m.anchor))
-                .collect(),
-            "Participant",
-        ),
-    };
-    let located = |name: &str| {
-        result
-            .locations
-            .iter()
-            .find(|l| l.element == name)
-            .map(|l| (l.path.clone(), l.line))
-    };
-    let failed = |name: &str| result.failures.iter().any(|f| f.element == name);
-    let marks_of = |name: &str, extra: bool| {
+    let recipe = result.lens.as_ref()?;
+    let kind = recipe.layout;
+    let element = |id: &str, what: &str, label: &str| {
         let mut marks = Vec::new();
-        if failed(name) {
+        if result.failures.iter().any(|f| f.element == id) {
             marks.push(Mark::Failed);
         }
-        if extra {
+        if result.extra_states.iter().any(|n| n == id) {
             marks.push(Mark::Extra);
         }
-        if touch.touched.iter().any(|t| t == name) {
-            marks.push(Mark::Touched);
-        }
-        if touch.added.iter().any(|t| t == name) {
-            marks.push(Mark::Added);
-        }
-        if touch.removed.iter().any(|t| t == name) {
-            marks.push(Mark::Removed);
-        }
-        marks
-    };
-    let nodes: Vec<Element> = nodes
-        .iter()
-        .map(|node| {
-            let name = node_name(kind, &node.id);
-            let extra = kind == LensKind::State && result.extra_states.contains(&node.id);
-            Element {
-                marks: marks_of(&name, extra),
-                location: located(&name),
-                what: node_word.into(),
-                label: node.label.clone(),
-                ends: None,
-                detail: None,
-                anchor: Some(node.anchor.clone()),
-                name,
+        for (ids, mark) in [
+            (&touch.touched, Mark::Touched),
+            (&touch.added, Mark::Added),
+            (&touch.removed, Mark::Removed),
+        ] {
+            if ids.iter().any(|n| n == id) {
+                marks.push(mark);
             }
-        })
-        .collect();
-    let index = |id: &str| match lens {
-        Lens::State { states, .. } => states.iter().position(|s| s.id == id),
-        Lens::Sequence { participants, .. } => participants.iter().position(|p| p.id == id),
+        }
+        let mut authored = vec![("ID", id.to_string())];
+        for binding in recipe.evidence.iter().filter(|e| e.element == id) {
+            authored.push(match &binding.anchor {
+                EvidenceAnchor::Path { path } => ("Path", path.clone()),
+                EvidenceAnchor::Symbol { path, name } => ("Symbol", format!("{name} in {path}")),
+                EvidenceAnchor::Text { path, text } => ("Text", format!("{path}: {text}")),
+                EvidenceAnchor::Entry { entry_kind, name } => {
+                    ("Entry", format!("{} {name}", entry_word(*entry_kind)))
+                }
+            });
+        }
+        Element {
+            name: id.into(),
+            what: what.into(),
+            label: label.into(),
+            ends: None,
+            detail: None,
+            group: None,
+            authored,
+            marks,
+        }
     };
-    let word = match kind {
-        LensKind::State => "transition",
-        LensKind::Sequence => "message",
-    };
-    let names = edge_names(
-        word,
-        raw_edges
-            .iter()
-            .map(|(f, t, l, _, _)| (f.as_str(), t.as_str(), l.as_str())),
-    );
-    let edges: Vec<Element> = raw_edges
+    let about = recipe
+        .groups
         .iter()
-        .zip(names)
-        .enumerate()
-        .map(|(n, ((from, to, label, detail, anchor), name))| Element {
-            marks: marks_of(&name, false),
-            location: located(&name),
-            what: match kind {
-                LensKind::State => "Transition".into(),
-                LensKind::Sequence => format!("Message {}", n + 1),
-            },
-            label: (*label).clone(),
-            ends: index(from).zip(index(to)),
-            detail: (*detail).clone(),
-            anchor: Some((*anchor).clone()),
-            name,
+        .map(|g| element(&g.id, "Group", &g.label))
+        .collect();
+    let nodes = recipe
+        .nodes
+        .iter()
+        .map(|n| {
+            let mut e = element(&n.id, "Node", &n.label);
+            e.group = n.group.clone();
+            if let Some(group) = &e.group {
+                e.authored.push(("Group", group.clone()));
+            }
+            e
         })
         .collect();
-    let mut about = Vec::new();
-    match lens {
-        Lens::State { states_from, .. } => about.push(Element {
-            marks: marks_of("states_from", false),
-            location: located("states_from"),
-            what: "States from".into(),
-            label: states_from.name.clone(),
-            ends: None,
-            detail: None,
-            anchor: Some(LensAnchor {
-                path: states_from.path.clone(),
-                name: Some(states_from.name.clone()),
-                text: None,
-            }),
-            name: "states_from".into(),
-        }),
-        Lens::Sequence {
-            entry: Some(entry), ..
-        } => about.push(Element {
-            marks: marks_of("entry", false),
-            location: located("entry"),
-            what: "Entry point".into(),
-            label: format!("{} {}", entry_word(entry.kind), entry.name),
-            ends: None,
-            detail: None,
-            anchor: None,
-            name: "entry".into(),
-        }),
-        Lens::Sequence { entry: None, .. } => {}
-    }
+    let index = |id: &str| recipe.nodes.iter().position(|n| n.id == id);
+    let edges = recipe
+        .edges
+        .iter()
+        .map(|edge| {
+            let mut e = element(&edge.id, "Edge", &edge.label);
+            e.ends = index(&edge.from).zip(index(&edge.to));
+            e.detail = edge.note.clone();
+            for (name, value) in [
+                ("Source label", &edge.from_label),
+                ("Target label", &edge.to_label),
+            ] {
+                if let Some(value) = value {
+                    e.authored.push((name, value.clone()));
+                }
+            }
+            e
+        })
+        .collect();
     let mut diagram = Diagram {
         kind,
-        id: lens.id().to_owned(),
-        title: lens.title().to_owned(),
+        id: recipe.id.clone(),
+        title: recipe.title.clone(),
         file: result.file.clone(),
         status: result.status,
-        read_at: lens.read_at().to_owned(),
+        derived: result.derived.clone(),
         commit: commit.map(str::to_owned),
         nodes,
         edges,
@@ -465,24 +369,22 @@ impl Diagram {
 
     /// "State lens · 8 states · 9 transitions".
     pub fn figures(&self) -> String {
-        let (nodes, edges) = match self.kind {
-            LensKind::State => (("state", "states"), ("transition", "transitions")),
-            LensKind::Sequence => (("participant", "participants"), ("message", "messages")),
-        };
         format!(
-            "{} lens · {} · {}",
+            "{} · {} nodes · {} edges",
             kind_word(Some(self.kind)),
-            super::plural(self.nodes.len() as u64, nodes.0, nodes.1),
-            super::plural(self.edges.len() as u64, edges.0, edges.1),
+            self.nodes.len(),
+            self.edges.len()
         )
     }
 
-    /// "Read at 3aafaafe81 · checked at 7005ad0dc1".
     pub fn provenance(&self) -> String {
-        let mut out = format!("Read at {}", short(&self.read_at));
-        if let Some(commit) = &self.commit {
-            out.push_str(&format!(" · checked at {}", short(commit)));
-        }
+        let mut out = format!(
+            "Checked at {}",
+            self.commit
+                .as_deref()
+                .map(short)
+                .unwrap_or("unknown revision")
+        );
         out.push_str(&format!(" · {}", self.file));
         out
     }
@@ -504,7 +406,7 @@ impl Diagram {
             LensStatus::Incomplete => {
                 "Incomplete: the states do not match the code's variants.".into()
             }
-            LensStatus::Malformed => "Malformed: the file could not be read as a lens.".into(),
+            LensStatus::Malformed => "Malformed: the file could not be read as a recipe.".into(),
         }
     }
 
@@ -550,22 +452,23 @@ pub struct Listing {
 /// sequence means, and a list keeps it on any width.
 pub fn listing(diagram: &Diagram) -> Vec<Listing> {
     let (nodes, edges) = match diagram.kind {
-        LensKind::State => ("States", "Transitions"),
-        LensKind::Sequence => ("Participants", "Messages"),
+        RecipeLayout::Graph => ("Nodes", "Edges"),
+        RecipeLayout::OrderedLanes => ("Lanes", "Ordered edges"),
     };
-    let node_lines = diagram
-        .nodes
-        .iter()
-        .map(|e| Line {
-            element: e.name.clone(),
-            lead: None,
-            main: e.label.clone(),
-            sub: None,
-            mark: e.marked(),
-            glyphs: e.glyphs(),
-            words: mark_words(e),
-        })
-        .collect();
+    let lines = |elements: &[Element]| {
+        elements
+            .iter()
+            .map(|e| Line {
+                element: e.name.clone(),
+                lead: None,
+                main: e.label.clone(),
+                sub: None,
+                mark: e.marked(),
+                glyphs: e.glyphs(),
+                words: mark_words(e),
+            })
+            .collect()
+    };
     let edge_lines = diagram
         .edges
         .iter()
@@ -573,16 +476,25 @@ pub fn listing(diagram: &Diagram) -> Vec<Listing> {
         .map(|(n, e)| {
             let ends = e.ends.map_or_else(
                 || "?".to_owned(),
-                |(a, b)| format!("{} → {}", diagram.node_label(a), diagram.node_label(b)),
+                |(a, b)| {
+                    let end = |n, label| {
+                        let name = diagram.node_label(n);
+                        e.authored
+                            .iter()
+                            .find(|(k, _)| *k == label)
+                            .map_or_else(|| name.to_owned(), |(_, v)| format!("{name} ({v})"))
+                    };
+                    format!("{} → {}", end(a, "Source label"), end(b, "Target label"))
+                },
             );
             let sub = match (diagram.kind, &e.detail) {
-                (LensKind::State, Some(guard)) => Some(format!("[{guard}]")),
-                (LensKind::Sequence, Some(note)) => Some(note.clone()),
+                (RecipeLayout::Graph, Some(guard)) => Some(guard.clone()),
+                (RecipeLayout::OrderedLanes, Some(note)) => Some(note.clone()),
                 (_, None) => None,
             };
             Line {
                 element: e.name.clone(),
-                lead: (diagram.kind == LensKind::Sequence).then(|| format!("{}.", n + 1)),
+                lead: (diagram.kind == RecipeLayout::OrderedLanes).then(|| format!("{}.", n + 1)),
                 main: format!("{ends}: {}", e.label),
                 sub,
                 mark: e.marked(),
@@ -591,16 +503,24 @@ pub fn listing(diagram: &Diagram) -> Vec<Listing> {
             }
         })
         .collect();
-    vec![
+    let mut sections = Vec::new();
+    if !diagram.about.is_empty() {
+        sections.push(Listing {
+            title: "Groups",
+            lines: lines(&diagram.about),
+        });
+    }
+    sections.extend([
         Listing {
             title: nodes,
-            lines: node_lines,
+            lines: lines(&diagram.nodes),
         },
         Listing {
             title: edges,
             lines: edge_lines,
         },
-    ]
+    ]);
+    sections
 }
 
 fn mark_words(e: &Element) -> String {
@@ -616,9 +536,8 @@ pub struct Inspect {
     /// Its checks, each with how it stands.
     pub checks: Vec<(Hue, String)>,
     /// Its committed source line.
-    pub line: Option<(String, u64)>,
-    /// The committed lines around it; none when corrald could not read them.
-    pub source: Option<Source>,
+    pub sources: Vec<Source>,
+    pub derived: Vec<String>,
 }
 
 /// A committed excerpt as the inspector shows it.
@@ -632,17 +551,6 @@ pub struct Source {
 
 pub const SOURCE_UNAVAILABLE: &str =
     "Source unavailable: corrald served no committed lines for this element.";
-
-fn source(diagram: &Diagram, name: &str) -> Option<Source> {
-    let e = diagram.excerpts.iter().find(|e| e.element == name)?;
-    Some(excerpt_source(
-        &e.path,
-        e.line,
-        e.first,
-        &e.lines,
-        diagram.commit.as_deref(),
-    ))
-}
 
 /// Committed lines from `first`, the anchored `line` marked, headed by where and at which
 /// commit they were read.
@@ -677,30 +585,9 @@ pub fn inspect(diagram: &Diagram, name: &str) -> Option<Inspect> {
         rows.push(("To", diagram.node_label(b).to_owned()));
     }
     if let Some(detail) = &element.detail {
-        rows.push((
-            match diagram.kind {
-                LensKind::State => "Guard",
-                LensKind::Sequence => "Note",
-            },
-            detail.clone(),
-        ));
+        rows.push(("Note", detail.clone()));
     }
-    if let Some(anchor) = &element.anchor {
-        rows.push(("Anchor", anchor.path.clone()));
-        if let Some(name) = &anchor.name {
-            rows.push(("Definition", name.clone()));
-        }
-        if let Some(text) = &anchor.text {
-            rows.push(("Text", text.replace('\n', "⏎ ")));
-        }
-    }
-    match (&element.location, &diagram.commit) {
-        (Some((path, line)), Some(commit)) => {
-            rows.push(("Line", format!("{path}:{line} @ {}", short(commit))))
-        }
-        (Some((path, line)), None) => rows.push(("Line", format!("{path}:{line}"))),
-        (None, _) => rows.push(("Line", "not located at this commit".into())),
-    }
+    rows.extend(element.authored.clone());
     let mut checks: Vec<(Hue, String)> = Vec::new();
     for issue in diagram.failures.iter().filter(|i| i.element == name) {
         checks.push((Hue::Fail, format!("Failed: {}", issue.message)));
@@ -720,37 +607,62 @@ pub fn inspect(diagram: &Diagram, name: &str) -> Option<Inspect> {
     if element.marks.contains(&Mark::Touched) {
         checks.push((
             Hue::Worker,
-            "The change under review edits its anchor.".into(),
+            "Bound source differs between the revisions.".into(),
         ));
     }
     if element.marks.contains(&Mark::Added) {
-        checks.push((Hue::Ok, "The change under review adds it.".into()));
+        checks.push((Hue::Ok, "Added in this revision.".into()));
     }
     if element.marks.contains(&Mark::Removed) {
-        checks.push((Hue::Fail, "The change under review removes it.".into()));
+        checks.push((Hue::Fail, "Removed since this revision.".into()));
     }
     Some(Inspect {
         what: element.what.clone(),
         title: element.label.clone(),
         rows,
         checks,
-        line: element.location.clone(),
-        source: source(diagram, name),
+
+        sources: diagram
+            .excerpts
+            .iter()
+            .filter(|e| e.element == name)
+            .map(|e| {
+                excerpt_source(
+                    &e.path,
+                    e.line,
+                    e.first,
+                    &e.lines,
+                    diagram.commit.as_deref(),
+                )
+            })
+            .collect(),
+        derived: diagram
+            .derived
+            .iter()
+            .filter(|d| d.element == name)
+            .map(|d| {
+                let r = &d.reference;
+                format!(
+                    "{} → {} · {:?} ×{} · {:?} (file reference)",
+                    r.from, r.to, r.kind, r.count, r.basis
+                )
+            })
+            .collect(),
     })
 }
 
-pub const LEAD: &str = "A lens is a saved state or sequence diagram, anchored in the code and checked on every commit.";
+pub const LEAD: &str =
+    "Repository diagrams bind authored nodes and edges to evidence at a Git commit.";
 pub const NONE: &str =
-    "No lenses in this project yet. Draft one: an agent writes it once, Corral checks it after.";
-pub const HINT: &str =
-    "Select a state, a transition, a participant or a message for its anchor and its checks.";
+    "No diagrams in this project yet. Draft one: an agent writes it once, Corral checks it after.";
+pub const HINT: &str = "Select an element for its authored bindings and committed evidence.";
 pub const DRAFT_LEAD: &str =
-    "Files a task for an agent to write the lens. Say in one sentence what it should show.";
+    "Files a task for an agent to write the diagram. Say in one sentence what it should show.";
 pub const DRAFT_PLACEHOLDER: &str = "e.g. how a run moves from dispatch to review";
-pub const MISSING: &str = "No such lens at this commit.";
+pub const MISSING: &str = "No such diagram at this commit.";
 /// Impact's heading over the lens as it was before the change.
 pub const AT_BASE: &str = "At the base: what the change removed or edited there";
-pub const AT_BASE_DELETED: &str = "The change deletes this lens; as it was at the base";
+pub const AT_BASE_DELETED: &str = "The change deletes this diagram; as it was at the base";
 pub const REPAIR_LEAD: &str = "Files a task for an agent to fix the failing checks.";
 
 /// Where the list's read stands, then what corrald says about it.
@@ -760,13 +672,13 @@ pub fn notices(list: Option<&SystemLenses>, row: Option<&SystemRow>) -> Vec<Noti
         if list.status == SystemStatus::Building {
             out.push(Notice {
                 hue: Hue::Neutral,
-                words: "Corral is checking the lenses at the new head.".into(),
+                words: "Corral is checking the diagrams at the new head.".into(),
             });
         }
         if let Some(error) = &list.error {
             out.push(Notice {
                 hue: Hue::Fail,
-                words: format!("The lenses could not be read: {error}"),
+                words: format!("The diagrams could not be read: {error}"),
             });
         }
         if list.omitted_rows > 0 {
@@ -774,7 +686,7 @@ pub fn notices(list: Option<&SystemLenses>, row: Option<&SystemRow>) -> Vec<Noti
                 hue: Hue::Held,
                 words: format!(
                     "{} left out to fit the reply.",
-                    super::plural(list.omitted_rows as u64, "lens", "lenses")
+                    super::plural(list.omitted_rows as u64, "diagram", "diagrams")
                 ),
             });
         }
@@ -789,8 +701,10 @@ pub fn notices(list: Option<&SystemLenses>, row: Option<&SystemRow>) -> Vec<Noti
 }
 
 /// The draft form's kinds.
-pub const KINDS: [(LensKind, &str); 2] =
-    [(LensKind::State, "State"), (LensKind::Sequence, "Sequence")];
+pub const KINDS: [(RecipeLayout, &str); 2] = [
+    (RecipeLayout::Graph, "Graph"),
+    (RecipeLayout::OrderedLanes, "Ordered lanes"),
+];
 
 #[cfg(test)]
 #[path = "lens_tests.rs"]

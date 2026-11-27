@@ -83,7 +83,7 @@ model shared by both.
 
 A lens is a saved, project-specific diagram of behaviour that structure cannot show: a status lifecycle, a
 pipeline, a request path. Section 6 defines it. A project with no lens shows what a lens is and one action,
-"Draft a lens", labelled as starting one agent run.
+"Draft a lens", which files an ordinary reviewable task without starting an agent.
 
 ### 3.3 Task page › Changes › Impact
 
@@ -171,65 +171,17 @@ Moving an otherwise unchanged declaration or link to another line is not a Runti
 
 ## 6. Lenses
 
-A lens is a typed behaviour diagram committed in the project repository. Set `lenses` in
-`[projects.<project>]` in `corral.toml` to change the repository-relative directory (default
-`.corral/lenses`). Corral reads `.toml` files and their source anchors from the selected Git commit,
-never from the working tree. Each file has a unique `id`, a `title`, a `kind`, and `read_at` (the full
-commit ID where the author last confirmed the anchors). Unknown keys or kinds are errors for that
-file; they do not stop other lenses from loading.
+A repository lens is a reviewed JSON recipe in the project’s `lenses` directory
+(default `.corral/lenses`). The caller resolves the project's observed commit; source and facts
+come from that revision, never the checkout. `graph` and `ordered_lanes` are layout primitives,
+not semantic diagram types. Nodes, edges and groups have stable IDs; evidence refers to these
+IDs. Enum coverage is an optional, bounded comparison of selected nodes to known variants.
 
-A **state** lens has `states_from = { path, name }`, `[[states]]` entries with `id`, `label` and
-`anchor`, and `[[transitions]]` with `from`, `to`, `label`, `anchor` and an optional plain-text
-`guard`. For example, after declaring both `running` and `review` states:
-
-```toml
-[[transitions]]
-from = "running"
-to = "review"
-label = "Submit work"
-anchor = { path = "crates/corral-engine/src/review.rs", text = "set_lifecycle(&mut task, Status::Review);" }
-```
-
-A **sequence** lens has `[[participants]]` entries with `id`, `label` and `anchor`. Its `[[messages]]`
-are in diagram order and have `from`, `to`, `label`, `anchor` and an optional plain-text `note`. An
-optional `entry = { kind = "command", name = "done" }` names an entry point (`command`, `route` or
-`operation`). In both kinds, `from` and `to` refer to IDs declared in the same file. See the checked
-examples [Task lifecycle](../../.corral/lenses/task-lifecycle.toml) and
-[Submit work](../../.corral/lenses/submit-work.toml) for complete files.
-
-An anchor has a repository-relative `path`, an optional definition `name`, and optional literal
-`text`. A path-only anchor points to line 1. Text must occur in the committed file, within the named
-definition when known. Names are checked when a `facts` extension provides definitions; a missing
-name is not a failure when the provider could not read its file or reports an incomplete answer.
-When Corral knows the enum variants named by `states_from`, state IDs must match (exact spelling or
-snake case for Rust variants). A sequence entry is checked when facts cover its kind. A positive
-match still counts when provider facts are partial, but a missing entry is not checked if the entry
-provider reports skipped or omitted facts. An empty extension entry answer does not claim coverage
-for files or kinds that no detector covered.
-
-- **Current**: all checks that could run passed. Checks that could not run are listed separately.
-- **Stale**: a path, a name or text that could be checked, or a known entry-point check failed. The
-  result names the failing elements.
-- **Incomplete**: enum coverage differs; the result lists the missing and extra states. If other
-  checks fail too, the status is stale and the enum differences are still reported.
-- **Malformed**: the file could not be read as a valid lens.
-
-`corral-next lens list [--project p]` lists lenses at the configured base tip. Use
-`corral-next lens check [--project p] [--at rev] [file]` to check them all or select a path relative
-to the repository or to the lens directory. `check` exits nonzero for stale, incomplete or malformed
-files. The daemon serves `system_lenses {project}` and `system_lens {project, id, at?}` under
-`system.v1`. Full commit IDs pin historical results. Moving refs are rechecked in the background on
-subsequent reads, and Corral landings invalidate the moving snapshots.
-
-Lens checks have per-file and per-revision scan budgets. Anchor checks outside the budget are
-reported as not checked; Review does not claim complete lens impact if changed source could not
-be compared.
-
-In Review, the **Lenses** category lists elements whose anchor line or named definition the task
-edits, and elements added or removed by changes to lens files. Clients opt into those new review
-rows with `system.lenses.v1`. Neither checks nor review runs an agent. Drafting or repairing a lens
-is an ordinary task that produces a reviewable change to the lens file; drawing the diagram is a
-separate feature.
+See [Author a repository lens](../guide/repository-lenses.md) for the five examples, accepted
+bindings, CLI checks and review workflow. An Impact link names the revision and touched elements;
+missing or incomplete evidence is not proof of a relationship change. Clients negotiate
+`system.lenses.v2` for the repository diagram contract. Publishing a pinned workflow artifact
+or a Mermaid preview does not make it a repository lens.
 
 ## 7. Freshness and cost
 

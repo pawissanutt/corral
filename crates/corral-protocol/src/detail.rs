@@ -92,7 +92,7 @@ pub enum DetailRef {
     },
     /// `system.v1`: impact of the latest submitted worker change. Runtime rows
     /// and summaries require `system.runtime.v1`; entry point changes and
-    /// summaries require `system.entries.v1`; lens impact requires `system.lenses.v1`;
+    /// summaries require `system.entries.v1`; lens impact requires `system.lenses.v2`;
     /// data model changes and summaries require `system.data.v1`.
     SystemReview {
         task: String,

@@ -18,7 +18,7 @@ button{color:inherit;background:transparent;border:1px solid var(--rule);border-
 // of a clicked element. It never reads source, follows links or runs anything it is given.
 const VERSION = 1;
 const input = JSON.parse(document.getElementById('diagram-data').textContent);
-const ids = new Set([...input.nodes, ...input.edges].map(e => e.id));
+const ids = new Set([...input.nodes, ...input.edges, ...(input.groups ?? [])].map(e => e.id));
 const notify = value => window.nsh?.postMessage(value);
 const dark = matchMedia('(prefers-color-scheme: dark)').matches;
 const ink = dark ? '#eaf0f6' : '#1d2733';
@@ -29,10 +29,10 @@ const pickGround = dark ? '#23474a' : '#dcf3ef';
 const stroke = {step: quiet, decision: dark ? '#eac982' : '#b7862a', end: dark ? '#83e2d6' : '#2a8d84'};
 // A comparison's marks: how an element's bound source changed. The list beside the graph says
 // the same in words, so colour and dash are never the only signal.
-const MARKS = ['changed', 'moved', 'removed', 'added', 'unknown'];
+const MARKS = ['changed', 'moved', 'removed', 'added', 'unknown', 'failed'];
 const markInk = {
   changed: dark ? '#f0b35e' : '#b8650a', moved: dark ? '#8fb8ff' : '#2f62c4',
-  removed: dark ? '#ff8a80' : '#c23a2f', added: dark ? '#9be28a' : '#2f8a2a', unknown: quiet,
+  removed: dark ? '#ff8a80' : '#c23a2f', added: dark ? '#9be28a' : '#2f8a2a', unknown: quiet, failed: dark ? '#ff8a80' : '#c23a2f',
 };
 const markNode = m => ({stroke: markInk[m], lineWidth: 2.6, lineDash: m === 'removed' || m === 'unknown' ? [4, 3] : 0, halo: true, haloStroke: markInk[m], haloLineWidth: 6, haloStrokeOpacity: 0.25});
 const markEdge = m => ({stroke: markInk[m], lineWidth: 2.6, lineDash: m === 'removed' || m === 'unknown' ? [4, 3] : 0});
@@ -47,26 +47,60 @@ const PREFIX = 'el:';
 const own = id => PREFIX + id;
 const recipeId = id => typeof id === 'string' && id.startsWith(PREFIX) ? id.slice(PREFIX.length) : null;
 const data = {
-  nodes: input.nodes.map(n => ({id: own(n.id), data: {label: n.label, kind: n.kind, start: n.start, w: widthOf(n.label)}})),
+  combos: (input.groups ?? []).map(g => ({id: own(g.id), data: {label: g.label}})),
+  nodes: input.nodes.map(n => ({id: own(n.id), ...(n.group ? {combo: own(n.group)} : {}), data: {label: n.label, kind: n.kind, start: n.start, w: widthOf(n.label)}})),
   // A back edge is laid out from its target, so the layout's ranks follow the flow from its
   // start; its arrow stays on its own target and its bow on its own side.
   edges: input.edges.map(e => ({
     id: own(e.id), source: own(e.back ? e.target : e.source), target: own(e.back ? e.source : e.target),
-    data: {label: e.label ?? '', kind: e.kind, bow: e.back ? -e.bow : e.bow, back: e.back, loop: e.loop},
+    data: {label: e.label ?? '', fromLabel:e.fromLabel, toLabel:e.toLabel, kind: e.kind, bow: e.back ? -e.bow : e.bow, back: e.back, loop: e.loop},
   })),
 };
+// Ordered lanes are fixed columns. Each message has its own row and invisible attachment
+// points; synthetic IDs live outside the recipe namespace and cannot select an element.
+if (input.ordered) {
+  const columns = new Map(input.nodes.map((n, i) => [n.id, i * 240]));
+  const point = (key,x,y) => { data.nodes.push({id:key,style:{x,y},data:{point:true,w:1,label:''}}); return key; };
+  data.nodes.forEach(n => {n.style = {x:columns.get(recipeId(n.id)), y:0};});
+  input.edges.forEach((e,i) => {
+    const y = 70 + i * 74;
+    const edge = data.edges[i];
+    edge.source = point('from:'+i, columns.get(e.source), y);
+    edge.target = e.source === e.target ? edge.source : point('to:'+i, columns.get(e.target), y);
+    edge.data.bow = 0; edge.data.label = (i+1)+'. '+edge.data.label;
+  });
+  input.nodes.forEach((n,i) => {
+    const end = point('end:'+i, columns.get(n.id), 76 + input.edges.length*74);
+    data.edges.unshift({id:'lane:'+i,source:own(n.id),target:end,data:{lane:true,bow:0,label:''}});
+  });
+}
 // A node's self links alternate above and below it, each pair further out than the last.
 const loopPlacement = d => d.data.loop % 2 === 0 ? 'top' : 'bottom';
 const loopDist = d => 36 + 40 * Math.floor((d.data.loop ?? 0) / 2);
 async function start() {
+  // Keep endpoint cardinalities next to their ends rather than merging them into an
+  // ambiguous centre label. They are ordinary canvas text, never HTML.
+  class LabeledLink extends G6.Quadratic {
+    drawLabelShape(attrs, container) {
+      super.drawLabelShape(attrs, container);
+      for (const [key, place] of [['fromLabel', 0.14], ['toLabel', 0.86]]) {
+        const label = attrs[key];
+        if (!label) continue;
+        const style = this.getLabelStyle({...attrs, labelText:label, labelPlacement:place, labelOffsetY:-12});
+        this.upsert(key, G6.Label, style, container);
+      }
+    }
+  }
+  G6.register(G6.ExtensionCategory.EDGE, 'endpoint-link', LabeledLink);
   const graph = new G6.Graph({
     container: host, width: host.clientWidth, height: host.clientHeight,
     padding: 24, animation: false, zoomRange: [0.25, 2.5], data,
-    layout: {type: 'antv-dagre', rankdir: 'LR', nodesep: 46, ranksep: 84},
+    ...(input.ordered ? {} : {layout: {type: 'antv-dagre', rankdir: 'LR', nodesep: 46, ranksep: 84, sortByCombo:true}}),
+    combo: {type:'rect',style:{labelText:d=>d.data.label, labelFill:ink, fill:card,fillOpacity:0.2,stroke:quiet,padding:18},state:{selected:{stroke:pick,lineWidth:3},...Object.fromEntries(MARKS.map(m=>[m,markNode(m)]))}},
     node: {
       type: 'rect',
       style: {
-        size: d => [d.data.w, 46], radius: d => d.data.kind === 'decision' ? 18 : 8,
+        size: d => d.data.point ? [1,1] : [d.data.w, 46], opacity:d=>d.data.point ? 0 : 1, radius: d => d.data.kind === 'decision' ? 18 : 8,
         fill: card, stroke: d => stroke[d.data.kind] ?? quiet,
         lineWidth: d => d.data.start ? 2.4 : 1.4, lineDash: d => d.data.kind === 'end' ? [5, 3] : 0,
         labelText: d => d.data.label, labelPlacement: 'center', labelFill: ink,
@@ -77,10 +111,11 @@ async function start() {
       state: {selected: {fill: pickGround, stroke: pick, lineWidth: 3}, ...Object.fromEntries(MARKS.map(m => [m, markNode(m)]))},
     },
     edge: {
-      type: 'quadratic',
+      type: d => d.data.fromLabel || d.data.toLabel ? 'endpoint-link' : 'quadratic',
       style: {
+        fromLabel:d=>d.data.fromLabel, toLabel:d=>d.data.toLabel,
         stroke: quiet, lineWidth: 1.5, increasedLineWidthForHitTesting: 10,
-        endArrow: d => !d.data.back, startArrow: d => d.data.back, endArrowSize: 8,
+        lineDash:d=>d.data.lane?[4,4]:0, endArrow: d => !d.data.back && !d.data.lane, startArrow: d => d.data.back, endArrowSize: 8,
         startArrowSize: 8, curveOffset: d => d.data.bow, loopPlacement, loopDist,
         labelText: d => d.data.label, labelAutoRotate: false, labelBackground: true,
         labelBackgroundFill: card, labelBackgroundStroke: quiet, labelBackgroundLineWidth: 1,
@@ -97,6 +132,7 @@ async function start() {
   };
   graph.on('node:click', report);
   graph.on('edge:click', report);
+  graph.on('combo:click', report);
   // Fit the graph to the view, never enlarging a small one past its own size; centred. The
   // zoom floor follows what this graph needs in this view, so no fit leaves part of it out.
   const ZOOM_FLOOR = 0.25;

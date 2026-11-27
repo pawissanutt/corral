@@ -26,7 +26,7 @@ pub mod tree;
 pub mod words;
 
 use corral_protocol::detail::DetailRef;
-use corral_types::lenses::LensKind;
+use corral_types::lenses::RecipeLayout;
 use corral_types::{DataTypeId, ModuleId, RuntimeUnitId, SystemAt};
 
 use crate::model::Id;
@@ -70,7 +70,7 @@ impl View {
 /// The Draft a lens form: the kind and the owner's one sentence.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Draft {
-    pub kind: LensKind,
+    pub kind: RecipeLayout,
     pub about: String,
 }
 

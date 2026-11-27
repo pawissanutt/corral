@@ -1,0 +1,179 @@
+{
+  "schema": "corral.repo-diagram",
+  "version": 1,
+  "id": "task-lifecycle",
+  "title": "Task lifecycle",
+  "layout": "graph",
+  "coverage": {
+    "path": "crates/corral-types/src/lib.rs",
+    "name": "Status",
+    "nodes": [
+      "idea",
+      "backlog",
+      "ready",
+      "running",
+      "blocked",
+      "review",
+      "done",
+      "dropped"
+    ]
+  },
+  "nodes": [
+    {
+      "id": "idea",
+      "label": "Idea"
+    },
+    {
+      "id": "backlog",
+      "label": "Backlog"
+    },
+    {
+      "id": "ready",
+      "label": "Ready"
+    },
+    {
+      "id": "running",
+      "label": "Running"
+    },
+    {
+      "id": "blocked",
+      "label": "Blocked"
+    },
+    {
+      "id": "review",
+      "label": "Review"
+    },
+    {
+      "id": "done",
+      "label": "Done"
+    },
+    {
+      "id": "dropped",
+      "label": "Dropped"
+    }
+  ],
+  "edges": [
+    {
+      "id": "dispatch",
+      "label": "Dispatch",
+      "from": "ready",
+      "to": "running"
+    },
+    {
+      "id": "submit",
+      "label": "Submit work",
+      "from": "running",
+      "to": "review"
+    },
+    {
+      "id": "merge",
+      "label": "Land",
+      "from": "review",
+      "to": "done"
+    },
+    {
+      "id": "reopen",
+      "label": "Reopen",
+      "from": "dropped",
+      "to": "backlog"
+    }
+  ],
+  "evidence": [
+    {
+      "element": "idea",
+      "anchor": {
+        "kind": "symbol",
+        "path": "crates/corral-types/src/lib.rs",
+        "name": "Status::Idea"
+      }
+    },
+    {
+      "element": "backlog",
+      "anchor": {
+        "kind": "symbol",
+        "path": "crates/corral-types/src/lib.rs",
+        "name": "Status::Backlog"
+      }
+    },
+    {
+      "element": "ready",
+      "anchor": {
+        "kind": "symbol",
+        "path": "crates/corral-types/src/lib.rs",
+        "name": "Status::Ready"
+      }
+    },
+    {
+      "element": "running",
+      "anchor": {
+        "kind": "symbol",
+        "path": "crates/corral-types/src/lib.rs",
+        "name": "Status::Running"
+      }
+    },
+    {
+      "element": "blocked",
+      "anchor": {
+        "kind": "symbol",
+        "path": "crates/corral-types/src/lib.rs",
+        "name": "Status::Blocked"
+      }
+    },
+    {
+      "element": "review",
+      "anchor": {
+        "kind": "symbol",
+        "path": "crates/corral-types/src/lib.rs",
+        "name": "Status::Review"
+      }
+    },
+    {
+      "element": "done",
+      "anchor": {
+        "kind": "symbol",
+        "path": "crates/corral-types/src/lib.rs",
+        "name": "Status::Done"
+      }
+    },
+    {
+      "element": "dropped",
+      "anchor": {
+        "kind": "symbol",
+        "path": "crates/corral-types/src/lib.rs",
+        "name": "Status::Dropped"
+      }
+    },
+    {
+      "element": "submit",
+      "anchor": {
+        "kind": "text",
+        "path": "crates/corral-engine/src/review.rs",
+        "text": "store.update_run(&run)?;\n                set_lifecycle(&mut task, Status::Review);"
+      }
+    },
+    {
+      "element": "merge",
+      "anchor": {
+        "kind": "text",
+        "path": "crates/corral-engine/src/land.rs",
+        "text": "set_lifecycle(&mut task, Status::Done);"
+      }
+    },
+    {
+      "element": "dispatch",
+      "anchor": {
+        "kind": "text",
+        "path": "crates/corral-engine/src/dispatch.rs",
+        "text": "set_lifecycle(&mut task, Status::Running);\n            if actor == Actor::Owner"
+      }
+    },
+    {
+      "element": "reopen",
+      "anchor": {
+        "kind": "text",
+        "path": "crates/corral-engine/src/tasks.rs",
+        "text": "self.set_status(store, &mut task, Status::Backlog)?;"
+      }
+    }
+  ]
+}

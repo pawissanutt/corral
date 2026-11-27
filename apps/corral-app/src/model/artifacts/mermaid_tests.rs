@@ -12,7 +12,7 @@ fn a_flowchart_reads_its_shapes_chains_and_arrow_words() {
         "flowchart LR\n  %% a comment\n  A[Brief] --> B{Gate passes?}\n  B -->|yes| C((Land)) & D[(Store)]\n  B -- no --> A; C -.-> E>Notify]\n  classDef hot fill:#f00\n",
     )
     .unwrap();
-    assert_eq!(diagram.kind, LensKind::State);
+    assert_eq!(diagram.kind, RecipeLayout::Graph);
     assert_eq!(
         labels(&diagram.nodes),
         ["Brief", "Gate passes?", "Land", "Store", "Notify"]
@@ -96,7 +96,7 @@ fn state_and_sequence_diagrams_read_their_ends_and_messages() {
         "sequenceDiagram\n  participant A as App\n  actor O\n  A->>+corrald: read page\n  Note over A: bounded\n  corrald-->>-A: bytes\n",
     )
     .unwrap();
-    assert_eq!(sequence.kind, LensKind::Sequence);
+    assert_eq!(sequence.kind, RecipeLayout::OrderedLanes);
     assert_eq!(labels(&sequence.nodes), ["App", "O", "corrald"]);
     assert_eq!(sequence.edges[1].ends, Some((2, 0)));
 }
@@ -124,7 +124,7 @@ fn an_er_diagram_reads_entities_attributes_and_cardinality() {
         "erDiagram\n  CUSTOMER ||--o{ ORDER : places\n  CUSTOMER {\n    string name PK\n    string email \"contact\"\n  }\n  ORDER ||--|{ LINE-ITEM : contains\n  p[\"Delivery address\"] }o..|| CUSTOMER : \"ships to\"\n  WAREHOUSE\n",
     )
     .unwrap();
-    assert_eq!(diagram.kind, LensKind::State);
+    assert_eq!(diagram.kind, RecipeLayout::Graph);
     assert_eq!(
         labels(&diagram.nodes),
         [

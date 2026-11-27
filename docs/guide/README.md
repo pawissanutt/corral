@@ -7,6 +7,7 @@ Corral has two engines. The current one is `corral-next` with the Corral app and
 ## Current engine, app and Pi host
 
 - [Publishing diagrams as task artifacts](agent-diagrams.md)
+- [Reviewed repository lenses](repository-lenses.md)
 - [Workflow diagram recipes](workflow-diagram-recipes.md)
 - [Assistant sessions](assistants.md) (covers both engines)
 - [Build sessions](build-sessions.md)

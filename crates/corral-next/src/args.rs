@@ -216,7 +216,7 @@ pub(crate) enum Command {
     /// Work with configured extensions.
     #[command(subcommand)]
     Ext(ExtCommand),
-    /// List or check committed behaviour diagrams.
+    /// Check committed repository diagrams or file a draft or repair task.
     #[command(subcommand)]
     Lens(crate::lens::LensCommand),
     /// List project tools or run one and print its stdout unchanged.

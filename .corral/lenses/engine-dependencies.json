@@ -1,0 +1,106 @@
+{
+  "schema": "corral.repo-diagram",
+  "version": 1,
+  "id": "engine-dependencies",
+  "title": "Dependencies used to check committed source",
+  "layout": "graph",
+  "groups": [
+    {
+      "id": "runtime",
+      "label": "Application"
+    },
+    {
+      "id": "readers",
+      "label": "Repository readers"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "engine",
+      "label": "Engine",
+      "group": "runtime"
+    },
+    {
+      "id": "facts",
+      "label": "Fact extraction",
+      "group": "readers"
+    },
+    {
+      "id": "git",
+      "label": "Git object access",
+      "group": "readers"
+    }
+  ],
+  "edges": [
+    {
+      "id": "facts-dep",
+      "label": "Uses fact tree",
+      "from": "engine",
+      "to": "facts"
+    },
+    {
+      "id": "git-dep",
+      "label": "Reads blobs",
+      "from": "engine",
+      "to": "git"
+    }
+  ],
+  "evidence": [
+    {
+      "element": "engine",
+      "anchor": {
+        "kind": "text",
+        "path": "crates/corral-engine/Cargo.toml",
+        "text": "name = \"corral-engine\""
+      }
+    },
+    {
+      "element": "facts",
+      "anchor": {
+        "kind": "text",
+        "path": "crates/corral-engine/Cargo.toml",
+        "text": "corral-facts.workspace = true"
+      }
+    },
+    {
+      "element": "git",
+      "anchor": {
+        "kind": "text",
+        "path": "crates/corral-engine/Cargo.toml",
+        "text": "corral-git.workspace = true"
+      }
+    },
+    {
+      "element": "runtime",
+      "anchor": {
+        "kind": "text",
+        "path": "crates/corral-engine/Cargo.toml",
+        "text": "name = \"corral-engine\""
+      }
+    },
+    {
+      "element": "readers",
+      "anchor": {
+        "kind": "text",
+        "path": "crates/corral-engine/Cargo.toml",
+        "text": "corral-facts.workspace = true\ncorral-git.workspace = true"
+      }
+    },
+    {
+      "element": "facts-dep",
+      "anchor": {
+        "kind": "text",
+        "path": "crates/corral-engine/Cargo.toml",
+        "text": "corral-facts.workspace = true"
+      }
+    },
+    {
+      "element": "git-dep",
+      "anchor": {
+        "kind": "text",
+        "path": "crates/corral-engine/Cargo.toml",
+        "text": "corral-git.workspace = true"
+      }
+    }
+  ]
+}

@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use super::layered::{LEdge, layered};
 use super::layout::{Font, Measure, Rect};
 use super::lens::{Diagram, Element};
-use corral_types::lenses::LensKind;
+use corral_types::lenses::RecipeLayout;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct NodeBox {
@@ -53,12 +53,12 @@ pub fn label_lines(diagram: &Diagram, edge: usize) -> (String, Option<String>) {
         return (String::new(), None);
     };
     let detail = e.detail.as_ref().map(|d| match diagram.kind {
-        LensKind::State => format!("[{d}]"),
-        LensKind::Sequence => d.clone(),
+        RecipeLayout::Graph => format!("[{d}]"),
+        RecipeLayout::OrderedLanes => d.clone(),
     });
     let lead = match diagram.kind {
-        LensKind::Sequence => format!("{}. {}", edge + 1, e.label),
-        LensKind::State => e.label.clone(),
+        RecipeLayout::OrderedLanes => format!("{}. {}", edge + 1, e.label),
+        RecipeLayout::Graph => e.label.clone(),
     };
     let lead = match e.glyphs() {
         Some(glyphs) => format!("{glyphs} {lead}"),
@@ -85,8 +85,8 @@ fn label_size(diagram: &Diagram, edge: usize, measure: Measure) -> (f32, f32) {
 
 pub fn layout(diagram: &Diagram, room: f32, measure: Measure) -> LensLayout {
     match diagram.kind {
-        LensKind::State => state(diagram, room, measure),
-        LensKind::Sequence => sequence(diagram, room, measure),
+        RecipeLayout::Graph => state(diagram, room, measure),
+        RecipeLayout::OrderedLanes => sequence(diagram, room, measure),
     }
 }
 

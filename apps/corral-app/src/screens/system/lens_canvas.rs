@@ -11,7 +11,7 @@
 
 use std::rc::Rc;
 
-use corral_types::lenses::LensKind;
+use corral_types::lenses::RecipeLayout;
 use nsh_core::canvas::CanvasTextAlign;
 use nsh_core::prelude::*;
 
@@ -180,10 +180,10 @@ fn label(p: Painter, r: Rect, d: &Diagram, edge: usize, e: &Element, picked: boo
     p
 }
 
-fn node(p: Painter, r: Rect, kind: LensKind, e: &Element, picked: bool) -> Painter {
+fn node(p: Painter, r: Rect, kind: RecipeLayout, e: &Element, picked: bool) -> Painter {
     let radius = match kind {
-        LensKind::State => r.h / 2.0,
-        LensKind::Sequence => 6.0,
+        RecipeLayout::Graph => r.h / 2.0,
+        RecipeLayout::OrderedLanes => 6.0,
     };
     let edge = if picked {
         ink(Token::Focus)

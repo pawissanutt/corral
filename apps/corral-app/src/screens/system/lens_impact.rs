@@ -12,8 +12,8 @@ use std::rc::Rc;
 use corral_protocol::detail::DetailRef;
 use nsh_core::prelude::*;
 
-use super::lens_canvas::{self, OnPick};
-use super::lenses::{Read, hued, inspector, listing, read_of};
+use super::lens_canvas::OnPick;
+use super::lenses::{Read, hued, inspector, read_of};
 use crate::model::system::lens::{self, Touch};
 use crate::model::{Form, Hue};
 use crate::state::AppState;
@@ -61,7 +61,11 @@ pub(crate) fn touched_lens(
 
 /// One revision of a touched lens: what it says, the lens drawn with its marks, and the
 /// inspector of the element picked on it.
-fn marked_lens(app: AppState, read: Memo<Read>, heading: Option<&'static str>) -> AnyElement {
+pub(super) fn marked_lens(
+    app: AppState,
+    read: Memo<Read>,
+    heading: Option<&'static str>,
+) -> AnyElement {
     let form = app.form;
     let shown = computed(move || match read.get() {
         Read::Ready(d, _) => Some(*d),
@@ -78,14 +82,14 @@ fn marked_lens(app: AppState, read: Memo<Read>, heading: Option<&'static str>) -
             Read::Missing => (Hue::Fail, lens::MISSING.to_owned()),
             Read::Failed(why) => (Hue::Fail, format!("The lens could not be read: {why}")),
             Read::Malformed(why) => (Hue::Fail, format!("Malformed: {}", why.join(" "))),
-            Read::Ready(d, _) => (lens::status_hue(d.status), d.verdict()),
+            Read::Ready(d, _) => (
+                lens::status_hue(d.status),
+                format!("{} · {}", d.provenance(), d.verdict()),
+            ),
         };
         Some(untracked(|| hued(app, hue, words)))
     });
-    let picture = match form {
-        Form::Desktop => lens_canvas::diagram(app, shown, picked, on_pick),
-        Form::Phone | Form::Terminal => listing(app, shown, picked, on_pick),
-    };
+    let picture = super::repo_view::picture(app, shown, picked, on_pick);
     view()
         .gap(px(if form == Form::Terminal { 0.0 } else { 8.0 }))
         .children(heading.map(|h| h3(app, h, None)))
