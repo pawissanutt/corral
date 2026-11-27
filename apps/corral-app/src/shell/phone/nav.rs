@@ -90,7 +90,20 @@ impl Nav {
         nav.tell_section();
         nav.tell_list();
         nav.open_lists();
+        nav.leave_unoffered();
         nav
+    }
+
+    /// Leaves a tab the workspace stops offering (a cold `/insight` that the feed then shows to
+    /// be assistant-only): Home, as every place it does not have goes.
+    fn leave_unoffered(self) {
+        let offered = computed(move || self.app.feed.with(crate::model::nav::phone_tabs));
+        effect(move || {
+            let tab = self.tab.get();
+            if !offered.get().contains(&tab) {
+                untracked(|| self.app.go(Destination::Home));
+            }
+        });
     }
 
     /// Tells the app which place's list of pages shows at the tab's root with nothing over it,
@@ -105,7 +118,9 @@ impl Nav {
         });
     }
 
-    /// Opens the tab root an address asks for: a list of pages, with nothing over it.
+    /// Opens the tab root an address asks for: a list of pages, with nothing over it. A
+    /// workspace without that tab (assistant-only has no Insight) goes where the place's key
+    /// would instead.
     fn open_lists(self) {
         effect(move || {
             let Some(area) = self.app.phone_list_open.get() else {
@@ -113,8 +128,10 @@ impl Nav {
             };
             untracked(|| {
                 self.app.phone_list_open.set(None);
-                if let Some(tab) = PhoneTab::ALL.into_iter().find(|tab| tab.area() == area) {
-                    self.select(tab);
+                let offered = self.app.feed.with(crate::model::nav::phone_tabs);
+                match offered.into_iter().find(|tab| tab.area() == area) {
+                    Some(tab) => self.select(tab),
+                    None => self.app.go_area(area),
                 }
             });
         });
