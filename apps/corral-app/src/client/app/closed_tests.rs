@@ -141,8 +141,11 @@ fn an_unchanged_first_commit_page_drops_the_older_pages_it_did_not_read_again() 
                 authored: String::new(),
                 committed: String::new(),
                 refs: Vec::new(),
+                refs_omitted: 0,
                 links: Vec::new(),
+                links_omitted: 0,
             }],
+            refs_incomplete: false,
         })),
     };
     ask("first", None, None, page("p0", "tip", Some("1")));

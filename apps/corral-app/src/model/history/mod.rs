@@ -49,6 +49,31 @@ pub const EMPTY_HEADING: &str = "No commits";
 pub const UNAVAILABLE_HEADING: &str = "Git history is unavailable";
 pub const STALE: &str = "Shown as last read; reading the history again failed:";
 pub const TIP_CAPTION: &str = "Tip";
+pub const REFS_INCOMPLETE: &str =
+    "Some ref labels are not shown: this repository has more refs than one read lists.";
+
+/// A row's `+n` after its ref labels, or after its link marks.
+fn more_mark(omitted: u64) -> Option<String> {
+    (omitted > 0).then(|| format!("+{omitted}"))
+}
+
+/// The inspector's refs line: the listed labels, then how many more were not listed.
+fn refs_words(refs: &[String], omitted: u64) -> String {
+    let noun = if omitted == 1 { "ref" } else { "refs" };
+    match (refs.is_empty(), omitted) {
+        (_, 0) => refs.join(", "),
+        (true, n) => format!("{n} {noun} not listed"),
+        (false, n) => format!("{} and {n} more {noun} not listed", refs.join(", ")),
+    }
+}
+
+fn links_more_words(omitted: u64) -> Option<String> {
+    match omitted {
+        0 => None,
+        1 => Some("1 more record names this commit; not listed".into()),
+        n => Some(format!("{n} more records name this commit; not listed")),
+    }
+}
 
 /// Why the history cannot be shown, in corrald's words (an older corrald does not know it).
 pub fn unavailable(why: &str) -> String {
@@ -177,10 +202,14 @@ pub struct Row {
     pub id: String,
     pub short: String,
     pub refs: Vec<String>,
+    /// `+n` for ref labels corrald did not list.
+    pub refs_more: Option<String>,
     pub subject: String,
     pub author: String,
     pub date: String,
     pub marks: Vec<Mark>,
+    /// `+n` for Corral records of the commit that were not listed.
+    pub links_more: Option<String>,
     pub graph: GraphRow,
     /// The row's lanes as glyphs, for a terminal and the phone.
     pub glyphs: String,
@@ -204,6 +233,8 @@ pub struct Inspector {
     /// Each parent's full SHA and, when it is not loaded or there is none, why.
     pub parents: Vec<(String, Option<&'static str>)>,
     pub links: Vec<LinkLine>,
+    /// After the links: how many more records name the commit without being listed.
+    pub links_more: Option<String>,
     pub caveat: Option<&'static str>,
 }
 
@@ -225,6 +256,8 @@ pub struct Page {
     pub below: Vec<usize>,
     /// The graph is wider than a canvas draws: what is left out, for the forms that draw one.
     pub overflow: Option<String>,
+    /// Some page of the walk says corrald's ref listing hit its bound.
+    pub refs_note: Option<&'static str>,
     pub more: Option<More>,
     pub inspector: Option<Inspector>,
 }
@@ -279,6 +312,7 @@ pub fn page(state: &State, feed: &Feed, scope: &Scope) -> Page {
             graph.lanes - DRAWN_LANES
         )
     });
+    out.refs_note = walk.refs_incomplete.then_some(REFS_INCOMPLETE);
     out.continuing = continuing(&graph);
     out.below = graph.continuing.iter().map(|open| open.lane).collect();
     out.rows = walk
@@ -425,6 +459,12 @@ fn commit_row(feed: &Feed, commit: &GitCommit, row: &GraphRow, lanes: usize) -> 
         label.push_str(", ");
         label.push_str(&mark.words);
     }
+    if commit.refs_omitted > 0 {
+        label.push_str(&format!(", {}", refs_words(&[], commit.refs_omitted)));
+    }
+    if let Some(words) = links_more_words(commit.links_omitted) {
+        label.push_str(&format!(", {words}"));
+    }
     Row {
         sha: commit.sha.clone(),
         id: format!(
@@ -433,10 +473,12 @@ fn commit_row(feed: &Feed, commit: &GitCommit, row: &GraphRow, lanes: usize) -> 
         ),
         short: short(&commit.sha),
         refs: commit.refs.clone(),
+        refs_more: more_mark(commit.refs_omitted),
         subject: commit.subject.clone(),
         author: commit.author.clone(),
         date,
         marks,
+        links_more: more_mark(commit.links_omitted),
         graph: row.clone(),
         glyphs: graph::glyphs(row, lanes),
         label,
@@ -481,8 +523,8 @@ fn inspect(feed: &Feed, commit: &GitCommit, row: &GraphRow) -> Inspector {
         ("Authored", dated(&commit.authored)),
         ("Committed", dated(&commit.committed)),
     ];
-    if !commit.refs.is_empty() {
-        facts.push(("Refs", commit.refs.join(", ")));
+    if !commit.refs.is_empty() || commit.refs_omitted > 0 {
+        facts.push(("Refs", refs_words(&commit.refs, commit.refs_omitted)));
     }
     let parents = if row.parents.is_empty() {
         vec![(String::new(), Some(NO_PARENT))]
@@ -510,6 +552,7 @@ fn inspect(feed: &Feed, commit: &GitCommit, row: &GraphRow) -> Inspector {
         facts,
         parents,
         caveat: (!links.is_empty()).then_some(CAVEAT),
+        links_more: links_more_words(commit.links_omitted),
         links,
     }
 }

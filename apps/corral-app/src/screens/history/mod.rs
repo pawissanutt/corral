@@ -9,7 +9,8 @@
 //! Test ids: "page-title", "btn-history-refresh", "btn-history-retry", "history",
 //! "history-tip", "field-history-branch", "seg-history-branch-<HEAD|branch>",
 //! "system-pick-<project>", "history-overflow", "commit-<sha12>", "history-below", "btn-history-more", "inspector", "inspector-title",
-//! "history-link-<n>", "btn-history-task-<task>", "btn-history-session-<session>".
+//! "history-link-<n>", "history-links-more", "history-refs-incomplete",
+//! "btn-history-task-<task>", "btn-history-session-<session>".
 
 mod branch;
 mod graph;
@@ -265,7 +266,12 @@ fn commit_row(app: AppState, row: Row, lanes: usize) -> AnyElement {
     let short = mono(app, row.short.clone())
         .flex_shrink_0()
         .text_color(color(Token::Ink3));
-    let refs: Vec<AnyElement> = if form == Form::Terminal {
+    let more = |words: &Option<String>| {
+        words
+            .clone()
+            .map(|words| quiet(app, words).flex_shrink_0().into_element())
+    };
+    let mut refs: Vec<AnyElement> = if form == Form::Terminal {
         (!row.refs.is_empty())
             .then(|| {
                 text(format!("({})", row.refs.join(", ")))
@@ -282,7 +288,8 @@ fn commit_row(app: AppState, row: Row, lanes: usize) -> AnyElement {
             .map(|name| chip(app, name.clone(), crate::model::Hue::Neutral))
             .collect()
     };
-    let marks: Vec<AnyElement> = row
+    refs.extend(more(&row.refs_more));
+    let mut marks: Vec<AnyElement> = row
         .marks
         .iter()
         .map(|mark| {
@@ -297,6 +304,7 @@ fn commit_row(app: AppState, row: Row, lanes: usize) -> AnyElement {
             }
         })
         .collect();
+    marks.extend(more(&row.links_more));
     let subject = plain(app, row.subject.clone()).number_of_lines(1u32);
     let subject = view().flex_1().min_w(px(0.0)).child(subject).into_element();
     let wide = form != Form::Terminal || term::page_columns(app) >= BESIDE_CELLS;
@@ -414,10 +422,27 @@ fn commits(app: AppState, data: Memo<Page>) -> AnyElement {
         }))
     });
     let overflow = view().px(px(16.0)).child(overflow).into_element();
+    let refs_note = computed(move || data.with(|page| page.refs_note));
+    let refs_note = dynamic(move || {
+        let words = refs_note.get()?;
+        Some(untracked(|| {
+            view()
+                .test_id("history-refs-incomplete")
+                .child(notice(
+                    app,
+                    crate::model::Hue::Held,
+                    &vec![span(words)],
+                    None,
+                ))
+                .into_element()
+        }))
+    })
+    .into_element();
     view()
         .flex_col()
         .min_w(px(0.0))
         .child(state_block(app, data))
+        .child(refs_note)
         .child(overflow)
         .child(list)
         .child(below)
@@ -488,9 +513,14 @@ fn inspected(app: AppState, inspector: Inspector) -> AnyElement {
     parts.extend(facts);
     parts.push(h3(app, PARENTS, None));
     parts.extend(parents);
-    if !links.is_empty() {
+    if !links.is_empty() || inspector.links_more.is_some() {
         parts.push(h3(app, LINKS, None));
         parts.extend(links);
+        parts.extend(inspector.links_more.map(|words| {
+            quiet(app, words)
+                .test_id("history-links-more")
+                .into_element()
+        }));
     }
     parts.extend(
         inspector

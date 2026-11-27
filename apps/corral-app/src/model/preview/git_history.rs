@@ -140,6 +140,7 @@ pub(super) fn serve(
         tip: tip.clone(),
         skip: skip as u64,
         commits,
+        refs_incomplete: false,
     };
     let pages: Vec<DetailReply> = (0..shown)
         .map(|i| DetailReply {
@@ -222,7 +223,10 @@ fn commit(feed: &Feed, project: &str, at: usize, sample: &Sample) -> GitCommit {
             "merge-rel" => vec!["release/0.8".into()],
             _ => Vec::new(),
         },
+        // One commit of each kind shows what corrald leaves out past its bounds.
+        refs_omitted: if key == "tag" { 2 } else { 0 },
         links: Vec::new(),
+        links_omitted: if key == "land-1" { 3 } else { 0 },
     }
 }
 
@@ -338,7 +342,9 @@ fn on_branch(feed: &Feed, all: &[TaskDetail], project: &str, name: &str) -> Vec<
         authored: when.clone(),
         committed: when,
         refs: vec![name.into()],
+        refs_omitted: 0,
         links: links(all, BRANCH_LINKS, project, name),
+        links_omitted: 0,
     };
     std::iter::once(tip).chain(rest).collect()
 }

@@ -183,6 +183,7 @@ pub(super) fn merge_pages(pages: &[DetailReply]) -> Result<Option<DetailBody>, S
                 );
             }
             walk.commits.extend(part.commits.iter().cloned());
+            walk.refs_incomplete |= part.refs_incomplete;
         }
         return Ok(Some(DetailBody::GitHistory(walk)));
     }
@@ -550,8 +551,11 @@ mod tests {
                     authored: String::new(),
                     committed: String::new(),
                     refs: Vec::new(),
+                    refs_omitted: 0,
                     links: Vec::new(),
+                    links_omitted: 0,
                 }],
+                refs_incomplete: false,
             })),
         };
         let walk = vec![page("a", "a")];
