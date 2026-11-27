@@ -283,6 +283,11 @@ fn pushed_page(nav: Nav, depth: usize, entry: Entry) -> Screen {
         headed,
     ) = page_of(app, entry.clone());
     nav.register(depth, &entry, &title, bar.as_ref().map(|bar| bar.shown));
+    // A page the stack already let go of (the web's back) is dismissed later: nothing to do.
+    // Not a signal: the dismissal comes after the page's scope is gone.
+    let mounted = std::rc::Rc::new(std::cell::Cell::new(true));
+    let unmounted = mounted.clone();
+    cleanup(move || unmounted.set(false));
     let position = depth + 1;
     let title: Reactive<SharedString> = SharedString::from(title).into_reactive();
     // Configuration stays on a back press or swipe while a profile shows alone, which returns
@@ -301,15 +306,24 @@ fn pushed_page(nav: Nav, depth: usize, entry: Entry) -> Screen {
         })
         .pop_on_back(move || !holds.get())
         // The browser's back and Escape slide this page out before it is dismissed: the page
-        // under it shows again first.
+        // under it shows again first. On the web the page leaves the stack and the model at
+        // once, as the browser's history already has: a Forward while it still slides out
+        // pushes it again, which its late dismissal must not take away.
         .on_back_press(move || {
             if !holds.get_untracked() {
                 nav.uncover(depth);
+                if os() == Os::Web {
+                    nav.back_to(depth);
+                }
             } else if !app.back_to_profiles() {
                 app.asks_before_leaving_config();
             }
         })
-        .on_dismiss(move || nav.back_to(depth));
+        .on_dismiss(move || {
+            if mounted.get() {
+                nav.back_to(depth);
+            }
+        });
     let page = if matches!(os(), Os::Ios | Os::Android) {
         match trailing {
             Some(trailing) => page.header_right(trailing),
