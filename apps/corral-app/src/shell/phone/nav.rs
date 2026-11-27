@@ -59,6 +59,10 @@ pub(super) struct Nav {
     pub app: AppState,
     pub tab: Signal<PhoneTab>,
     pub stack: Signal<Vec<Entry>>,
+    /// On the web, the depth of a page the browser's back took away that still slides out: the
+    /// browser's history is already under it, so what shows and the address are the stack up
+    /// to it, while the page stays mounted until its dismissal.
+    leaving: Signal<Option<usize>>,
     /// The bar each page on the stack brings, by page key, and whether it shows now.
     bars: Signal<Vec<(String, Memo<bool>)>>,
     /// The title of each page on the stack, by page key: the back label of the page above it.
@@ -80,6 +84,7 @@ impl Nav {
             app,
             tab: signal(tab),
             stack: signal(entries),
+            leaving: signal(None),
             bars: signal(Vec::new()),
             titles: signal(Vec::new()),
             drawn_from: signal(drawn),
@@ -111,7 +116,7 @@ impl Nav {
     fn tell_list(self) {
         effect(move || {
             let tab = self.tab.get();
-            let bare = self.stack.with(Vec::is_empty);
+            let bare = self.visible_len() == 0;
             let list = (bare && tab.destination().is_none()).then(|| tab.area());
             let goes = self.app.nav.with_untracked(|nav| nav.goes);
             self.app.phone_list.set(list.map(|area| (area, goes)));
@@ -210,13 +215,50 @@ impl Nav {
         }
     }
 
+    /// Tracked: how many entries show, without one that slides out after the browser's back.
+    fn visible_len(self) -> usize {
+        let len = self.stack.with(Vec::len);
+        self.leaving.get().map_or(len, |at| at.min(len))
+    }
+
+    /// The browser's back took the page at `depth` away on the web: what shows (and the address)
+    /// is the stack under it from now on, while it slides out until its dismissal.
+    pub fn leave(self, depth: usize) {
+        if os() == Os::Web {
+            self.leaving
+                .update(|at| *at = Some(at.map_or(depth, |at| at.min(depth))));
+        }
+    }
+
+    /// Before the stack changes to `entries` on `tab`: a page sliding out stays until its
+    /// dismissal while what shows under it is already that; any other change lets it go first,
+    /// on its own, so a page pushed again where it was (Forward) mounts anew rather than
+    /// keeping the screen the browser already took away.
+    fn let_go(self, tab: PhoneTab, entries: &[Entry]) -> bool {
+        let Some(at) = self.leaving.get_untracked() else {
+            return false;
+        };
+        let kept = self.tab.get_untracked() == tab
+            && self
+                .stack
+                .with_untracked(|s| s.get(..at).is_some_and(|under| under == entries));
+        if kept {
+            return true;
+        }
+        self.leaving.set(None);
+        self.stack.update(|s| s.truncate(at));
+        false
+    }
+
     /// Shows `tab` with `entries` over its root and makes the model's pages the same.
     fn land(self, tab: PhoneTab, entries: Vec<Entry>) {
         let pages = pages_of(&entries);
-        batch(|| {
-            self.tab.set(tab);
-            self.stack.set(entries);
-        });
+        if !self.let_go(tab, &entries) {
+            batch(|| {
+                self.tab.set(tab);
+                self.stack.set(entries);
+            });
+        }
         if self.app.nav.with_untracked(|n| n.pages != pages) {
             self.app.nav.update(|n| n.pages = pages);
         }
@@ -231,6 +273,7 @@ impl Nav {
 
     /// The user chose `tab`: its root, with nothing over it, as the mock's tab bar does.
     pub fn select(self, tab: PhoneTab) {
+        self.leaving.set(None);
         batch(|| {
             self.tab.set(tab);
             self.stack.set(Vec::new());
@@ -247,6 +290,7 @@ impl Nav {
 
     /// A row of Activity's list: its page over the list.
     pub fn open_page(self, page: Destination) {
+        self.let_go(self.tab.get_untracked(), &[Entry::Destination(page)]);
         self.stack.set(vec![Entry::Destination(page)]);
         self.app.go(page);
     }
@@ -270,6 +314,7 @@ impl Nav {
             return;
         }
         self.stack.update(|s| s.truncate(depth));
+        self.leaving.set(None);
         if pages > 0 {
             self.app.nav.update(|n| {
                 for _ in 0..pages {

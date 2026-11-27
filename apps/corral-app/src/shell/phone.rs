@@ -283,7 +283,8 @@ fn pushed_page(nav: Nav, depth: usize, entry: Entry) -> Screen {
         headed,
     ) = page_of(app, entry.clone());
     nav.register(depth, &entry, &title, bar.as_ref().map(|bar| bar.shown));
-    // A page the stack already let go of (the web's back) is dismissed later: nothing to do.
+    // A page the stack already let go of (Forward pushed it anew) is dismissed later: nothing
+    // to do.
     // Not a signal: the dismissal comes after the page's scope is gone.
     let mounted = std::rc::Rc::new(std::cell::Cell::new(true));
     let unmounted = mounted.clone();
@@ -306,15 +307,13 @@ fn pushed_page(nav: Nav, depth: usize, entry: Entry) -> Screen {
         })
         .pop_on_back(move || !holds.get())
         // The browser's back and Escape slide this page out before it is dismissed: the page
-        // under it shows again first. On the web the page leaves the stack and the model at
-        // once, as the browser's history already has: a Forward while it still slides out
-        // pushes it again, which its late dismissal must not take away.
+        // under it shows again first, and on the web it is what the address names at once, as
+        // the browser's history already has it. A Forward while this page still slides out
+        // pushes it anew, which this page's late dismissal must not take away.
         .on_back_press(move || {
             if !holds.get_untracked() {
                 nav.uncover(depth);
-                if os() == Os::Web {
-                    nav.back_to(depth);
-                }
+                nav.leave(depth);
             } else if !app.back_to_profiles() {
                 app.asks_before_leaving_config();
             }
