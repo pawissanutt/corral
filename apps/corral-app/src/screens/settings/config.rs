@@ -33,7 +33,7 @@ use crate::ui::kit::text::h3;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, MEASURE_FORM, Token, color};
 
-const PARTS: [(Part, &str); 9] = [
+const PARTS: [(Part, &str); 10] = [
     (Part::Workspace, "Workspace"),
     (Part::Projects, "Projects"),
     (Part::Profiles, "Profiles"),
@@ -43,6 +43,7 @@ const PARTS: [(Part, &str); 9] = [
     (Part::Extensions, "Extensions"),
     (Part::File, "File"),
     (Part::Automations, "Automations"),
+    (Part::Skills, "Skills"),
 ];
 
 /// The save bar's measure: the section's, with the 24 pt the bar and the body each pad their
@@ -125,23 +126,6 @@ fn content(app: AppState) -> AnyElement {
                 move |part| app.act(app.settings, move |state, _| state.config_part(part)),
                 "tab-config",
             ),
-            dynamic(move || {
-                let active = selected.get() == Part::Skills;
-                untracked(|| {
-                    button(
-                        app,
-                        "Skills",
-                        if active {
-                            ButtonKind::Primary
-                        } else {
-                            ButtonKind::Ghost
-                        },
-                        "tab-config-9",
-                        move || app.act(app.settings, |state, _| state.config_part(Part::Skills)),
-                    )
-                })
-            })
-            .into_element(),
             dynamic(move || {
                 let part = selected.get();
                 untracked(|| {

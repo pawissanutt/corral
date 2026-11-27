@@ -109,14 +109,14 @@ fn workspace(app: AppState, ctx: Context) -> AnyElement {
                     parts.push(detail(app, &ctx, row, loaded, waiting, review));
                 } else {
                     let reload = ctx.clone();
-                    parts.push(control(
+                    parts.push(inline(control(
                         app,
                         "Reload catalog",
                         "btn-pi-skills-reload",
                         waiting,
                         false,
                         move || list(app, &reload),
-                    ));
+                    )));
                     if let Some(catalog) = catalog {
                         if catalog.skills.is_empty() {
                             parts.push(
@@ -130,23 +130,7 @@ fn workspace(app: AppState, ctx: Context) -> AnyElement {
                             );
                         }
                         for (index, row) in catalog.skills.into_iter().enumerate() {
-                            let pick_ctx = ctx.clone();
-                            parts.push(button_with(
-                                app,
-                                format!(
-                                    "{} · {} · {}",
-                                    row.name,
-                                    skills::source(row.source),
-                                    skills::status(&row)
-                                ),
-                                ButtonKind::Quiet,
-                                ButtonOptions {
-                                    disabled: waiting,
-                                    ..Default::default()
-                                },
-                                format!("btn-pi-skill-{index}"),
-                                move || get(app, &pick_ctx, &row.id),
-                            ));
+                            parts.push(catalog_row(app, &ctx, index, row, waiting));
                         }
                     }
                 }
@@ -160,6 +144,49 @@ fn workspace(app: AppState, ctx: Context) -> AnyElement {
         })
     })
     .into_element()
+}
+
+/// One catalog skill, as Extensions lists its entries: the name to press, then where it comes
+/// from and whether it is on.
+fn catalog_row(
+    app: AppState,
+    ctx: &Context,
+    index: usize,
+    row: PiSkillRow,
+    waiting: bool,
+) -> AnyElement {
+    let pick_ctx = ctx.clone();
+    let facts = format!("{} · {}", skills::source(row.source), skills::status(&row));
+    let name = row.name.clone();
+    let id = row.id;
+    view()
+        .flex_row()
+        .flex_wrap()
+        .items_center()
+        .gap(px(8.0))
+        .min_w(px(0.0))
+        .child(button_with(
+            app,
+            name,
+            ButtonKind::Ghost,
+            ButtonOptions {
+                disabled: waiting,
+                ..Default::default()
+            },
+            format!("btn-pi-skill-{index}"),
+            move || get(app, &pick_ctx, &id),
+        ))
+        .child(cell(app, facts, Token::Ink3, false))
+        .into_element()
+}
+
+/// A button at its own width rather than stretched across the column.
+fn inline(button: AnyElement) -> AnyElement {
+    view()
+        .flex_row()
+        .min_w(px(0.0))
+        .child(button)
+        .into_element()
 }
 
 fn control(
@@ -315,7 +342,7 @@ fn detail(
             dynamic(move || {
                 let blocked = dirty.get() || waiting;
                 let ctx = ctx.clone();
-                control(
+                inline(control(
                     app,
                     if row.enabled {
                         "Disable in workspace"
@@ -326,7 +353,7 @@ fn detail(
                     blocked,
                     false,
                     move || toggle(app, &ctx),
-                )
+                ))
             })
             .into_element(),
         );
@@ -334,7 +361,7 @@ fn detail(
     parts.push(actions.into_element());
     if loaded {
         let toggle = ctx.clone();
-        parts.push(button(
+        parts.push(inline(button(
             app,
             if review {
                 "Show Markdown source"
@@ -344,7 +371,7 @@ fn detail(
             ButtonKind::Ghost,
             "btn-pi-skill-preview",
             move || edit(app, &toggle, |e| e.review = !e.review),
-        ));
+        )));
         let target = ctx.clone();
         let value = move || {
             app.settings.with(|s| {
