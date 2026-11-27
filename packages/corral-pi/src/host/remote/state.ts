@@ -177,7 +177,7 @@ export function capabilities(registry: RemoteRegistry, options: { open: boolean;
   for (const capability of can) {
     if (options.closing) capability.unavailable = "Session is stopping";
     else if (capability.id === "jobs" && !registry.get("job_output")) capability.unavailable = "Managed jobs are not enabled";
-    else if (options.open && ["model", "compact", "export", "plan_mode"].includes(capability.id)) {
+    else if (options.open && ["model", "compact", "export", "plan_mode", "shell"].includes(capability.id)) {
       capability.unavailable = "Wait for the current turn to finish";
     }
   }

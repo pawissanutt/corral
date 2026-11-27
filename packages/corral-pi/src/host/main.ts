@@ -344,7 +344,7 @@ async function runSession(config: HostConfig, overrides: HostOverrides, events: 
   setAgentHueSource(id => session.agentHue(id));
   terminal = new sdk.InteractiveMode(session.runtime, {
     // corral resumes sessions with its own commands; Pi's `pi --session …` line would name a command that does not work here.
-    ...(codeHandoff ? { onTerminalCommand: (text: string) => session.handleCodeCommand(text) } : {}),
+    onTerminalCommand: (text: string) => session.handleCodeCommand(text),
     verbose: false, resumeHint: false, terminal: panels ? panels.wrap(physicalTerminal) : physicalTerminal,
     errorPresentation: panels ? errorPresenter(() => session.latestStopCause()) : presentCodexError,
     ...(panels ? { tuiMode: "fullscreen" as const, readOnlyQueue: true, mainView: (transcript, presentation) => panels.mainView(transcript, presentation),

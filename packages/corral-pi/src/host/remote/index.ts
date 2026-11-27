@@ -3,12 +3,13 @@ import type { RemoteOwner } from "../remote-owner.ts";
 import type { HostSession } from "../session.ts";
 import { registerCards } from "./cards.ts";
 import { registerFleet } from "./fleet.ts";
+import { registerShell } from "./shell.ts";
 
 /** Install only the parts this session serves, before publishing its first state. */
 export function installRemote(host: HostSession, owner: RemoteOwner, sessionDir: string): void {
   if (host.servesChildren) registerFleet(host.remoteRegistry, sessionDir, child => host.childTranscript(child));
   registerCards(host.remoteRegistry, {
-    dialogs: host.dialogs, ready: () => host.remoteActionsReady, beforeQuestion: () => owner.resume(),
+    dialogs: host.dialogs, ready: () => host.remoteDialogsReady, beforeQuestion: () => owner.resume(),
     reviewAttempt: card => {
       const plan = host.planMode;
       const brief = plan?.review === card ? plan.brief() : undefined;
@@ -18,6 +19,8 @@ export function installRemote(host: HostSession, owner: RemoteOwner, sessionDir:
   });
   host.remoteBuild.register(host.remoteRegistry);
   host.installRemoteParts();
+  registerShell(host.remoteRegistry, () => host.session, run => host.runRemoteShell(run),
+    text => host.liveEvents.note("text", text, Date.now()));
   host.remoteRegistry.register({ name: "queue_move", parse: args => {
     const key = parseQueueWithdraw(args), { delta } = args;
     if (delta !== -1 && delta !== 1) throw new BridgeRefusal("bad_input", "delta must be -1 or 1");

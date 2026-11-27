@@ -13,7 +13,8 @@ use corral_protocol::{
     rows::{AssistantKind, AssistantLocation, AssistantRow, AssistantState},
     session::{SESSION_RELAUNCH, SESSION_TERMINATE, SessionRelaunched},
     session_host::{
-        InputDisposition, SESSION_CARD_ANSWER, SESSION_SEND, SessionCardAnswered, SessionSent,
+        InputDisposition, SESSION_ACTION, SESSION_CARD_ANSWER, SESSION_SEND, SessionActionDone,
+        SessionCardAnswered, SessionSent,
     },
     session_state::InputOrigin,
 };
@@ -85,6 +86,39 @@ fn page(client: &mut Client, id: &str) -> SessionPage {
         panic!("expected session transcript")
     };
     page
+}
+
+#[test]
+fn shell_action_forwards_command_and_exclude_flag_to_owner_bash() {
+    let fixture = Fixture::new();
+    let id = "B-shell";
+    let host = terminal(
+        &fixture,
+        id,
+        Script::default().reply("owner_bash", |_, _, _| json!({"text": "shell result"})),
+    );
+    let mut owner = Client::connect_with(&fixture.unix_server(), vec![wire::BUILD_V1.into()]);
+    let command = "printf '%s\\n' 'hello 世界' && echo done";
+    for exclude in [false, true] {
+        let result: SessionActionDone = owner.ok(
+            SESSION_ACTION,
+            json!({"id": id, "action": "shell", "command": command, "exclude_from_context": exclude}),
+        );
+        assert_eq!(result.text.as_deref(), Some("shell result"));
+    }
+    assert_eq!(
+        host.state.lock().unwrap().requests,
+        vec![
+            (
+                "owner_bash".into(),
+                json!({"command": command, "exclude_from_context": false})
+            ),
+            (
+                "owner_bash".into(),
+                json!({"command": command, "exclude_from_context": true})
+            ),
+        ]
+    );
 }
 
 #[test]

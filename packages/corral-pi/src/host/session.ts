@@ -455,6 +455,7 @@ export class HostSession {
   private readonly worktreeAccess: WorktreeAccess | undefined;
   private readonly checkpoints: Checkpoints | undefined;
   private rewinding = false;
+  private remoteShellRunning = false;
   private readonly auxiliary: AuxiliaryRuntime | undefined;
   private readonly fleet: FleetRuntime | undefined;
   private readonly buildControls: BuildControls | undefined;
@@ -484,7 +485,7 @@ export class HostSession {
 
   handleCodeCommand(text: string): boolean {
     // Once the handoff is admitted, don't let native submissions (e.g. !bash) start new work.
-    return this.switchingCode || (this.codeCommand?.(text) ?? false);
+    return this.switchingCode || this.remoteShellRunning || (this.codeCommand?.(text) ?? false);
   }
 
   private constructor(private readonly options: HostSessionOptions) {
@@ -1568,7 +1569,7 @@ export class HostSession {
       });
     }
     pi.on("input", async (event) => {
-      if (this.closing || this.rewinding || this.switchingCode) return { action: "handled" as const };
+      if (this.closing || this.rewinding || this.switchingCode || this.remoteShellRunning) return { action: "handled" as const };
       if (this.open && event.source === "interactive") this.ownerInput = true;
       else this.lastInputSource = event.source;
       // A build session's record keeps what the owner asked for, verbatim.
@@ -1950,7 +1951,19 @@ export class HostSession {
 
   private get recordsTurnMarks(): boolean { return this.attached === "headless" || this.options.ui !== "plain"; }
 
-  get remoteActionsReady(): boolean { return this.bound && !this.closing && !this.rewinding && !this.switchingCode; }
+  get remoteDialogsReady(): boolean { return this.bound && !this.closing && !this.rewinding && !this.switchingCode; }
+  get remoteActionsReady(): boolean { return this.remoteDialogsReady && !this.remoteShellRunning; }
+
+  async runRemoteShell<T>(run: () => Promise<T>): Promise<T> {
+    if (!this.remoteActionsReady || this.remoteShellRunning || this.open || this.admissions.size > 0 ||
+        !this.session.isReadyForHandoff) {
+      throw new BridgeRefusal("busy", "Wait for the current session action to finish");
+    }
+    this.remoteShellRunning = true;
+    this.liveEvents.stateChanged();
+    try { return await run(); }
+    finally { this.remoteShellRunning = false; this.liveEvents.stateChanged(); }
+  }
 
   installRemoteParts(): void {
     const registry = this.remoteRegistry, build = this.buildControls, commands = this.commands;
@@ -2256,6 +2269,7 @@ export class HostSession {
     if (this.automationRetired) return Promise.resolve({ disposition: "rejected", reason: "retired" });
     if (!this.bound || this.closing) return Promise.resolve({ disposition: "rejected", reason: "host_not_ready" });
     if (this.rewinding) return Promise.resolve({ disposition: "rejected", reason: "rewind_in_progress" });
+    if (this.remoteShellRunning) return Promise.resolve({ disposition: "rejected", reason: "busy" });
     if (this.switchingCode) return Promise.resolve({ disposition: "rejected", reason: "code_handoff_in_progress" });
     const socketId = input.inputId ?? source?.requestId;
     const transcriptId = input.inputId ?? (input.origin === "owner" ? source?.requestId : undefined);
@@ -2442,7 +2456,7 @@ export class HostSession {
     if (!snapshots || !this.bound || this.closing) {
       throw new BridgeRefusal("rewind_unavailable", "rewind is available in a running worker with turn checkpoints");
     }
-    if (this.rewinding) throw new BridgeRefusal("busy", "a rewind is already in progress");
+    if (this.rewinding || this.remoteShellRunning) throw new BridgeRefusal("busy", "a rewind or shell command is already in progress");
     const session = this.session;
     const manager = session.sessionManager;
     if ("list" in input) return listRewinds(manager);
@@ -2555,7 +2569,7 @@ export class HostSession {
       effort: effort_levels.length ? session.thinkingLevel : undefined, effort_levels, usage,
       queue, queue_total, cards, exit, children: this.liveEvents.childCounts, jobs: jobCounts(jobs, recovered.length),
       board, plan, plan_mode: this.planMode?.brief(), changes: this.remoteChanges.count, notices: this.liveEvents.notices, can: capabilities(this.remoteRegistry, {
-        open: this.open || session.isStreaming || session.isCompacting, closing: this.closing, rewind: this.checkpoints !== undefined,
+        open: this.open || session.isStreaming || session.isCompacting || this.remoteShellRunning, closing: this.closing, rewind: this.checkpoints !== undefined,
       }),
     };
     const journal = this.options.build ? statSync(join(this.options.build.dir, "journal.json"), { throwIfNoEntry: false }) : undefined;
