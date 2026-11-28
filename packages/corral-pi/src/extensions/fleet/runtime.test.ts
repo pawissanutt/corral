@@ -333,6 +333,45 @@ test("agent_wait collects final reports without automatic redelivery", async () 
   } finally { await runtime.close(); }
 });
 
+test("parent reports distinguish child exits without usable output", async () => {
+  const { runtime, runner, delivered } = fixture(4);
+  try {
+    const unknown = "openai-subscription: unknown (unknown)";
+    await runtime.start("call", [spec("review", { kind: "review" }), spec("failed-verdict", { kind: "review" }),
+      spec("slice"), spec("stopped")]);
+    const wait = fleetTools(runtime).find(tool => tool.name === "agent_wait")!;
+    const reviewing = wait.execute("wait", { ids: ["review", "failed-verdict"] }, undefined, undefined, {} as never);
+    runner.children.get("review")!.finish({ report: "", failed: unknown });
+    const failedVerdict = runner.children.get("failed-verdict")!;
+    failedVerdict.hooks.onEvent({ type: "tool", name: "review_verdict", id: "v1", phase: "error" });
+    failedVerdict.finish({ report: "" });
+    runner.children.get("slice")!.finish({ report: " \n", failed:
+      "The OpenAI subscription request failed. No reply was produced. The reason could not be determined. Send a message to retry, or choose another model." });
+    runner.children.get("stopped")!.hooks.onToolStart("edit", { path: "src/a.ts" });
+    runtime.cancel("stopped");
+
+    const result = await reviewing;
+    const [review, refused] = (result.details as ChildToolDetails).children;
+    expect(review).toMatchObject({ state: "failed" });
+    expect(review?.error).toMatch(/without a verdict.*subscription request failed.*reason could not be determined/i);
+    expect(review?.report).toBeUndefined();
+    expect(refused?.error).toMatch(/verdict submission failed/i);
+    const collected = result.content[0];
+    const text = collected?.type === "text" ? collected.text : undefined;
+    expect(text).toMatch(/no report.*assigned scope/i);
+    expect(text).toMatch(/next:.*independent review/i);
+    await flush();
+    const slice = delivered.find(text => text.startsWith("## slice: failed"));
+    expect(slice).toMatch(/subscription request failed.*reason could not be determined/i);
+    expect(slice).toMatch(/no report.*assigned scope/i);
+    expect(slice).not.toMatch(/verdict|quota|retry/i);
+    const stopped = delivered.find(text => text.startsWith("## stopped: cancelled"));
+    expect(stopped).toContain("src/a.ts");
+    expect(stopped).toMatch(/next:.*existing edits/i);
+    expect(delivered).toHaveLength(2);
+  } finally { await runtime.close(); }
+});
+
 test("timed-out collection does not swallow a later settlement", async () => {
   const { runtime, runner, delivered } = fixture();
   try {

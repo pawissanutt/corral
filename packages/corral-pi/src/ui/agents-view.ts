@@ -67,14 +67,18 @@ function row(text: string, width: number, surface = PANEL_BG): string {
   const base = surface + PANEL_TEXT;
   return PANEL_BG + " " + base + cell(text, width - 2, base) + PANEL_BG + " " + RESET;
 }
-/** A completion summary appears only beside other agent states. */
+/** Cancellation ends a row's work, not its retained history. Never fold stopping or failed agents. */
+function inHistory(agent: AgentRow): boolean {
+  return agent.key !== "retained-picker" && (agent.state === "cancelled" || agent.state === "done");
+}
 function doneGroup(agents: readonly AgentRow[]): AgentRow[] {
-  const done = agents.filter(agent => agent.state === "done");
-  return done.length >= 3 && agents.some(agent => agent.state !== "done" && agent.key !== "retained-picker") ? done : [];
+  const history = agents.filter(inHistory);
+  if (history.some(agent => agent.state === "cancelled")) return history;
+  return history.length >= 3 && agents.some(agent => agent.state !== "done" && agent.key !== "retained-picker") ? history : [];
 }
 function listKeys(model: AgentsModel, expanded: boolean): string[] {
   const agents = orderedAgents(model.agents), group = doneGroup(agents);
-  return [...agents.flatMap((agent): string[] => !group.length || agent.state !== "done" ? [agent.key]
+  return [...agents.flatMap((agent): string[] => !group.length || !inHistory(agent) ? [agent.key]
     : [...(agent === group[0] ? [DONE] : []), ...(expanded ? [agent.key] : [])]), ...visibleCommands(model.jobs).map(job => job.key)];
 }
 function shownEntry(model: AgentsModel, selected: string | undefined, commands = visibleCommands(model.jobs)): AgentsEntry | undefined {
@@ -255,10 +259,13 @@ export function renderAgents(model: AgentsModel, selected: string | undefined, w
     if (agent === group[0]) {
       const on = selected === DONE;
       if (on) selectedRow = lines.length;
-      push(row((on ? bar + "▌" : " ") + GAP + PANEL_MUTED + (expanded ? "▾" : "▸") + " ✓ Done · " + group.length
-        + "  " + group.map(item => item.name).join(" · "), width, on ? PANEL_SELECTED : PANEL_BG), [{ key: DONE, action: "fold" }]);
+      const cancelled = group.filter(item => item.state === "cancelled").length;
+      const summary = cancelled ? ` History · ${cancelled} cancelled${group.length > cancelled ? ` · ${group.length - cancelled} done` : ""}`
+        : ` ✓ Done · ${group.length}  ${group.map(item => item.name).join(" · ")}`;
+      push(row((on ? bar + "▌" : " ") + GAP + PANEL_MUTED + (expanded ? "▾" : "▸") + summary,
+        width, on ? PANEL_SELECTED : PANEL_BG), [{ key: DONE, action: "fold" }]);
     }
-    if (!expanded && group.length && agent.state === "done") return;
+    if (!expanded && group.length && inHistory(agent)) return;
     const on = entry?.row.key === agent.key;
     if (on) selectedRow = lines.length;
     for (const line of agentLines(agent, index, on, density, width, options.color, options.now, bar)) push(line, [{ key: agent.key }]);
@@ -293,7 +300,7 @@ export function renderAgents(model: AgentsModel, selected: string | undefined, w
     actions.lines.forEach((line, index) => push(line, actions.hits[index]));
   }
 
-  const fleet = model.agents.filter(agent => agent.key !== "retained-picker");
+  const fleet = model.agents.filter(agent => agent.key !== "retained-picker" && (expanded || agent.state !== "cancelled"));
   if (fleet.length >= 2) {
     divider();
     heading("Timeline", (model.maxParallel === undefined ? "" : ` · up to ${model.maxParallel} at once`)
@@ -367,7 +374,11 @@ export class AgentsView {
   private render(width: number): string[] {
     const model = this.host.model();
     if (this.selected === DONE && !doneGroup(model.agents).length) { this.selected = undefined; this.reveal = true; }
-    this.selected ??= shownEntry(model, undefined)?.row.key;
+    this.selected ??= listKeys(model, this.expanded)[0];
+    if (!this.expanded && model.agents.some(agent => agent.key === this.selected && agent.state === "cancelled")) {
+      this.selected = DONE;
+      this.reveal = true;
+    }
     const frame = renderAgents(model, this.selected, width, {
       now: this.host.now(), short: this.host.short(), expanded: this.expanded, color: hue => this.host.color(hue),
       focused: this.host.focused?.() ?? true,

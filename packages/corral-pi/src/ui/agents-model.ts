@@ -396,7 +396,7 @@ export function liveCount(model: AgentsModel): number {
 export function isLive(state: AgentState): boolean { return LIVE[state]; }
 
 const AGENT_GROUP: Readonly<Record<AgentState, number>> = {
-  needs: 0, running: 1, stopping: 1, queued: 2, preparing: 2, not_started: 2, failed: 3, cancelled: 3, uncertain: 3, done: 4,
+  needs: 0, running: 1, stopping: 1, queued: 2, preparing: 2, not_started: 2, failed: 3, cancelled: 4, uncertain: 3, done: 4,
 };
 /** Group by urgency without disturbing host order within a group. */
 export function orderedAgents(agents: readonly AgentRow[]): AgentRow[] {

@@ -98,6 +98,7 @@ impl World {
                 initial: None,
                 multi: false,
                 free_text: true,
+                note_on_picks: false,
             }],
             child: None,
             tool: Some("plan_submit".into()),

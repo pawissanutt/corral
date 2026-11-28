@@ -3,7 +3,7 @@ import { Type } from "typebox";
 import { ASK_USER_GUIDELINES } from "../roles/common/ask-user.ts";
 import { AskDialog, type Choice, type DialogAnswer, type DialogOptions, type DialogQuestion, type DialogResult } from "./ask-user-dialog.ts";
 import { ANSWER_MAX_BYTES, Choice as PendingChoice, type ChoiceQuestion, type PendingQuestions } from "./pending-questions.ts";
-import { cardOptions, invalidAnswer, optionId, type CardAnswer } from "./remote/cards.ts";
+import { cardOptions, invalidAnswer, optionId, questionTextCapabilities, type CardAnswer } from "./remote/cards.ts";
 import type { OpenDialog, RemoteDialogs } from "./remote/dialogs.ts";
 
 const choice = Type.Union([
@@ -49,8 +49,9 @@ function remoteAnswers(questions: readonly DialogQuestion[], answers: readonly C
   if (answers.length !== questions.length) invalidAnswer("answer each question");
   const decoded = answers.map(({ options, text = "" }, i) => {
     const question = questions[i]!;
+    const { free_text, note_on_picks } = questionTextCapabilities(question.freeText);
     if ((!question.multiSelect && options.length > 1) || new Set(options).size !== options.length ||
-        (options.length ? text && question.freeText !== true : question.freeText === false || !text.trim())) {
+        (options.length ? text && !note_on_picks : !free_text || !text.trim())) {
       invalidAnswer("choose listed options or use free text if allowed");
     }
     const selected = options.map(id => {
@@ -85,7 +86,8 @@ export async function askDialog(ui: DialogUi, questions: DialogQuestion[], signa
         const opened = dialogs.open({
           kind: "question", title: questions[0]?.question ?? "Owner question", tool: "ask_user",
           questions: questions.map(q => ({ text: q.question, header: q.header, multi: q.multiSelect === true,
-            free_text: q.freeText !== false, options: cardOptions(q.options.map(({ label, description }) => ({ label, detail: description }))) })),
+            ...questionTextCapabilities(q.freeText),
+            options: cardOptions(q.options.map(({ label, description }) => ({ label, detail: description }))) })),
         }, { signal, validate: (answers, by) => {
           if (by.source === "remote") wireAnswers = remoteAnswers(questions, answers);
         } });

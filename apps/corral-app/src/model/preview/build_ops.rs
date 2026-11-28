@@ -75,6 +75,7 @@ pub(super) fn api_question(at: &str) -> SessionCard {
         initial: None,
         multi: false,
         free_text: true,
+        note_on_picks: false,
     };
     SessionCard {
         id: "q-b1".into(),
@@ -463,6 +464,7 @@ fn exit_card(feed: &Feed, id: &str, at: &str) -> Result<SessionCard, String> {
             initial: None,
             multi: false,
             free_text: false,
+            note_on_picks: false,
         }],
         child: None,
         tool: None,

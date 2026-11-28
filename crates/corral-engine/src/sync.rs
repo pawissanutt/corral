@@ -15,6 +15,7 @@ use crate::{
 };
 
 mod attention;
+pub(crate) mod episodes;
 #[cfg(test)]
 mod tests;
 
@@ -27,7 +28,7 @@ struct Observation {
 impl Engine {
     pub fn sync(&self) -> Result<()> {
         for run in self.store.live_runs(None)? {
-            if let Err(error) = self.reconcile(&run) {
+            if let Err(error) = self.reconcile_observation(&run) {
                 self.sync_error(&run.task, Some(&run.id), "session reconciliation", &error)?;
             }
         }
@@ -68,6 +69,20 @@ impl Engine {
     }
 
     pub(crate) fn reconcile(&self, observed: &Run) -> Result<()> {
+        if let Some(failure) = self.reconcile_observation(observed)? {
+            anyhow::bail!(
+                "read session {}:{}: {}",
+                observed.task,
+                observed.id,
+                failure.reason()
+            );
+        }
+        Ok(())
+    }
+
+    // Polling records transport failures as episodes. Explicit relaunch callers
+    // still receive a failure, rather than treating an unreadable session as gone.
+    fn reconcile_observation(&self, observed: &Run) -> Result<Option<episodes::Failure>> {
         // Serialize sampling through commit across CLI sync, daemon sync and
         // relaunch. An older observation must not win by committing last.
         let lock = OpenOptions::new()
@@ -93,7 +108,7 @@ impl Engine {
                 .map(|status| (status, None, None)),
             None => Ok((Some(SessionStatus::Gone), None, None)),
         };
-        let (sample, error) = match state {
+        let (sample, failure) = match state {
             Ok((status, paused, activity)) => (
                 Observation {
                     status,
@@ -108,13 +123,11 @@ impl Engine {
                     paused: None,
                     activity: None,
                 },
-                Some(error),
+                Some(episodes::Failure::from_error(&error)),
             ),
         };
-        self.reconcile_sample(observed, seq, sample, Timestamp::now())?;
-        error
-            .map_or(Ok(()), Err)
-            .with_context(|| format!("read session {}:{}", observed.task, observed.id))
+        self.reconcile_sample(observed, seq, sample, failure.as_ref(), Timestamp::now())?;
+        Ok(failure)
     }
 
     fn reconcile_sample(
@@ -122,6 +135,7 @@ impl Engine {
         observed: &Run,
         seq: i64,
         sample: Observation,
+        failure: Option<&episodes::Failure>,
         now: Timestamp,
     ) -> Result<()> {
         self.store.transaction(|store| {
@@ -131,9 +145,25 @@ impl Engine {
             if run.ended.is_some()
                 || run.session != observed.session
                 || store.task_event_seq(&run.task)? != seq
-                || store
-                    .latest_run(&run.task, run.role)?
-                    .is_none_or(|latest| latest.id != run.id)
+            {
+                return Ok(());
+            }
+            // Every live run is sampled, even if a newer run owns its role's
+            // lifecycle. Attribute any incident to the exact sampled run only.
+            if let Some(failure) = failure {
+                store.record_observation_failure(&run, failure, now)?;
+            } else if sample.status == Some(SessionStatus::Gone)
+                || (sample.status.is_some()
+                    && (!matches!(run.session, Some(SessionRef::Pi { .. }))
+                        || sample.paused.is_some()))
+            {
+                // Unknown status and Pi's fallback presentation are not evidence
+                // that the failed observation channel is working again.
+                store.recover_observation_episode(&run, now)?;
+            }
+            if store
+                .latest_run(&run.task, run.role)?
+                .is_none_or(|latest| latest.id != run.id)
             {
                 return Ok(());
             }

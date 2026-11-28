@@ -89,7 +89,11 @@ pub struct CardQuestion {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial: Option<String>,
     pub multi: bool,
+    /// Accept typed text instead of any options (Other).
     pub free_text: bool,
+    /// Accept a note with selected options. Absent on older hosts; defaults to false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub note_on_picks: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

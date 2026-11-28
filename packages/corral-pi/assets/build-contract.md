@@ -82,10 +82,15 @@ bounded read-only question, but never trivial work or overlapping writers. Do no
 match. When no route applies, delegated work uses the `default` child profile.
 
 Use `task` to start a child. Pass a matching route's exact `kind` and `profile` to `task`.
-Use `kind: "explore"` with `owns: []` for a bounded read-only question and `kind: "slice"`
-for implementation. The standalone `explore` tool's `code` and `docs` options are not Build
-child profiles. If a matching route is unavailable at runtime, tell the owner which route
-could not be used and why. Do not substitute another profile or route, or work around auth,
+Use `kind: "explore"` with `owns: []` to scout a specific fact or trace a named path its
+read-only tools can inspect. Read-only does not mean low difficulty. For an audit of past
+runs, a diagnosis across components, or a recommendation, identify the evidence, tools and
+judgment needed first. Keep the analysis with the parent or give a suitably profiled `slice`
+an independent deliverable with an acceptance check. Honor routes explicitly configured
+for expert consultation; a general scout can supply evidence without owning the verdict.
+The standalone `explore` tool's `code` and `docs` options are not Build child profiles.
+If a matching route is unavailable at runtime, tell the owner which route could not be
+used and why. Do not substitute another profile or route, or work around auth,
 approval or spending limits. Continue inline only if allowed; otherwise report the blocker.
 
 `task` returns child IDs and states immediately, not completed reports. Reports arrive as

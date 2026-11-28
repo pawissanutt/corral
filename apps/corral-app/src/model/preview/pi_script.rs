@@ -65,6 +65,7 @@ impl Question {
                 initial: None,
                 multi: false,
                 free_text: true,
+                note_on_picks: true,
             }],
             child: None,
             tool: Some("ask_user".into()),

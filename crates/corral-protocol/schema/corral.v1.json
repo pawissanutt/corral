@@ -1644,6 +1644,7 @@
       "CardQuestion": {
         "properties": {
           "free_text": {
+            "description": "Accept typed text instead of any options (Other).",
             "type": "boolean"
           },
           "header": {
@@ -1659,6 +1660,10 @@
             ]
           },
           "multi": {
+            "type": "boolean"
+          },
+          "note_on_picks": {
+            "description": "Accept a note with selected options. Absent on older hosts; defaults to false.",
             "type": "boolean"
           },
           "options": {

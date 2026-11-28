@@ -268,6 +268,33 @@ mod tests {
     }
 
     #[test]
+    fn session_cards_keep_note_capability_independent_of_legacy_other() {
+        let body: DetailBody = round_trip(json!({
+            "kind": "session_cards",
+            "body": { "cards": [{
+                "id": "card-1", "kind": "question", "title": "Owner input",
+                "body_more": false, "opened_at": "2026-11-19T12:00:00Z",
+                "questions": [
+                    { "text": "Old host", "multi": true, "free_text": true },
+                    { "text": "New host", "multi": false, "free_text": false, "note_on_picks": true }
+                ]
+            }] }
+        }));
+        let DetailBody::SessionCards(cards) = body else {
+            panic!("expected session cards");
+        };
+        let questions = &cards.cards[0].questions;
+        assert!(questions[0].free_text && !questions[0].note_on_picks);
+        assert!(!questions[1].free_text && questions[1].note_on_picks);
+        assert!(
+            serde_json::to_value(&questions[0])
+                .unwrap()
+                .get("note_on_picks")
+                .is_none()
+        );
+    }
+
+    #[test]
     fn unknown_card_kinds_and_actions_survive_a_round_trip() {
         let body: DetailBody = round_trip(json!({
             "kind": "session_cards",

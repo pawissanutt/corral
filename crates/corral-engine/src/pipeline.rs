@@ -121,7 +121,7 @@ impl Engine {
             return Err(changed_approved_candidate());
         }
         let project = self.project_for(&task)?;
-        if let Some(project) = project.as_ref().filter(|p| !p.gate.is_empty()) {
+        let checked = if let Some(project) = project.as_ref().filter(|p| !p.gate.is_empty()) {
             let check = match self.store.latest_check(id, CheckKind::Gate, &head)? {
                 Some(check) => check,
                 None => self.run_gate(
@@ -135,7 +135,10 @@ impl Engine {
             if check.result == CheckResult::Fail {
                 return self.send_back(id, &gate_notes(&check));
             }
-        }
+            Some(check.key)
+        } else {
+            None
+        };
         let task = self.store.require_task(id)?;
         if task.status != Status::Review {
             return Ok(());
@@ -158,8 +161,9 @@ impl Engine {
             None
         };
         if review.is_none() && project.as_ref().is_some_and(|p| p.reviewer.is_some()) {
-            // review_as requests the current round at most once per live reviewer.
-            self.review_as(id, None, Actor::Auto)?;
+            // Admission pins the gate to this submission before starting or
+            // reusing a reviewer, and requests the round at most once per run.
+            self.review_after_gate(id, checked.as_deref())?;
             return Ok(());
         }
         if review.is_some_and(|check| check.result == CheckResult::Fail) {

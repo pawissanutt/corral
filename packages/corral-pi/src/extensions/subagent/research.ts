@@ -40,23 +40,25 @@ export function researchBudget(options: ResearchOptions, maxTurns: number) {
 }
 
 export const DEPTH_GUIDANCE: Record<ResearchEffort, string> = {
-  quick: "Depth: quick. Locate and cite the main answer; one or two rounds of parallel searches are enough.",
+  quick: "Depth: quick. Focus on locating and citing the main answer.",
   standard: "Depth: standard. Trace the whole path the question names and verify it in the code; do not stop at the first plausible hit.",
-  deep: "Depth: deep. Be exhaustive: cover every layer, alternative implementation, error path and edge case that could change the answer.",
+  deep: "Depth: deep. Check relevant alternative implementations, error paths and edge cases that could change the answer.",
 };
 
 /** Shared method for every read-only code research child, standalone or Build. */
 export const CODE_METHOD = [
   "Method:",
-  "1. Orient broadly first. Turns are counted per model response, not per tool call: batch 3-8 independent searches (grep for key identifiers and synonyms, find for likely file names, ls of relevant directories) in one response instead of one search per turn. With codemode, one cell can run many searches and filter the results.",
-  "2. Read whole functions or sections around each hit, not isolated lines.",
-  "3. Follow the path. For each key symbol check its definition, callers and callees (lsp_definition/lsp_references when available), configuration and tests. Cover every layer the question names.",
-  "4. Look for what would change the answer: other implementations, duplicates, flags, error paths and edge cases.",
-  "5. Before answering, check coverage: every claim has path:line evidence and every part of the question was examined. Spend remaining turns on gaps. Report something as absent only after listing the searches that failed to find it.",
+  "1. Start with the most relevant sources. If you have independent leads, batch their searches in one response instead of spending a turn on each. With codemode, one cell can run several searches and filter the results.",
+  "2. Read the functions or sections around relevant hits, not isolated lines.",
+  "3. Follow the path the question names. Check definitions, callers and callees (lsp_definition/lsp_references when available), configuration and tests where they could change the answer.",
+  "4. Consider what might overturn the evidence: other implementations, duplicates, flags, error paths and edge cases. If you conclude something is absent, say where you looked.",
 ].join("\n");
-const DOCS_METHOD = "Prefer official, version-relevant documentation. Run independent searches in parallel, open the most authoritative pages, and cross-check important claims across sources. Cite exact URLs and separate documented behavior from inference. If web tools/search are unavailable, report that limitation; do not invent sources.";
-/** The answer shape shared by research children. */
-export const ANSWER_FORMAT = "Answer with: the direct answer first; findings with path:line (or URL) evidence; the relevant files, each with a one-line role; coverage (what you examined) and remaining gaps or uncertainties; a next step. Distinguish observed behavior from inference. Do not implement changes.";
+const DOCS_METHOD = "Prefer official, version-relevant documentation. Run independent searches in parallel, open the most authoritative pages, and cross-check claims when another source could change the answer. Cite exact URLs and separate documented behavior from inference. If web tools/search are unavailable, report that limitation; do not invent sources.";
+const STOPPING_RULE = "If a missing check could materially change the requested answer and is feasible with your current tools, time and budget, do it now. "
+  + "If it is not feasible, name the blocker and what it leaves unverified; do not imply the check ran. "
+  + "Stop searching when the requested answer is supported or no further material check is feasible.";
+/** The stopping rule and answer shape shared by research children. */
+export const ANSWER_FORMAT = `${STOPPING_RULE}\n\nAnswer with: the direct answer first; findings with path:line (or URL) evidence; the relevant files, each with a one-line role; coverage (what you examined) and remaining gaps or uncertainties. Distinguish observed behavior from inference. Do not implement changes.`;
 
 export function researchPrompt(prompt: string, options: ResearchOptions, cwd: string, tools: readonly string[], maxTurns: number,
   orientation?: string): string {
@@ -66,7 +68,7 @@ export function researchPrompt(prompt: string, options: ResearchOptions, cwd: st
     `Research profile: ${profile}; effort: ${effort}; root: ${cwd}.`,
     `Mission (at most ${maxTurns} model turns, including final synthesis; each turn may batch several tool calls):\n${prompt}`,
     `Scope (advisory, not an additional sandbox): ${options.scope ?? "the supplied question within the current worktree"}`,
-    `Starting points: ${options.starting_points ?? "none supplied; start with broad parallel searches"}`,
+    `Starting points: ${options.starting_points ?? "none supplied"}`,
     `Relevant constraints supplied by parent: ${options.constraints ?? "none supplied; read relevant local guidance when needed"}`,
     `Available tools: ${tools.join(", ") || "none"}. No shell, writes, MCP, board authority or recursive delegation.`,
     ...(orientation && profile === "code" ? [orientation] : []),
@@ -77,9 +79,9 @@ export function researchPrompt(prompt: string, options: ResearchOptions, cwd: st
 }
 
 /** One follow-up for a run that answered after very little searching. */
-export const GAP_CHECK_PROMPT = "Before you finish: list each claim in your answer that lacks path:line evidence, and each part of the question or lead you have not examined. "
-  + "Investigate the most important gaps now, batching independent searches in one response. "
-  + "Then give your complete final answer again in full (it replaces the previous one), including what you verified and what remains uncertain.";
+export const GAP_CHECK_PROMPT = "Before you finish: consider whether an unsupported claim or unexamined part of the question could change your answer. "
+  + `${STOPPING_RULE} Give your complete answer with evidence and any remaining uncertainty (it replaces the previous answer). `
+  + "If there is no material gap, return the supported answer without further searching.";
 /** Tool calls below which a non-quick answer earns one gap check. */
 export const GAP_CHECK_MIN_CALLS = 8;
 /** The follow-up stops this long before the child deadline and falls back to the first answer. */
@@ -114,13 +116,10 @@ export function researchDepth(messages: readonly AgentMessage[], observed?: numb
   return { turns, toolCalls: observed ?? toolCalls, resultBytes };
 }
 
-/** One line for the parent; a thin run is labelled so it can be retried deeper. */
-export function depthLine(depth: ResearchDepth | undefined, effort?: ResearchEffort): string | undefined {
+/** Report observed work, not a quality verdict inferred from its volume. */
+export function depthLine(depth: ResearchDepth | undefined): string | undefined {
   if (!depth) return undefined;
-  const kb = Math.round(depth.resultBytes / 1024);
-  const thin = effort !== "quick" && depth.toolCalls < GAP_CHECK_MIN_CALLS;
-  return `Depth: ${depth.turns} turns, ${depth.toolCalls} tool calls, ${kb} KB of tool output.`
-    + (thin ? " Thin coverage: verify key claims or retry with effort deep or narrower questions." : "");
+  return `Depth: ${depth.turns} turns, ${depth.toolCalls} tool calls, ${Math.round(depth.resultBytes / 1024)} KB of tool output.`;
 }
 
 /** Never substitute a tool log for verified findings without labelling it. No thinking is exposed. */

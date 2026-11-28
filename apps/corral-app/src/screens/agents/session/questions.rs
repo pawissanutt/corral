@@ -6,7 +6,8 @@
 //! unanswered`. Until the card's body is read it is the title and where the read stands, with
 //! Retry after a failure. The keys: 1–9 choose, the arrows walk the options, ← → the tabs.
 //! test ids `seg-answer-<n>`, `seg-answer-review`, `opt-<card>-<n>`, `field-answer-<card>-<n>`,
-//! `review-<n>`, `btn-send-answers`, `btn-answer-close`, `card-read`, `btn-cards-retry`.
+//! `field-answer-<card>-<n>-note`, `review-<n>`, `btn-send-answers`, `btn-answer-close`,
+//! `card-read`, `btn-cards-retry`.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -16,7 +17,7 @@ use nsh_core::prelude::*;
 
 use crate::model::Form;
 use crate::model::hue::Hue;
-use crate::model::session::{AnswerCard, AnswerTab, SessionPage};
+use crate::model::session::{Action, AnswerCard, AnswerTab, SessionPage, TextRow};
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
 use crate::ui::kit::marks::hue_ink;
@@ -306,24 +307,17 @@ fn question(app: AppState, card: Memo<Option<AnswerCard>>, index: usize) -> AnyE
     let options = computed(move || view_of().map(|q| q.options).unwrap_or_default());
     let rows = options_list(app, options, Rc::new(Cell::new(true)), None, true, Some(0));
     let row = computed(move || view_of().and_then(|q| q.words));
+    let note_row = computed(move || view_of().and_then(|q| q.note));
     let submit = computed(move || {
         card.with(|c| {
             c.as_ref()
                 .and_then(|c| c.send.as_ref().map(|send| send.action.clone()))
         })
     });
+    let note_field = question_field(app, note_row, submit, false);
     // A question that takes only words gives its field the keys.
     let words_only = asked.as_ref().is_some_and(|q| q.options.is_empty());
-    let field = asked.and_then(|q| q.words).map(|first| {
-        text_row(
-            app,
-            first,
-            row,
-            Rc::new(Cell::new(true)),
-            submit,
-            words_only,
-        )
-    });
+    let field = question_field(app, row, submit, words_only);
     view()
         .gap(px(if form == Form::Terminal { 0.0 } else { 6.0 }))
         .children(header)
@@ -333,6 +327,25 @@ fn question(app: AppState, card: Memo<Option<AnswerCard>>, index: usize) -> AnyE
                 .test_id(&format!("question-{index}")),
         )
         .child(rows)
-        .children(field)
+        .child(note_field)
+        .child(field)
         .into_element()
+}
+
+fn question_field(
+    app: AppState,
+    row: Memo<Option<TextRow>>,
+    submit: Memo<Option<Action>>,
+    focus: bool,
+) -> AnyElement {
+    let present = computed(move || row.with(Option::is_some));
+    dynamic(move || {
+        present.get().then(|| {
+            untracked(|| {
+                row.get()
+                    .map(|first| text_row(app, first, row, Rc::new(Cell::new(true)), submit, focus))
+            })
+        })?
+    })
+    .into_element()
 }

@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { checked, type Run } from "./corral-cli.ts";
-import { checkCheckoutSupport, checkLandingEnvironment } from "./fast-forward.ts";
+import { checkCheckoutSupport, checkLandingEnvironment, INDEX_LOCK_RECOVERY, INSPECT_GIT_CHECKOUT } from "./fast-forward.ts";
 import { checkIndexVisibility } from "./index-visibility.ts";
 import { buildProject, gateInputFingerprint } from "./gate.ts";
 import { landingBaseFromRef, landingBaseLookups } from "./git.ts";
@@ -95,8 +95,11 @@ export async function ancestor(git: Run, base: string, head: string, cwd: string
 const OPERATIONS: readonly [marker: string, name: string][] = [
   ["rebase-apply", "rebase or am"], ["rebase-merge", "rebase"], ["MERGE_HEAD", "merge"],
   ["CHERRY_PICK_HEAD", "cherry-pick"], ["REVERT_HEAD", "revert"], ["sequencer", "sequencer operation"],
-  ["BISECT_START", "bisect"], ["MERGE_AUTOSTASH", "merge autostash"], ["index.lock", "index lock"],
+  ["BISECT_START", "bisect"], ["MERGE_AUTOSTASH", "merge autostash"],
 ];
+const NO_OPERATION = "No in-progress Git operation was identified.";
+const OPERATION_RECOVERY = "Only continue or abort the operation if you recognize it and intend to do so.";
+
 function present(path: string): boolean {
   try { lstatSync(path); return true; }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
@@ -106,11 +109,21 @@ async function gitDir(git: Run, cwd: string): Promise<string> {
   if (!dir.startsWith("/")) throw new Error(`Cannot locate the Git directory for ${cwd}.`);
   return dir;
 }
+function operationDetail(dir: string): string | undefined {
+  const found = OPERATIONS.find(([marker]) => present(join(dir, marker)));
+  if (found) return `Git ${found[1]} state detected (${found[0]}).`;
+}
+function indexLockDetail(dir: string, diagnostic = ""): string | undefined {
+  const lock = join(dir, "index.lock");
+  if (present(lock)) return `Found ${JSON.stringify(lock)}. ${INDEX_LOCK_RECOVERY}`;
+  if (/\bindex\.lock\b/.test(diagnostic)) return `Git's diagnostic mentions index.lock. ${INDEX_LOCK_RECOVERY}`;
+}
 async function checkIdle(git: Run, cwd: string): Promise<void> {
   const dir = await gitDir(git, cwd);
-  for (const [marker, operation] of OPERATIONS) if (present(join(dir, marker))) {
-    throw new Error(`The checkout at ${cwd} has an ongoing Git ${operation}. Finish it before preparing to land.`);
-  }
+  const operation = operationDetail(dir), lock = indexLockDetail(dir);
+  if (!operation && !lock) return;
+  throw new Error([`Checkout ${JSON.stringify(cwd)}:`, operation ?? NO_OPERATION, lock, INSPECT_GIT_CHECKOUT,
+    operation && OPERATION_RECOVERY].filter(Boolean).join(" "));
 }
 export async function checkSource(git: Run, context: BuildContext): Promise<void> {
   const { worktree, repoRoot } = context.session;
@@ -145,11 +158,12 @@ export async function checkDestination(git: Run, context: BuildContext, target: 
   if (!selected) return undefined;
   const checkout = selected[0]!.slice("worktree ".length);
   if (selected.some(line => line === "bare" || line.startsWith("prunable"))) throw new Error(`The base checkout at ${checkout} is unavailable.`);
+  // In-progress operations such as rebase can detach HEAD; report the operation first.
+  await checkIdle(git, checkout);
   const branch = await git(["symbolic-ref", "--quiet", "HEAD"], { cwd: checkout });
   if (branch.code !== 0 || branch.stdout.trim() !== target.ref) {
     throw new Error(`The ${session.bare ? "repository's primary checkout" : "base checkout"} must be on ${target.name}; found ${branch.stdout.trim().replace(/^refs\/heads\//, "") || "a detached HEAD"}.`);
   }
-  await checkIdle(git, checkout);
   if (session.bare) {
     if ((await checked(git, ["status", "--porcelain", "--untracked-files=no", "--ignore-submodules=none"], checkout)).trim()) {
       throw new Error("The repository's primary checkout has tracked changes; commit or stash them before landing.");
@@ -235,11 +249,10 @@ export async function rebaseCandidate(git: Run, cwd: string, base: string, sourc
   if (result.code === 0) return;
   const unmerged = await git(["diff", "--name-only", "-z", "--diff-filter=U"], { cwd, env: { GIT_OPTIONAL_LOCKS: "0" } }).catch(() => undefined);
   const conflicts = unmerged?.code === 0 ? paths(unmerged.stdout) : [];
-  let recovery = "Inspect this checkout before trying again.";
+  let recovery: string | undefined;
   let restored = false;
   const states = rebaseDirectories(dir);
   if (states.length) {
-    recovery = "Corral did not abort the in-progress rebase. Inspect git status, then finish or abort the rebase yourself before trying again.";
     const state = conflicts.length && states.length === 1 ? states[0] : undefined;
     const identity = state ? rebaseDirectoryIdentity(state) : undefined;
     // A rebase that refuses to start (e.g. another process got here first) does
@@ -251,16 +264,23 @@ export async function rebaseCandidate(git: Run, cwd: string, base: string, sourc
         rebaseDirectories(dir).length === 1 && rebaseDirectoryIdentity(state) === identity) {
       // Git has no ownership-conditional abort; recheck state immediately before invoking it.
       const abort = await git(["rebase", "--abort"], { cwd }).catch(error => ({ code: 1, stderr: message(error), stdout: "" }));
-      if (abort.code) recovery = `Rebase abort failed: ${abort.stderr.trim() || abort.stdout.trim()}. Inspect and recover the worktree manually.`;
+      if (abort.code) recovery = `Rebase abort failed: ${abort.stderr.trim() || abort.stdout.trim()}.`;
       else if (await sourceBranch(git, cwd).catch(() => undefined) === branch &&
           await commit(git, "HEAD", cwd).catch(() => undefined) === source && !rebaseDirectories(dir).length) {
         restored = true;
         recovery = "The rebase was aborted; the branch is unchanged.";
-      } else recovery = "Git reported a successful abort, but Corral could not verify that the source branch was restored. Inspect this checkout before trying again.";
+      } else recovery = "Git reported a successful abort, but Corral could not verify that the source branch was restored.";
     }
   }
-  throw new PreparationError(conflicts.length
-    ? `Rebase conflicts: ${conflicts.slice(0, 10).map(path => JSON.stringify(path)).join(", ")}${conflicts.length > 10 ? ` and ${conflicts.length - 10} more` : ""}. ${recovery}`
-    : `Rebase failed: ${result.stderr.trim() || result.stdout.trim() || `exit ${result.code}`}. ${recovery}`,
+  const operation = restored ? undefined : operationDetail(dir);
+  if (!recovery && operation) recovery = "Corral did not abort this operation; ownership was not verified.";
+  const diagnostic = result.stderr.trim() || result.stdout.trim() || `exit ${result.code}`;
+  const lock = indexLockDetail(dir, `${diagnostic}\n${recovery ?? ""}`);
+  const detail = conflicts.length
+    ? `Rebase conflicts in checkout ${JSON.stringify(cwd)}: ${conflicts.slice(0, 10).map(path => JSON.stringify(path)).join(", ")}${conflicts.length > 10 ? ` and ${conflicts.length - 10} more` : ""}.`
+    : `Rebase failed in checkout ${JSON.stringify(cwd)}.`;
+  throw new PreparationError([detail, !restored && (operation ?? NO_OPERATION), recovery, lock,
+    (!restored || lock) && INSPECT_GIT_CHECKOUT, operation && OPERATION_RECOVERY,
+    !conflicts.length && `Git: ${diagnostic}`].filter(Boolean).join(" "),
   conflicts.length ? { state: restored ? "conflicts" : "failed", conflicts: conflicts.slice(0, 100) } : {});
 }

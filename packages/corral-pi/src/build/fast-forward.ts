@@ -14,6 +14,9 @@ const SAFE_READ = constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLO
 const gitError = (error: unknown) => error instanceof Error ? error.message : String(error);
 const missing = (error: unknown) => (error as NodeJS.ErrnoException).code === "ENOENT";
 
+export const INSPECT_GIT_CHECKOUT = "Run git --no-optional-locks status in this checkout and inspect it before retrying.";
+export const INDEX_LOCK_RECOVERY = "Corral cannot identify the lock holder. Check for active Git processes and leave the lock in place.";
+
 /** Caller must retain the worktree recovery detail instead of turning this into a retryable stale pin. */
 export class PartialFastForward extends Error {}
 
@@ -183,6 +186,9 @@ export async function fastForward(git: Run, request: {
   // to the original index, nor overwrite or break an existing index lock.
   const index = join(gitDir, "index"), lockPath = `${index}.lock`;
   const lock = await open(lockPath, "wx", 0o666).catch(error => {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+      throw new Error(`Checkout ${JSON.stringify(checkout)}: found ${JSON.stringify(lockPath)}. The lock alone does not identify a Git operation. ${INDEX_LOCK_RECOVERY} ${INSPECT_GIT_CHECKOUT}`);
+    }
     throw new Error(`Cannot lock the index of ${checkout}: ${gitError(error)}`);
   });
   let temp: string | undefined, installed = false, checkoutStarted = false;

@@ -299,6 +299,13 @@ pub enum DockAction {
         question: usize,
         text: String,
     },
+    /// A note on the selected options of an owner question.
+    QuestionNote {
+        session: Id,
+        card: String,
+        question: usize,
+        text: String,
+    },
     /// Send a question card's answers once every question has one, else go to the first
     /// unanswered; send an input card's text.
     Submit { session: Id, card: String },
@@ -668,8 +675,17 @@ pub(super) fn act(state: &mut State, action: DockAction, feed: &Feed) -> Vec<Eff
             if kind(feed, session.as_str(), &card) == Some(CardKind::PlanReview) {
                 plan_review::text(state, &session, &card, text);
             } else {
-                questions::text(state, &session, &card, question, text, feed);
+                questions::text(state, &session, &card, question, text, false, feed);
             }
+            Vec::new()
+        }
+        DockAction::QuestionNote {
+            session,
+            card,
+            question,
+            text,
+        } => {
+            questions::text(state, &session, &card, question, text, true, feed);
             Vec::new()
         }
         DockAction::Submit { session, card } => match kind(feed, session.as_str(), &card) {

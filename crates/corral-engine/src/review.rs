@@ -124,17 +124,24 @@ impl Engine {
                             let mut current = store.require_task(id)?;
                             if current.blocked == task.blocked {
                                 let interrupted = store.interrupted_submission(id)?;
-                                let status = if interrupted.as_deref() == Some(check.key.as_str()) {
+                                if let Some(previous) = interrupted.as_deref()
+                                    && previous != check.key
+                                {
+                                    return self.block_review_resubmit(
+                                        store,
+                                        &mut current,
+                                        &run,
+                                        self.actor,
+                                        Some(previous),
+                                        &check.key,
+                                    );
+                                }
+                                let status = if interrupted.is_some() {
                                     Status::Review
                                 } else {
                                     Status::Running
                                 };
                                 set_lifecycle(&mut current, status);
-                                if status == Status::Running && let Some(previous) = interrupted {
-                                    current.attention = Some(format!(
-                                        "Gate checked {} but review was for {previous}. Submit the updated candidate with done.", check.key
-                                    ));
-                                }
                                 store.update_task(&current)?;
                                 self.event(
                                     store,
@@ -183,11 +190,12 @@ impl Engine {
     }
 
     pub fn review(&self, id: &str, profile: Option<&str>) -> Result<Run> {
-        self.review_as(id, profile, self.actor)
+        self.review_selected(id, profile, self.actor, None)
     }
 
-    pub(crate) fn review_as(&self, id: &str, profile: Option<&str>, actor: Actor) -> Result<Run> {
-        self.review_selected(id, profile, actor, None)
+    pub(crate) fn review_after_gate(&self, id: &str, checked: Option<&str>) -> Result<()> {
+        self.request_review(id, None, Actor::Auto, None, checked)
+            .map(|_| ())
     }
 
     pub(crate) fn review_selected(
@@ -197,6 +205,23 @@ impl Engine {
         actor: Actor,
         selected: Option<&str>,
     ) -> Result<Run> {
+        self.request_review(id, profile, actor, selected, None)?
+            .ok_or_else(|| {
+                refuse(
+                    "submit the current candidate with done before requesting review",
+                    vec![next_done(id)],
+                )
+            })
+    }
+
+    fn request_review(
+        &self,
+        id: &str,
+        profile: Option<&str>,
+        actor: Actor,
+        selected: Option<&str>,
+        checked: Option<&str>,
+    ) -> Result<Option<Run>> {
         self.launch_transaction(id, |store, pending| {
             let mut task = store.require_task(id)?;
             if let Some(run) = selected {
@@ -213,6 +238,33 @@ impl Engine {
                     "review requires a submitted task",
                     vec![next_done(id), next_force_approve(id)],
                 ));
+            }
+            self.require_worktree(&worker)?;
+            let checkout = Checkout::from_run(&worker)?;
+            checkout.verify_branch()?;
+            let head = corral_git::rev_sha(&checkout.repo, &checkout.branch_ref())
+                .context("read current candidate before requesting review")?;
+            let submitted = store.review_submission_sha(id)?;
+            if submitted.as_deref() != Some(head.as_str())
+                || worker.head_sha.as_deref() != Some(head.as_str())
+            {
+                // Commit the actionable block before returning a refusal to an
+                // explicit review/relaunch caller. No session effects occurred.
+                self.block_review_resubmit(
+                    store,
+                    &mut task,
+                    &worker,
+                    actor,
+                    submitted.as_deref(),
+                    &head,
+                )?;
+                return Ok(None);
+            }
+            if checked.is_some_and(|sha| sha != head) {
+                // The branch moved back to the submitted candidate after the
+                // pipeline selected a gate check. Give the next advance a chance
+                // to consume a check for that candidate, not the other SHA.
+                return Ok(None);
             }
             let project = self.project_for(&task)?;
             let name = profile.or(project
@@ -248,7 +300,7 @@ impl Engine {
                     && (!is_pi_reviewer(&reviewer) || store.has_bound_review_request(&reviewer)?)
                 {
                     if store.has_review_request_since_done(id, &reviewer.id, task.round)? {
-                        return Ok(reviewer);
+                        return Ok(Some(reviewer));
                     }
                     let prompt = self
                         .state_dir
@@ -278,7 +330,7 @@ impl Engine {
                             self.record_review_request(
                                 store, &mut task, &reviewer, actor, recovery, pickup,
                             )?;
-                            return Ok(reviewer);
+                            return Ok(Some(reviewer));
                         }
                         Err(error) if as_refusal(&error).is_some() => {}
                         Err(error) => return Err(error).context("request re-review"),
@@ -294,8 +346,6 @@ impl Engine {
                 };
                 self.end_run(store, &mut reviewer, outcome, stop)?;
             }
-            self.require_worktree(&worker)?;
-            let checkout = Checkout::from_run(&worker)?;
             let history = review_history(store, id)?;
             let run = self.start_run(
                 store,
@@ -311,8 +361,37 @@ impl Engine {
                 },
             )?;
             self.record_review_request(store, &mut task, &run, actor, recovery, None)?;
-            Ok(run)
+            Ok(Some(run))
         })
+    }
+
+    fn block_review_resubmit(
+        &self,
+        store: &Store,
+        task: &mut Task,
+        worker: &Run,
+        actor: Actor,
+        submitted: Option<&str>,
+        candidate: &str,
+    ) -> Result<()> {
+        let detail = if let Some(sha) = submitted.filter(|sha| *sha != candidate) {
+            format!(
+                "Candidate {candidate} does not match submitted SHA {sha}. Submit the current candidate with done."
+            )
+        } else {
+            format!("No matching submission for candidate {candidate}. Submit it with done.")
+        };
+        self.block_in(
+            store,
+            task,
+            Some(&worker.id),
+            Blocked {
+                reason: "candidate needs resubmission".into(),
+                detail: Some(detail),
+                next: vec![next_done(&task.id)],
+            },
+            actor,
+        )
     }
 
     fn record_review_request(
@@ -613,6 +692,15 @@ impl Engine {
             }
             Ok(())
         })
+    }
+}
+
+impl Store {
+    fn review_submission_sha(&self, id: &str) -> Result<Option<String>> {
+        self.connection.query_row(
+            "SELECT (SELECT json_extract(detail,'$.sha') FROM events WHERE task=?1 AND kind='done' ORDER BY seq DESC LIMIT 1)",
+            [id], |row| row.get(0),
+        ).context("read submitted review candidate")
     }
 }
 

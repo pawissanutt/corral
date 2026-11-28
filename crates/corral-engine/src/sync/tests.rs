@@ -59,7 +59,13 @@ impl Fixture {
     fn sample(&self, run: &Run, secs: i64, sample: Observation) {
         let seq = self.engine.store.task_event_seq(&run.task).unwrap();
         self.engine
-            .reconcile_sample(run, seq, sample, Timestamp::from_second(secs).unwrap())
+            .reconcile_sample(
+                run,
+                seq,
+                sample,
+                None,
+                Timestamp::from_second(secs).unwrap(),
+            )
             .unwrap();
     }
 }
@@ -198,6 +204,7 @@ fn only_current_unfulfilled_work_gets_native_attention() {
             &run,
             stale,
             pi(true, false, false, json!({})),
+            None,
             Timestamp::from_second(101).unwrap(),
         )
         .unwrap();
@@ -447,4 +454,206 @@ fn non_pi_requires_sustained_idle_and_resets_after_progress() {
     );
     f.sample(&run, 621, idle());
     assert_eq!(f.reason(&run), None);
+}
+
+#[test]
+fn observation_failures_form_restart_safe_per_run_episodes() {
+    use std::sync::{Arc, Mutex};
+
+    use crate::{
+        Origin,
+        runner::{LaunchSpec, Runner},
+    };
+
+    #[derive(Clone, Copy)]
+    enum Sample {
+        Down,
+        Timeout,
+        Unknown,
+        Working,
+        Unclassified(&'static str),
+        PiRefused(&'static str),
+    }
+
+    struct Observer(Arc<Mutex<Sample>>);
+    impl Runner for Observer {
+        fn reconciliation_status(&self, _: &SessionRef) -> Result<Option<SessionStatus>> {
+            match *self.0.lock().unwrap() {
+                Sample::Down => Err(anyhow::Error::from(corral_herdr::EngineProblem::Down)
+                    .context("transport diagnostic containing a secret")),
+                Sample::Timeout => Err(std::io::Error::from(std::io::ErrorKind::TimedOut).into()),
+                Sample::Unknown => Ok(None),
+                Sample::Working => Ok(Some(SessionStatus::Working)),
+                Sample::Unclassified(message) => Err(anyhow::anyhow!(message)),
+                Sample::PiRefused(code) => Err(crate::runner::pi::PiRefusal {
+                    command: "get_state".to_owned(),
+                    code: code.to_owned(),
+                    reason: "private diagnostic".to_owned(),
+                }
+                .into()),
+            }
+        }
+        fn start(&self, _: &LaunchSpec) -> Result<SessionRef> {
+            panic!("unexpected restart")
+        }
+        fn status(&self, _: &SessionRef) -> Result<SessionStatus> {
+            panic!("expected reconciliation read")
+        }
+        fn send(&self, _: &SessionRef, _: &str, _: Origin) -> Result<()> {
+            panic!("unexpected input")
+        }
+        fn stop(&self, _: &SessionRef) -> Result<()> {
+            panic!("unexpected stop")
+        }
+        fn focus(&self, _: &SessionRef) -> Result<()> {
+            panic!("unexpected focus")
+        }
+    }
+
+    let (mut f, worker) = Fixture::new(Role::Worker, Status::Running, false);
+    let mut reviewer = worker.clone();
+    reviewer.id = "R2".into();
+    reviewer.role = Role::Reviewer;
+    f.engine.store.insert_run(&reviewer).unwrap();
+    // Simulate a pre-episode workspace before the first upgraded writable open.
+    f.engine
+        .store
+        .connection
+        .execute("DROP TABLE run_observation_episodes", [])
+        .unwrap();
+    let sample = Arc::new(Mutex::new(Sample::Down));
+    let open =
+        || Engine::open_with_runner(f.root.path(), Box::new(Observer(sample.clone()))).unwrap();
+    f.engine = open();
+    f.engine.sync().unwrap();
+    let log = |engine: &Engine| engine.store.list_events(&worker.task).unwrap();
+    let first = log(&f.engine);
+    assert_eq!(first.len(), 2, "first observation is visible for each run");
+    f.engine = open();
+    f.engine.sync().unwrap();
+    *sample.lock().unwrap() = Sample::Unknown;
+    f.engine.sync().unwrap();
+    assert_eq!(
+        log(&f.engine),
+        first,
+        "repeats and unknown status do not append events"
+    );
+    assert!(!serde_json::to_string(&first).unwrap().contains("secret"));
+    assert_eq!(f.engine.store.live_runs(None).unwrap().len(), 2);
+    let failed = || Observation {
+        status: None,
+        paused: None,
+        activity: None,
+    };
+    let down = episodes::Failure::from_error(&corral_herdr::EngineProblem::Down.into());
+    let last_seen = Timestamp::from_second(first[1].ts.as_second() + 60).unwrap();
+    for run in [&worker, &reviewer] {
+        let seq = f.engine.store.task_event_seq(&run.task).unwrap();
+        f.engine
+            .reconcile_sample(run, seq, failed(), Some(&down), last_seen)
+            .unwrap();
+    }
+    assert_eq!(
+        f.engine.store.require_task(&worker.task).unwrap().status,
+        Status::Running
+    );
+
+    let attention = || {
+        let mut tasks = [f.engine.store.require_task(&worker.task).unwrap()];
+        tasks[0].attention = Some("Existing advisory.".into());
+        f.engine
+            .store
+            .add_observation_attention(&mut tasks)
+            .unwrap();
+        tasks[0].attention.take().unwrap()
+    };
+    let current = attention();
+    assert!(current.starts_with("Existing advisory."));
+    assert!(current.contains("R1 session state unknown"));
+    assert!(current.contains("R2 session state unknown"));
+    assert_eq!(current.matches("3 failed").count(), 2);
+    assert_eq!(
+        current
+            .matches(format!("last {last_seen}").as_str())
+            .count(),
+        2
+    );
+
+    for next in [Sample::Timeout, Sample::Working, Sample::Timeout] {
+        *sample.lock().unwrap() = next;
+        f.engine.sync().unwrap();
+        if matches!(next, Sample::Working) {
+            assert_eq!(attention(), "Existing advisory.");
+        }
+    }
+    let events = log(&f.engine);
+    assert_eq!(
+        &events[..first.len()],
+        first,
+        "opening events are immutable"
+    );
+    for run in [&worker, &reviewer] {
+        let history: Vec<_> = events
+            .iter()
+            .filter(|event| event.run.as_ref() == Some(&run.id))
+            .collect();
+        let states: Vec<_> = history
+            .iter()
+            .map(|event| event.detail["state"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            states,
+            ["opened", "cause_changed", "opened", "recovered", "opened"]
+        );
+        assert_eq!(history[1].detail["observations"], 3);
+        assert_eq!(
+            history[1].detail["first_seen"],
+            history[0].detail["first_seen"]
+        );
+        assert_eq!(history[1].detail["last_seen"], json!(last_seen));
+        assert_ne!(history[0].detail["cause"], history[2].detail["cause"]);
+        assert_eq!(history[2].detail["cause"], history[4].detail["cause"]);
+        assert_eq!(history[3].detail["opened_seq"], history[2].seq);
+    }
+
+    // A sample captured before the run retired cannot reopen its episode or
+    // shift the failure onto the other live run.
+    let seq = f.engine.store.task_event_seq(&worker.task).unwrap();
+    let mut retired = worker.clone();
+    retired.ended = Some(Timestamp::now());
+    retired.outcome = Some(Outcome::Stopped);
+    f.engine.store.update_run(&retired).unwrap();
+    let retired_log = log(&f.engine);
+    let closure = retired_log.last().unwrap();
+    assert_eq!(closure.run.as_deref(), Some(worker.id.as_str()));
+    assert_eq!(closure.detail["state"], "run_ended");
+    f.engine
+        .reconcile_sample(&worker, seq, failed(), Some(&down), Timestamp::now())
+        .unwrap();
+    assert_eq!(log(&f.engine), retired_log);
+    assert!(!attention().contains("R1 session state unknown"));
+    assert!(attention().contains("R2 session state unknown"));
+
+    for next in [
+        Sample::Unclassified("private A"),
+        Sample::Unclassified("private A"),
+        Sample::Unclassified("private B"),
+        Sample::PiRefused("private C"),
+        Sample::PiRefused("private C"),
+        Sample::PiRefused("private D"),
+    ] {
+        *sample.lock().unwrap() = next;
+        f.engine.sync().unwrap();
+    }
+    let events = log(&f.engine);
+    let openings: Vec<_> = events
+        .iter()
+        .skip(retired_log.len())
+        .filter(|event| event.detail["state"] == "opened")
+        .map(|event| event.detail["signature"].as_str().unwrap())
+        .collect();
+    assert_eq!(openings.len(), 4);
+    assert_ne!(openings[0], openings[1]);
+    assert_ne!(openings[2], openings[3]);
+    assert!(!serde_json::to_string(&events).unwrap().contains("private"));
 }

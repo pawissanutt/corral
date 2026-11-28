@@ -16,6 +16,9 @@ use serde_json::Value;
 
 use crate::state::Shared;
 
+mod pending;
+pub(crate) use pending::Pending as PendingOperations;
+
 pub(crate) const IO_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub(crate) enum Peer {

@@ -11,7 +11,18 @@ export function formatChildReport(child: ChildSnapshot): string {
     ...(child.usage.toolCalls === undefined ? [] : [`${child.usage.toolCalls} tool calls`]),
     ...(child.usage.cost === undefined ? [] : [`$${child.usage.cost.toFixed(6)}`]),
     ...(child.usage.contextPercent === undefined ? [] : [`${child.usage.contextPercent.toFixed(1)}% context`])].join(", ");
-  return `## ${child.id}: ${child.state}\nFiles edited:\n${files}\nUsage: ${usage}${child.error ? `\nError: ${child.error}` : ""}\n\n${child.report ?? "No report."}`;
+  const settled = !LIVE_CHILD_STATES.includes(child.state);
+  const report = child.report?.trim() ? child.report : undefined;
+  let next: string | undefined;
+  if (child.state === "cancelled") {
+    next = child.edits.length ? "Reconcile existing edits before continuing." : "Leave it stopped unless this assignment is still needed.";
+  } else if (settled && child.kind === "review" && !child.verdict) {
+    next = "If review is still needed, check the error or transcript before arranging another independent review.";
+  } else if (settled && (child.state === "failed" || !report)) {
+    next = "Check the error or transcript and any existing edits before deciding what work remains.";
+  }
+  const body = report ?? (settled ? "No report for the assigned scope." : "Report pending.");
+  return `## ${child.id}: ${child.state}\nFiles edited:\n${files}\nUsage: ${usage}${child.error ? `\nError: ${child.error}` : ""}\n\n${next ? `Next: ${next}\n\n` : ""}${body}`;
 }
 
 export interface AgentCommunication {
@@ -56,14 +67,16 @@ export function fleetTools(runtime: FleetRuntime, allowedKinds: readonly ChildKi
         ...(guidance === "build" && proactive ? ["When multiple independent outputs are ready, dispatch them together with shared context, exclusive writer paths and a per-child acceptance check. Keep integration for the parent."] : []),
         ...(guidance === "build" ? [
           "For Build implementation and bounded read-only exploration, follow the effective Build delegation policy. Pass a matching route's exact kind and profile to task; use the default profile for unmatched assignments. Report unavailable routes instead of substituting another profile.",
-          "Give implementation children non-overlapping owned files; use kind explore and owns: [] for read-only work. Include full requirements and expected checks or evidence; children inherit none of your conversation.",
+          "Give slice children disjoint owned outputs and an acceptance check. Use kind explore and owns: [] for bounded scouting its tools can complete, not as the default for analytical work. Children inherit none of your conversation.",
           "Keep useful separate work for yourself. Use after only for real dependencies, and unique lowercase ids for the entire session.",
         ] : [
           "Use task for substantial independent implementation, not trivial edits. Give children non-overlapping owned files, the full requirements and expected checks; they inherit none of your conversation.",
           "Keep useful separate work for yourself. Use after only for real dependencies, and unique lowercase ids for the entire session. "
             + (workerTask ? workerProfile : "Choose a configured profile or an approved provider/model."),
         ]),
-        ...(allowedKinds.includes("explore") ? ["Explore children accept effort quick, standard (default) or deep. Check each explore report's tool-call count: a broad question answered with few calls deserves verification or a deep retry."] : []),
+        ...(allowedKinds.includes("explore") ? [guidance === "build"
+          ? "Explore effort (quick, standard or deep) does not add tool access. Judge the report by the requested evidence, not tool count or done status. If evidence is missing, rescope or take over rather than automatically retrying deeper."
+          : "Explore children accept effort quick, standard (default) or deep. Check each explore report's tool-call count: a broad question answered with few calls deserves verification or a deep retry."] : []),
         "Collect and reconcile every child report and outside-ownership edit before claiming completion. Do not run shared checks while children are still editing. Children grant no review or board authority.",
       ],
       parameters: Type.Object({ ...(guidance === "build" ? { context: Type.Optional(Type.String({ maxLength: 8192 })) } : {}), agents: Type.Array(Type.Object({

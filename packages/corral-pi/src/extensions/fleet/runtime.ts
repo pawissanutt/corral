@@ -5,6 +5,7 @@ import type * as Sdk from "@earendil-works/pi-coding-agent";
 import type { ModelRuntime, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { isProviderId } from "../../auth/providers.ts";
 import { assertApiEffort } from "../../host/api-providers.ts";
+import { codexFailureCopyFromText } from "../../host/codex-failure-copy.ts";
 import { AGENT_JOURNAL_MAX, AGENT_MESSAGE_MAX, AGENT_SEND_BUDGET, MAX_CHILDREN_PER_CALL, MAX_PARALLEL_LIMIT,
   type AgentMessage, type BuildProfile, type ChildKind, type ChildQuestion, type ChildSnapshot, type ChildSpec,
   type FleetControl, type FleetSnapshot, type MessageOutcome, type RosterEntry } from "../../build/types.ts";
@@ -595,6 +596,7 @@ export class FleetRuntime implements FleetControl {
           const outside = entry.spec.owns.length > 0 && !entry.spec.owns.some(owned => owned === "." || path === owned || path.startsWith(`${owned}/`));
           entry.value.edits = [...entry.value.edits.filter(edit => edit.path !== path), { path, outside, at: this.now() }];
         };
+        let verdictSubmissionFailed = false;
         entry.handle = this.runner.run(entry.spec, entry.model, {
           onImageSaved: path => { noteEdit(path); this.touch(entry, true); },
           execution: { sessionFile: entry.value.sessionFile!, sessionId: entry.request, maxTurns: entry.maxTurns, deadlineAt: entry.deadlineAt,
@@ -602,7 +604,10 @@ export class FleetRuntime implements FleetControl {
           onEvent: event => {
             if (!live(entry)) return;
             entry.history.observe(entry.spec.id, event);
-            if (event.type === "tool" && (event.phase === "completed" || event.phase === "error")) entry.value.activity = undefined;
+            if (event.type === "tool" && (event.phase === "completed" || event.phase === "error")) {
+              entry.value.activity = undefined;
+              if (entry.value.kind === "review" && event.name === "review_verdict" && event.phase === "error") verdictSubmissionFailed = true;
+            }
             // Text deltas change the preview, not persisted token or context usage.
             if (event.type === "assistant_end" || event.type === "tool") this.refreshUsage(entry);
             this.touch(entry);
@@ -643,13 +648,21 @@ export class FleetRuntime implements FleetControl {
         const result = await entry.handle.done;
         entry.researchReport = result.researchReport;
         entry.truncated = result.truncated ?? result.report.length > 32768;
+        const report = result.report.trim() ? result.report : undefined;
         if (live(entry)) {
-          const failed = entry.noFallback && result.failed
-            ? `Child ${entry.spec.id} profile ${JSON.stringify(entry.model.profile)}: ${result.failed}. Choose another usable configured profile, or continue inline.`
-            : entry.value.kind === "review" && !entry.value.verdict ? "Review ended without a verdict" : result.failed;
-          this.finish(entry, failed ? "failed" : "done", failed, result.report);
+          const verdictFailure = entry.value.kind === "review" && !entry.value.verdict
+            ? verdictSubmissionFailed ? "Review verdict submission failed" : "Review ended without a verdict"
+            : undefined;
+          // Keep the provider evidence, but don't pass on advice to message a settled child to retry.
+          const providerNote = result.failed ? codexFailureCopyFromText(result.failed) : undefined;
+          const failure = providerNote?.step.startsWith("Send a message to retry") ? providerNote.sentence : result.failed;
+          const detail = entry.noFallback && failure
+            ? `Child ${entry.spec.id} profile ${JSON.stringify(entry.model.profile)}: ${failure.replace(/\.$/, "")}. Choose another usable configured profile, or continue inline.`
+            : failure;
+          const failed = [verdictFailure, detail].filter(Boolean).join(": ");
+          this.finish(entry, failed ? "failed" : "done", failed || undefined, report);
         }
-        else entry.value.report = result.report.slice(0, 32768);
+        else entry.value.report = report?.slice(0, 32768);
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
         if (entry.value.state === "stopping") {

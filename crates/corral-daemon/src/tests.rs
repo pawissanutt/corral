@@ -26,6 +26,8 @@ mod attachments;
 mod diagram;
 mod diagram_compare;
 mod fake_host;
+#[path = "conn/pending_op_tests.rs"]
+mod pending_op;
 mod pi_build;
 mod pi_chat;
 mod system;

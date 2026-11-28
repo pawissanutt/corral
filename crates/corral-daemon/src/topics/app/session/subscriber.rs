@@ -57,12 +57,10 @@ impl Drop for Watch {
 #[derive(Default)]
 pub(in crate::topics) struct SessionTopics {
     subscribers: BTreeMap<Arc<str>, Subscriber>,
-    /// Made with the first subscription: a connection that watches no session waits as before.
-    waker: Option<Arc<Waker>>,
 }
 
 impl SessionTopics {
-    pub fn open(&mut self, shared: &Shared, open: SubOpen) -> Result<()> {
+    pub fn open(&mut self, shared: &Shared, open: SubOpen, waker: &Arc<Waker>) -> Result<()> {
         let scope: Arc<str> = scope(open.scope)?.into();
         ensure!(
             crate::sessions::child_scope(&scope)?.is_none(),
@@ -72,27 +70,15 @@ impl SessionTopics {
             self.subscribers.contains_key(&scope) || self.subscribers.len() < SESSION_SUBSCRIPTIONS,
             "too many session subscriptions"
         );
-        let waker = match &self.waker {
-            Some(waker) => Arc::clone(waker),
-            None => {
-                let waker = Arc::new(Waker::new().context("opening the session wake signal")?);
-                self.waker = Some(Arc::clone(&waker));
-                waker
-            }
-        };
         let mut sub = subscribe(
             Arc::clone(&shared.session_live.watches),
             Arc::clone(&scope),
             shared.epoch(),
             open.since,
         )?;
-        sub.watch.wake(&waker);
+        sub.watch.wake(waker);
         self.subscribers.insert(scope, sub);
         Ok(())
-    }
-
-    pub fn waker(&self) -> Option<Arc<Waker>> {
-        self.waker.clone()
     }
 
     pub fn close(&mut self, scope: Option<String>) {

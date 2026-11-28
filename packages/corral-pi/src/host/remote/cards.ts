@@ -15,6 +15,7 @@ export interface CardOption {
 }
 export interface CardQuestion {
   header?: string; text: string; options: CardOption[]; initial?: string; multi: boolean; free_text: boolean;
+  note_on_picks?: boolean;
 }
 export interface SessionCard extends Omit<CardBrief, "kind"> {
   kind: CardKind; meta?: string; body?: string; body_more: boolean; questions: CardQuestion[]; tool?: string; opened_at: string;
@@ -40,6 +41,10 @@ export function cardOptions(options: readonly { label: string; detail?: string }
 export function cardQuestion(text: string, options: CardOption[], free_text = false, initial?: string): CardQuestion {
   return { text, options, multi: false, free_text, initial };
 }
+// ask_user accepts Other by default, but notes only when the caller opted in.
+export function questionTextCapabilities(freeText?: boolean): Pick<CardQuestion, "free_text" | "note_on_picks"> {
+  return { free_text: freeText !== false, ...(freeText === true ? { note_on_picks: true } : {}) };
+}
 export function invalidAnswer(reason: string): never { throw new BridgeRefusal("invalid_card_answer", reason); }
 export function singleAnswer(answers: readonly CardAnswer[]): CardAnswer {
   const answer = answers[0];
@@ -52,7 +57,8 @@ export function questionEntries(pending: PendingQuestions | undefined): CardEntr
   return pending.pending().map<CardEntry>(record => ({
     card: { id: record.id, kind: "question", title: record.questions[0]?.question ?? "Owner question", tool: record.tool,
       opened_at: stamp(record.expires - QUESTION_TTL), expires_at: stamp(record.expires),
-      questions: record.questions.map(q => cardQuestion(q.question, cardOptions(q.options.map(label => ({ label }))), q.freeText !== false)) },
+      questions: record.questions.map(q => ({ text: q.question, options: cardOptions(q.options.map(label => ({ label }))),
+        multi: false, ...questionTextCapabilities(q.freeText) })) },
     async answer(answers, dismiss, beforeQuestion) {
       if (dismiss) return "dismissed";
       if (answers.length !== record.questions.length) invalidAnswer("answer each question");

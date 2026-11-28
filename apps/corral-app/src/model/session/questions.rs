@@ -94,8 +94,10 @@ pub struct QuestionView {
     /// `· choose any`.
     pub multi: bool,
     pub options: Vec<ChoiceOption>,
-    /// `Other`, `Note` or `Answer`: the owner's own words, where the question takes them.
+    /// `Other` or `Answer`: the owner's own words in place of picks.
     pub words: Option<TextRow>,
+    /// An optional note on the current picks, only if the host accepts it.
+    pub note: Option<TextRow>,
 }
 
 /// A text field whose every change is one action.
@@ -109,6 +111,7 @@ pub struct TextRow {
     session: Id,
     card: String,
     question: usize,
+    note_on_picks: bool,
 }
 
 impl TextRow {
@@ -128,16 +131,32 @@ impl TextRow {
             session: session.clone(),
             card: card.to_owned(),
             question,
+            note_on_picks: false,
         }
+    }
+
+    fn note(mut self) -> Self {
+        self.id.push_str("-note");
+        self.note_on_picks = true;
+        self
     }
 
     /// The action the field's new `text` dispatches.
     pub fn with(&self, text: String) -> Action {
-        Action::Dock(DockAction::Text {
-            session: self.session.clone(),
-            card: self.card.clone(),
-            question: self.question,
-            text,
+        Action::Dock(if self.note_on_picks {
+            DockAction::QuestionNote {
+                session: self.session.clone(),
+                card: self.card.clone(),
+                question: self.question,
+                text,
+            }
+        } else {
+            DockAction::Text {
+                session: self.session.clone(),
+                card: self.card.clone(),
+                question: self.question,
+                text,
+            }
         })
     }
 }
@@ -167,12 +186,32 @@ pub struct SendAnswers {
     pub action: Action,
 }
 
-/// Whether `question` has an answer in `draft`. A question that offers neither options nor
-/// words takes none and counts as answered.
+fn available(question: &CardQuestion, id: &str) -> bool {
+    question
+        .options
+        .iter()
+        .any(|option| option.id == id && option.unavailable.is_none())
+}
+
+/// A refreshed card may no longer take a draft as written. Require a new answer rather than
+/// silently dropping a choice or sending a pick without the note its owner wrote.
+fn valid_draft(question: &CardQuestion, draft: &CardDraft, index: usize) -> bool {
+    let picks = draft.picks(index);
+    let text_allowed = if picks.is_empty() {
+        question.free_text
+    } else {
+        question.note_on_picks
+    };
+    (question.multi || picks.len() <= 1)
+        && picks.iter().all(|id| available(question, id))
+        && (text_allowed || draft.text(index).trim().is_empty())
+}
+
 fn answered(question: &CardQuestion, draft: &CardDraft, index: usize) -> bool {
-    !draft.picks(index).is_empty()
-        || !draft.text(index).trim().is_empty()
-        || (question.options.is_empty() && !question.free_text)
+    valid_draft(question, draft, index)
+        && (!draft.picks(index).is_empty()
+            || !draft.text(index).trim().is_empty()
+            || (question.options.is_empty() && !question.free_text))
 }
 
 fn unanswered(card: &SessionCard, draft: &CardDraft) -> Vec<usize> {
@@ -186,6 +225,9 @@ fn unanswered(card: &SessionCard, draft: &CardDraft) -> Vec<usize> {
 
 /// The answer as the Review tab says it.
 fn said(question: &CardQuestion, draft: &CardDraft, index: usize) -> Option<String> {
+    if !valid_draft(question, draft, index) {
+        return None;
+    }
     let mut parts: Vec<String> = draft
         .picks(index)
         .iter()
@@ -199,16 +241,6 @@ fn said(question: &CardQuestion, draft: &CardDraft, index: usize) -> Option<Stri
     (!parts.is_empty()).then(|| parts.join(" · "))
 }
 
-fn words_label(question: &CardQuestion) -> &'static str {
-    if question.options.is_empty() {
-        "Answer"
-    } else if question.multi {
-        "Note"
-    } else {
-        "Other"
-    }
-}
-
 fn view(
     cx: &Cx<'_>,
     card: &SessionCard,
@@ -217,6 +249,11 @@ fn view(
     enabled: bool,
 ) -> Option<QuestionView> {
     let question = card.questions.get(index)?;
+    let (picks, text) = if valid_draft(question, draft, index) {
+        (draft.picks(index), draft.text(index))
+    } else {
+        (&[][..], "")
+    };
     let pick = |option: &str| {
         Action::Dock(DockAction::Pick {
             session: cx.id.clone(),
@@ -230,20 +267,36 @@ fn view(
         header: question.header.clone(),
         text: question.text.clone(),
         multi: question.multi,
-        options: options(&card.id, question, draft.picks(index), enabled, pick),
-        words: (question.free_text || question.options.is_empty()).then(|| {
+        options: options(&card.id, question, picks, enabled, pick),
+        words: question.free_text.then(|| {
+            let words_only = question.options.is_empty();
             TextRow::new(
                 cx.id,
                 &card.id,
                 index,
-                words_label(question),
-                draft.text(index).to_owned(),
-                if question.options.is_empty() {
+                if words_only { "Answer" } else { "Other" },
+                if picks.is_empty() {
+                    text.to_owned()
+                } else {
+                    String::new()
+                },
+                if words_only {
                     "Your answer…"
                 } else {
-                    "Or answer in your own words…"
+                    "Answer in your own words instead…"
                 },
             )
+        }),
+        note: (question.note_on_picks && !picks.is_empty()).then(|| {
+            TextRow::new(
+                cx.id,
+                &card.id,
+                index,
+                "Note",
+                text.to_owned(),
+                "Optional note on your choice…",
+            )
+            .note()
         }),
     })
 }
@@ -425,8 +478,8 @@ pub(super) fn dock(cx: &Cx<'_>, cards: &[CardBrief]) -> Option<QuestionDock> {
     })
 }
 
-/// Chooses an option: a multi-choice question toggles it; a single choice replaces the
-/// question's answer, words included, and moves on to the next tab.
+/// Chooses an option: a multi-choice question toggles it; a single choice replaces the pick.
+/// Stay on a question that accepts a note, so the note field is available before moving on.
 pub(super) fn pick(
     state: &mut State,
     session: &Id,
@@ -441,22 +494,22 @@ pub(super) fn pick(
     let Some(asked) = card.questions.get(question) else {
         return;
     };
-    let offered = asked
-        .options
-        .iter()
-        .any(|found| found.id == option && found.unavailable.is_none());
-    if !offered || dock::sending(state.ui(session.as_str()), feed, card_id) {
+    if !available(asked, &option) || dock::sending(state.ui(session.as_str()), feed, card_id) {
         return;
     }
     let count = card.questions.len();
-    let multi = asked.multi;
     let draft = state
         .ui_mut(session)
         .dock
         .drafts
         .entry(card_id.to_owned())
         .or_default();
-    if multi {
+    if !valid_draft(asked, draft, question) {
+        draft.picks_mut(question).clear();
+        *draft.text_mut(question) = None;
+    }
+    let had_picks = !draft.picks(question).is_empty();
+    if asked.multi {
         let picks = draft.picks_mut(question);
         match picks.iter().position(|picked| *picked == option) {
             Some(at) => {
@@ -466,32 +519,52 @@ pub(super) fn pick(
         }
     } else {
         *draft.picks_mut(question) = vec![option];
-        *draft.text_mut(question) = None;
-        if count > 1 {
-            draft.tab = (question + 1).min(count);
+        if count > 1 && !asked.note_on_picks {
+            draft.tab = question + 1;
         }
+    }
+    // Do not change a typed Other into a note or send a former note as Other.
+    if !asked.note_on_picks || !had_picks || draft.picks(question).is_empty() {
+        *draft.text_mut(question) = None;
     }
 }
 
-/// The owner's own words for a question; for a single choice they replace the chosen option.
+/// Text in Other replaces picks; text in Note can only annotate picks.
 pub(super) fn text(
     state: &mut State,
     session: &Id,
     card_id: &str,
     question: usize,
     text: String,
+    note: bool,
     feed: &Feed,
 ) {
-    let single = dock::card(feed, session.as_str(), card_id)
-        .and_then(|card| card.questions.get(question))
-        .is_some_and(|asked| !asked.multi && !asked.options.is_empty());
+    let Some(card) = dock::card(feed, session.as_str(), card_id) else {
+        return;
+    };
+    if dock::sending(state.ui(session.as_str()), feed, card_id) {
+        return;
+    }
+    let asked = card.questions.get(question);
+    if card.kind != CardKind::Input
+        && !asked.is_some_and(|q| if note { q.note_on_picks } else { q.free_text })
+    {
+        return;
+    }
     let draft = state
         .ui_mut(session)
         .dock
         .drafts
         .entry(card_id.to_owned())
         .or_default();
-    if single && !text.trim().is_empty() {
+    let has_picks = !draft.picks(question).is_empty();
+    if note && (!has_picks || !asked.is_some_and(|q| valid_draft(q, draft, question))) {
+        return;
+    }
+    if !note && has_picks {
+        if text.trim().is_empty() {
+            return;
+        }
         draft.picks_mut(question).clear();
     }
     *draft.text_mut(question) = Some(text);

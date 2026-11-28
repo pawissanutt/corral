@@ -32,6 +32,7 @@ pub(super) fn question(options: Vec<CardOption>, free_text: bool) -> CardQuestio
         initial: None,
         multi: false,
         free_text,
+        note_on_picks: false,
     }
 }
 
@@ -142,6 +143,118 @@ fn a_two_question_card_is_not_sent_until_both_are_answered() {
         .map(|answer| answer.options.clone())
         .collect();
     assert_eq!(chosen, [vec!["rest".to_owned()], vec!["disk".to_owned()]]);
+}
+
+#[test]
+fn question_draft_sends_pick_notes_and_other_as_distinct_answers() {
+    let offered = || vec![option("rest"), option("grpc")];
+    let mut feed = feed_with(
+        card(
+            "q-1",
+            CardKind::Question,
+            vec![
+                CardQuestion {
+                    note_on_picks: true,
+                    ..question(offered(), true)
+                },
+                CardQuestion {
+                    multi: true,
+                    note_on_picks: true,
+                    ..question(offered(), false)
+                },
+                CardQuestion {
+                    multi: true,
+                    ..question(offered(), true)
+                },
+            ],
+        ),
+        SessionState::default(),
+    );
+    feed.link = crate::model::daemon::Link::Up;
+    let session = Id::from(SESSION);
+    let mut state = State::default();
+    let bring = Action::Dock(DockAction::Bring {
+        session: session.clone(),
+        card: "q-1".into(),
+    });
+    let show = |tab| {
+        Action::Dock(DockAction::Show {
+            session: session.clone(),
+            card: "q-1".into(),
+            tab,
+        })
+    };
+    let shown = |state: &State| dock_of(&feed, state).answer.unwrap().question.unwrap();
+    state.act(bring.clone(), &feed);
+
+    let first = shown(&state);
+    assert!(first.note.is_none());
+    state.act(first.options[0].action.clone().unwrap(), &feed);
+    let first = shown(&state);
+    assert_eq!(first.index, 0);
+    state.act(first.note.unwrap().with("keep the old route".into()), &feed);
+    let first = shown(&state);
+    assert!(first.options[0].chosen);
+    assert!(first.words.unwrap().text.is_empty());
+
+    state.act(show(1), &feed);
+    assert!(shown(&state).words.is_none());
+    for index in [0, 1] {
+        state.act(shown(&state).options[index].action.clone().unwrap(), &feed);
+    }
+    state.act(
+        shown(&state).note.unwrap().with("in that order".into()),
+        &feed,
+    );
+
+    state.act(show(2), &feed);
+    state.act(shown(&state).options[0].action.clone().unwrap(), &feed);
+    let last = shown(&state);
+    assert!(last.note.is_none());
+    state.act(last.words.unwrap().with("use neither".into()), &feed);
+    assert!(shown(&state).options.iter().all(|option| !option.chosen));
+
+    let close = dock_of(&feed, &state).answer.unwrap().close;
+    assert!(answers(&state.act(close, &feed)).is_empty());
+    state.act(bring, &feed);
+    let submit = dock_of(&feed, &state).answer.unwrap().send.unwrap().action;
+    // A refreshed card can remove an option or revoke the note capability. Neither case may
+    // turn the invalid draft into a new answer, even if Send was armed against the old card.
+    for refreshed in [
+        CardQuestion {
+            note_on_picks: true,
+            ..question(vec![option("grpc")], true)
+        },
+        question(offered(), true),
+    ] {
+        let mut refreshed_feed = feed_with(
+            card("q-1", CardKind::Question, vec![refreshed]),
+            SessionState::default(),
+        );
+        refreshed_feed.link = crate::model::daemon::Link::Up;
+        assert!(answers(&state.act(submit.clone(), &refreshed_feed)).is_empty());
+        assert!(
+            dock_of(&refreshed_feed, &state)
+                .answer
+                .unwrap()
+                .question
+                .unwrap()
+                .options
+                .iter()
+                .all(|option| !option.chosen)
+        );
+    }
+    let sent = answers(&state.act(submit, &feed));
+    assert_eq!(sent.len(), 1);
+    assert!(!sent[0].dismiss);
+    assert_eq!(
+        serde_json::to_value(&sent[0].answers).unwrap(),
+        serde_json::json!([
+            { "options": ["rest"], "text": "keep the old route" },
+            { "options": ["rest", "grpc"], "text": "in that order" },
+            { "text": "use neither" },
+        ])
+    );
 }
 
 /// The dock of `SESSION` as a build's page on desktop builds it.

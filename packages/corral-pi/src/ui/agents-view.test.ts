@@ -276,6 +276,22 @@ test("Done folds successes until toggled or a member is selected, and one agent 
   expect(plain(single.lines).join("\n")).not.toContain("Timeline");
 });
 
+test("a selected stopping agent folds into history when cancelled and can be reopened", () => {
+  const children = [buildChild("stopped", { state: "stopping" }), buildChild("passed", { state: "done" })];
+  let model = buildModel({ ...MOCK_FLEET, children });
+  const view = new AgentsView(viewHost(() => model));
+  const screen = () => plain(renderLayoutFrame(view.scroll, 116, 32, () => {}).lines).join("\n");
+  view.select(childKey("stopped"));
+  expect(screen()).toContain("waiting for cleanup");
+  model = buildModel({ ...MOCK_FLEET, children: [{ ...children[0]!, state: "cancelled" }, children[1]!] });
+  expect(screen()).not.toContain("its edits stay in the worktree");
+  expect(view.actions()).toEqual(["fold"]);
+  view.handleKey("\r");
+  view.move(1);
+  expect(view.entry()?.row.key).toBe(childKey("stopped"));
+  expect(screen()).toContain("its edits stay in the worktree");
+});
+
 test("selection moves to the first row when Done unfolds by itself", () => {
   const state = { ...fixture, jobs: [], helpers: [helper("live", "running", NOW),
     ...["one", "two", "three"].map(id => helper(id, "completed", NOW))] };

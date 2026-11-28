@@ -420,10 +420,11 @@ fn tasks(engine: &Engine) -> Result<Vec<TaskRow>> {
 }
 
 /// The caller reads the tasks and their related facts in one store snapshot.
-pub(super) fn task_rows(engine: &Engine, tasks: Vec<Task>) -> Result<Vec<TaskRow>> {
+pub(super) fn task_rows(engine: &Engine, mut tasks: Vec<Task>) -> Result<Vec<TaskRow>> {
     if tasks.is_empty() {
         return Ok(Vec::new());
     }
+    engine.store.add_observation_attention(&mut tasks)?;
     let dependencies = tasks
         .iter()
         .flat_map(|task| task.depends_on.iter().map(String::as_str))

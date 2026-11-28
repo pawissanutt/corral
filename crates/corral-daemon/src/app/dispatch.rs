@@ -160,8 +160,27 @@ pub(crate) fn serve(
             topics.close(decode(params)?);
             Ok(())
         }),
-        op::OP_SUBMIT => answer!(Ok(ops::submit(shared, decode(params)?)?)),
-        op::OP_RESULT => answer!(Ok(ops::result(shared, decode(params)?)?)),
+        op::OP_SUBMIT | op::OP_RESULT => {
+            let queued = (|| -> Result<(), Failure> {
+                let waker = topics.ensure_waker()?;
+                if method == op::OP_SUBMIT {
+                    let submission = decode(params)?;
+                    topics
+                        .operations
+                        .push(id.clone(), || ops::submit(shared, submission, &waker))?;
+                } else {
+                    let request = decode(params)?;
+                    topics
+                        .operations
+                        .push(id.clone(), || ops::result(shared, request, &waker))?;
+                }
+                Ok(())
+            })();
+            match queued {
+                Ok(()) => Ok(()), // The connection flushes the reply when ready or timed out.
+                Err(error) => respond::<()>(conn, id, Err(error)),
+            }
+        }
         chat::ASSISTANT_WARM => answer!(Ok(assistant::warm(shared, decode(params)?)?)),
         chat::ASSISTANT_SESSION => answer!(Ok(assistant::session(shared, decode(params)?)?)),
         build::CODE_START => answer!(Ok(builds::start_code(shared, decode(params)?)?)),
@@ -532,6 +551,14 @@ impl From<anyhow::Error> for Failure {
         };
         Self::new(code, message)
     }
+}
+
+pub(crate) fn respond_op(
+    conn: &mut dyn Conn,
+    id: Value,
+    result: Result<op::OpReply>,
+) -> Result<()> {
+    respond(conn, id, result.map_err(Into::into))
 }
 
 fn respond<T: Serialize>(conn: &mut dyn Conn, id: Value, result: Result<T, Failure>) -> Result<()> {

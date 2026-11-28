@@ -19,8 +19,8 @@ function delegationFacts(settings: BuildSettings): string[] {
     "",
     `Mode: ${mode}`,
     mode === "proactive"
-      ? "Scope only enough to settle shared decisions. Dispatch ready independent outputs early in one task call before investigating each yourself. Use bounded read-only exploration for unknowns while doing known work. Give every child an acceptance check and every writer exclusive paths. Keep integration with the parent; use findings as they arrive and wait only when blocked. Keep coupled edits and known-file lookups inline. This applies even without routes or named profiles."
-      : "Split work into parallel children when there are substantial independent slices with separable files and a clear interface. Use read-only children for substantial independent research when it is useful.",
+      ? "Scope only enough to settle shared decisions. Dispatch ready independent outputs early in one task call before investigating each yourself. Use bounded read-only exploration for specific factual unknowns while doing known work. Give every child an acceptance check and every writer exclusive paths. Keep integration with the parent; use findings as they arrive and wait only when blocked. Keep coupled edits and known-file lookups inline. This applies even without routes or named profiles."
+      : "Split work into parallel children when there are substantial independent slices with separable files and a clear interface. Use scouts for bounded factual questions; route analytical deliverables by difficulty and required tools.",
     "",
     "Ordered routes (first clearly applicable match per assignment):",
     ...(routes.length ? routes.map(({ match, kind, profile, strategy }, index) =>

@@ -1,20 +1,22 @@
 //! Owner operations run off the connection and sync threads.
 use std::{
-    sync::{Arc, atomic::Ordering, mpsc},
+    sync::{Arc, atomic::Ordering},
     thread,
+    time::Instant,
 };
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use corral_engine::Engine;
 use corral_protocol::op::{OpReply, OpSubmit};
 use corral_types::Op;
 
-use crate::state::Shared;
+use crate::{state::Shared, wake::Waker};
 
 mod late;
+use late::Outcome;
 pub(crate) use late::{Late, result};
 
-pub(crate) fn submit(shared: &Arc<Shared>, submit: OpSubmit) -> Result<OpReply> {
+pub(crate) fn submit(shared: &Arc<Shared>, submit: OpSubmit, waker: &Arc<Waker>) -> Result<Wait> {
     {
         let mut state = shared.lock();
         if state.stop || state.op_workers >= crate::server::MAX_CONNECTIONS {
@@ -23,8 +25,8 @@ pub(crate) fn submit(shared: &Arc<Shared>, submit: OpSubmit) -> Result<OpReply> 
         state.op_workers += 1;
     }
     let permit = OperationPermit(Arc::clone(shared));
-    // One slot: the worker never waits for its reader, which may come late through `op.result`.
-    let (send, receive) = mpsc::sync_channel(1);
+    let outcome = Arc::new(Outcome::default());
+    let complete = Complete(Some(Arc::clone(&outcome)));
     thread::Builder::new()
         .name("corrald-op".into())
         .spawn(move || {
@@ -40,9 +42,7 @@ pub(crate) fn submit(shared: &Arc<Shared>, submit: OpSubmit) -> Result<OpReply> 
             let succeeded = result.is_ok();
             shared.publish();
             shared.nudge(None);
-            if let Err(mpsc::SendError(Err(error))) = send.send(result) {
-                eprintln!("corrald late operation: {error:#}");
-            }
+            complete.finish(result);
             if let (true, Some(task), Some(engine)) = (succeeded, advance, engine) {
                 if let Err(error) = engine.advance(&task) {
                     eprintln!("corrald advance {task}: {error:#}");
@@ -51,15 +51,68 @@ pub(crate) fn submit(shared: &Arc<Shared>, submit: OpSubmit) -> Result<OpReply> 
             }
         })
         .context("start daemon operation worker")?;
-    let wait = shared.late_ops.wait();
-    // A zero wait (tests only) parks at once, so the delayed path is taken deterministically.
-    if wait.is_zero() {
-        return Ok(late::park(shared, receive));
+    Ok(Wait::new(shared, outcome, WaitKind::Submit, waker))
+}
+
+/// A reply being awaited by a connection. Only that connection's loop polls and sends it.
+pub(crate) struct Wait {
+    outcome: Arc<Outcome>,
+    deadline: Instant,
+    kind: WaitKind,
+    park_now: bool,
+}
+
+enum WaitKind {
+    Submit,
+    Follow(u64),
+}
+
+impl Wait {
+    fn new(shared: &Shared, outcome: Arc<Outcome>, kind: WaitKind, waker: &Arc<Waker>) -> Self {
+        let wait = shared.late_ops.wait();
+        outcome.watch(waker);
+        Self {
+            outcome,
+            deadline: Instant::now() + wait,
+            kind,
+            // Tests can force the delayed submit path even when the worker is already done.
+            park_now: wait.is_zero(),
+        }
     }
-    match receive.recv_timeout(wait) {
-        Ok(result) => result,
-        Err(mpsc::RecvTimeoutError::Timeout) => Ok(late::park(shared, receive)),
-        Err(error) => Err(error).context("receive daemon operation outcome"),
+
+    pub(crate) fn poll(&self, shared: &Shared) -> Option<Result<OpReply>> {
+        let expired = || Instant::now() >= self.deadline;
+        match self.kind {
+            WaitKind::Submit if self.park_now => {
+                Some(Ok(late::park(shared, Arc::clone(&self.outcome))))
+            }
+            WaitKind::Submit => self
+                .outcome
+                .take()
+                .or_else(|| expired().then(|| Ok(late::park(shared, Arc::clone(&self.outcome))))),
+            WaitKind::Follow(n) => self
+                .outcome
+                .replay()
+                .or_else(|| expired().then(|| Ok(late::running(shared, n)))),
+        }
+    }
+}
+
+struct Complete(Option<Arc<Outcome>>);
+
+impl Complete {
+    fn finish(mut self, result: Result<OpReply>) {
+        if let Some(outcome) = self.0.take() {
+            outcome.finish(result);
+        }
+    }
+}
+
+impl Drop for Complete {
+    fn drop(&mut self) {
+        if let Some(outcome) = self.0.take() {
+            outcome.finish(Err(anyhow!("operation ended without an outcome")));
+        }
     }
 }
 

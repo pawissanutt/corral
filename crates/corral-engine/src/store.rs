@@ -63,6 +63,9 @@ impl Store {
         connection
             .execute_batch(crate::takeover::identity::SCHEMA)
             .context("initialize run checkout identity table")?;
+        connection
+            .execute_batch(crate::sync::episodes::SCHEMA)
+            .context("initialize run observation episodes")?;
         let store = Self { connection };
         crate::artifacts::prepare_catalog(&store)?;
         Ok(store)
@@ -506,6 +509,11 @@ impl Store {
     }
 
     pub fn update_run(&self, run: &Run) -> Result<()> {
+        // An explicit stop is not a successful observation. Close the episode
+        // atomically with the run so it doesn't remain active after retirement.
+        if run.ended.is_some() && self.connection.is_autocommit() {
+            return self.transaction(|store| store.update_run(run));
+        }
         let changed = self
             .connection
             .execute(
@@ -520,6 +528,9 @@ impl Store {
             )
             .context("update run")?;
         ensure!(changed == 1, "run {}:{} does not exist", run.task, run.id);
+        if let Some(ended) = run.ended {
+            self.end_observation_episode(run, ended)?;
+        }
         Ok(())
     }
 

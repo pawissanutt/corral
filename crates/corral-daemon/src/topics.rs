@@ -3,6 +3,8 @@ mod app;
 pub(crate) use app::TerminalCache;
 pub(crate) use app::{SessionLive, join_session_live, start_session_live};
 
+use std::sync::Arc;
+
 use anyhow::{Context, Result, ensure};
 use corral_protocol::{
     self as wire,
@@ -12,15 +14,23 @@ use corral_protocol::{
 };
 use serde::Serialize;
 
-use crate::{conn::Conn, state::Shared, views::SystemFeatures};
+use crate::{
+    app::dispatch,
+    conn::{Conn, PendingOperations},
+    state::Shared,
+    views::SystemFeatures,
+    wake::Waker,
+};
 
 pub(crate) struct Subscriptions<'a> {
     shared: &'a Shared,
     rows: Vec<app::Subscriber>,
     terminals: app::TerminalTopics,
     sessions: app::SessionTopics,
-    // Deferred read replies use this connection's regular, single-writer flush.
+    // Only the connection loop writes frames, including deferred RPC replies.
     pub(crate) model_discovery: crate::config::pi_hosted_tool_models::Pending,
+    pub(crate) operations: PendingOperations,
+    waker: Option<Arc<Waker>>,
     session_fleet: bool,
     session_state: bool,
     session_transcript: bool,
@@ -40,6 +50,8 @@ impl<'a> Subscriptions<'a> {
             terminals: app::TerminalTopics::default(),
             sessions: app::SessionTopics::default(),
             model_discovery: Default::default(),
+            operations: Default::default(),
+            waker: None,
             session_fleet: false,
             session_state: false,
             session_transcript: false,
@@ -101,7 +113,8 @@ impl<'a> Subscriptions<'a> {
             return self.terminals.open(self.shared, open);
         }
         if open.topic == Topic::Session {
-            return self.sessions.open(self.shared, open);
+            let waker = self.ensure_waker()?;
+            return self.sessions.open(self.shared, open, &waker);
         }
         ensure!(open.scope.is_none(), "topic does not take a scope");
         ensure!(
@@ -156,16 +169,28 @@ impl<'a> Subscriptions<'a> {
         }
     }
 
-    /// Ends this connection's wait for client input when a watched session has a page.
-    pub(crate) fn waker(&self) -> Option<std::sync::Arc<crate::wake::Waker>> {
-        self.sessions.waker()
+    /// Ends the connection's wait for input when a session page or operation reply is ready.
+    pub(crate) fn waker(&self) -> Option<Arc<Waker>> {
+        self.waker.clone()
+    }
+
+    pub(crate) fn ensure_waker(&mut self) -> Result<Arc<Waker>> {
+        if let Some(waker) = &self.waker {
+            return Ok(Arc::clone(waker));
+        }
+        let waker = Arc::new(Waker::new().context("opening the connection wake signal")?);
+        self.waker = Some(Arc::clone(&waker));
+        Ok(waker)
     }
 
     pub fn flush(&mut self, conn: &mut dyn Conn) -> Result<()> {
         // Before the buffers are read: what is published from here on wakes the next wait.
-        if let Some(waker) = self.sessions.waker() {
+        if let Some(waker) = &self.waker {
             waker.clear();
         }
+        self.operations.flush(self.shared, |id, outcome| {
+            dispatch::respond_op(conn, id, outcome)
+        })?;
         self.model_discovery.flush(conn)?;
         let mut i = 0;
         while i < self.rows.len() {
