@@ -136,20 +136,16 @@ impl HookSettings {
     /// Corral operations are never wrapped.
     pub fn wraps(&self, tool: &str) -> bool {
         !tool.starts_with("corral_")
-            && self
-                .pre_tool
-                .iter()
-                .chain(&self.post_tool)
-                .any(|hook| {
-                    hook.tools.is_empty()
-                        || hook.tools.iter().any(|t| {
-                            t == tool
-                                || matches!(
-                                    (t.as_str(), tool),
-                                    ("codemode", "eval_js") | ("eval_js", "codemode")
-                                )
-                        })
-                })
+            && self.pre_tool.iter().chain(&self.post_tool).any(|hook| {
+                hook.tools.is_empty()
+                    || hook.tools.iter().any(|t| {
+                        t == tool
+                            || matches!(
+                                (t.as_str(), tool),
+                                ("codemode", "eval_js") | ("eval_js", "codemode")
+                            )
+                    })
+            })
     }
 
     /// The enabled hook settings a generation snapshot recorded, if any.
