@@ -411,6 +411,29 @@ fn timeline_keyboard_focus_survives_folding_a_plan_and_selecting_a_lane() {
     app.wait_for("id:task-page").unwrap();
 }
 
+/// Configuration's ten tabs are wider than a phone: swiping the strip brings Skills, the last,
+/// into view, so a finger can reach it.
+#[test]
+fn phone_config_tabs_scroll_to_skills() {
+    let config = phone();
+    let width = config.viewport.width.0;
+    let mut app = preview(config, &[]);
+    app.press("id:nav-settings").unwrap();
+    app.press("id:settings-config").unwrap();
+    app.wait_for("id:tab-config-9").unwrap();
+    let right = |app: &mut Headless| {
+        let nodes = app.screen().layout_nodes();
+        let tab = nodes
+            .iter()
+            .find(|node| node.test_id.as_deref() == Some("tab-config-9"))
+            .expect("the Skills tab");
+        tab.bounds.origin.x.0 + tab.bounds.size.width.0
+    };
+    assert!(right(&mut app) > width, "the strip outgrows the phone");
+    app.scroll("id:tab-config-0", Points(2000.0)).unwrap();
+    assert!(right(&mut app) <= width, "Skills scrolls into view");
+}
+
 #[test]
 fn skills_fixture_keeps_markdown_drafts_and_switches_read_only_builtins() {
     let mut app = preview(phone(), &[]);

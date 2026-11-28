@@ -119,13 +119,28 @@ fn content(app: AppState) -> AnyElement {
         "Configuration",
         12.0,
         vec![
-            tab_strip(
-                app,
-                &PARTS,
-                move || selected.get(),
-                move |part| app.act(app.settings, move |state, _| state.config_part(part)),
-                "tab-config",
-            ),
+            // Ten tabs outgrow a phone or an 80-column terminal: the strip scrolls sideways
+            // there, and fills the row (its hairline full width) where it fits. The 1 pt under
+            // it keeps the selected tab's underline, which hangs 1 pt below, inside the scroll.
+            scroll()
+                .horizontal()
+                .w_full()
+                .child(
+                    view()
+                        .flex_shrink_0()
+                        .min_w(relative(1.0))
+                        .pb(px(1.0))
+                        .child(tab_strip(
+                            app,
+                            &PARTS,
+                            move || selected.get(),
+                            move |part| {
+                                app.act(app.settings, move |state, _| state.config_part(part))
+                            },
+                            "tab-config",
+                        )),
+                )
+                .into_element(),
             dynamic(move || {
                 let part = selected.get();
                 untracked(|| {
