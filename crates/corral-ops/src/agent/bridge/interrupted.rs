@@ -440,6 +440,11 @@ pub fn classify_corral(
     }
 }
 
+// Session transcripts can contain the current name or the pre-rename name.
+fn is_cell_tool(tool: &str) -> bool {
+    matches!(tool, "eval_js" | "codemode")
+}
+
 /// The class of a dangling upstream or local tool call: edits, writes and shell commands may
 /// have run in the host process, so their outcome is never claimed.
 pub fn classify_upstream(tool: &str, snapshot: Option<&str>) -> (ResumeClass, Option<String>) {
@@ -460,7 +465,7 @@ pub fn classify_upstream(tool: &str, snapshot: Option<&str>) -> (ResumeClass, Op
             ResumeClass::OutcomeUnknown,
             Some("subscription quota may have been consumed; inspect auxiliary usage before retrying".into()),
         )
-    } else if tool == "codemode" {
+    } else if is_cell_tool(tool) {
         (
             ResumeClass::OutcomeUnknown,
             Some(format!(
@@ -533,7 +538,7 @@ pub fn needs_snapshot(scan: &DanglingScan, hooks: Option<&HookSettings>) -> bool
     !scan.hooks.is_empty()
         || scan.calls.iter().any(|call| {
             MUTATING.contains(&call.name.as_str())
-                || call.name == "codemode"
+                || is_cell_tool(&call.name)
                 || hooks.is_some_and(|h| h.wraps(&call.name))
         })
 }
@@ -605,21 +610,23 @@ mod tests {
     }
 
     #[test]
-    fn interrupted_codemode_is_unknown_even_when_its_script_looks_read_only() {
+    fn interrupted_cells_are_unknown_under_both_tool_names() {
         // The outer call has no final result: nested calls may already have acted.
-        let scan = DanglingScan {
-            calls: vec![DanglingCall {
-                id: "script-1".into(),
-                name: "codemode".into(),
-            }],
-            ..Default::default()
-        };
-        assert!(needs_snapshot(&scan, None));
-        let (class, detail) = classify_local(&scan.calls[0], (Some("saved.diff"), &[], None));
-        assert_eq!(class, ResumeClass::OutcomeUnknown);
-        let detail = detail.unwrap();
-        assert!(detail.contains("nested tools may have run"));
-        assert!(detail.contains("saved.diff"));
+        for tool in ["eval_js", "codemode"] {
+            let scan = DanglingScan {
+                calls: vec![DanglingCall {
+                    id: "script-1".into(),
+                    name: tool.into(),
+                }],
+                ..Default::default()
+            };
+            assert!(needs_snapshot(&scan, None));
+            let (class, detail) = classify_local(&scan.calls[0], (Some("saved.diff"), &[], None));
+            assert_eq!(class, ResumeClass::OutcomeUnknown);
+            let detail = detail.unwrap();
+            assert!(detail.contains("nested tools may have run"));
+            assert!(detail.contains("saved.diff"));
+        }
     }
 
     #[test]

@@ -1,6 +1,6 @@
 //! Code Mode recovery (T-683): a lost host's journaled nested calls are classified from their own
-//! receipts under their child keys, whether or not the `codemode` call that started the cell has a
-//! result, and a child the host saw settle is not reported again. Nothing is replayed.
+//! receipts under their child keys, whether or not the outer call has a result. A child the host
+//! saw settle is not reported again. Nothing is replayed.
 use corral_core::agent as core_agent;
 use serde_json::json;
 
@@ -43,7 +43,7 @@ fn resume_classifies_each_unsettled_code_mode_child_from_its_receipt() {
         f::healthy,
     );
     let session = f::session(
-        &[("detached", "codemode"), ("live", "codemode")],
+        &[("detached", "codemode"), ("live", "eval_js")],
         &["detached"],
     ) + &child("started", "detached", "cell-1.1", "corral_progress")
         + &child("settled", "detached", "cell-1.1", "corral_progress")
@@ -85,7 +85,7 @@ fn resume_classifies_each_unsettled_code_mode_child_from_its_receipt() {
     assert_eq!(notices.len(), 1);
     let calls = notices[0].subject.clone().unwrap()["calls"].clone();
     let expected = [
-        ("codemode", "outcome_unknown"),
+        ("eval_js", "outcome_unknown"),
         ("corral_progress", "result"),
         ("corral_evidence", "not_committed"),
         ("bash", "outcome_unknown"),
