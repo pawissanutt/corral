@@ -110,7 +110,7 @@
       "anchor": {
         "kind": "text",
         "path": "crates/corral-engine/src/pipeline.rs",
-        "text": "self.review_as(id, None, Actor::Auto)?;"
+        "text": "self.review_after_gate(id, checked.as_deref())?;"
       }
     }
   ]
