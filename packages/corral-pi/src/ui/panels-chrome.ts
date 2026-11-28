@@ -103,12 +103,17 @@ export function statusBar(identity: HostIdentity, snapshot: PanelSnapshot | null
   const share = child ? child.contextPercent === undefined ? {} : { percent: child.contextPercent } : undefined;
   const meterAt = (room: number, tier: ContextForm = form) => contextSegment(snapshot, room, tier, share);
   const shortest = visibleWidth(meterAt(0)), meter = visibleWidth(meterAt(width, "tiny"));
-  const roomFor = (level: ComposerLevel) => width - 1 - visibleWidth(pill + cost + composer(level)) - 3;
-  const level = LEVELS.find(candidate => roomFor(candidate) >= (composer(candidate) ? Math.max(meter, shortest) : shortest));
+  const fitComposer = (room: number) => LEVELS.find(candidate => {
+    const tail = composer(candidate);
+    return room - visibleWidth(tail) >= (tail ? Math.max(meter, shortest) : shortest);
+  });
+  const afterPill = width - 1 - visibleWidth(pill + cost) - 3;
+  const level = fitComposer(afterPill);
   if (level === undefined) {
-    return [row(pill + cost), row(meterAt(width - 1)), ...(alerts ? wrapped(alerts) : [])];
+    const room = width - 1, tail = composer(fitComposer(room) ?? 3);
+    return [row(pill + cost), row(meterAt(room - visibleWidth(tail)) + tail), ...(alerts ? wrapped(alerts) : [])];
   }
-  const room = roomFor(level), tail = composer(level);
+  const tail = composer(level), room = afterPill - visibleWidth(tail);
   const inline = alerts && visibleWidth(alerts) + 3 + shortest <= room;
   const context = meterAt(room - (inline ? visibleWidth(alerts) + 3 : 0));
   return [row(pill + cost + sep + context + tail + (inline ? sep + PANEL_WARNING + alerts : "")), ...(alerts && !inline ? wrapped(alerts) : [])];

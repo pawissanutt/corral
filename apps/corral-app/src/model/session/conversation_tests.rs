@@ -291,7 +291,7 @@ fn an_opened_conversation_gives_the_composer_and_status_bar_its_agent() {
 
     fleet.children[0].state = "needs".into();
     let host = feed.live.get_mut(ID).expect("parent is live");
-    host.replace_fleet(Some(fleet));
+    host.replace_fleet(Some(fleet.clone()));
     let waiting = shown_page(&feed, &state, &id)
         .composer
         .expect("inline composer");
@@ -318,6 +318,41 @@ fn an_opened_conversation_gives_the_composer_and_status_bar_its_agent() {
     assert_eq!(chat.send.label, "Send");
     assert_eq!(chat.draft, "draft stays");
 
+    let picked = chat
+        .receiver
+        .expect("receiver switcher")
+        .choices
+        .into_iter()
+        .find(|choice| choice.child.as_deref() == Some("a1"))
+        .expect("child choice");
+    state.act(picked.action, &feed);
+    let mut settled = fleet.clone();
+    settled.children[0].state = "done".into();
+    settled.children[0].steerable = false;
+    feed.live
+        .get_mut(ID)
+        .expect("parent is live")
+        .replace_fleet(Some(settled));
+    let stale = shown_page(&feed, &state, &id)
+        .composer
+        .expect("parent composer");
+    assert_eq!(stale.title.to, "→ a1");
+    assert!(stale.send.unavailable.is_some());
+    let receiver = stale.receiver.expect("parent recovery stays available");
+    assert!(receiver.unavailable.is_none());
+    assert_eq!(receiver.choices.len(), 1);
+    state.act(receiver.choices[0].action.clone(), &feed);
+    let restored = shown_page(&feed, &state, &id)
+        .composer
+        .expect("parent composer");
+    assert_eq!(restored.title.to, "→ parent");
+    assert_eq!(restored.draft, "draft stays");
+    assert!(restored.send.unavailable.is_none());
+
+    feed.live
+        .get_mut(ID)
+        .expect("parent is live")
+        .replace_fleet(Some(fleet));
     state.act(open("a1"), &feed);
     state.act(open("unlisted"), &feed);
     let unlisted = shown_page(&feed, &state, &id);

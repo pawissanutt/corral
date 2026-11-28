@@ -22,9 +22,10 @@ test("no role draws a binding segment, and the role keeps three letters when tin
 
 test("a long child identity does not clip the host's alerts when the meter moves to its own row", () => {
   const rows = statusBar(worker, snapshot(true), new Map([["refusal", "Parent input was refused: check the host's reason before trying again."]]),
-    64, false, undefined, { id: "a".repeat(32) });
+    64, false, { model: "openai/child-picker", effort: "low" }, { id: "a".repeat(32) });
   const text = rows.map(stripTerminalSequences).join("\n");
-  expect(text).toContain("Context unavailable");
+  expect(stripTerminalSequences(rows[1]!)).toContain("Context unavailable");
+  expect(stripTerminalSequences(rows[1]!)).toContain("child-picker · effort low");
   expect(text.replace(/\s+/g, " ")).toContain("Parent input was refused: check the host's reason before trying again.");
   expect(rows.every(row => visibleWidth(row) === 64)).toBeTrue();
 });

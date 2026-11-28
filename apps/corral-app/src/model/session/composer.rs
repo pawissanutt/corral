@@ -342,13 +342,18 @@ fn refusal(cx: &Cx<'_>) -> Option<String> {
 }
 
 fn receiver(cx: &Cx<'_>) -> Option<ReceiverPill> {
-    let fleet = cx.live.and_then(|live| live.fleet.as_ref())?;
-    let steerable: Vec<_> = fleet
-        .children
-        .iter()
+    let steerable: Vec<_> = cx
+        .live
+        .and_then(|live| live.fleet.as_ref())
+        .into_iter()
+        .flat_map(|fleet| &fleet.children)
         .filter(|child| child.steerable)
         .collect();
-    if steerable.is_empty() || matches!(cx.can("children"), Can::Absent) {
+    let to = cx.ui.to.as_deref();
+    // Even when nobody can be steered, the owner must be able to leave a stale receiver.
+    let stale = to.is_some_and(|id| !steerable.iter().any(|child| child.id == id));
+    let children = cx.can("children");
+    if !stale && (steerable.is_empty() || matches!(children, Can::Absent)) {
         return None;
     }
     let parent = if *cx.role == SessionRole::Build {
@@ -356,7 +361,6 @@ fn receiver(cx: &Cx<'_>) -> Option<ReceiverPill> {
     } else {
         "agent"
     };
-    let to = cx.ui.to.as_deref();
     let mut choices = vec![ReceiverChoice {
         child: None,
         label: parent.into(),
@@ -366,15 +370,17 @@ fn receiver(cx: &Cx<'_>) -> Option<ReceiverPill> {
             to: None,
         },
     }];
-    choices.extend(steerable.iter().map(|child| ReceiverChoice {
-        child: Some(child.id.clone()),
-        label: format!("{} · {}", child.id, child.state),
-        selected: to == Some(child.id.as_str()),
-        action: Action::Receiver {
-            session: cx.id.clone(),
-            to: Some(child.id.clone()),
-        },
-    }));
+    if !stale || matches!(children, Can::Yes | Can::Unknown) {
+        choices.extend(steerable.iter().map(|child| ReceiverChoice {
+            child: Some(child.id.clone()),
+            label: format!("{} · {}", child.id, child.state),
+            selected: to == Some(child.id.as_str()),
+            action: Action::Receiver {
+                session: cx.id.clone(),
+                to: Some(child.id.clone()),
+            },
+        }));
+    }
     let label = match &cx.ui.dock.compose {
         Some(Compose::Answer { child, .. }) => {
             format!("→ {} · answer ▾", child.as_deref().unwrap_or(parent))
@@ -384,7 +390,7 @@ fn receiver(cx: &Cx<'_>) -> Option<ReceiverPill> {
     Some(ReceiverPill {
         label,
         choices,
-        unavailable: unavailable(cx.can("children")),
+        unavailable: if stale { None } else { unavailable(children) },
     })
 }
 
