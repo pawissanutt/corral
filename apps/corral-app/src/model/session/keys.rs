@@ -500,6 +500,9 @@ pub fn legend_of(cx: &Cx<'_>, tab: Tab, slash: bool) -> Vec<(&'static str, &'sta
             legend.extend(part_legend(tab));
             legend
         }
+        Focus::Composer if cx.ui.to.is_some() => {
+            super::composer::composer(cx).map_or_else(Vec::new, |composer| composer.keys)
+        }
         _ => legend(focus, tab, super::composer::working(cx)),
     }
 }

@@ -1000,7 +1000,7 @@ export class NativePanels implements PanelSurface {
             const draft = this.getExpandedText(), command = draft.trimStart().startsWith("/");
             const columns = owner.terminal?.physical.columns ?? width, stop = piKey("app.interrupt");
             const snapshot = owner.snapshot(), opened = owner.workbench.openedChild(snapshot);
-            const parent = opened && owner.build ? { label: "parent", color: PANEL_BLUE } : undefined;
+            const parent = opened ? { label: "parent", color: PANEL_BLUE } : undefined;
             const target = command ? parent : owner.build?.composerTarget() ?? parent;
             const shell = owner.build?.target() ? undefined : shellDisposition(draft);
             const child = opened?.child, fleet = opened?.fleet;

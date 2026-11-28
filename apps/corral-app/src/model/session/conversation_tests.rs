@@ -326,6 +326,8 @@ fn an_opened_conversation_gives_the_composer_and_status_bar_its_agent() {
         .find(|choice| choice.child.as_deref() == Some("a1"))
         .expect("child choice");
     state.act(picked.action, &feed);
+    let steering = shown_page(&feed, &state, &id);
+    assert_eq!(steering.legend, [("⏎", "steer")]);
     let mut settled = fleet.clone();
     settled.children[0].state = "done".into();
     settled.children[0].steerable = false;

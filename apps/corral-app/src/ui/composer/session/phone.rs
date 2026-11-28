@@ -47,6 +47,15 @@ fn phone_line(app: AppState, composer: Memo<Option<SessionComposer>>) -> AnyElem
     .into_element()
 }
 
+/// A remembered queue preference applies only while the current composer offers a queue.
+fn send_policy(after: bool, primary: SendPolicy, queue: Option<SendPolicy>) -> SendPolicy {
+    if after {
+        queue.unwrap_or(primary)
+    } else {
+        primary
+    }
+}
+
 /// The phone: while the agent works, Steer now | After this turn decides what the button does;
 /// the field and the button in one row; the button stops the turn while the agent works and the
 /// draft is empty.
@@ -115,14 +124,20 @@ pub(super) fn phone(
                     },
                     "btn-send",
                     move || {
-                        let policy = if after.get_untracked() && working.get_untracked() {
-                            SendPolicy::FollowUp
-                        } else {
-                            composer
-                                .with_untracked(|c| c.as_ref().map(|c| c.send.policy))
-                                .unwrap_or(SendPolicy::Steer)
-                        };
-                        send(app, &id, composer, policy, ask, attach);
+                        let policy = composer.with_untracked(|c| {
+                            let c = c.as_ref()?;
+                            Some(send_policy(
+                                after.get_untracked() && c.mode == SendMode::Working,
+                                c.send.policy,
+                                c.queue
+                                    .as_ref()
+                                    .filter(|queue| queue.unavailable.is_none())
+                                    .map(|queue| queue.policy),
+                            ))
+                        });
+                        if let Some(policy) = policy {
+                            send(app, &id, composer, policy, ask, attach);
+                        }
                     },
                 ),
             })
@@ -150,4 +165,22 @@ pub(super) fn phone(
         .child(bar(app, id, composer, ask, attach))
         .child(reasons(app, composer))
         .into_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_hidden_queue_preference_cannot_block_steering_a_child() {
+        let after = true;
+        assert_eq!(
+            send_policy(after, SendPolicy::Steer, Some(SendPolicy::FollowUp)),
+            SendPolicy::FollowUp
+        );
+        assert_eq!(
+            send_policy(after, SendPolicy::Steer, None),
+            SendPolicy::Steer
+        );
+    }
 }
