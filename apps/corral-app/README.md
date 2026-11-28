@@ -101,8 +101,11 @@ upgrading its binary. The installer replaces its own web bundle; update separate
 web files yourself. Back up your workspace and configuration before
 upgrading; no automatic rollback or downgrade compatibility is promised.
 
-Classic CLI installation is retired on Unix and Windows. For the classic installers and
-prerequisites, see the [v0.4.0 archive](https://github.com/pawissanutt/corral/tree/v0.4.0).
+Classic CLI installation is retired on Unix and Windows. The [v0.4.0 archive](https://github.com/pawissanutt/corral/tree/v0.4.0) is source only, not an installer or migration binary.
+
+To bring Classic tasks into Next, keep a backup of the entire Classic workspace (including `.corral/`) and its matching executable. From the Classic workspace, use that executable’s `corral export tasks /path/to/export` and, if available, `corral export events --json > /path/to/events.json`. Use a fresh export directory. If your binary lacks the export commands, keep the backup; do not point Next at the Classic store.
+
+In a **separate, empty workspace**, run `corral-next init`, then `corral-next import /path/to/export --dry-run`. Add `--events /path/to/events.json` to use event dates and `--all` to include Done and Dropped tasks. Check the report, then repeat the same import without `--dry-run` to write the tasks. This is a task import, not a restore of sessions, settings or the full event history.
 
 ### Windows desktop
 
@@ -398,7 +401,7 @@ The sample preview carries one build session, `B-k3x9` (*parity-guide*), that se
 
 - **Devices**: this device and the paired ones, **Pair a device**, Revoke and Forget.
 - **This daemon**, **Connection**: daemon state, last sync and its error, endpoint and store, and this device's enrolment. The device id is kept in a private `0600` file, named as such, not an OS keychain.
-- **Notifications**: Web Push requires the archived classic daemon.
+- **Notifications**: enable Web Push per paired browser. Start `corrald-next run` with `--push-key /absolute/path/to/vapid-private.pem` (a private `0600` P-256 VAPID key file), `--push-subject mailto:owner@example.org`, and one `--push-origin` per trusted HTTPS **push service** origin (not the app origin). Keep the key outside the web directory. Serve the app over HTTPS or loopback, then opt in from Notifications and grant browser permission. Without a configured key, push stays off.
 - **Configuration**: edits `corral.toml` through `config.get` and `config.put`, one part at a time: Workspace (limits, defaults, Auto dispatch, Auto land), Projects (gate lines, reviewer), Profiles, Harnesses, Routing, Artifacts (globs) and File (the whole file as text). A form field changes one key in place, so comments, order and unknown tables survive. **Save** (`Ctrl S` from any field) sends the whole draft once; corrald writes the file only after the engine's config check passes, and a refusal's reasons land on the field they name, or at the top. **Discard** drops the edits. Leaving with unsaved edits asks once. When the file changed outside the editor, a notice offers **Read again** and says unsaved edits are dropped only when there are some; a file on disk that does not parse is reported with its position. The `[daemon]` listener is read when corrald starts: change it in File and restart.
   - **Profiles** lists the profiles defined in the file. Search by name or configuration, then open a profile to change its harness, model, effort or arguments. Model and effort suggestions come from configured profiles, not a live catalog; exact custom values are still accepted for validation. Profile actions change the draft only.
   - **Harnesses** lists the five built-ins even when the file has no harness tables, alongside custom launch commands. Select **corral-pi** (profile key `pi`) for terminal sign-in instructions and to distinguish task profiles in `corral.toml` from Pi child profiles in `pi.toml`. Browsing the catalog does not create overrides.

@@ -42,8 +42,8 @@ authenticated activity (not availability); device listings report the last final
 while `app.session.device.reach` is the current SessionGuard's carrier. A local TLS
 terminator is observed as loopback; no untrusted forwarded header asserts remote reach.
 
-The retired classic daemon implemented `push.v1` as an additive authenticated-device
-capability; it is not an operator feature of `corrald-next`. In that implementation, `push.status`,
+`corrald-next` supports `push.v1` as an opt-in authenticated-device capability
+([operator setup](../../apps/corral-app/README.md#settings)). `push.status`,
 `push.subscribe` and `push.unsubscribe` apply only to the session's own device.
 Subscriptions and selected `PushKind`s persist per device, opt-in/off by default, and
 revocation clears them. `PushStatus` exposes availability, the public VAPID key,
