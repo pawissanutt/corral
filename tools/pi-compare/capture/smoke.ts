@@ -1,7 +1,8 @@
 // Explicitly authorized main-request cost smoke only; never a workflow quality experiment.
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { Type, normalizeContext } from "../../../packages/corral-pi/node_modules/@earendil-works/pi-ai";
+import { Type } from "../../../packages/corral-pi/node_modules/typebox";
+import { normalizeContext } from "../../../packages/corral-pi/node_modules/@earendil-works/pi-ai";
 import auth from "../../../packages/corral-pi/src/auth/index.ts";
 import { createModelCatalog } from "../../../packages/corral-pi/src/host/catalog.ts";
 import { guardedFetch, restrictEnvironment } from "../../../packages/corral-pi/src/host/restrict.ts";

@@ -45,21 +45,19 @@ workflow pass criteria. The live cohort is a **capability-cost smoke**, not a wo
 comparison. No tool is executed by the live requests; static MCP activation and auxiliary
 captures use fake inference and private fixtures only.
 
-Reproduce offline captures from the repository root (after frozen installs in both
-`packages/corral-pi` and this directory):
+The original static capture adapter and Rust resolver depended on the retired
+Classic capability catalog. Their source is in Git history; there is no Next
+replacement for generating the T-579 static inputs. Use the archived static
+capture directory (`STATIC_DIR`) for the remaining tools. After frozen installs
+in both `packages/corral-pi` and this directory, the offline paths are:
 
 ```sh
-python3 tools/pi-compare/resolver/build.py tools/pi-compare/records/resolver-build TARGET_DIR
-bun tools/pi-compare/capture/static.ts RESOLVER_BINARY NEW_STATIC_DIR
 bun tools/pi-compare/capture/auxiliary.ts STATIC_DIR NEW_AUXILIARY_DIR
 bun tools/pi-compare/capture/audit.ts STATIC_DIR SMOKE_DIR NEW_REPORT_JSON
 ```
 
-`RESOLVER_BINARY` is the executable Cargo built (respect the repo's target-dir setting).
-The standalone research adapter links the production Rust catalog; it has no preset
-matrix of its own. `build.py` generates its manifest in the new ignored build directory,
-so it cannot be mistaken for a repository workspace member by quick-gate discovery. `capture/tsconfig.json` uses the host's compiler conventions because
-these adapters import host source; check it with this directory's `tsc -p capture/tsconfig.json`.
+`capture/tsconfig.json` uses the host's compiler conventions for adapters that
+import host source; check it with this directory's `tsc -p capture/tsconfig.json`.
 Normal `bun run typecheck` checks the standalone offline analysis/tests.
 
 `capture/smoke.ts` requires a **fresh finite allowance** before execution. Its T-579
@@ -73,7 +71,10 @@ Never use static heuristic tokens as billable tokens or treat disabled strict pl
 trials as zero-cost successes. The raw T-579 evidence is attached as an archive rather
 than checked into source.
 
-## Capture contract
+## Historical T-313 capture contract
+
+These instructions describe the original workflow and readback formats. The
+offline parser still reads those captures; this is not a Next runbook.
 
 Before any live pair, preregister the seed, six task IDs, expected **pair** tokens,
 and arm ordering in a manifest with the shape in `test/fixtures/manifest.json`.

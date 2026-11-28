@@ -3,7 +3,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Type } from "../../../packages/corral-pi/node_modules/@earendil-works/pi-ai";
+import { Type } from "../../../packages/corral-pi/node_modules/typebox";
 import type { ToolDefinition } from "../../../packages/corral-pi/node_modules/@earendil-works/pi-coding-agent";
 import auth from "../../../packages/corral-pi/test/fixtures/auth/index.ts";
 import { createModelCatalog } from "../../../packages/corral-pi/src/host/catalog.ts";
