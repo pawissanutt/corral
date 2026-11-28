@@ -11,7 +11,8 @@ import { type CodeRuntime, DEFAULT_WAIT_MS, MAX_WAIT_MS } from "../extensions/co
 export const CODEMODE_TOOL = "eval_js";
 
 const DESCRIPTION = [
-  "Prefer a direct tool call for one independent operation. For several independent calls whose results you would",
+  "Run JavaScript to combine tool calls or filter their results. For a single read, edit, or command, call that tool directly.",
+  "For several independent calls whose results you would",
   "print unchanged, issue parallel direct tool calls in one turn; they run concurrently. Use direct tools for edits,",
   "writes and other state changes unless a later step in the same cell depends on their result.",
   "Use a JavaScript cell in this session's persistent Corral kernel to chain dependent calls, filter or summarise",
@@ -60,7 +61,7 @@ export function codemodeTool(runtime: CodeRuntime, callable: (names: readonly st
   }) : Parameters;
   return {
     name: CODEMODE_TOOL, label: "JavaScript cell", exposure: "model-only", description, parameters,
-    promptSnippet: "Prefer direct tools for one independent operation, independent results printed unchanged (parallel direct calls in one turn run concurrently), and edits, writes or other state changes unless a later step in the same cell depends on the result. Use JavaScript cells for dependent chains, filtering or summarising large results before they reach context, loops over many items, computation, or earlier-cell variables.",
+    promptSnippet: "Run JavaScript to combine tool calls or filter their results. For a single read, edit, or command, call that tool directly.",
     prepareLoadout: (loadout) => {
       const names = callable(loadout.callable.map((tool) => tool.name).filter((name) => name !== CODEMODE_TOOL));
       // The legacy launch alias stays callable, but new scripts should use bash({ wait_ms: 0 }).

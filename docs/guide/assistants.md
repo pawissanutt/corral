@@ -272,7 +272,7 @@ The packaged role contract tells the model to
 read the board through the CLI, file ideas and comments only on the owner's request, and act
 on clear owner instructions only.
 
-Two fixed shell rules apply to every assistant bash call, top-level or nested (from codemode or
+Two fixed shell rules apply to every assistant bash call, top-level or nested (from `eval_js` or
 another tool), before any configured `bash_rules`. No preset, capability setting or rule can
 turn them off. Corral refuses, and runs nothing for:
 

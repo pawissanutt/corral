@@ -546,7 +546,7 @@ test("explore JavaScript is isolated and nested calls obey the read-only child c
         { profile: "fixture", provider: "fixture", model: "fixture" }, f.hooks, new AbortController().signal);
     const done = await handle.done;
     expect(done.failed).toBeUndefined();
-    expect(done.researchReport?.depth.toolCalls).toBe(1);
+    expect(done.researchReport?.depth?.toolCalls).toBe(1);
   } finally { f.cleanup(); }
 });
 

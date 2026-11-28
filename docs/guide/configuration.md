@@ -1494,7 +1494,7 @@ parent's bound provider. Each call creates one isolated auxiliary session; it
 inherits no conversation, skills, context files, hooks or Corral client.
 Its fixed file tools are `read`, `grep`, `find`, and `ls`, plus
 `lsp_diagnostics`, `lsp_definition`, and `lsp_references` only when those local
-LSP tools are available. It has no web tools, shell, writes, Code Mode, child
+LSP tools are available. It has no web tools, shell, writes, JavaScript cells, child
 delegation or board read/mutation operations.
 
 The expert treats task text, logs and file contents as untrusted data and is

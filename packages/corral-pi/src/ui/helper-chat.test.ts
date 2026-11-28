@@ -148,7 +148,7 @@ test("a child's call whose arguments still stream reads as writing, and one call
   expect(rows[0]?.trim().startsWith("✓ write notes.md")).toBeTrue();
 });
 
-test.each(["codemode", "eval_js"])("a child's %s call reads as the tools it calls, not its source", (tool) => {
+for (const tool of ["codemode", "eval_js"]) test(`a child's ${tool} call reads as the tools it calls, not its source`, () => {
   const chat = new HelperChat(() => undefined, "/tmp");
   const entry = { ...fixture(), messages: [{ id: "c", kind: "tool" as const, tool, phase: "completed" as const, text: "ok",
     arguments: JSON.stringify({ code: "const a = await tools.read({ path: 'x' }); await tools.bash({ command: 'ls' }); await tools.read({ path: 'y' });" }) }] };

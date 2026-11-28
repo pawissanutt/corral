@@ -17,8 +17,8 @@ const SPINNER = /[⠋⠙⠹⠸⠼⠴⠦⠧●]/;
 
 const type = (h: PanelHost, text: string) => { for (const char of text) h.physical.send(char); };
 const lines = (h: PanelHost) => h.screen().lines();
-/** The cell's header row: the one naming `code` with its call count. */
-const header = (h: PanelHost) => lines(h).find(line => /\bcode\b.*\b2 calls\b/.test(line));
+/** The cell's header row includes its title and call count. */
+const header = (h: PanelHost) => lines(h).find(line => /\bJavaScript cell\b.*\b2 calls\b/.test(line));
 
 test("a Code Mode cell shows the calls it made, live, and its final state", async () => {
   const { promise: reached, resolve: entered } = Promise.withResolvers<void>();
@@ -48,7 +48,7 @@ test("a Code Mode cell shows the calls it made, live, and its final state", asyn
     await h.physical.whenWritten(() => (header(h) ?? "").includes("✗1") && /✗ .*missing\.md/.test(row("missing.md")),
       "the cell header counting the failed read");
     const live = header(h) ?? "";
-    expect(live).toMatch(new RegExp(`${SPINNER.source} code`));
+    expect(live).toMatch(new RegExp(`${SPINNER.source} JavaScript cell`));
     expect(row("present.txt")).toMatch(new RegExp(`${SPINNER.source} .*present\\.txt`));
     expect(h.screen().text()).toMatch(/ENOENT|not found|no such file/i);
 
@@ -57,7 +57,7 @@ test("a Code Mode cell shows the calls it made, live, and its final state", asyn
     await ended;
     await h.host.drained();
     await h.physical.untilVisible("CELL_REPLY_DONE", mark);
-    await h.physical.whenWritten(() => /^\s*✓ code/.test(header(h) ?? ""), "the settled cell header");
+    await h.physical.whenWritten(() => /^\s*✓ JavaScript cell/.test(header(h) ?? ""), "the settled cell header");
     const final = header(h) ?? "";
     expect(final).toContain("✓1");
     expect(final).toContain("✗1");
