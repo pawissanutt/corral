@@ -216,6 +216,8 @@ pub struct SendButton {
 pub struct StopButton {
     pub label: &'static str,
     pub action: Action,
+    /// The phone's icon-only Stop beside the draft is safe only in the parent's own composer.
+    pub inline_on_phone: bool,
 }
 
 /// What the composer's place shows when the session takes no message now.
@@ -507,17 +509,15 @@ pub fn composer(cx: &Cx<'_>) -> Option<SessionComposer> {
             (send, None)
         }
     };
+    let child_context = opened.is_some() || child;
     let stop =
         (parent_working(cx) && cx.controls().contains(&Control::Cancel)).then(|| StopButton {
-            label: if opened.is_some() {
-                "Stop parent"
-            } else {
-                "Stop"
-            },
+            label: if child_context { "Stop parent" } else { "Stop" },
             action: Action::Control {
                 session: cx.id.clone(),
                 control: Control::Cancel,
             },
+            inline_on_phone: !child_context,
         });
     // An open agent conversation shows that agent's model and effort, not the parent's.
     let (model, effort) = match opened {

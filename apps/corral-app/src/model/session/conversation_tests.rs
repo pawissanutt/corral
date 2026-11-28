@@ -271,6 +271,43 @@ fn an_opened_conversation_gives_the_composer_and_status_bar_its_agent() {
     );
     assert!(bar.queued.is_none());
 
+    feed.assistants.insert(
+        ID.into(),
+        serde_json::from_value(serde_json::json!({
+            "id": ID, "kind": "build", "title": "Build", "state": "working", "live_in": "pane",
+            "pending": 0, "rev": 1,
+        }))
+        .expect("working build row"),
+    );
+    let host_state = |feed: &mut Feed, open| {
+        feed.live
+            .get_mut(ID)
+            .expect("parent is live")
+            .state
+            .as_mut()
+            .expect("host state")
+            .open = open;
+    };
+    host_state(&mut feed, true);
+    let phone = Env {
+        form: Form::Phone,
+        ..env
+    };
+    let child_stop = page(&feed, &state, &id, phone)
+        .composer
+        .expect("child composer")
+        .stop
+        .expect("parent can stop");
+    assert_eq!(child_stop.label, "Stop parent");
+    assert!(!child_stop.inline_on_phone);
+    let parent_stop = page(&feed, &State::default(), &id, phone)
+        .composer
+        .expect("parent composer")
+        .stop
+        .expect("parent can stop");
+    assert!(parent_stop.inline_on_phone);
+    host_state(&mut feed, false);
+
     let scope = Id::from(SCOPE);
     let standalone = shown_page(&feed, &state, &scope);
     assert_eq!(standalone.status.role, bar.role);

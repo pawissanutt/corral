@@ -90,7 +90,12 @@ pub(super) fn phone(
         composer.with(|c| {
             let c = c.as_ref()?;
             if c.mode == SendMode::Working && c.draft.trim().is_empty() {
-                return c.stop.clone().map(Err);
+                return c
+                    .stop
+                    .as_ref()
+                    .filter(|stop| stop.inline_on_phone)
+                    .cloned()
+                    .map(Err);
             }
             Some(Ok(c.send.unavailable.is_some()))
         })
