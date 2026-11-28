@@ -11,7 +11,9 @@
 
 use std::rc::Rc;
 
-use nsh_base::text_view::{Block, ColumnAlign, CustomNode, Document, Inline, Table, text_view};
+use nsh_base::text_view::{
+    Block, ColumnAlign, CustomNode, Document, Inline, Table, TextViewClasses, text_view,
+};
 use nsh_core::{geometry::REM_SIZE, prelude::*};
 
 use crate::state::AppState;
@@ -69,7 +71,7 @@ fn lift_blocks(blocks: &mut [Block], tables: &mut Vec<Table>) {
 pub(super) fn table(
     tables: &[Table],
     node: &CustomNode,
-    cell: impl Fn(Document) -> AnyElement,
+    cell: impl Fn(Document, TextViewClasses) -> AnyElement,
 ) -> Option<AnyElement> {
     let table = tables.get(node.attributes.get(AT)?.parse::<usize>().ok()?)?;
     let columns = table.columns();
@@ -101,18 +103,28 @@ pub(super) fn table(
         }
         placed.extend((col..columns).map(|c| (c, 1, Vec::new())));
         for (c, span, content) in placed {
-            let content = if head && !content.is_empty() {
-                vec![Inline::Strong { content }]
-            } else {
-                content
+            // The paragraph's own alignment, so every wrapped line keeps it; the cell's
+            // alignment places an image-only cell's picture, which is no paragraph of text.
+            let align = table.align.get(c).copied().unwrap_or_default();
+            let (text_align, place) = match align {
+                ColumnAlign::Center => (Some("text-center"), view().items_center()),
+                ColumnAlign::Right => (Some("text-right"), view().items_end()),
+                ColumnAlign::Left => (Some("text-left"), view().items_start()),
+                ColumnAlign::None => (None, view()),
             };
-            let words = cell(Document::new(vec![Block::paragraph(content)]));
-            let place = view().flex_col().min_w(px(0.0));
-            let place = match table.align.get(c).copied().unwrap_or_default() {
-                ColumnAlign::Center => place.items_center(),
-                ColumnAlign::Right => place.items_end(),
-                ColumnAlign::Left | ColumnAlign::None => place,
+            // The header's weight is a style, not emphasis around its words, so an
+            // image-only header stays a picture sized to its column.
+            let paragraph = [head.then_some("font-semibold"), text_align]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join(" ");
+            let classes = TextViewClasses {
+                paragraph: (!paragraph.is_empty()).then(|| paragraph.into()),
+                ..TextViewClasses::default()
             };
+            let words = cell(Document::new(vec![Block::paragraph(content)]), classes);
+            let place = place.flex_col().min_w(px(0.0));
             grid.push(
                 place
                     .row_start(line)
@@ -205,9 +217,9 @@ fn ems(text: &str) -> f32 {
         .sum()
 }
 
-/// A cell's words as an artifact's text view draws them.
-pub(super) fn cell(app: AppState, document: Document) -> AnyElement {
-    super::shown(app, text_view().document(document), None)
+/// A cell's words as an artifact's text view draws them, its paragraph styled by `classes`.
+pub(super) fn cell(app: AppState, document: Document, classes: TextViewClasses) -> AnyElement {
+    super::shown(app, text_view().document(document).classes(classes), None)
 }
 
 #[cfg(test)]

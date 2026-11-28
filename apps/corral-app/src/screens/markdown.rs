@@ -537,8 +537,9 @@ fn shown(app: AppState, words: TextViewElement, artifact: Option<Rc<[Table]>>) -
         words
             .render_custom(move |node: &CustomNode| {
                 if node.name == grid::TABLE
-                    && let Some(table) =
-                        grid::table(&tables, node, |document| grid::cell(app, document))
+                    && let Some(table) = grid::table(&tables, node, |document, classes| {
+                        grid::cell(app, document, classes)
+                    })
                 {
                     return table;
                 }
