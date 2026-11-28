@@ -73,7 +73,8 @@ export class Hooks {
 
   private matching(hooks: readonly HookCommand[], tool: string): HookCommand[] {
     if (tool.startsWith("corral_")) return [];
-    return hooks.filter((hook) => hook.tools === undefined || hook.tools.length === 0 || hook.tools.includes(tool));
+    const names = tool === "eval_js" || tool === "codemode" ? ["eval_js", "codemode"] : [tool];
+    return hooks.filter((hook) => !hook.tools?.length || names.some((name) => hook.tools?.includes(name)));
   }
 
   wraps(tool: string): boolean {
@@ -115,9 +116,14 @@ export class Hooks {
       ...(scope.toolCallId !== undefined ? { tool_call_id: scope.toolCallId } : {}),
       ...(scope.turn !== undefined ? { turn: scope.turn } : {}),
     };
-    let stdin = JSON.stringify({ ...base, ...extra });
+    // Durable records keep the actual call name; the hook process gets the compatibility name.
+    const hookTool = scope.tool === "eval_js" || scope.tool === "codemode"
+      ? (hook.tools?.includes("eval_js") ? "eval_js" : "codemode")
+      : scope.tool;
+    const payload = { ...base, ...(hookTool !== undefined ? { tool: hookTool } : {}) };
+    let stdin = JSON.stringify({ ...payload, ...extra });
     if (Buffer.byteLength(stdin) > STDIN_MAX_BYTES) {
-      stdin = JSON.stringify({ ...base, input: { omitted: "too_large" } });
+      stdin = JSON.stringify({ ...payload, input: { omitted: "too_large" } });
     }
     this.host.record({ ...base, state: "prepared" });
     return new Promise((resolve) => {
@@ -140,7 +146,7 @@ export class Hooks {
         cwd: this.host.cwd, detached: true, stdio: ["pipe", "pipe", "pipe"],
         env: {
           ...process.env, CORRAL_HOOK_PHASE: phase, CORRAL_HOOK_NAME: hook.name, CORRAL_HOOK_INVOCATION: invocation,
-          ...(scope.tool !== undefined ? { CORRAL_HOOK_TOOL: scope.tool } : {}),
+          ...(hookTool !== undefined ? { CORRAL_HOOK_TOOL: hookTool } : {}),
         },
       });
       const timer = setTimeout(() => {

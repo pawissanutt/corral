@@ -61,6 +61,28 @@ test("each hook is recorded prepared before launch, then started and completed, 
   }
 });
 
+test("eval_js hooks receive their selected spelling exactly once", async () => {
+  const hook = (name: string, tools?: string[]) => ({ name, tools, argv: ["sh", "-c",
+    `printf '%s %s ' "$CORRAL_HOOK_NAME" "$CORRAL_HOOK_TOOL" >> marker; cat >> marker; echo >> marker`],
+  });
+  const fx = fixture(settings({ post_tool: [hook("wildcard"), hook("empty", []), hook("legacy", ["codemode"]),
+    hook("current", ["eval_js"]), hook("both", ["codemode", "eval_js"]), hook("other", ["read"])] }));
+  try {
+    expect(await fx.runner.after({ tool: "eval_js", toolCallId: "js-1", input: {} }, false)).toEqual([]);
+    const seen = readFileSync(join(fx.cwd, "marker"), "utf8").trim().split("\n").map(line => {
+      const [name, env, ...json] = line.split(" ");
+      return [name, env, JSON.parse(json.join(" ")).tool];
+    });
+    expect(seen).toEqual([
+      ["wildcard", "codemode", "codemode"], ["empty", "codemode", "codemode"], ["legacy", "codemode", "codemode"],
+      ["current", "eval_js", "eval_js"], ["both", "eval_js", "eval_js"],
+    ]);
+    expect(fx.records.filter(record => record.state === "prepared").map(record => record.tool)).toEqual(Array(5).fill("eval_js"));
+  } finally {
+    fx.cleanup();
+  }
+});
+
 test("a failing pre hook refuses the call, a failing post hook annotates it, and a hung hook is killed", async () => {
   // Given hooks that fail, cannot start or hang.
   const fx = fixture(settings({

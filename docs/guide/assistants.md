@@ -265,6 +265,11 @@ access, because an assistant is not bound to a project. `session_export`, `backg
 operation for sessions, session-owned jobs and scratch roots, which other members of the
 assistant plan add.
 
+Workers with hooks enabled can match `eval_js` with either `eval_js` or the legacy
+`codemode` selector. Hooks that explicitly list `eval_js` receive that name in stdin's
+`tool` field and `CORRAL_HOOK_TOOL`; hooks that list only the legacy spelling or match
+all tools receive `codemode` for these calls. Listing both spellings runs the hook once.
+
 The role's core tools are read, grep, find, ls and bash, plus `corral_todo` while `todo` is on.
 The host exports `CORRAL_ASSISTANT=A-<n>` and `CORRAL_ASSISTANT_GENERATION` into the session's
 shell, so its `corral` commands can be attributed to the session. Parent edit and write calls use the [write permissions](#write-permissions) described below.
