@@ -100,6 +100,12 @@ pub fn row_next_button(app: AppState, record: &str, step: &NextStep) -> AnyEleme
 /// on desktop and in a terminal, the action sheet on a phone. `compact` is the three dots a
 /// list row carries; a page spells the word.
 pub fn more_button(app: AppState, record: Record, compact: bool) -> AnyElement {
+    more_button_with(app, record, compact, true)
+}
+
+/// [`more_button`]; `beside` false leaves Open in side pane out of the menu, for a head that
+/// has its own side-pane control.
+pub fn more_button_with(app: AppState, record: Record, compact: bool, beside: bool) -> AnyElement {
     let form = app.form;
     let id = format!("more-{}", record.id());
     let spoken = format!("{MORE}: every operation on {}", record.id());
@@ -154,5 +160,5 @@ pub fn more_button(app: AppState, record: Record, compact: bool) -> AnyElement {
                     .font_weight(FontWeight::BOLD),
             ),
     };
-    more_menu(app, record, trigger.into_element())
+    more_menu(app, record, trigger.into_element(), beside)
 }

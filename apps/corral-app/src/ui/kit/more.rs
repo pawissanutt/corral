@@ -54,7 +54,7 @@ pub fn with_menu(app: AppState, record: Record, row: AnyElement) -> AnyElement {
         .trigger(row)
         .child(dynamic(move || {
             let record = record.clone();
-            untracked(move || items(app, &record))
+            untracked(move || items(app, &record, true))
         }))
         .into_element()
 }
@@ -62,7 +62,10 @@ pub fn with_menu(app: AppState, record: Record, row: AnyElement) -> AnyElement {
 /// The same verb menu opened by pressing `trigger` (a page head's Actions control): a popup at
 /// the trigger on desktop and terminal, the action sheet on the phone; Return, Space or Down on
 /// the focused trigger open it with the first available verb focused.
-pub fn more_menu(app: AppState, record: Record, trigger: AnyElement) -> AnyElement {
+///
+/// `beside` keeps the Open in side pane row; a page head that carries its own side-pane control
+/// passes false so the menu does not repeat it.
+pub fn more_menu(app: AppState, record: Record, trigger: AnyElement, beside: bool) -> AnyElement {
     menu()
         .popup_style(popup(app.form))
         .backdrop_style(backdrop)
@@ -70,7 +73,7 @@ pub fn more_menu(app: AppState, record: Record, trigger: AnyElement) -> AnyEleme
         .trigger(trigger)
         .child(dynamic(move || {
             let record = record.clone();
-            untracked(move || items(app, &record))
+            untracked(move || items(app, &record, beside))
         }))
         .into_element()
 }
@@ -106,7 +109,7 @@ pub(crate) fn backdrop(s: StyleRefinement) -> StyleRefinement {
 /// opens the composer when it asks for input. Nothing is predicted or disabled: the engine
 /// decides, and a refusal opens its sheet. A session's More menu holds its controls; a task's
 /// holds the fifteen operations with its next step marked.
-fn items(app: AppState, record: &Record) -> AnyElement {
+fn items(app: AppState, record: &Record, beside: bool) -> AnyElement {
     let (verbs, next) = app.feed.with_untracked(|feed| {
         (
             work::record_verbs(record, feed),
@@ -118,7 +121,7 @@ fn items(app: AppState, record: &Record) -> AnyElement {
             verbs
                 .into_iter()
                 .filter(|verb| {
-                    crate::model::dock::supported(app.form)
+                    (beside && crate::model::dock::supported(app.form))
                         || !matches!(verb.press, Press::OpenBeside(_))
                 })
                 .map(|verb| match &verb.press {
@@ -204,7 +207,7 @@ fn task_menu(app: AppState, record: Record, label: String, slug: &'static str) -
         .back(back)
         .child(dynamic(move || {
             let record = record.clone();
-            untracked(move || items(app, &record))
+            untracked(move || items(app, &record, true))
         }))
         .into_element()
 }

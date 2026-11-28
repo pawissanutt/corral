@@ -24,7 +24,7 @@ use crate::ui::icons::Icon;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
 use crate::ui::kit::chip::chip;
 use crate::ui::kit::hint::hinted;
-use crate::ui::kit::next::more_button;
+use crate::ui::kit::next::more_button_with;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
@@ -68,10 +68,31 @@ fn details_button(app: AppState, page: Memo<SessionPage>) -> AnyElement {
     })
 }
 
-/// The session's More menu: its controls, then for a run its task's.
+/// The session's More menu: its controls, then for a run its task's. Open in side pane is the
+/// head's own control beside it, so the menu leaves it out, and More itself is absent while
+/// that would leave nothing in it.
 fn more(app: AppState, page: Memo<SessionPage>) -> AnyElement {
+    use crate::model::work::{Press, record_verbs};
     let id = untracked(|| page.with(|p| p.id.clone()));
-    more_button(app, Record::Session(id), app.form == Form::Phone)
+    let record = Record::Session(id);
+    let has_rows = {
+        let record = record.clone();
+        computed(move || {
+            app.feed.with(|feed| {
+                record_verbs(&record, feed)
+                    .iter()
+                    .any(|verb| !matches!(verb.press, Press::OpenBeside(_)))
+            })
+        })
+    };
+    let compact = app.form == Form::Phone;
+    dynamic(move || {
+        has_rows.get().then(|| {
+            let record = record.clone();
+            untracked(move || more_button_with(app, record, compact, false))
+        })
+    })
+    .into_element()
 }
 
 /// One view the head opens.
