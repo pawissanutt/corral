@@ -6,6 +6,8 @@
 //! (`markdown_tables.rs`). Shared by every transcript that shows written Markdown: a watched
 //! session's and the assistant's.
 
+use std::rc::Rc;
+
 use nsh_base::text_view::document::TableCell;
 use nsh_base::text_view::{
     Block, CodeBlock, CustomNode, Document, Inline, MarkdownOptions, Parser, Table,
@@ -29,6 +31,8 @@ use crate::state::AppState;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color, text_size};
 
+#[path = "markdown_grid.rs"]
+mod grid;
 #[path = "markdown_tables.rs"]
 mod tables;
 use tables::Measure;
@@ -406,7 +410,7 @@ pub(crate) fn chat_markdown_streaming(
             tables::apply(&mut document, &plan.get());
             document
         }),
-        false,
+        None,
     );
     view()
         .min_w(px(0.0))
@@ -425,13 +429,20 @@ fn laid_out(
     open: &[String],
 ) -> AnyElement {
     let mut document = document(app, markdown, streaming, images, open);
-    if diagrams {
-        diagram_nodes(&mut document.blocks);
-        for note in &mut document.footnotes {
-            diagram_nodes(&mut note.children);
-        }
+    if !diagrams {
+        return shown(app, text_view().document(document), None);
     }
-    shown(app, text_view().document(document), diagrams)
+    diagram_nodes(&mut document.blocks);
+    for note in &mut document.footnotes {
+        diagram_nodes(&mut note.children);
+    }
+    // A phone's tables are records by now; a terminal keeps the text view's box-drawn table.
+    let tables = if app.form == Form::Desktop {
+        grid::lift(&mut document)
+    } else {
+        Rc::from([])
+    };
+    shown(app, text_view().document(document), Some(tables))
 }
 
 /// `markdown` as the parser reads it, its open ends closed while `streaming`.
@@ -503,9 +514,10 @@ pub(crate) fn diagram_nodes(blocks: &mut [Block]) {
 
 /// A text view of the app's: its words select and copy with the platform's own gestures and
 /// commands (a drag selects without following a link; a press on one still opens it), its
-/// links open what they cite, its code blocks are the app's (with `diagrams`, a Mermaid fence
-/// is its diagram and other fences keep the text view's highlighted code blocks).
-fn shown(app: AppState, words: TextViewElement, diagrams: bool) -> AnyElement {
+/// links open what they cite, its code blocks are the app's (for an artifact, with its lifted
+/// `tables`, a Mermaid fence is its diagram, other fences keep the text view's highlighted code
+/// blocks, and each lifted table is the app's grid).
+fn shown(app: AppState, words: TextViewElement, artifact: Option<Rc<[Table]>>) -> AnyElement {
     install_link_selection_tracking();
     let words = words
         .selectable(true)
@@ -521,9 +533,15 @@ fn shown(app: AppState, words: TextViewElement, diagrams: bool) -> AnyElement {
                 },
             );
         });
-    let rendered = if diagrams {
+    let rendered = if let Some(tables) = artifact {
         words
             .render_custom(move |node: &CustomNode| {
+                if node.name == grid::TABLE
+                    && let Some(table) =
+                        grid::table(&tables, node, |document| grid::cell(app, document))
+                {
+                    return table;
+                }
                 let language = node.attributes.get("language").map(String::as_str);
                 let source = plain_code(app, language, &node.text);
                 if node.name == DIAGRAM {

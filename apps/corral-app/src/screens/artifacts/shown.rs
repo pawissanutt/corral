@@ -19,11 +19,11 @@ use crate::screens::markdown::{artifact_markdown, provide_styles};
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button, button_with};
 use crate::ui::kit::marks::hue_ink;
-use crate::ui::kit::page::{body, measure, measured_head};
+use crate::ui::kit::page::{body, head, measure};
 use crate::ui::kit::table::kv;
 use crate::ui::kit::text::{dim, mono, plain};
 use crate::ui::term;
-use crate::ui::tokens::{FONT_MONO, MEASURE_RECORD, Token, color};
+use crate::ui::tokens::{FONT_MONO, Token, color};
 
 /// A code or log line's size and leading on desktop and phone.
 const CODE: (f32, f32) = (11.5, 17.0);
@@ -31,12 +31,11 @@ const CODE: (f32, f32) = (11.5, 17.0);
 const IMAGE_RATIO: f32 = 16.0 / 9.0;
 /// The widest an image is drawn.
 const IMAGE_MAX: f32 = 720.0;
-/// The measure of Markdown and plain text on desktop.
-const MEASURE: f32 = 680.0;
-/// The column a desktop preview keeps to, centred in its pane: an image's widest, so the title
-/// and buttons stand over the words or the picture rather than across an empty pane. Code and
-/// logs scroll sideways within it.
-const PREVIEW_MEASURE: f32 = IMAGE_MAX;
+/// The column a desktop preview keeps to, centred in its pane: wide enough that a report's
+/// words and tables use the pane rather than leave a margin either side of it, so the title and
+/// buttons stand over them. Code and logs scroll sideways within it. Full size has no measure:
+/// it takes the whole page.
+const PREVIEW_MEASURE: f32 = 1040.0;
 
 /// The selected artifact beside or under the results: test ids "artifact-preview",
 /// "btn-open-full", "btn-open-task".
@@ -135,8 +134,8 @@ fn actions(
 }
 
 /// The artifact full size in the results' place: its title and reference in the head with Back
-/// and Open its task, then its facts and all of its content, kept to the record's measure on a
-/// desktop, centred. test ids "artifact-full", "btn-artifact-back", "btn-open-task".
+/// and Open its task, then its facts and all of its content across the whole page.
+/// test ids "artifact-full", "btn-artifact-back", "btn-open-task".
 pub(super) fn full(
     app: AppState,
     page: Memo<Page>,
@@ -186,18 +185,13 @@ pub(super) fn full(
                 .flex_1()
                 .min_w(px(0.0))
                 .min_h(px(0.0))
-                .child(measured_head(
+                .child(head(
                     app,
-                    MEASURE_RECORD,
                     preview.title.clone(),
                     Some(preview.reference.clone()),
                     Vec::new(),
                 ))
-                .child(body(
-                    app,
-                    "artifact-full",
-                    measure(app, MEASURE_RECORD, scroll),
-                ))
+                .child(body(app, "artifact-full", scroll))
                 .into_element()
         })
     })
@@ -242,7 +236,7 @@ fn content(app: AppState, content: &Content) -> AnyElement {
         Body::Markdown(words) => {
             provide_styles(app);
             view()
-                .when(form == Form::Desktop, |doc| doc.max_w(px(MEASURE)))
+                .min_w(px(0.0))
                 .child(artifact_markdown(app, words))
                 .into_element()
         }
