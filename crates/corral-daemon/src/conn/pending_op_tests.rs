@@ -1,4 +1,62 @@
+use std::sync::Mutex;
+
 use super::*;
+
+#[test]
+fn pipelined_moves_are_admitted_in_order_without_blocking_ping() {
+    let hold = Arc::new(Mutex::new(()));
+    let gate = Arc::clone(&hold);
+    let fixture = Fixture::with_runner(Arc::new(move || {
+        drop(gate.lock().unwrap_or_else(|error| error.into_inner()));
+        Box::new(FakeRunner::new())
+    }));
+    let engine = fixture.shared.engine().unwrap();
+    let task = engine
+        .new_task(NewTask {
+            title: "pipelined moves".into(),
+            status: Status::Backlog,
+            ..NewTask::default()
+        })
+        .unwrap();
+    let mut client = Client::connect(&fixture.unix_server());
+    fixture.shared.late_ops.set_wait(Duration::from_secs(30));
+
+    // Hold operation workers before they open the engine. PING proves the connection has
+    // consumed both submits; neither worker can finish or release its permit before then.
+    let guard = hold.lock().unwrap();
+    for (id, status) in [(2, Status::Ready), (3, Status::Backlog)] {
+        send(
+            &mut client,
+            id,
+            wire::op::OP_SUBMIT,
+            OpSubmit {
+                op: Op::Move {
+                    id: task.id.clone(),
+                    status,
+                },
+                force: false,
+            },
+        );
+    }
+    send(&mut client, 4, wire::PING, ());
+    let _: wire::Pong = receive(&mut client, 4);
+    let workers = fixture.shared.lock().op_workers;
+    assert_eq!(workers, 1, "the second Move could race the first");
+    drop(guard);
+
+    let OpReply::Done { seq: first, .. } = receive(&mut client, 2) else {
+        panic!("the first Move should have finished");
+    };
+    let OpReply::Done { seq: second, .. } = receive(&mut client, 3) else {
+        panic!("the second Move should have finished");
+    };
+    assert!(first < second);
+    assert_eq!(
+        engine.store.get_task(&task.id).unwrap().unwrap().status,
+        Status::Backlog,
+        "executing the moves in reverse would leave the task Ready"
+    );
+}
 
 /// Pipeline ordinary RPCs before releasing the writer that one pending Move needs.
 #[test]

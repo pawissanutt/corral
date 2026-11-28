@@ -656,4 +656,19 @@ fn observation_failures_form_restart_safe_per_run_episodes() {
     assert_ne!(openings[0], openings[1]);
     assert_ne!(openings[2], openings[3]);
     assert!(!serde_json::to_string(&events).unwrap().contains("private"));
+
+    // A pre-episode CLI can retire the reviewer without closing its episode.
+    // The board must use the run's liveness, not the presence of an episode row.
+    let mut ended = reviewer;
+    ended.ended = Some(Timestamp::now());
+    ended.outcome = Some(Outcome::Stopped);
+    f.engine
+        .store
+        .connection
+        .execute(
+            "UPDATE runs SET live=0, document=?3 WHERE task=?1 AND id=?2",
+            rusqlite::params![ended.task, ended.id, serde_json::to_string(&ended).unwrap()],
+        )
+        .unwrap();
+    assert_eq!(attention(), "Existing advisory.");
 }

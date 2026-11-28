@@ -290,7 +290,8 @@ impl Store {
             .connection
             .prepare_cached(
                 "SELECT e.task,e.run,e.document FROM run_observation_episodes e
-             WHERE e.task IN (SELECT value FROM json_each(?1)) ORDER BY e.task,e.run",
+                 JOIN runs r ON r.task=e.task AND r.id=e.run AND r.live=1
+                 WHERE e.task IN (SELECT value FROM json_each(?1)) ORDER BY e.task,e.run",
             )
             .context("prepare board observation summaries")?;
         let mut rows = statement

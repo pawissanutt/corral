@@ -187,10 +187,10 @@ impl<'a> Subscriptions<'a> {
         // Before the buffers are read: what is published from here on wakes the next wait.
         if let Some(waker) = &self.waker {
             waker.clear();
+            self.operations.flush(self.shared, waker, |id, outcome| {
+                dispatch::respond_op(conn, id, outcome)
+            })?;
         }
-        self.operations.flush(self.shared, |id, outcome| {
-            dispatch::respond_op(conn, id, outcome)
-        })?;
         self.model_discovery.flush(conn)?;
         let mut i = 0;
         while i < self.rows.len() {

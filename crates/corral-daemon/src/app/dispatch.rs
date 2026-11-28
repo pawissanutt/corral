@@ -165,14 +165,15 @@ pub(crate) fn serve(
                 let waker = topics.ensure_waker()?;
                 if method == op::OP_SUBMIT {
                     let submission = decode(params)?;
+                    let shared = Arc::clone(shared);
                     topics
                         .operations
-                        .push(id.clone(), || ops::submit(shared, submission, &waker))?;
+                        .submit(id.clone(), move || ops::submit(&shared, submission, &waker))?;
                 } else {
                     let request = decode(params)?;
                     topics
                         .operations
-                        .push(id.clone(), || ops::result(shared, request, &waker))?;
+                        .follow(id.clone(), || ops::result(shared, request, &waker))?;
                 }
                 Ok(())
             })();
