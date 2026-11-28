@@ -56,7 +56,7 @@ fn header(app: AppState, cell: &CodeCell) -> View {
         .child(glyph(app, cell.state))
         .children(space())
         .child(
-            mono(app, "code", color(Token::Ink))
+            mono(app, "JavaScript cell", color(Token::Ink))
                 .flex_shrink_0()
                 .font_weight(if form == Form::Terminal {
                     FontWeight::BOLD
@@ -134,7 +134,7 @@ pub(super) fn cell(app: AppState, cell: &CodeCell, id: &str) -> AnyElement {
         app,
         header(app, cell),
         cell.action.as_ref(),
-        format!("code cell, {}", cell.calls),
+        format!("JavaScript cell, {}", cell.calls),
         cell.open,
         id,
     );

@@ -359,7 +359,7 @@ fn status_word(status: &str) -> Option<&'static str> {
     }
 }
 
-/// A `codemode` call as its cell.
+/// An `eval_js` or legacy `codemode` call as its cell.
 pub(super) fn cell(
     call: &Call<'_>,
     call_id: &str,

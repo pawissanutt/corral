@@ -85,7 +85,7 @@ impl Journal {
                 result,
                 ..
             } if !call_id.is_empty() => match name.as_str() {
-                "codemode" => {
+                "eval_js" | "codemode" => {
                     self.codemode.insert(call_id.clone());
                 }
                 "build_finish" => self.finish = Some(call_id.clone()),

@@ -721,7 +721,7 @@ pub fn window_fetches(feed: &daemon::Feed, cache: Option<&DetailCache>, ui: &Ui)
                 SessionItem::ToolCall { name, call_id, .. } => {
                     matches!(
                         name.as_str(),
-                        "task" | "build_finish" | "board_plan" | "codemode"
+                        "task" | "build_finish" | "board_plan" | "eval_js" | "codemode"
                     ) || if call_id.is_empty() {
                         opened(ui, &item_key(&anchor, count - n))
                     } else {

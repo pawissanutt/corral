@@ -620,7 +620,7 @@ pub(super) fn card(
             row(
                 glyph,
                 hue,
-                format!("code cell {cell} settled in background: {status}"),
+                format!("JavaScript cell {cell} settled in background: {status}"),
             )
         }
         "corral_owner_question" => {

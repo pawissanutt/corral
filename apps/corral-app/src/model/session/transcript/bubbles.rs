@@ -60,7 +60,7 @@ pub(super) fn notice(text: &str) -> Vec<Marker> {
         .collect()
 }
 
-/// `✓ code cell 12 settled: ok · 4 calls · reported to the agent`.
+/// `✓ JavaScript cell 12 settled: ok · 4 calls · reported to the agent`.
 fn cell(text: &str) -> Option<Vec<Marker>> {
     let mut lines = text.lines();
     let head = lines.next()?.strip_prefix(CELL_HEAD)?.strip_suffix(']')?;
@@ -122,7 +122,7 @@ fn cell(text: &str) -> Option<Vec<Marker>> {
     Some(vec![Marker::quiet(
         glyph,
         hue,
-        format!("code cell {number} settled: {word}{calls}{alert} · reported to the agent"),
+        format!("JavaScript cell {number} settled: {word}{calls}{alert} · reported to the agent"),
     )])
 }
 

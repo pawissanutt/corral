@@ -775,7 +775,7 @@ pub(super) fn call(
         lines: None,
     };
     match name.as_str() {
-        "codemode" => {
+        "eval_js" | "codemode" => {
             return Some(MessageItem::Cell(code_cell::cell(
                 &shown, call_id, &key, elapsed_ms, rest, cx,
             )));

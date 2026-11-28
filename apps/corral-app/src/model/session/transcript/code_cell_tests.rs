@@ -5,13 +5,19 @@ use super::{CellRow, MessageItem, ToolState};
 
 #[test]
 fn a_cell_lists_the_calls_it_recorded_not_its_script() {
+    for name in ["eval_js", "codemode"] {
+        check_recorded_cell(name);
+    }
+}
+
+fn check_recorded_cell(name: &str) {
     // The script names three reads; the runtime recorded one bash call.
     let script = "const a = await read({ path: 'a.rs' });\nconst b = await read({ path: 'b.rs' });\nawait read({ path: 'c.rs' });";
     let arguments = serde_json::json!({ "code": script }).to_string();
     let result = serde_json::json!({
         "role": "toolResult",
         "toolCallId": "m1",
-        "toolName": "codemode",
+        "toolName": name,
         "content": [{ "type": "text", "text": "cell-3 ok" }],
         "details": { "cells": [{
             "cell": "cell-3",
@@ -40,7 +46,7 @@ fn a_cell_lists_the_calls_it_recorded_not_its_script() {
         "2026-11-15T10:00:00Z",
         vec![SessionItem::ToolCall {
             call_id: "m1".into(),
-            name: "codemode".into(),
+            name: name.into(),
             arguments,
             summary: String::new(),
             state: SessionToolState::Done,
@@ -55,7 +61,7 @@ fn a_cell_lists_the_calls_it_recorded_not_its_script() {
     )]);
     let page = shown(&feed);
     let [MessageItem::Cell(cell)] = page.messages[0].items.as_slice() else {
-        panic!("the codemode call is drawn as its cell");
+        panic!("the {name} call should be drawn as its cell");
     };
     let calls: Vec<&str> = cell
         .children
