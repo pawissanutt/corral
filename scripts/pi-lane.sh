@@ -6,7 +6,7 @@ set -euo pipefail
 exec </dev/null
 cd "$(dirname "$0")/.."
 
-# Keep the native mbx lease across compilation, prebuilt execution and gaps.
+# Keep the native mbx lease across the Pi lane.
 if [[ ${1:-} == --corral-mbx-protected ]]; then
   shift
   python3 scripts/cargo_cache_targets.py --verify-protection
@@ -14,15 +14,10 @@ elif [[ ${CORRAL_BUILD_CACHE:-off} == mbx && ${CORRAL_MBX_TARGETS:-private} == m
   exec python3 scripts/cargo_cache.py --protect-script "$PWD/scripts/pi-lane.sh" "$@"
 fi
 
-repo=$PWD
 package=packages/corral-pi
 timer="$PWD/scripts/gate_timer.py"
 compile() {
   local label="pi-$1"
-  if [[ $1 == cargo ]]; then
-    shift
-    set -- bash "$repo/scripts/cargo.sh" "$@"
-  fi
   if [[ -n ${CORRAL_TEST_BUDGET_STATE:-} ]]; then
     python3 "$timer" compile "$CORRAL_TEST_BUDGET_STATE" "$label" -- "$@"
   else
@@ -47,12 +42,6 @@ if [[ $(command -v node) != "$shims/node" ]]; then
   exit 1
 fi
 
-# Cross-lane helpers normally build these lazily. Prepare them before the measured
-# Bun phase, so a cold Rust cache is compilation evidence rather than a test-budget failure.
-if [[ -n ${CORRAL_TEST_BUDGET_STATE:-} ]] && python3 scripts/gate_pi.py "$@"; then
-  compile cargo build -p corral --bin corral --features corral-ops/hermetic-harness
-  compile cargo test -p corral-ops --lib --no-run
-fi
 cd "$package"
 compile bun install --frozen-lockfile
 # Quick gates pass the changed modules' test consumers; no args means the full package.

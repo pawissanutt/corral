@@ -5,8 +5,8 @@
 # in their harnesses (T-053); do not unset gate context here.
 #
 # Without --tier (or with --tier full) this is the full tier, which corral runs for every
-# landing on main and for plan verify. Full landings scope optional lanes and torture
-# suites by changed paths; plan verify keeps all lanes and suites. --tier quick reads
+# landing on main and for plan verify. Full landings scope optional lanes by changed paths;
+# plan verify keeps all lanes. --tier quick reads
 # CORRAL_GATE_CONTEXT (schema v1) and checks only what the candidate touched.
 set -euo pipefail
 exec </dev/null
@@ -81,7 +81,6 @@ fi
 # overwritten by a concurrent candidate after Cargo releases its build lock.
 # An explicit caller target remains supported; an empty override means the default.
 if [[ -z ${CARGO_TARGET_DIR:-} ]]; then unset CARGO_TARGET_DIR; fi
-docs_binary="${CARGO_TARGET_DIR:-target}/debug/corral"
 gate_dir=$(mktemp -d)
 trap 'rm -rf "$gate_dir"' EXIT
 export CORRAL_TEST_BUDGET_STATE="$gate_dir/budget.json"
@@ -179,8 +178,8 @@ if [[ $tier == quick ]]; then
   fi
 
   # Declared tests replace the module selection and may name any package. The 'quick'
-  # nextest profile leaves out the slow group (.config/nextest.toml) unless tests are
-  # declared; full landings restore torture suites on owning-module changes.
+  # nextest profile applies its default filter (.config/nextest.toml) unless tests are
+  # declared.
   # Quarantine runs whenever Rust tests are in scope. A candidate that touches no crate and
   # declares no tests builds no test binaries: neither run could observe its change.
   if ((declared || ${#scope[@]})); then
@@ -236,7 +235,7 @@ if [[ $tier == quick ]]; then
     printf '\nSkipping scripts/pi-lane.sh (packages/corral-pi/ untouched).\n'
   fi
 
-  printf '\nSkipping Darwin checks, doctests, scripts/work-budget.sh and the docs build (tier quick).\n'
+  printf '\nSkipping Darwin checks, doctests and the candidate build (tier quick).\n'
   finish
   exit 0
 fi
@@ -322,19 +321,14 @@ begin_step "CORRAL_HERDR_SESSION=corral-test cargo test --workspace --doc"
 CORRAL_HERDR_SESSION=corral-test bash scripts/cargo.sh test --workspace --doc
 end_step
 
-begin_step "scripts/work-budget.sh"
-scripts/work-budget.sh
-end_step
-
 if ((pi_touched)); then
   pi_lane
 else
   printf '\nSkipping scripts/pi-lane.sh (Pi package and contracts untouched).\n'
 fi
 
-begin_step "cargo build -p corral && scripts/check-docs.sh $docs_binary"
-python3 scripts/gate_timer.py compile "$CORRAL_TEST_BUDGET_STATE" candidate-build -- bash scripts/cargo.sh build -p corral
-scripts/check-docs.sh "$docs_binary"
+begin_step "cargo build -p corral-next -p corral-daemon --bin corral-next --bin corrald-next"
+python3 scripts/gate_timer.py compile "$CORRAL_TEST_BUDGET_STATE" candidate-build -- bash scripts/cargo.sh build -p corral-next -p corral-daemon --bin corral-next --bin corrald-next
 end_step
 
 finish

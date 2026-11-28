@@ -8,9 +8,6 @@
 # one systemd user service, `corrald-next.service`; a second workspace on the same machine
 # names its own: `just root=/other/workspace unit=corrald-next-other.service daemon-service`.
 #
-# The old engine is not driven from here: its crates are excluded from the Cargo workspace and
-# no longer build. Its installed `corral` binary still answers `corral daemon status`.
-
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
 root := ''

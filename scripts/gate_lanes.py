@@ -13,80 +13,11 @@ import re
 import shlex
 import subprocess
 import sys
-import tomllib
 
 PI_CONTRACTS = (
     "packages/corral-pi/", "scripts/pi-lane.sh", "scripts/build-pi-host.sh",
-    "crates/corral-ops/src/agent/", "crates/corral-core/src/agent/",
-    "crates/corral-ops/src/agent.rs", "crates/corral-core/src/agent.rs",
-    "crates/corral-ops/assets/", "crates/corral/src/agent_cmd.rs",
-    "crates/corral-core/src/config/agent_capabilities", "crates/corral-core/src/inbox/",
-    "crates/corral-core/src/inbox.rs", "crates/corral-ops/src/inbox",
+    "crates/corral-daemon/", "crates/corral-protocol/", "crates/corral-types/",
 )
-# Each catalog entry names a behavior, not merely a duration. Changes to these owners
-# restore the whole relevant torture suite; budget fixtures alone do not opt them in.
-SLOW_OWNERS = {
-    # One recovery intent must survive competing apply and process loss without another launch.
-    "=recovery::tests::concurrency::concurrent_apply_and_process_loss_never_replay_one_reviewer": (
-        "crates/corral-ops/src/recovery", "crates/corral-ops/tests/recovery",
-    ),
-    # Local advisory review recovery covers each durable publication/accounting boundary.
-    "=assistant::workflow::tests::review_tests::assistant_local_review_restart_boundaries_never_replay_inference": (
-        "crates/corral-ops/src/assistant/workflow/review/",
-        "crates/corral-ops/src/assistant/workflow/review_tests.rs",
-        "crates/corral-ops/src/assistant/workflow/publication.rs",
-        "crates/corral-ops/src/agent/ops/assistant_workflow.rs",
-        "crates/corral-ops/src/agent/ops/auxiliary.rs",
-        "crates/corral-core/src/assistant_workflow.rs",
-    ),
-    # Bounded annotation CAS contention uses the service and its exact Store lease/append owners.
-    "=annotations::tests::annotations_reply_resolve_race_uses_revision_cas": (
-        "crates/corral-ops/src/annotations.rs", "crates/corral-ops/src/annotations_tests.rs",
-        "crates/corral-core/src/store/annotations.rs", "crates/corral-core/src/store/head_api.rs",
-    ),
-    "handoff_publication_crash_matrix": ("crates/corral-ops/src/assistant/workflow/handoff/",),
-    "handoff_materialization_restart": ("crates/corral-ops/src/assistant/workflow/handoff/",),
-    "handoff_pm_context_restart": (
-        "crates/corral-ops/src/plan_review", "crates/corral-ops/src/plan_pm_context_tests.rs",
-        "crates/corral-ops/src/agent/admission.rs", "crates/corral-ops/src/agent/recovery_quiesce.rs",
-        "crates/corral-ops/src/agent/ops/planning.rs", "crates/corral-core/src/plan.rs",
-        "packages/corral-pi/src/roles/plan-reviewer/", "packages/corral-pi/src/host/session.ts",
-    ),
-    "scratch_gc_resume_startup_interleaving": (
-        "crates/corral-core/src/assistant", "crates/corral-ops/src/assistant/scratch",
-        "crates/corral-ops/src/agent/ops/assistant", "crates/corral-ops/src/agent/launch.rs",
-    ),
-    "one_winner_per_thousand": ("crates/corral-ops/src/operating",),
-    "submission_paths_tests::crashes::": (
-        "crates/corral-ops/src/operating", "crates/corral-ops/src/submission",
-        "crates/corral-ops/tests/support/submission_path", "crates/corral-core/src/store/",
-        "crates/corral-ops/src/dispatch", "crates/corral-ops/src/launch",
-        "crates/corral-ops/src/plan", "crates/corral-ops/src/review",
-    ),
-    "ledger_cleanup_closes": ("crates/corral-ops/src/cleanup", "crates/corral-ops/tests/support/cleanup"),
-    "delivery_history::s21_": (
-        "crates/corral-ops/src/delivery", "crates/corral-ops/src/attention.rs",
-        "crates/corral-ops/src/attention/", "crates/corral-core/src/inbox",
-        "crates/corral-ops/tests/attention_eval",
-    ),
-    "self_projection_restart": ("crates/corral-ops/src/plan", "crates/corral-ops/tests/plan_ops"),
-    "inputs_changed_between_approval": (
-        "crates/corral-ops/src/autopilot", "crates/corral-ops/src/gate",
-        "crates/corral-ops/src/review.rs", "crates/corral-ops/tests/autopilot_ops",
-    ),
-    "interrupted_coding_stages": ("crates/corral-ops/src/operating", "crates/corral-ops/tests/operating_launch"),
-    "concrete_planning_paths": ("crates/corral-ops/src/operating", "crates/corral-ops/src/plan", "crates/corral-ops/tests/operating_launch"),
-    "concrete_gate_and_profile_reviewer": ("crates/corral-ops/src/operating", "crates/corral-ops/src/gate", "crates/corral-ops/src/review", "crates/corral-ops/tests/operating_launch"),
-    "binary_id(=corral-ops::gate_tiers_e2e)": (
-        "crates/corral-ops/src/gate", "crates/corral-ops/src/plan",
-        "crates/corral-ops/src/autopilot", "crates/corral-ops/tests/gate_tiers_e2e",
-    ),
-    "retained_branch_cleanup_refuses": (
-        "crates/corral-ops/src/cleanup", "crates/corral-ops/src/review.rs",
-        "crates/corral-ops/src/storage_gc.rs", "crates/corral-ops/src/storage_gc/",
-        "crates/corral-ops/tests/cleanup_ops",
-    ),
-}
 # Bun slow catalog: (test file under packages/corral-pi, test name, reason). The Pi lane skips
 # these unless CORRAL_PI_SLOW=1: quick gates never run them, full landings restore them when an
 # owner path changes, and plan verify and the nightly slow lane (scripts/slow_lane.py) always do.
@@ -95,15 +26,13 @@ PI_SLOW = (
      "T-768: load-sensitive live browser cancellation"),
     ("src/extensions/lsp/lsp.test.ts", "LSP close joins concurrent preparation and retains positive not started evidence",
      "T-932: preparation/close race with joined startup flights"),
-    ("test/assistant-planning-policy.test.ts", "LSP preparation shares pending admission and close cannot certify an unacknowledged startup",
-     "T-932: host admission acknowledgement/close race retains uncertainty"),
 )
 # Owners include the test support files that hold its synchronization and cleanup checks.
 PI_SLOW_OWNERS = (
     "packages/corral-pi/src/extensions/browser/", "packages/corral-pi/test/browser.test.ts",
     "packages/corral-pi/test/support/exits.ts", "packages/corral-pi/test/support/wait.ts",
     "packages/corral-pi/src/extensions/lsp/", "packages/corral-pi/src/host/session.ts",
-    "packages/corral-pi/src/host/managed-effects.ts", "packages/corral-pi/test/assistant-planning-policy.test.ts",
+    "packages/corral-pi/src/host/managed-effects.ts",
 )
 
 
@@ -144,20 +73,10 @@ def darwin_touched(context: dict) -> bool:
                for line in result.stdout.splitlines() if line.startswith(("+", "-")))
 
 
-def landing_filter(paths: list[str]) -> str:
-    if any(workspace_input(path) or path.startswith((".config/nextest.toml", "scripts/gate_lanes.py", "crates/corral-core/", "crates/corral-git/", "crates/corral-herdr/", "crates/corral-ops/src/sync", "crates/corral-ops/tests/support/fixture"))
-           for path in paths):
-        return "all()"
-    config = tomllib.loads(Path(".config/nextest.toml").read_text())
-    catalog = config["profile"]["slow"]["default-filter"]
-    # One OR term per line; fail closed if a new catalog entry has no owner mapping.
-    terms = [line.strip().removeprefix("| ") for line in catalog.splitlines() if line.strip()]
-    selected = []
-    for term in terms:
-        owners = [prefix for key, prefixes in SLOW_OWNERS.items() if key in term for prefix in prefixes]
-        if not owners or any(path.startswith(tuple(owners)) for path in paths):
-            selected.append(term)
-    return f"not ({catalog})" + (f" or ({' | '.join(selected)})" if selected else "")
+def landing_filter(_paths: list[str]) -> str:
+    # The Classic Rust catalog has retired. Do not omit workspace tests: new
+    # slow entries run on landings until explicit owner scoping is introduced.
+    return "all()"
 
 
 def plan(path: str | None) -> None:

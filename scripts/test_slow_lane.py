@@ -1,34 +1,14 @@
 #!/usr/bin/env python3
 """No host load, real test suite, live board mutation, or owner herdr in these fixtures."""
-import argparse
 import contextlib
 import io
+import json
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
 
 import slow_lane
-
-
-class FakeBoard(slow_lane.Board):
-    def __init__(self):
-        self.project = 'corral'
-        self.tasks = []
-        self.calls = []
-
-    def call(self, *args):
-        import json
-        self.calls.append(args)
-        if args[0] == 'list':
-            return json.dumps(self.tasks)
-        if args[0] == 'new':
-            task = f'T-{len(self.tasks) + 1:03}'
-            self.tasks.append({'id': task, 'title': args[1]})
-            return task
-        if args[:2] == ('artifact', 'add'):
-            return 'R0 log transient artifacts/T-001/R0/hash-proof.log\n'
-        return ''
 
 
 class SlowLaneTests(unittest.TestCase):
@@ -45,7 +25,7 @@ class SlowLaneTests(unittest.TestCase):
                  patch.object(slow_lane.os, 'getloadavg', return_value=(33, 33, 33)), \
                  patch.object(slow_lane, 'command') as command, \
                  contextlib.redirect_stdout(io.StringIO()):
-                self.assertEqual(slow_lane.run(argparse.Namespace()), 75)
+                self.assertEqual(slow_lane.run(), 75)
                 priority.assert_called_once()
                 command.assert_not_called()
                 self.assertEqual(list(Path(directory).iterdir()), [])
@@ -57,7 +37,7 @@ class SlowLaneTests(unittest.TestCase):
             nice.assert_called_once_with(slow_lane.os.PRIO_PROCESS, 0, 19)
             command.assert_called_once_with(['ionice', '-c', '3', '-p', str(slow_lane.os.getpid())])
 
-    def test_repeated_failure_rows_and_nightly_runs_file_once_per_test_and_keep_raw_proof(self):
+    def test_repeated_failure_rows_report_each_test_once(self):
         names = slow_lane.failures('''
         FAIL [ 1.0s] ( 1/2) pkg::binary module::one
      TIMEOUT [ 2.0s] ( 2/2) pkg::binary module::two
@@ -68,15 +48,29 @@ class SlowLaneTests(unittest.TestCase):
 ''')
         self.assertEqual(names, ['corral-pi a cancelled call stops its browser and removes its profile',
                                  'pkg::binary module::one', 'pkg::binary module::two'])
-        names = names[1:]
-        board = FakeBoard()
-        first = board.file_failures(names, Path('/disposable/proof.log'), 'candidate')
-        second = board.file_failures(names, Path('/disposable/proof.log'), 'candidate')
-        self.assertEqual(first, ['T-001', 'T-002'])
-        self.assertEqual(first, second)
-        self.assertEqual(sum(call[0] == 'new' for call in board.calls), 2)
-        self.assertEqual(sum(call[:2] == ('artifact', 'set-tier') and call[-1] == 'keep'
-                             for call in board.calls), 4)
+    def test_failed_run_reports_local_proof_and_preserves_failure_exit(self):
+        def run(_args, **kwargs):
+            kwargs['stdout'].write('(fail) example test [10ms]\n')
+            return type('Result', (), {'returncode': 1})()
+
+        with tempfile.TemporaryDirectory() as directory, io.StringIO() as out:
+            with patch.object(slow_lane, 'REPO', Path(directory)), \
+                 patch.object(slow_lane.os, 'chdir'), \
+                 patch.object(slow_lane, 'idle_priority'), \
+                 patch.object(slow_lane, 'available_cores', return_value=1), \
+                 patch.object(slow_lane.os, 'getloadavg', return_value=(0, 0, 0)), \
+                 patch.object(slow_lane, 'command', side_effect=['', 'deadbeef']) as command, \
+                 patch.object(slow_lane.subprocess, 'run', side_effect=run) as shell, \
+                 contextlib.redirect_stdout(out):
+                self.assertEqual(slow_lane.run(), 1)
+            report = json.loads(out.getvalue())
+            self.assertEqual(report['failures'], ['corral-pi example test'])
+            self.assertEqual(report['candidate'], 'deadbeef')
+            log = Path(report['log'])
+            self.assertEqual(log.parent, Path(directory) / '.evidence' / 'slow')
+            self.assertIn('(fail) example test', log.read_text())
+            self.assertEqual(command.call_count, 2)  # git status and rev-parse only
+            self.assertIn('--profile slow --no-tests=pass', shell.call_args.args[0][-1])
 
     def test_nightly_runs_the_bun_slow_catalog_after_nextest_whatever_its_result(self):
         command = slow_lane.pi_slow_command()

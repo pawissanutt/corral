@@ -23,12 +23,6 @@ CONTEXT: Final = {
 RUNNER_COMMAND: Final = "bash scripts/gate.sh"
 QUICK: Final = "bash scripts/gate.sh --tier quick"
 STEP_END: Final = re.compile(r"<== (.+) ([0-9]+\.[0-9]{3})s")
-BUDGET_TESTS: Final = (
-    "app::work_budget::board_work_stays_within_budget_and_independent_of_history",
-    "app::hot_budget::hot_reads_work_stays_independent_of_history",
-    "app::sync_budget::sync_tick_work_stays_independent_of_history",
-)
-BUDGET_FILTER: Final = "binary_id(=corral-tui) and (" + " or ".join(f"test(={name})" for name in BUDGET_TESTS) + ")"
 
 
 def semantic_args(args: list[str]) -> list[str]:
@@ -62,13 +56,6 @@ def darwin_check_args(target: str) -> list[str]:
     return ["check", "--workspace", "--all-targets", "--target", target,
             *(arg for override in overrides
               for arg in ("--config", f"target.{target}.{override}"))]
-
-
-STARTERS: Final = (
-    "e2e.sh", "screenshots.sh", "tui-drive.sh", "tui-drive-autopilot.sh",
-    "tui-drive-cards.sh", "tui-drive-dispatch.sh", "tui-drive-pins.sh",
-    "tui-drive-profiles.sh",
-)
 
 
 class StartupEntry(TypedDict):
@@ -115,7 +102,7 @@ class GateTests(unittest.TestCase):
         self.repo = Path(temp.name)
         (self.repo / "scripts").mkdir()
         (self.repo / "src").mkdir()
-        for name in ("gate.sh", "cargo.sh", "cargo_cache.py", "cargo_cache_targets.py", "cargo_config.py", "gate_select.py", "gate_lanes.py", "gate_pi.py", "gate_timer.py", "gate_case.py", "gate_ratchet.py", "gate_repair.py", "gate_quarantine.py", "test_cost.py", "check-candidate.py", "work-budget.sh"):
+        for name in ("gate.sh", "cargo.sh", "cargo_cache.py", "cargo_cache_targets.py", "cargo_config.py", "gate_select.py", "gate_lanes.py", "gate_pi.py", "gate_timer.py", "gate_case.py", "gate_ratchet.py", "gate_repair.py", "gate_quarantine.py", "test_cost.py", "check-candidate.py"):
             _ = shutil.copy2(SCRIPTS / name, self.repo / "scripts" / name)
         (self.repo / ".config").mkdir()
         for file in ("gate.toml", "nextest.toml"):
@@ -248,14 +235,12 @@ if entry["args"][:2] == ["nextest", "list"]:
     print(Path(os.environ["LIST_JSON"]).read_text() if os.environ.get("LIST_JSON") else json.dumps({{"rust-suites": {{}}}}))
 """
         self.write("bin/cargo", recorder)
-        self.write("scripts/check-docs.sh", recorder)
         self.write("bin/rustup", f"""#!{sys.executable}
 import os, sys
 print(os.environ.get("INSTALLED_TARGETS", ""))
 sys.exit(int(os.environ.get("RUSTUP_STATUS", "0")))
 """)
-        for path in (bin_dir / "cargo", bin_dir / "rustup",
-                     self.repo / "scripts/check-docs.sh"):
+        for path in (bin_dir / "cargo", bin_dir / "rustup"):
             path.chmod(0o755)
         return str(bin_dir) + os.pathsep + os.environ["PATH"]
 
@@ -329,16 +314,14 @@ else:
             "cargo clippy --workspace --all-targets -- -D warnings",
             "CORRAL_HERDR_SESSION=corral-test cargo nextest run --workspace",
             "CORRAL_HERDR_SESSION=corral-test cargo test --workspace --doc",
-            "scripts/work-budget.sh",
-            "cargo build -p corral && scripts/check-docs.sh target/debug/corral",
+            "cargo build -p corral-next -p corral-daemon --bin corral-next --bin corrald-next",
         ]
-        work_budget = "cargo:nextest run --profile default --run-ignored only"
         def fail(command: str) -> dict[str, str]:
             return {"FAIL_COMMAND": command}
 
         # (announced steps, failure diagnostic and status or None, environment, lib.rs)
         cases: list[tuple[int, tuple[str, int] | None, dict[str, str], str]] = [
-            (9, None, {}, ""),
+            (8, None, {}, ""),
             (1, (steps[0], 23), fail("cargo:fmt --all -- --check"), ""),
             (2, (steps[1], 1), {}, "const _: () = ();\n" * 801),
             (2, ("listing installed Rust targets", 41), {"RUSTUP_STATUS": "41"}, ""),
@@ -348,9 +331,7 @@ else:
             (5, (steps[4], 23), fail("cargo:clippy --workspace --all-targets -- -D warnings"), ""),
             (6, (steps[5], 23), fail("cargo:nextest run"), ""),
             (7, (steps[6], 23), fail("cargo:test --workspace --doc"), ""),
-            (8, (steps[7], 23), fail(work_budget), ""),
-            (9, (steps[8], 23), fail("cargo:build -p corral"), ""),
-            (9, (steps[8], 23), fail("check-docs.sh:target/debug/corral"), ""),
+            (8, (steps[7], 23), fail("cargo:build -p corral-next"), ""),
         ]
         for announced, failure, env, source in cases:
             with self.subTest(failure=failure, env=env):
@@ -396,9 +377,7 @@ else:
             ("cargo", ["nextest", "list", "--profile", "default", "--ignore-default-filter", "--run-ignored", "all", "--message-format", "json", "-E", "<exception selection>"]),
             ("cargo", ["nextest", "run", "--profile", "default", "-E", "(all())"]),
             ("cargo", ["test", "--workspace", "--doc"]),
-            ("cargo", ["nextest", "run", "--profile", "default", "--run-ignored", "only", "-E", BUDGET_FILTER]),
-            ("cargo", ["build", "-p", "corral"]),
-            ("check-docs.sh", ["target/debug/corral"]),
+            ("cargo", ["build", "-p", "corral-next", "-p", "corral-daemon", "--bin", "corral-next", "--bin", "corrald-next"]),
         ])
         # Compile selectors belong only to the build phase, never a measured reuse run.
         for entry in entries:
@@ -409,7 +388,7 @@ else:
             self.assertEqual(entry["context"], CONTEXT)
             self.assertEqual(entry["stdin"], "")
         self.assertEqual([e["session"] for e in entries],
-                         ["not-the-test-session"] * 3 + ["corral-test"] * 5 + ["not-the-test-session"] * 2)
+                         ["not-the-test-session"] * 3 + ["corral-test"] * 4 + ["not-the-test-session"])
         self.assertIn("maximum 800 (limit 800)", result.stdout)
 
     def test_linked_worktree_keeps_candidate_target_and_honors_explicit_override(self) -> None:
@@ -428,8 +407,7 @@ else:
             self.assertEqual(result.returncode, 0, result.stderr)
             entries = [json.loads(line) for line in (linked / "commands.jsonl").read_text().splitlines()]
             self.assertTrue(all(entry["target_dir"] == (override or None) for entry in entries))
-            target = override or "target"
-            self.assertEqual(entries[-1]["args"], [str(Path(target) / "debug/corral")])
+            self.assertEqual(entries[-1]["args"][:3], ["build", "-p", "corral-next"])
             (linked / "commands.jsonl").unlink()
 
     def install_bun_recorder(self) -> None:
@@ -492,7 +470,7 @@ with open({str(self.repo / "bun.jsonl")!r}, "a") as log:
         # A context-bound full landing scopes Pi too; plan verification never does.
         for changed, verify, runs in [("docs/guide.md", False, False),
                                       ("packages/corral-pi/src/a.ts", False, True),
-                                      ("crates/corral-ops/assets/review-contracts/common.md", False, True),
+                                      ("crates/corral-protocol/src/lib.rs", False, True),
                                       ("docs/guide.md", True, True)]:
             self.write("lane-context.json", json.dumps({"schema_version": 1,
                        "plan_verify": verify, "changed_paths": [changed],
@@ -554,7 +532,7 @@ with open({str(self.repo / "bun.jsonl")!r}, "a") as log:
 
         # The full recipe honors path scope even when both targets are installed.
         for changed, runs in [("docs/guide.md", False),
-                              ("crates/corral-ops/src/platform.rs", True),
+                              ("crates/corral-engine/src/platform.rs", True),
                               ("Cargo.lock", True)]:
             (self.repo / "commands.jsonl").unlink(missing_ok=True)
             self.write("lane-context.json", json.dumps({"schema_version": 1,
@@ -756,8 +734,7 @@ fn main() {{
     def startup_environment(self) -> dict[str, str]:
         """Fake engine records startup scope and signals readiness before waiting."""
         (self.repo / "bin").mkdir()
-        for name in (*STARTERS, "test-herdr.sh"):
-            _ = shutil.copy2(SCRIPTS / name, self.repo / "scripts" / name)
+        _ = shutil.copy2(SCRIPTS / "test-herdr.sh", self.repo / "scripts" / "test-herdr.sh")
         self.write("bin/herdr", f"""#!{sys.executable}
 import json, os, signal, sys
 from pathlib import Path
@@ -835,21 +812,15 @@ printf '%s\\n' '{"target_directory":"/unused"}'
                 self.assertEqual(result.returncode, status, result.stderr)
                 self.assert_startup_isolated()
 
-    def test_every_owning_script_isolates_and_stops_on_server_failure(self) -> None:
-        # Given every actual startup entrypoint and a server that exits before ready:
+    def test_private_startup_failure_stops_before_the_client(self) -> None:
         environment = {**self.startup_environment(), "FAIL_STARTUP": "1"}
-        for script in STARTERS:
-            with self.subTest(script=script):
-                (self.repo / "startups.jsonl").unlink(missing_ok=True)
-                # When the owning script attempts startup (never the owner's engine):
-                result = subprocess.run(
-                    ["bash", str(self.repo / "scripts" / script)],
-                    cwd=self.repo, env=environment, capture_output=True, text=True, timeout=15,
-                )
-                # Then startup failure stops the script and cleans its own lifecycle.
-                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-                self.assertIn("Isolated herdr startup failed", result.stderr)
-                self.assert_startup_isolated()
+        result = subprocess.run(
+            ["bash", "-c", "source scripts/test-herdr.sh && corral_test_herdr_start && exit 92"],
+            cwd=self.repo, env=environment, capture_output=True, text=True, timeout=15,
+        )
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("Isolated herdr startup failed", result.stderr)
+        self.assert_startup_isolated()
 
 
 def load_tests(

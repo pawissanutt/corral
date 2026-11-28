@@ -54,7 +54,7 @@ class PolicyTests(unittest.TestCase):
 
     def test_optional_lanes_and_plan_verify_are_conservative(self):
         self.assertTrue(gate_lanes.pi_touched(["packages/corral-pi/assets/worker-contract.md"]))
-        self.assertTrue(gate_lanes.pi_touched(["crates/corral-ops/src/agent/wire.rs"]))
+        self.assertTrue(gate_lanes.pi_touched(["crates/corral-protocol/src/lib.rs"]))
         self.assertFalse(gate_lanes.pi_touched(["docs/guide/a.md"]))
         self.write("src.rs", "fn platform() {}\n")  # Removed cfg must still trigger Darwin.
         self.commit()
@@ -77,35 +77,11 @@ class PolicyTests(unittest.TestCase):
             self.assertIn("darwin_touched=1", out.getvalue())
             self.assertIn("landing_filter='all()'", out.getvalue())
 
-    def test_slow_catalog_is_restored_by_owners_and_unknown_entries_fail_closed(self):
-        ordinary = gate_lanes.landing_filter(["docs/a.md"])
-        cleanup = gate_lanes.landing_filter(["crates/corral-ops/src/cleanup.rs"])
-        self.assertNotIn(" or (", ordinary)
-        self.assertIn(" or (", cleanup)
-        self.assertIn("ledger_cleanup_closes", cleanup.split(" or (")[1])
-        for prefixes in gate_lanes.SLOW_OWNERS.values():
-            for prefix in prefixes:
-                with self.subTest(owner_prefix=prefix):
-                    self.assertTrue((ROOT / prefix).exists() or any(ROOT.glob(prefix + "*")), prefix)
-        delivery = (
-            "delivery_history::s21_prior_unsafe_attempts_bar_rejected_resends_after_restart_and_fifo_promotion",
-            "delivery_history::s21_ten_current_attempts_preserve_prior_unsafe_witness_on_every_recipient",
-            "delivery_history::s21_unattempted_replacements_retry_original_recipient_after_restart_and_promotion",
-        )
-        cases = {
-            "crates/corral-ops/src/storage_gc.rs": ("retained_branch_cleanup_refuses",),
-            "crates/corral-ops/src/storage_gc/worktrees.rs": ("retained_branch_cleanup_refuses",),
-            "crates/corral-ops/src/storage_gc/lifecycle.rs": ("retained_branch_cleanup_refuses",),
-            "crates/corral-ops/src/attention.rs": delivery,
-            "crates/corral-ops/src/attention/metrics.rs": delivery,
-            "crates/corral-ops/src/review.rs": ("inputs_changed_between_approval", "retained_branch_cleanup_refuses"),
-        }
-        for path, terms in cases.items():
-            with self.subTest(changed_path=path):
-                restored = gate_lanes.landing_filter([path]).partition(" or (")[2]
-                for term in terms:
-                    self.assertIn(term, restored)
-        self.assertEqual(gate_lanes.landing_filter(["Cargo.lock"]), "all()")
+    def test_retired_rust_catalog_keeps_all_landing_tests(self):
+        for path in ("docs/a.md", "crates/corral-engine/src/lib.rs", "Cargo.lock"):
+            self.assertEqual(gate_lanes.landing_filter([path]), "all()")
+
+    def test_bun_slow_catalog_is_restored_by_owners(self):
         # The Bun slow catalog follows the same rule: only its owners restore it on a landing.
         self.assertTrue(gate_lanes.pi_slow(["packages/corral-pi/src/extensions/browser/chrome.ts"]))
         self.assertTrue(gate_lanes.pi_slow(["packages/corral-pi/test/browser.test.ts"]))
@@ -123,10 +99,6 @@ class PolicyTests(unittest.TestCase):
                 source = (ROOT / "packages/corral-pi" / path).read_text()
                 self.assertIn(f'test.skipIf(process.env.CORRAL_PI_SLOW === "0")("{name}"', source)
                 self.assertTrue(reason.startswith("T-"), reason)
-        config = Path(".config/nextest.toml")
-        config.write_text(config.read_text().replace("test(retained_branch_cleanup_refuses)",
-                                                     "test(new_unmapped_torture)"))
-        self.assertIn("new_unmapped_torture", gate_lanes.landing_filter(["docs/a.md"]).split(" or (")[1])
 
     def test_time_budget_reports_and_preserves_actual_failure(self):
         # Waiting is not load generation. Crossing a time threshold cannot change status.
@@ -143,6 +115,8 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(gate_pi.selection(["packages/corral-pi/assets/worker-contract.md"]),
                          ["./src/roles/worker/worker.test.ts"])
         self.assertEqual(gate_pi.selection(["packages/corral-pi/bun.lock"]), [])
+        self.assertEqual(gate_pi.selection(["crates/corral-protocol/src/lib.rs",
+                                            "packages/corral-pi/src/value.ts"]), [])
 
     def test_nextest_candidate_existing_and_exception_times_are_report_only(self):
         config = tomllib.loads(Path(".config/nextest.toml").read_text())
