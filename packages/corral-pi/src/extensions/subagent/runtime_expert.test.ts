@@ -17,7 +17,7 @@ test("expert settings are explicit and the read-only ceiling never borrows paren
   expect(auxiliarySettings("worker", ["expert"], { expert }).expert).toBeUndefined();
   expect(() => ExpertSettingsSchema.parse({ ...expert, model: null })).toThrow();
   expect(expertLoadout([])).toEqual(["read", "grep", "find", "ls"]);
-  expect(expertLoadout(["bash", "write", "edit", "web_read", "corral_dispatch", "corral_expert", "codemode",
+  expect(expertLoadout(["bash", "write", "edit", "web_read", "corral_dispatch", "corral_expert", "eval_js",
     "lsp_references", "lsp_definition", "lsp_diagnostics"].map(localTool))).toEqual([
     "read", "grep", "find", "ls", "lsp_diagnostics", "lsp_definition", "lsp_references",
   ]);

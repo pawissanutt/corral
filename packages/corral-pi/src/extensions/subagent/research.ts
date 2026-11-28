@@ -48,7 +48,7 @@ export const DEPTH_GUIDANCE: Record<ResearchEffort, string> = {
 /** Shared method for every read-only code research child, standalone or Build. */
 export const CODE_METHOD = [
   "Method:",
-  "1. Start with the most relevant sources. If you have independent leads, batch their searches in one response instead of spending a turn on each. With codemode, one cell can run several searches and filter the results.",
+  "1. Start with the most relevant sources. If you have independent leads, batch their searches in one response instead of spending a turn on each. With eval_js, one cell can run several searches and filter the results.",
   "2. Read the functions or sections around relevant hits, not isolated lines.",
   "3. Follow the path the question names. Check definitions, callers and callees (lsp_definition/lsp_references when available), configuration and tests where they could change the answer.",
   "4. Consider what might overturn the evidence: other implementations, duplicates, flags, error paths and edge cases. If you conclude something is absent, say where you looked.",
@@ -98,7 +98,7 @@ export function wantsGapCheck(input: { effort?: ResearchEffort; toolCalls: numbe
 
 /**
  * Count what the helper looked at. `observed` is the runner's count of admitted calls (including
- * calls inside Code Mode cells, excluding the cells themselves); without it, direct tool-call
+ * calls inside JavaScript cells, excluding the cells themselves); without it, direct tool-call
  * blocks are counted, which also includes refused calls.
  */
 export function researchDepth(messages: readonly AgentMessage[], observed?: number): ResearchDepth {
@@ -108,7 +108,7 @@ export function researchDepth(messages: readonly AgentMessage[], observed?: numb
   for (const message of messages) {
     if (message.role === "assistant") {
       turns++;
-      toolCalls += message.content.filter(block => block.type === "toolCall" && block.name !== "codemode").length;
+      toolCalls += message.content.filter(block => block.type === "toolCall" && block.name !== "eval_js" && block.name !== "codemode").length;
     } else if (message.role === "toolResult") {
       for (const block of message.content) if (block.type === "text") resultBytes += Buffer.byteLength(block.text, "utf8");
     }

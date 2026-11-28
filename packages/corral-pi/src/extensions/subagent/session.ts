@@ -172,7 +172,7 @@ export async function runAuxiliarySession(options: AuxiliarySessionOptions, invo
   const baseLoadout = invocation.kind === "explore" ? exploreLoadout(options.parentLoadout) : expertLoadout(localTools);
   const loadout = withHosted(baseLoadout);
   const allowed = new Set(loadout);
-  const code = invocation.kind === "explore" && allowed.has("codemode") ? researchCode(allowed) : undefined;
+  const code = invocation.kind === "explore" && allowed.has("eval_js") ? researchCode(allowed) : undefined;
   let turns = 0;
   let synthesis: "turn_limit" | "time_reserve" | undefined;
   let synthesisUsed: typeof synthesis;
@@ -181,7 +181,7 @@ export async function runAuxiliarySession(options: AuxiliarySessionOptions, invo
     ? researchBudget(invocation.research ?? {}, invocation.maxTurns).thinkingLevel : "off";
   const extension = (pi: ExtensionAPI) => {
     residentLifecycle(pi);
-    for (const tool of localTools.filter((tool) => allowed.has(tool.name) && tool.name !== "codemode")) pi.registerTool(tool);
+    for (const tool of localTools.filter((tool) => allowed.has(tool.name) && tool.name !== "eval_js")) pi.registerTool(tool);
     for (const tool of hosted) pi.registerTool(tool);
     if (code) pi.registerTool(code.tool);
     pi.on("tool_call", (event) => {

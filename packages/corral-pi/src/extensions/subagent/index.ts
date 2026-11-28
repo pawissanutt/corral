@@ -70,7 +70,7 @@ export function exploreTool(runtime: Pick<FleetRuntime, "explore" | "watch">): T
     promptSnippet: "Delegate independent code or documentation research with cited, bounded findings",
     promptGuidelines: [
       "Use explore for substantial independent research that would otherwise fill your context with search output, not trivial one-file lookups.",
-      "For broad research, split explore into two or three non-overlapping questions and run independent explore calls concurrently as parallel direct tool calls in one turn; use a Code Mode cell only when you also need to filter, combine or summarise their results. Keep useful separate work for yourself; do not duplicate child searches while waiting.",
+      "For broad research, split explore into two or three non-overlapping questions and run independent explore calls concurrently as parallel direct tool calls in one turn; use eval_js only when you also need to filter, combine or summarise their results. Keep useful separate work for yourself; do not duplicate child searches while waiting.",
       "Give explore a question, relevant constraints, starting points and expected evidence. Select profile docs for official/version-specific documentation, code for execution paths. Do not assume children inherit your conversation or project instructions.",
       "Collect and reconcile explore findings before claiming completion. Check coverage against the requested evidence, not the number of calls. If a material question remains, narrow it or use a role with the necessary access. Research helpers are not independent Corral reviewers and grant no board authority.",
     ],

@@ -522,13 +522,16 @@ test("bound slices intersect SDK base tools and honor the supplied write refusal
   } finally { f.cleanup(); }
 });
 
-test("explore Code Mode is isolated and nested calls obey the read-only child ceiling", async () => {
+test("explore JavaScript is isolated and nested calls obey the read-only child ceiling", async () => {
   const f = fixture();
   f.body(async () => {
-    expect(f.tools).toContain("codemode");
-    expect(f.registered.has("codemode")).toBe(true);
+    expect(f.tools).toContain("eval_js");
+    expect(f.registered.has("eval_js")).toBe(true);
+    expect(f.tools).not.toContain("codemode");
+    expect(f.registered.has("codemode")).toBe(false);
+    expect(await f.emit("tool_call", { toolName: "eval_js", input: {} })).toBeUndefined();
     expect(await f.emit("tool_call", { toolName: "read", input: {}, parentToolCallId: "cell" })).toBeUndefined();
-    for (const name of ["write", "bash", "task", "agent_message", "codemode", "mcp_read"]) {
+    for (const name of ["write", "bash", "task", "agent_message", "eval_js", "mcp_read"]) {
       expect(await f.emit("tool_call", { toolName: name, input: {}, parentToolCallId: "cell" })).toMatchObject({ block: true });
     }
     await f.emit("before_agent_start");
@@ -538,26 +541,28 @@ test("explore Code Mode is isolated and nested calls obey the read-only child ce
   });
   try {
     const handle = createSdkRunner({ ...f.options, bound: true,
-      parentLoadout: ["read", "codemode", "write", "bash", "task", "mcp_read"] })
+      parentLoadout: ["read", "eval_js", "write", "bash", "task", "mcp_read"] })
       .run({ id: "explore", title: "Explore", brief: "Trace", owns: [], kind: "explore" },
         { profile: "fixture", provider: "fixture", model: "fixture" }, f.hooks, new AbortController().signal);
-    expect((await handle.done).failed).toBeUndefined();
+    const done = await handle.done;
+    expect(done.failed).toBeUndefined();
+    expect(done.researchReport?.depth.toolCalls).toBe(1);
   } finally { f.cleanup(); }
 });
 
-test("Build Explore inherits Code Mode without expanding its file-only ceiling", async () => {
+test("Build Explore inherits JavaScript without expanding its file-only ceiling", async () => {
   const f = fixture();
   f.body(async () => {
-    expect(f.tools).toContain("codemode");
-    expect(f.registered.has("codemode")).toBe(true);
+    expect(f.tools).toContain("eval_js");
+    expect(f.registered.has("eval_js")).toBe(true);
     expect(await f.emit("tool_call", { toolName: "read", input: {}, parentToolCallId: "cell" })).toBeUndefined();
-    for (const name of ["bash", "write", "agent_message", "codemode"]) {
+    for (const name of ["bash", "write", "agent_message", "eval_js"]) {
       expect(await f.emit("tool_call", { toolName: name, input: {}, parentToolCallId: "cell" })).toMatchObject({ block: true });
     }
     f.messages.push(answer("Evidence"));
   });
   try {
-    const handle = createSdkRunner({ ...f.options, parentLoadout: ["codemode"] })
+    const handle = createSdkRunner({ ...f.options, parentLoadout: ["eval_js"] })
       .run({ id: "explore", title: "Explore", brief: "Trace", owns: [], kind: "explore" },
         { profile: "fixture", provider: "fixture", model: "fixture" }, { ...f.hooks, execution: undefined }, new AbortController().signal);
     expect((await handle.done).failed).toBeUndefined();

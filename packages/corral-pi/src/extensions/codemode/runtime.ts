@@ -267,7 +267,7 @@ export class CodeRuntime {
     const startedAt = this.clock.now();
     let result: Promise<CellResult>;
     try {
-      if (this.closed) throw new KernelError("kernel_closed", "Code Mode is closed for this host");
+      if (this.closed) throw new KernelError("kernel_closed", "The JavaScript kernel is closed for this host");
       result = this.current().submit(code, { cell: id }).result;
     } catch (error) {
       if (!(error instanceof KernelError)) throw error;

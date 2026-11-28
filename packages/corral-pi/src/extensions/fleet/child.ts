@@ -302,16 +302,16 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
       options.hostedTools?.({ kind, owns: spec.owns }) ?? []);
     const baseLoadout = options.bound
       ? kind === "slice" ? BASE_TOOLS.filter(name => parent.includes(name))
-        : kind === "explore" ? exploreLoadout(parent).filter(name => execution?.research?.profile !== "docs" || ["web_fetch", "web_read", "web_search", "codemode"].includes(name))
+        : kind === "explore" ? exploreLoadout(parent).filter(name => execution?.research?.profile !== "docs" || ["web_fetch", "web_read", "web_search", "eval_js"].includes(name))
         : ["read", "grep", "find", "ls", "bash"].filter(name => parent.includes(name))
       : kind === "slice" ? [...BASE_TOOLS, ...localTools.filter(tool => !DELEGATION[tool.name]).map(tool => tool.name)]
         : ["read", "grep", "find", "ls", ...(kind === "review" ? ["bash"] : []),
-          ...(kind === "explore" && parent.includes("codemode") ? ["codemode"] : [])];
+          ...(kind === "explore" && parent.includes("eval_js") ? ["eval_js"] : [])];
     const loadout = withHosted(baseLoadout);
     const allowed = new Set([...loadout, ...(kind === "review" ? ["review_verdict"] : []),
       ...(kind === "slice" ? ["ask_owner"] : []), ...communication.map(tool => tool.name)]);
     const nestedAllowed = new Set(loadout);
-    const code = kind === "explore" && allowed.has("codemode") ? researchCode(nestedAllowed) : undefined;
+    const code = kind === "explore" && allowed.has("eval_js") ? researchCode(nestedAllowed) : undefined;
     let session: Sdk.AgentSession | undefined;
     let pending: ResolvedModel | undefined;
     let profileTier = initialModel.serviceTier;
@@ -387,7 +387,7 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
         const extension = (pi: ExtensionAPI) => {
           residentLifecycle(pi);
           for (const tool of localTools) {
-            if (tool.name !== "codemode" && allowed.has(tool.name) && (!options.bound || (research && !BASE_TOOLS.includes(tool.name)))
+            if (tool.name !== "eval_js" && allowed.has(tool.name) && (!options.bound || (research && !BASE_TOOLS.includes(tool.name)))
               && !["ask_owner", "agent_message", "agent_roster", "review_verdict"].includes(tool.name)) pi.registerTool(tool);
           }
           for (const tool of hosted) pi.registerTool(tool);
@@ -435,7 +435,7 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
                 : options.shellRefusal?.(command) ?? (gitWrite(command) ? "Build children cannot run Git write commands" : undefined);
             }
             if (reason) return { block: true, reason };
-            if (event.toolName !== "codemode") toolCalls++;
+            if (event.toolName !== "eval_js") toolCalls++;
             // SDK tool_execution_start precedes its blocking hook, so count starts only here.
             hooks.onToolStart(event.toolName, event.input);
             return undefined;

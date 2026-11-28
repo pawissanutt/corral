@@ -44,7 +44,7 @@ export function jobTools(jobs: JobRuntime, monitor = true, commands?: Commands, 
       name: "bash", label: "Run a managed command",
       description: "Execute bash in the worktree. wait_ms releases observation after 10000 ms by default, returning a job handle without restarting or killing the command. "
         + "timeout is a separate hard deadline in SECONDS from launch (bounded by the configured runtime cap). Completion is announced automatically. "
-        + "Use job_output for a nonblocking log peek; job_wait to await one job or the next result. In Code Mode, the default awaits actual completion; explicit wait_ms:0 backgrounds immediately.",
+        + "Use job_output for a nonblocking log peek; job_wait to await one job or the next result. In eval_js, the default awaits actual completion; explicit wait_ms:0 backgrounds immediately.",
       parameters: Type.Object({ command: Type.String({ minLength: 1, maxLength: 4096 }),
         timeout: Type.Optional(Type.Number({ minimum: 1 })), wait_ms: waitBudget }),
       async execute(id: string, params: { command: string; timeout?: number; wait_ms?: number }, signal?: AbortSignal, onUpdate?: AgentToolUpdateCallback<unknown>) {
