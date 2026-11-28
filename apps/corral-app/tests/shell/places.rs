@@ -161,7 +161,7 @@ fn phone_system_lists_the_map_and_the_picked_nodes_edges() {
     app.press("id:nav-structure").unwrap();
     app.press("id:system-pick-corral").unwrap();
     app.wait_for("id:system-tree").unwrap();
-    app.press("id:node-c-crates-corral-ops").unwrap();
+    app.press("id:node-c-crates-corral-facts").unwrap();
     app.wait_for("id:edge-line-0").unwrap();
     app.press("id:edge-line-0").unwrap();
     app.wait_for("id:inspector-title").unwrap();
