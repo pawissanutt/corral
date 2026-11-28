@@ -106,7 +106,7 @@ test("bash rules and hooks run around worker tools with durable hook attribution
     // Then deny wins (also nested), ask runs nothing yet, and the allowed command works.
     expect(result("t1-deny")).toEqual({ isError: true, text: "bash rule \"rm *\" denies \"rm notes.txt\"; nothing ran" });
     expect(result("t1-eval")).toEqual({ isError: true, text: "pre_tool hook legacy-gate refused eval_js: exited 3: legacy refusal" });
-    expect(live.state().codemode?.cells).toEqual([]);
+    expect(live.state().codemode).toMatchObject({ cells: [] });
     expect(result("t1-nest").text).toBe("[true,true,true,false]");
     expect(result("t1-deny-flags")).toEqual({ isError: true, text: "bash rule \"rm *\" denies \"rm notes.txt\"; nothing ran" });
     expect(result("t1-ask-flags").isError).toBeTrue();
