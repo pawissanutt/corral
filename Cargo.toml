@@ -1,9 +1,6 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
-# The old engine: these four were written against the protocol and daemon the new engine
-# replaced and no longer compile. Their source stays for reference until it is deleted.
-exclude = ["crates/corral", "crates/corral-core", "crates/corral-ops", "crates/corral-tui"]
 
 [workspace.package]
 version = "0.6.0"
@@ -38,20 +35,14 @@ sha2 = "0.10"
 sha1_smol = "1"
 flate2 = "1"
 regex = "1"
-ratatui = "0.30"
 unicode-width = "0.2"
 pulldown-cmark = { version = "0.13", default-features = false }
-ratatui-image = { version = "11.1.0", default-features = false, features = ["crossterm"] }
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
 clap = { version = "4", features = ["derive"] }
 tempfile = "3"
-corral-core = { path = "crates/corral-core" }
 corral-engine = { path = "crates/corral-engine" }
 corral-types = { path = "crates/corral-types" }
 corral-protocol = { path = "crates/corral-protocol" }
 corral-herdr = { path = "crates/corral-herdr" }
 corral-git = { path = "crates/corral-git" }
 corral-facts = { path = "crates/corral-facts" }
-corral-ops = { path = "crates/corral-ops" }
 corral-daemon = { path = "crates/corral-daemon" }
-corral-tui = { path = "crates/corral-tui" }

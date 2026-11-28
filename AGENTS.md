@@ -1,7 +1,7 @@
 # AGENTS.md - corral
 
 corral is a project-management control plane for agentic coding that runs inside herdr.
-Design: docs/DESIGN.md. UX reference (interactive HTML mock): docs/mockup/corral-tui.html.
+For the current app design, see `docs/app-design/README.md`.
 herdr CLI shapes (captured from herdr 0.9.3): docs/herdr-cli.md.
 
 ## Layout
@@ -19,7 +19,7 @@ herdr CLI shapes (captured from herdr 0.9.3): docs/herdr-cli.md.
 
 Dependencies flow corral-next -> {engine, protocol}; daemon -> {engine, facts, herdr, protocol, types}; engine -> {facts, git, herdr, types}; protocol and facts -> types. `corral-types`, `corral-git` and `corral-herdr` depend on no other crate here.
 
-The classic engine (`crates/corral`, `crates/corral-core`, `crates/corral-ops`, `crates/corral-tui`) is excluded from the workspace in `Cargo.toml` and does not compile against the current protocol and daemon. Its source stays for reference until it is deleted.
+Classic is retired. Use the v0.4.0 tag for its source and guides. `.corral/lenses/` is live input to the current engine and app.
 
 `apps/corral-app/` is the Corral app (NSH, Rust): its own Cargo workspace and toolchain (rustc 1.97),
 not a workspace member, and not built or tested by `scripts/gate.sh`. It depends on
@@ -60,22 +60,12 @@ not a workspace member, and not built or tested by `scripts/gate.sh`. It depends
   from overwriting each other's top-level CLI executable. Explicit `CARGO_TARGET_DIR` is
   respected; share executable targets only with external serialization through execution,
   not just Cargo's build lock. Compile once per gate and reuse its candidate-bound metadata.
-  Keep the gate/work-budget test-clock feature union aligned to avoid a redundant rebuild.
 - Check one crate: `cargo check -p <crate>`; test one crate: `cargo test -p <crate>`.
-- The `corral` binary includes `corral daemon`; build the daemon and protocol crates with the workspace. Install its workspace user service explicitly with `corral daemon install`; builds never enable services.
+- The current binaries are `corral-next` and `corrald-next`. Builds never enable workspace services.
 - Test binaries carry no debuginfo (`[profile.test] debug = false`); panic messages keep
   their file and line. When a backtrace needs line numbers, rerun that one test with
   `CARGO_PROFILE_TEST_DEBUG=line-tables-only cargo test -p <crate> <name>`.
-- Before `corral done`, run the gate your run contract names. In a tiered run that is `corral gate <id> --wait`, exactly once after the final rebase: corral selects the tier (quick during review rounds and for Plan-target members), records the receipt, and autopilot reuses it. Audited tasks then capture evidence, record it against the attempt that gate printed, run `corral done <id> --check`, then `corral done`. Evidence recorded for a quick receipt follows the candidate only through corral's authorized carries (tier promotion, clean replay); any other change needs fresh evidence. Legacy and untiered runs keep the gate commands their contract lists.
-- `scripts/gate.sh` without `--tier` is the full landing tier: formatting, the exact
-  800-SLOC Rust ceiling, Clippy, workspace nextest in `corral-test`, doctests, small work
-  budgets, and a candidate build/docs check. Quick checks touched crates/modules (or declared
-  tests), with crate-wide fallback when selection cannot decide. Slow has fixed membership
-  in `.config/nextest.toml`: race/crash/torture/restart matrices, with reasons. Full excludes
-  slow except on owning-module changes (`scripts/gate_lanes.py`); plan verify keeps all suites.
-  Quick leaves slow out unless explicitly declared. Pi runs on package/shared-contract
-  changes; Darwin runs on platform/dependency changes; plan verify keeps both lanes.
-  Missing/legacy context is conservative: all suites and optional lanes.
+- Run the gate named by your run contract. The full `scripts/gate.sh` checks formatting, the 800-SLOC Rust ceiling, Clippy, workspace tests and doctests, and builds the current binaries. The app has a separate gate.
 - Install cargo-nextest before running the gate. `.config/nextest.toml` uses 12 slots,
   serializes shared live fixtures and disables retries. After each nextest run,
   `scripts/gate_case.py` reads its JUnit report, observes the 10s per-test reference and
@@ -91,31 +81,15 @@ not a workspace member, and not built or tested by `scripts/gate.sh`. It depends
   at quiet load. Logs retain build/total wall time and load/core separately.
   Quick lints touched production targets; full retains all-target Clippy. Selected tests
   still compile and execute in quick, using fresh prebuilt metadata (no runtime rebuild).
-  See [gate cost policy](docs/guide/gate-costs.md) for added-test cost reporting and the host
-  nightly slow lane (nice 19, idle I/O, load/core <=1.0, private herdr, deduplicated failure
-  tasks). PM installs its documented cron line after landing; workers never install it.
+  See [gate cost policy](docs/guide/gate-costs.md) for added-test cost reporting.
   Keep new shared-server tests in `herdr`; fake-engine tests remain parallel.
 - The script uses null stdin and preserves gate identity exports; tests isolate their own subprocess environments. Run its targeted temporary-fixture regressions with `python3 scripts/test_gate.py`,
-  `python3 scripts/test_gate_select.py`, `python3 scripts/test_gate_policy.py` and
-  `python3 scripts/test_slow_lane.py`.
-- The Linux concurrent-dequeue regression requires `python3` and `strace`. It traces only disposable fixture processes and synchronizes on lock syscalls, never timing sleeps.
+  `python3 scripts/test_gate_select.py`, `python3 scripts/test_gate_policy.py`.
 - The Pi Claude wire-cache regression requires Linux `unshare`, `ip`, and unprivileged user/network/PID namespaces. It runs the real SDK/CLI against a synthetic loopback endpoint with no external network or owner credentials; unavailable isolation fails the Linux gate. Non-Linux runs skip it. `CORRAL_TEST_CLAUDE_EXECUTABLE=/path/to/claude` tests an installed CLI instead of the pinned SDK binary; see the Pi guide.
 - Compilation in the gate goes through `scripts/cargo.sh`, which is plain Cargo unless
   `CORRAL_BUILD_CACHE=mbx` opts into the shared mbx 1.29.2 cache pilot. Bare `cargo` is not
   intercepted; use `bash scripts/cargo.sh <args>` to share artifacts. See
   [build cache](docs/guide/build-cache.md) for settings, policy capture and rollback.
-
-### Private generated outputs
-
-`storage.outputs.<project>.<class>` is an opt-in exclusive/rebuildable ownership contract, not
-permission to scan arbitrary target/build/dist directories. Keep source, evidence, credentials,
-dependencies and caches outside declared outputs. Only empty private Git-ignored directories
-are registered before managed submission; existing unregistered contents are never adopted.
-Do not share generated executables across task outputs. Reclamation shares the task lock with
-state writers and authorized launch submission, requires absent panes/non-live hosts and complete
-consumer visibility, and fails closed on unsupported platforms. Sync only schedules the bounded
-output worker; never put byte/process walks in rendering or hot scheduling. See
-[storage](docs/guide/classic/storage.md#private-rebuildable-outputs-of-inactive-tasks).
 
 ### Load testing: container only
 
@@ -124,7 +98,7 @@ spin loops, `stress-ng`, or parallel stress harnesses. The **only allowed way to
 load-test** (workers, reviewers, and gates alike) is `scripts/load-sandbox.sh`:
 
 ```bash
-scripts/load-sandbox.sh --cpus 2 --memory 2g --pids-limit 256 --burners 2 -- cargo test -p corral-core
+scripts/load-sandbox.sh --cpus 2 --memory 2g --pids-limit 256 --burners 2 -- cargo test -p corral-engine
 ```
 
 It runs the command and optional burners in one Podman container (default 2 CPUs,
@@ -132,13 +106,8 @@ hard maximum 4; default 2g memory and 256 PIDs), then forcibly removes it on suc
 failure, or interruption. Never fall back to host load if Podman/cgroups are unavailable;
 report the blocked check instead. This does not authorize an extra gate or change its tier.
 See [load sandbox](docs/guide/load-sandbox.md) for image prerequisites and smoke checks.
-The product setting `load_sandbox.enabled` must be on for corral's sandbox cleanup and prompt text.
 
 ## herdr in tests
-
-Pane ownership and legacy migration are specified in `docs/session-ownership.md`.
-Do not infer legacy ownership from mutable config or the test client's selectors.
-Hand-built nonlegacy run fixtures must save their fake client's socket explicitly.
 
 NEVER create panes or workspaces in the user's live herdr session. A session name alone does
 not isolate plugins: even `corral-test` can load the owner's plugin hooks. Do not reuse or stop
@@ -159,10 +128,7 @@ supplies a deterministic test-only Git identity instead of reading the owner's g
 creates one baseline fixture pane so T-092's empty-inventory guard does not block initial
 queue admission, and terminates only its own child server and removes its temporary directories on exit.
 Keep clients and panes inside this environment; a bare command from another shell targets a
-different server. Scripts that own startup (e2e, screenshots, and the shell TUI drivers) use
-this helper automatically. The mouse driver, plan QA, gate, and live Rust tests only consume
-a server: launch them inside the subshell above. Gate fixtures use fake commands, not herdr;
-the startup CLI tests likewise use a fake engine with isolated HOME/XDG.
+different server.
 
 Tests that need herdr must skip (return early with a printed note) when
 `herdr --session corral-test workspace list` fails. Never start an owner-configured server to
