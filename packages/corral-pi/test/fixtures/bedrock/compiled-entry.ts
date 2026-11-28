@@ -1,4 +1,4 @@
-// The entry bedrock-compiled.test.ts compiles with scripts/build-pi-host.sh's flags: one fake
+// The entry bedrock-compiled.test.ts compiles with the release workflow's flags: one fake
 // Bedrock turn through handler adoption and pi-ai's Bedrock client (which a compiled host can only
 // load through the module adoption registers), then a raw node:https request under the tripwire.
 import https from "node:https";

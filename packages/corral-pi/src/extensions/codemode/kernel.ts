@@ -22,7 +22,7 @@ import {
 export type { KernelOutput, OutputLimits, WireError } from "./kernel-protocol.ts";
 
 const COMPILED = /\$bunfs|~BUN|%7EBUN/.test(import.meta.url);
-/** In the compiled host the worker is an extra entrypoint (scripts/build-pi-host.sh) addressed from its root. */
+/** In the compiled host the worker is an extra entrypoint (the release workflow) addressed from its root. */
 export const KERNEL_WORKER: string | URL = COMPILED
   ? "./src/extensions/codemode/kernel-worker.ts" : new URL("./kernel-worker.ts", import.meta.url);
 

@@ -15,7 +15,7 @@ import subprocess
 import sys
 
 PI_CONTRACTS = (
-    "packages/corral-pi/", "scripts/pi-lane.sh", "scripts/build-pi-host.sh",
+    "packages/corral-pi/", "scripts/pi-lane.sh", ".github/workflows/release.yml",
     "crates/corral-daemon/", "crates/corral-protocol/", "crates/corral-types/",
 )
 # Bun slow catalog: (test file under packages/corral-pi, test name, reason). The Pi lane skips
