@@ -391,11 +391,14 @@ fn current(shared: &Shared, config: &Config, scope: &str) -> Result<Chat> {
             "automation chat ended; the rule will allocate a new chat when it fires",
             vec![],
         )),
+        // A thread started after End answers with the configured default, not the ended
+        // chat's profile: the app shows the default for a new thread, and inheriting kept
+        // every later thread on whatever model one earlier chat had been switched to.
         Some(chat) => create(
             shared,
             chat.meta.quick,
             chat.meta.task,
-            chat.meta.profile,
+            default_profile(config).into(),
             None,
         ),
         None if scope == QUICK_THREAD => {
