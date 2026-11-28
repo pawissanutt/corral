@@ -42,7 +42,8 @@ authenticated activity (not availability); device listings report the last final
 while `app.session.device.reach` is the current SessionGuard's carrier. A local TLS
 terminator is observed as loopback; no untrusted forwarded header asserts remote reach.
 
-`push.v1` is an additive authenticated-device capability: `push.status`,
+The retired classic daemon implemented `push.v1` as an additive authenticated-device
+capability; it is not an operator feature of `corrald-next`. In that implementation, `push.status`,
 `push.subscribe` and `push.unsubscribe` apply only to the session's own device.
 Subscriptions and selected `PushKind`s persist per device, opt-in/off by default, and
 revocation clears them. `PushStatus` exposes availability, the public VAPID key,
@@ -57,8 +58,7 @@ canonical open owner moves, not transport presence or fixture data.
 Web Push needs same-origin HTTPS/loopback hosting of the module script, browser support
 and the browser vendor's external push service. It does not create remote reach or a
 dead-man. Relay rendezvous, native publisher APNs/FCM delivery and detecting an absent
-daemon still require independently hosted TLS infrastructure; see the
-[operator setup and limits](../guide/daemon.md#opt-in-web-push).
+daemon still require independently hosted TLS infrastructure.
 
 ## Version and feature negotiation
 

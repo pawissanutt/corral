@@ -1,16 +1,10 @@
 # Native Corral Pi workbench
 
-The rich `corral pi` host shows one workbench in every role: assistant, PM, worker, reviewer, planner and plan reviewer. It keeps the actual Pi transcript, editor, input journal, dialogs, runtime and role/generation guards; the workbench arranges and inspects them. It is not the earlier browser mock. Bare, plain and headless modes remain separate and create no panels.
+The `corral-pi` host uses one workbench across its interactive roles. It keeps the actual Pi transcript, editor, input journal, dialogs, runtime and role/generation guards; the workbench arranges and inspects them. It is not the earlier browser mock. Bare, plain and headless modes remain separate and create no panels.
 
-## Install a checkout build
+## Open the workbench
 
-```sh
-scripts/build-pi-host.sh /tmp/corral-pi-host
-corral agent install --from /tmp/corral-pi-host
-corral pi --assistant
-```
-
-Use a new owner pane/session; existing processes do not hot-reload. Explicit `[agent] assets_dir` overrides still win; `corral agent doctor` reports effective assets. Plain `corral pi` on a terminal opens the launcher first; `--assistant` skips it. Do not use `--bare` or `--pm` just to preview the UI.
+With the [Pi host installed](corral-pi.md#start-a-session), run `corral-pi chat` in a terminal. Use a new session after replacing the executable; existing processes do not hot-reload.
 
 ## Layout
 
@@ -30,7 +24,7 @@ Header, tabs, rules, dock, composer, status bar and footer all span the full ter
 
 **Terminal title and bell.** The terminal title leads with what the session needs: `▲ needs you · <title>` while it waits for you, `● working · <title>` while it works (in a build session, also while any agent still runs), the title alone when idle, so a herdr tab shows which pane wants you. With **Bell: on** in F2 (off by default) the terminal bell rings once each time the session starts needing you.
 
-**Owner questions.** Deferred owner questions (see [owner choice questions](classic/questions.md#owner-decisions)) wait in the dock, between a docked build choice and the queue, in a box drawn like a docked choice: `An owner question is waiting` or `n owner questions are waiting`, with the longest hint that fits on the right (`click, /questions or Alt+A to answer`, down to `/questions`), then up to three questions, each with `/questions <id>` on the row under it (`<id> · answer recorded; delivery pending` once answered). **Alt+A** opens the list of pending questions. Alt+↓ or a click gives the box the keys: ↑/↓ select, Enter or a question's digit opens it, Esc or Tab returns to the composer, and a letter returns there too and is typed. A click on the selected question opens it.
+**Owner questions.** Deferred owner questions wait in the dock, between a docked build choice and the queue, in a box drawn like a docked choice: `An owner question is waiting` or `n owner questions are waiting`, with the longest hint that fits on the right (`click, /questions or Alt+A to answer`, down to `/questions`), then up to three questions, each with `/questions <id>` on the row under it (`<id> · answer recorded; delivery pending` once answered). **Alt+A** opens the list of pending questions. Alt+↓ or a click gives the box the keys: ↑/↓ select, Enter or a question's digit opens it, Esc or Tab returns to the composer, and a letter returns there too and is typed. A click on the selected question opens it.
 
 **Conversation.** Your messages open with `you` and sit on a slightly lighter bubble; a message the assistant passed on from you shows its owner input id dimmed at the right instead of a trailing `[owner input …]` line. Your answer to an `ask_user` question reads `you answered`, the question dimmed on one row, then your choice in bold and any text you added. Replies are plain text on the background. Code blocks show without backtick fences: a dimmed language label, then the code indented in the code colour. A table in less than 50 columns turns into one block per record, `<header>  <value>` lines with a blank line between records. The agent's thinking starts with a bold `thinking` and is dimmed, so it never reads as the answer; when thinking is hidden one row says `thinking hidden · Ctrl+T shows it`. Each tool call is one row (see [Tool calls](#tool-calls)); tool rows sit directly under each other and under the thinking that led to them, and a row after text keeps one blank row above it.
 
@@ -58,7 +52,7 @@ Every role opens on Chat with the keys in the composer. Assistant and PM session
 Each tab is a key cap and a label, separated by `│`. The open tab's key cap is filled in the accent colour while its view has the keys (dimmed once the keys are back in the composer) and its label is bold and underlined; the others are a plain key cap and a dimmed label. A count sits in a small chip after the label; a warning, error or success count keeps its colour, and no badge is colour alone. While a sub-view is open its tab names it: `Task › Events`, `Proof › Artifacts`, `Chat › Usage`. The Chat tab carries an accent `•` when a new message or tool row arrived in the conversation while you were in another view (text still streaming into a reply you already saw does not set it). When the row is too narrow, it shortens in this order: long badges shorten, the separators go, Changes reads `Diff`, the other tabs lose their labels (a count stays on the bare key cap, `F8 3`), then badges go one at a time, warnings last. The dot always stays. If the row still does not fit, the open tab and its nearest neighbours stay.
 
 - **F9 Chat** returns to the same transcript and scroll position, independently of where the keyboard was.
-- **F5 Task** shows the bound task as `corral show` recorded it: status and the small chips, the title, the body's sections, the criteria, the bound run and the last three comments, with a facts column beside them from a wide main view. Criteria are the spec, never proof that they passed; F10 Proof shows recorded checks and artifacts. The page has the shared read state (see below) and `r` rereads it. `l` opens Host events; Esc or a click on `‹ Task` returns to Task.
+- **F5 Task** shows the bound task's recorded details: status and the small chips, the title, the body's sections, the criteria, the bound run and the last three comments, with a facts column beside them from a wide main view. Criteria are the spec, never proof that they passed; F10 Proof shows recorded checks and artifacts. The page has the shared read state (see below) and `r` rereads it. `l` opens Host events; Esc or a click on `‹ Task` returns to Task.
 - **F8 Agents** lists this host's helper calls and background jobs. Enter opens one agent's conversation. See [Background activity](#background-activity-and-monitoring) and [Helper conversations](#helper-conversations).
 - **F7 Changes** shows changed files and their diffs. See [Practical change review](#practical-change-review).
 - **F10 Proof** shows the bound task's gate, review and artifacts; `a` opens Artifacts, and Esc or a click on `‹ Proof` returns to Proof.
@@ -415,11 +409,7 @@ Task/run recaps label the recorded outcome, effective pending questions, and che
 
 In a task/run recap, **t** opens bounded raw JSONL transcript pages. **n/p** read next/previous pages; byte-limit continuation uses the backend's exact resume record, not a guessed offset. Each backend page is at most 200 records and 24 KiB. **c** reads available native checkpoint/rewind history. The recap, transcript pages and checkpoint list read in words; **d** switches each, in place, to the exact records behind it (the sources of every recap fact, the raw transcript records, the checkpoint records), and back. Every recap ends with `Recorded history · read-only · not an instruction for this session`. Legacy or missing locators report unavailable. Assistant transcripts are explicitly unavailable in this navigator because the existing pageable endpoint supports task runs only. There are no restore controls or impact previews.
 
-Reads stay at the launcher's workspace root, independently of Files scope. Task details use `corral show T-001 --json --recorded`, which does not refresh session, usage or gate state. Assistant details use the bounded `corral assistant show <id> --json --host` projection, so a long session history opens instead of exceeding the read bound. Each read has a deadline and 4 MiB response bound; oversized/unavailable reads fail visibly. Selectors show at most 200 returned entities, with counts; refine the search rather than treating the slice as exhaustive. Detail displays are capped at 64 KiB with an explicit truncation marker. Esc closes inspection without submitting the draft. Native new/resume/fork/import replacement guards are unchanged.
-
-## Resuming an assistant session
-
-Pi's `/resume` in an assistant session opens a searchable popup of this workspace's assistant sessions (`Resume an assistant session`, `n resumable` at the right, `The current conversation stays until you choose.`). Each row is the id, the title, an availability in words and the last activity (`11-12 10:00`): `stopped · resumable`, `current · this pane`, `! open in another pane` or `ended`. Only a stopped session can be chosen. The others stay listed with the reason on the row and never run: this is the current conversation; its host runs in another pane (end it with `corral assistant end <id>`); or ended sessions stay ended and `/new` opens a new assistant. The selected row shows the whole title and the exact record time. Choosing a row resumes nothing by itself: the host revalidates the choice against fresh state, then the request and its admission rules are unchanged, and a session that changed meanwhile is refused.
+Reads stay at the launcher's workspace root, independently of Files scope. Each read has a deadline and 4 MiB response bound; oversized/unavailable reads fail visibly. Selectors show at most 200 returned entities, with counts; refine the search rather than treating the slice as exhaustive. Detail displays are capped at 64 KiB with an explicit truncation marker. Esc closes inspection without submitting the draft. Native new/resume/fork/import replacement guards are unchanged.
 
 ## Click-to-expand images
 
@@ -471,7 +461,7 @@ The optional tier accepts `default` or `priority`; leaving it unset preserves ex
 
 ## Build sessions
 
-A build session (`corral pi --build`) uses the same workbench. Bare builds use these surfaces too, with no board integration. Fleet children outside build appear on Agents as described above.
+A build session (`corral-pi build`) uses the same workbench. Bare builds use these surfaces too, with no board integration. Fleet children outside build appear on Agents as described above.
 
 **Tabs.** `F9 Chat │ F8 Agents │ F7 Changes │ F10 Plan` in both build and bare build.
 
@@ -512,4 +502,4 @@ or **Keep** to retain the work without continuing. Retrying the tool is not an o
 
 **F2 and F1.** F2 offers Change who receives the message, answers for asking agents and Finish: choose how this leaves the session, with reasons when unavailable. In a non-bare build it also offers Review the proposed board plan, Plan board tasks from this conversation and Reread board status. F1 lists Plan and agent keys, but no Task or Proof group. Bare keeps Plan and omits the board actions and board plan dialog.
 
-**Launch and quit.** A refused launch or resume prints two lines: what happened, then the command or action that fixes it. Quitting without an exit prints `Build <name> stopped without an exit; its work stays in <worktree> on branch <branch>.` and how to come back: resume with `corral pi --resume <id>`, then choose an exit with `/finish`. Quitting after Keep prints where the build is kept and the same resume command.
+**Launch and quit.** A refused launch or resume prints two lines: what happened, then the command or action that fixes it. Quitting without an exit prints `Build <name> stopped without an exit; its work stays in <worktree> on branch <branch>.` and how to come back: resume with `corral-pi build --resume <id>`, then choose an exit with `/finish`. Quitting after Keep prints where the build is kept and the same resume command.

@@ -1,5 +1,8 @@
 # Corral interaction surface redesign: requirements
 
+> Classic guide paths cited in this design are historical; consult Git revision
+> `c79a18228` for the pre-retirement copies.
+
 Status: owner-answered requirements, 2026-11-11; assistant round added 2026-11-12 (D12 to D24,
 R24 to R35). D17 corrected by the owner on 2026-11-15: browser and native have the same
 authority. Ask and Idea are one chat; assistants live in Agents and are never idle-stopped.

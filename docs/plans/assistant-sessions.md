@@ -194,6 +194,9 @@ owner_decisions:
   - "OD7 Session ID prefix: recommend A-<n>."
 ---
 
+> Classic guide paths cited in this design are historical; consult Git revision
+> `c79a18228` for the pre-retirement copies.
+
 # Plan: assistant sessions
 
 Status: revision 3 (2026-10-29), design for T-544. Revision 3 follows the owner's UX-first

@@ -16,8 +16,8 @@ every build is plain Cargo.
 | anything else | Fails with exit status 2. |
 
 The gate compiles through this adapter: nextest binary preparation, Clippy, the
-platform `cargo check` lanes, doctests and the final `cargo build -p corral`. So do
-the standalone branch of `scripts/work-budget.sh` and the Pi lane's Rust compilation.
+platform `cargo check` lanes and doctests. The Pi lane also uses the adapter for its
+Rust compilation.
 Prebuilt nextest runs keep using the metadata the gate captured and don't recompile.
 
 In mbx mode, help, version and the `search`, `login`, `logout`, `owner` and `yank`
@@ -141,7 +141,7 @@ choices stay private: the adapter disables automatic adoption for those builds.
 Consequently, enabling this mode does **not** reclaim existing private targets.
 Migration or deletion of those targets requires a separate owner decision.
 
-`scripts/gate.sh`, `scripts/work-budget.sh` and `scripts/pi-lane.sh` hold a
+`scripts/gate.sh` and `scripts/pi-lane.sh` hold a
 shared native mbx target lease across their whole workflow, not just compilation.
 This protects prebuilt nextest binaries and the gaps between commands. The helper
 takes the lease **before** mbx places or restores a target; it creates no target

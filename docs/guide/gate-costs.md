@@ -45,16 +45,15 @@ references, quiet-load accounting and added-suite30s reference print observation
 never replace a command's exit status. Assertions, compilation, lint and actual command
 failures still fail normally; there are no retries-to-green.
 
-`.config/gate.toml` records cumulative nextest/work-budget/Bun execution separately from
+`.config/gate.toml` records cumulative nextest and Bun execution separately from
 build/preparation and total wall. Load/core is sampled before, during and after execution;
 busy/unknown phases remain identified, not timing qualification. No timer terminates a
 command for slowness. Cancellation still forwards to owned child groups.
 
 Nextest compiles candidate binaries once and reuses fresh metadata. Pi cross-lane Rust
 helpers are prebuilt before Bun timing; install/typecheck are preparation. Quick Clippy
-checks touched production targets; full retains all-target Clippy. Work budgets preserve
-the core/test-clock feature union. Linked worktrees keep local targets unless explicitly
-overridden, avoiding cross-candidate top-level CLI overwrites; docs use the actual target.
+checks touched production targets; full retains all-target Clippy. Linked worktrees keep
+local targets unless explicitly overridden, avoiding cross-candidate CLI overwrites.
 The slower Clippy test-profile experiment was reverted.
 
 After each nextest run, `gate_case.py` reads its JUnit report and records per-test
@@ -147,22 +146,15 @@ them for builds/tests; real builds still require the platform's native toolchain
    explicit nextest slow profile and then the Bun `PI_SLOW` catalog (with `CORRAL_PI_SLOW=1`,
    whatever nextest's result) with a reported maintenance wall threshold, and lets the helper clean up its own
    server/directories. It never reuses or stops an owner's server.
-5. Retains raw logs locally and as `log` artifacts with tier `keep` on a monitoring task.
-   Each distinct failing test gets one open task keyed by binary+test; subsequent failures
-   reuse that task and attach proof. A build/startup failure gets one infrastructure task.
-   These are Backlog, origin agent, never dispatched. Board operations happen **outside**
-   the private test environment. A reporting error propagates with the local proof retained;
-   no mutation is blindly retried after a lost acknowledgement.
+5. Retains raw logs in `.evidence/slow` for the host operator. It does not file board tasks
+   or attach artifacts.
 
-The PM installs a cron entry **after landing**, choosing the monitoring task and host paths.
-No worker should install a crontab or run an unauthorized slow tier to validate this setup.
-Example cron entry (03:15 local time):
+Run `python3 scripts/slow_lane.py` without arguments from the repository root. The JSON
+summary includes the candidate, exit code, log path and failures. An empty Rust slow profile
+is allowed; the Bun catalog still runs and its failures propagate.
 
-```cron
-15 3 * * * cd /home/owner/main-workspace/corral && mkdir -p .evidence && nice -n 19 ionice -c 3 /usr/bin/python3 scripts/slow_lane.py --root /home/owner/main-workspace --corral /home/owner/.cargo/bin/corral --report-task T-761 >>.evidence/slow-cron.log 2>&1
-```
-
-No GitHub schedule is installed. An owning-module full-gate failure already returns to its
-candidate task/worker with the receipt; the nightly lane additionally files deduplicated
-root-cause tasks for any slow failures it observes. No retries-to-green in either path.
+No GitHub schedule is installed. Only the host operator should schedule this lane;
+workers should not install a crontab or run an unauthorized slow tier. An owning-module
+full-gate failure already returns to its candidate task/worker with the receipt.
+No retries-to-green in either path.
 Mutation sampling and monthly test maintenance and flake triage are not per-gate checks.

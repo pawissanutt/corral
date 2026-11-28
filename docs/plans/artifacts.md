@@ -1,7 +1,10 @@
 # Artifacts: classification, revisions and a project library
 
+> Classic guide paths cited in this design are historical; consult Git revision
+> `c79a18228` for the pre-retirement copies.
+
 Status: **implemented** (T-2047–T-2054); this document retains the 2026-11-24 proposal and its
-historical baseline for context. For current usage see the [artifact guide](../guide/classic/cli.md#corral-artifact).
+historical baseline for context. For current usage see the [task artifact guide](../guide/agent-diagrams.md).
 Revision 1 was cross-checked by an independent architect (`architect-astra`); what changed is in the
 [review log](#12-review-log).
 

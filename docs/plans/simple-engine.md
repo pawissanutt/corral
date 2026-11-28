@@ -552,7 +552,7 @@ Direction:
    store read-only.
 3. Delete `crates/corral-ops`, `crates/corral-core`, `crates/corral-tui`, the old
    `crates/corral`, and the gate tier, selection, lane and quarantine scripts.
-4. Rewrite `docs/DESIGN.md` and the guides from this document.
+4. Update the guides from this document.
 
 ## Exit criteria
 

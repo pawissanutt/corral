@@ -1,5 +1,8 @@
 # Corral app and `corrald`: architecture
 
+> Classic guide paths cited in this design are historical; consult Git revision
+> `c79a18228` for the pre-retirement copies.
+
 Status: proposal, 2026-11-11; assistant round added 2026-11-12, revised to one chat, then to "the assistant
 lives in Agents and is never idle-stopped", then given a model selector the same day (section 13, D12 to D24,
 R24 to R35, decisions 36 to 41).
