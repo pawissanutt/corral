@@ -6,6 +6,7 @@
 // script streams in, the row shows its newest lines. The model-facing report text is not drawn.
 import type { AgentToolResult, ToolRenderers } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, truncateToWidth, visibleWidth, type Component, type SelectionRow } from "@earendil-works/pi-tui";
+import { JAVASCRIPT_CELL_TITLE } from "./cell-label.ts";
 import type { CellReport, ChildOutcome } from "../extensions/codemode/report.ts";
 import { helperConversationId } from "../extensions/subagent/conversation.ts";
 import type { Ticker } from "./activity.ts";
@@ -387,17 +388,17 @@ function timing(view: View, cell: CellView, running: boolean): Pick<RowModel, "d
   return { duration: { since: cell.startedAt ?? view.state.seen } };
 }
 
-/** The header row of a code cell; a cell with exactly one call is that call's row behind `code ›`. */
+/** The header row of a code cell; a cell with exactly one call is that call's row behind `JavaScript cell ›`. */
 function headerModel(view: View, deps: CodeCellDeps, width: number): RowModel {
   const { cell, context, args } = view;
   if (!context.argsComplete) {
     const lines = args.code ? args.code.split("\n").length : 0;
-    return { state: "writing", verb: "code", ...(lines ? { target: counted(lines, "line", "lines") } : {}) };
+    return { state: "writing", verb: JAVASCRIPT_CELL_TITLE, ...(lines ? { target: counted(lines, "line", "lines") } : {}) };
   }
   if (!cell) {
     const failed = view.state.final === true && context.isError;
     const text = failed ? firstLine(resultText(view.state.result)) : "";
-    return { state: failed ? "failed" : "running", verb: "code", ...(text ? { outcome: text, outcomeTone: "error" as const } : {}) };
+    return { state: failed ? "failed" : "running", verb: JAVASCRIPT_CELL_TITLE, ...(text ? { outcome: text, outcomeTone: "error" as const } : {}) };
   }
   const running = cellRunning(view, cell), history = !settled(cell) && !running;
   const orphan = !running && !view.live, counts = countsOf(cell);
@@ -414,14 +415,14 @@ function headerModel(view: View, deps: CodeCellDeps, width: number): RowModel {
   if (history) {
     const tally = counts.total === 0 ? "" : [counted(counts.total, "call", "calls"), counts.ok ? `✓${counts.ok}` : "",
       counts.failed ? `✗${counts.failed}` : "", unknown ? `!${unknown}` : ""].filter(Boolean).join(" ");
-    return { state: "waiting", verb: "code", ...(tally ? { target: tally } : {}), outcome: MOVED, outcomeTone: "muted",
+    return { state: "waiting", verb: JAVASCRIPT_CELL_TITLE, ...(tally ? { target: tally } : {}), outcome: MOVED, outcomeTone: "muted",
       ...(right ? { right } : {}), ...time };
   }
 
   if (cell.recorded && cell.children.length === 1 && omittedTotal(cell) === 0) {
     const child = childModel(cell.children[0]!, deps, context, orphan);
     const outcome = [failure || child.outcome || "", lost].filter(Boolean).join(" · ");
-    return { state: cellFailed ? "failed" : running ? "running" : child.state, verb: `code › ${child.verb}`,
+    return { state: cellFailed ? "failed" : running ? "running" : child.state, verb: `${JAVASCRIPT_CELL_TITLE} › ${child.verb}`,
       ...(child.target ? { target: child.target } : {}),
       ...(outcome ? { outcome, outcomeTone: failure ? "error" as const : lost && !child.outcome ? "warning" as const : child.outcomeTone ?? "text" } : {}),
       ...(right ? { right } : {}), ...time };
@@ -431,7 +432,7 @@ function headerModel(view: View, deps: CodeCellDeps, width: number): RowModel {
   const summary = width >= SUMMARY_MIN ? toolSummary(cell) : "";
   const outcome = [counts.failed ? `✗${counts.failed}` : "", failure, lost].filter(Boolean).join(" · ");
   const tone = counts.failed || failure ? "error" as const : "warning" as const;
-  return { state, verb: "code", target: [tally, summary].filter(Boolean).join(" · "),
+  return { state, verb: JAVASCRIPT_CELL_TITLE, target: [tally, summary].filter(Boolean).join(" · "),
     ...(outcome ? { outcome, outcomeTone: tone } : {}), ...(right ? { right } : {}), ...time };
 }
 
@@ -574,7 +575,7 @@ export function cellLines(deps: CodeCellDeps, context: RenderContext, width: num
 }
 
 /**
- * Pi renderers for `codemode`, self-framed like every tool row, from the shared tool rendering deps: nested calls use
+ * Pi renderers for `eval_js` and historical `codemode`, self-framed like every tool row, from the shared tool rendering deps: nested calls use
  * the same presenters as direct calls.
  */
 export function codeCellRenderers(deps: ToolRenderDeps): ToolRenderers {

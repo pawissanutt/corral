@@ -10,6 +10,7 @@ import type { CorralToolSpec } from "../roles/types.ts";
 import type { PanelView } from "./panels.ts";
 import type { TodoLedger } from "./todo.ts";
 import { buildPresenters } from "./build/build-presenters.ts";
+import { isJavaScriptCellTool } from "./cell-label.ts";
 import { codeCellRenderers } from "./code-cell.ts";
 import { corralPresenters } from "./corral-presenter.ts";
 import { groupingFor } from "./tool-group.ts";
@@ -70,7 +71,7 @@ export function presenterFor(name: string, deps: ToolRenderDeps, label?: string)
 export function installToolRenderers(pi: Pick<ExtensionAPI, "registerToolRenderer">, deps: ToolRenderDeps): void {
   pi.registerToolRenderer((name, next) => {
     if (OWN_CARDS[name] === true) return next();
-    if (name === "codemode") return codeCellRenderers(deps);
+    if (isJavaScriptCellTool(name)) return codeCellRenderers(deps);
     return rowRenderers(presenterFor(name, deps, labelOf(next())), deps, name, groupingFor(name));
   });
 }

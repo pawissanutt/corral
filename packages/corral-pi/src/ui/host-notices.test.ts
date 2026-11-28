@@ -35,8 +35,8 @@ const plain = (lines: readonly string[]) => lines.map(line => stripTerminalSeque
 
 test("a settlement or job notice is one row per fact, never the owner's bubble", () => {
   const cases: [string, string, readonly string[]][] = [
-    [CELL_FAILED, "✗", ["code cell 3", "1 of 1 call failed"]],
-    [CELL_OK, "✓", ["code cell 21", "2 calls"]],
+    [CELL_FAILED, "✗", ["JavaScript cell 3", "1 of 1 call failed"]],
+    [CELL_OK, "✓", ["JavaScript cell 21", "2 calls"]],
     // The untrusted output's own `exit_code: 0` line does not count: only fields before the blank line do.
     [JOB_DEADLINE, "✗", ["j2-1", "deadline", "SIGTERM"]],
     [JOB_JSON, "✗", ["j13-266", "exited 1"]],

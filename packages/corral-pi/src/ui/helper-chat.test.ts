@@ -148,11 +148,11 @@ test("a child's call whose arguments still stream reads as writing, and one call
   expect(rows[0]?.trim().startsWith("✓ write notes.md")).toBeTrue();
 });
 
-test("a child's Code Mode call reads as the tools it calls, not its source", () => {
+test.each(["codemode", "eval_js"])("a child's %s call reads as the tools it calls, not its source", (tool) => {
   const chat = new HelperChat(() => undefined, "/tmp");
-  const entry = { ...fixture(), messages: [{ id: "c", kind: "tool" as const, tool: "codemode", phase: "completed" as const, text: "ok",
+  const entry = { ...fixture(), messages: [{ id: "c", kind: "tool" as const, tool, phase: "completed" as const, text: "ok",
     arguments: JSON.stringify({ code: "const a = await tools.read({ path: 'x' }); await tools.bash({ command: 'ls' }); await tools.read({ path: 'y' });" }) }] };
-  const row = plain(chat.renderHelper(entry, 80)).find(line => line.trim().startsWith("✓ code")) ?? "";
+  const row = plain(chat.renderHelper(entry, 80)).find(line => line.trim().startsWith("✓ JavaScript cell")) ?? "";
   expect(row).toContain("read, bash");
   expect(row).not.toContain("await");
 });

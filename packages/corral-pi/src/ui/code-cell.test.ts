@@ -58,7 +58,7 @@ test("a failed child below the fold stays visible, and a cell whose script caugh
     child(11, "bash", true)];
   expect(foldChildren(children).some(entry => "child" in entry && entry.child === children[9])).toBeTrue();
   const lines = draw(cellRenderers(deps()), context(code), [report(children)]);
-  expect(lines[0]).toMatch(/^\s*✓ code/);
+  expect(lines[0]).toMatch(/^\s*✓ JavaScript cell/);
   expect(lines[0]).toContain("✗1");
   expect(lines.some(line => line.includes("missing.md") && line.includes("ENOENT"))).toBeTrue();
 });
@@ -102,7 +102,7 @@ test("a detached cell keeps redrawing from the runtime until it settles, then re
   changed?.();
   expect(redraws).toBe(1);
   const after = renderers.renderCall!(ctx.args, undefined as never, ctx).render(100).map(line => stripTerminalSequences(line));
-  expect(after[0]).toMatch(/^\s*✗ code/);
+  expect(after[0]).toMatch(/^\s*✗ JavaScript cell/);
   expect(after[0]).toContain("settled in background");
   expect(after.some(line => line.includes("timed out"))).toBeTrue();
   expect(released).toBe(2);
@@ -116,7 +116,7 @@ test("a stored detached report the runtime does not know is history: no spinner,
   const stored = report([child(1, "read", undefined), child(2, "bash", undefined)], { status: "detached", durationMs: undefined });
   const lines = draw(cellRenderers(deps(source, ticker)), context(code), [stored]);
   expect(lines.join("\n")).not.toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧]/);
-  expect(lines[0]).toMatch(/^\s*○ code/);
+  expect(lines[0]).toMatch(/^\s*○ JavaScript cell/);
   expect(lines[0]).toContain("moved to the background");
   expect(lines.filter(line => /^\s+! /.test(line) && line.includes("outcome not recorded"))).toHaveLength(2);
   expect(holds).toEqual([]);
@@ -129,7 +129,7 @@ test("a report stored before child records existed renders its counts and failur
     failures: [{ tool: "read", call: "cell-6.2", key: "x/cell-6.2", ok: false, code: "tool_error", message: "ENOENT", effect: "unknown" }] };
   let lines: string[] = [];
   expect(() => { lines = draw(cellRenderers(deps()), context(code), [old as unknown as CellReport]); }).not.toThrow();
-  expect(lines[0]).toMatch(/^\s*✗ code/);
+  expect(lines[0]).toMatch(/^\s*✗ JavaScript cell/);
   expect(lines[0]).toContain("4 calls");
   expect(lines.some(line => line.includes("ENOENT"))).toBeTrue();
 });

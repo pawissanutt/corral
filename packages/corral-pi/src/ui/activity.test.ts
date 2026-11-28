@@ -90,13 +90,13 @@ test("each phase reads as glyph and words: tools with their nested call, retry, 
   activity.agentStart();
   activity.update("thinking_delta");
   expect(shown(activity, 92, time.now())).toMatch(/thinking/);
-  activity.update("toolcall_delta", "codemode");
-  expect(shown(activity, 92, time.now())).toMatch(/writing codemode/);
+  activity.update("toolcall_delta", "eval_js");
+  expect(shown(activity, 92, time.now())).toMatch(/writing JavaScript cell/);
   activity.messageEnd("toolUse");
-  activity.toolStart("c1", "codemode");
+  activity.toolStart("c1", "eval_js");
   activity.toolStart("c1/1", "read", "c1");
   time.advance(4000);
-  expect(shown(activity, 92, time.now())).toMatch(new RegExp("^" + SPIN.source + " running codemode › read · 4s · esc stop$"));
+  expect(shown(activity, 92, time.now())).toMatch(new RegExp("^" + SPIN.source + " running JavaScript cell › read · 4s · esc stop$"));
   activity.toolEnd("c1");
   expect(activity.phase()).toBe("model");
   // A blocking dialog the agent opened shows no spinner; the owner's own palette does not count.

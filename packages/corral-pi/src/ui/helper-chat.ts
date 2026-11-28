@@ -14,6 +14,7 @@ import {
 import type { HelperMessage } from "../extensions/subagent/inspection.ts";
 import { codexFailureCopyFromText } from "../host/codex-failure-copy.ts";
 import type { AgentMail, ConversationSource } from "./agents-model.ts";
+import { isJavaScriptCellTool, JAVASCRIPT_CELL_TITLE } from "./cell-label.ts";
 import { presentCodexError } from "./error-copy.ts";
 import { userLabel } from "./panels-theme.ts";
 import { plainLabel, PANEL_BUBBLE, PANEL_MUTED, PANEL_TEXT, PANEL_WARNING } from "./panels-view.ts";
@@ -191,16 +192,16 @@ function childDeps(cwd: string): ToolRenderDeps {
 /** The row of a child's tool call: the same presenter as the main transcript; a Code Mode cell reads as the tools it calls. */
 function helperRow(message: HelperMessage, live: boolean, cwd: string): RowModel {
   const call = helperCall(message, cwd);
-  const present: Presenter = call.name === "codemode" ? codeRow : presenterFor(call.name, childDeps(cwd));
+  const present: Presenter = isJavaScriptCellTool(call.name) ? codeRow : presenterFor(call.name, childDeps(cwd));
   const model = presentCall(present, call);
   // A conversation that stopped leaves its unfinished calls waiting, never spinning.
   return !live && (model.state === "writing" || model.state === "running") ? { ...model, state: "waiting" } : model;
 }
-/** A child's Code Mode call as `code · read, bash`: the tools its script calls, never the script. */
+/** A child's Code Mode call as `JavaScript cell · read, bash`: the tools its script calls, never the script. */
 function codeRow(call: CallInput): RowModel {
   const sites = callSites(typeof call.args.code === "string" ? call.args.code : ""), state = baseState(call);
   const reason = state === "failed" ? firstLine(resultText(call.result)) : "";
-  return { state, verb: "code", ...(reason ? { outcome: reason } : sites ? { outcome: sites } : {}) };
+  return { state, verb: JAVASCRIPT_CELL_TITLE, ...(reason ? { outcome: reason } : sites ? { outcome: sites } : {}) };
 }
 
 interface Cached {

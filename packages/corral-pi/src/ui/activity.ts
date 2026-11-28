@@ -1,6 +1,7 @@
 // The working indicator: what the main agent is doing and since when, observed from Pi's extension events,
 // and the one shared redraw clock. The clock runs only while the agent is busy or a live row holds it, so an
 // idle session schedules nothing. Presentation only: nothing here changes what the agent sends or receives.
+import { isJavaScriptCellTool, JAVASCRIPT_CELL_TITLE } from "./cell-label.ts";
 import { spinner } from "./frame.ts";
 import { NOTICE_MS } from "./header.ts";
 import { PANEL_BLUE, PANEL_ERROR, PANEL_MUTED, PANEL_SUCCESS, PANEL_TEXT, PANEL_WARNING } from "./panels-view.ts";
@@ -101,7 +102,7 @@ export function elapsedLabel(ms: number, compact = false): string {
 }
 
 /** A tool's name as words: `job_wait` reads `job wait`, `corral_next` reads `corral next`. */
-function toolWords(name: string): string { return name.replaceAll("_", " "); }
+function toolWords(name: string): string { return isJavaScriptCellTool(name) ? JAVASCRIPT_CELL_TITLE : name.replaceAll("_", " "); }
 
 /**
  * What the main agent is doing, fed by `NativePanels` from Pi's extension events. Phases, highest first: waiting

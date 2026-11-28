@@ -8,6 +8,7 @@
 import {
   truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component, type TuiMouseEvent, type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
+import { JAVASCRIPT_CELL_TITLE } from "./cell-label.ts";
 import { corralPromptRow } from "./host-envelopes.ts";
 import { AgentMessageCard, classifyAgentNote } from "./agent-message.ts";
 import { agentIdColor } from "./agent-hues.ts";
@@ -47,7 +48,7 @@ function cellNotice(text: string): HostNotice | undefined {
   const calls = total === 0 || failed > 0 ? still : ` · ${total} ${total === 1 ? "call" : "calls"}${still}`;
   return { kind: "code-cell", text, rows: [{
     state: status === "ok" ? "ok" : "failed",
-    words: `code cell ${number} settled: ${CELL_WORDS[status] ?? status}${calls}`,
+    words: `${JAVASCRIPT_CELL_TITLE} ${number} settled: ${CELL_WORDS[status] ?? status}${calls}`,
     ...(failed > 0 ? { alert: `${failed} of ${total} ${total === 1 ? "call" : "calls"} failed` } : {}),
     note: "reported to the agent",
   }] };
