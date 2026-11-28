@@ -1,10 +1,7 @@
-// Helpers for the cross-lane fixture: the real corral binaries built from this checkout, a
-// throwaway workspace, an events.jsonl follower and a secret scan.
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { closeSync, existsSync, openSync, readSync, readdirSync, readFileSync, realpathSync, statSync, watch } from "node:fs";
-import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { closeSync, existsSync, openSync, readSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
 
 import { PACKAGE_ROOT } from "./fixture-install.ts";
 import { within } from "./wait.ts";
@@ -33,57 +30,7 @@ export function ok(argv: string[], options?: Parameters<typeof run>[1]): string 
   return result.stdout;
 }
 
-/** The private root scripts/test-herdr.sh made (HOME is `<root>/home`), never the owner's. */
-export function privateRoot(): string | undefined {
-  const home = process.env.HOME;
-  if (!home || basename(home) !== "home") return undefined;
-  const root = dirname(home);
-  return /^corral-herdr-[A-Za-z0-9]+$/.test(basename(root)) && existsSync(join(root, "server.log")) ? root : undefined;
-}
-
-export function privateHerdr(): boolean {
-  return privateRoot() !== undefined && process.env.CORRAL_HERDR_SESSION === "corral-test"
-    && run(["herdr", "--session", "corral-test", "workspace", "list"]).status === 0;
-}
-
-interface Artifact {
-  readonly reason: string;
-  readonly target?: { name: string; kind: string[] };
-  readonly profile?: { test: boolean };
-  readonly executable?: string | null;
-}
-
-function artifacts(args: string[]): Artifact[] {
-  return ok(["bash", join(REPO, "scripts/cargo.sh"), ...args, "--message-format=json"])
-    .split("\n").filter((line) => line.startsWith("{")).map((line) => JSON.parse(line) as Artifact)
-    .filter((entry) => entry.reason === "compiler-artifact" && entry.executable);
-}
-
-/** The corral binary as corral's own test builds make it: `hermetic-harness` never probes omp/omo/claude. */
-export function corralBinary(): string {
-  const built = artifacts(["build", "-p", "corral", "--bin", "corral", "--features", "corral-ops/hermetic-harness"])
-    .find((entry) => entry.target?.name === "corral" && entry.target.kind.includes("bin"));
-  if (!built?.executable) throw new Error("cargo built no corral binary");
-  return built.executable;
-}
-
-/** The corral-ops unit-test binary, whose ignored `fresh_process_probe` is a fresh corral process. */
-export function probeBinary(): string {
-  const built = artifacts(["test", "-p", "corral-ops", "--lib", "--no-run"])
-    .find((entry) => entry.target?.name === "corral_ops" && entry.profile?.test);
-  if (!built?.executable) throw new Error("cargo built no corral-ops test binary");
-  return built.executable;
-}
-
 export const sha256 = (data: string | Buffer) => createHash("sha256").update(data).digest("hex");
-
-/** `agent::launch::generation_dir` for a worker run. */
-export function generationDir(workspace: string, task: string, run: string, generation: number): string {
-  const runtime = process.env.XDG_RUNTIME_DIR ? join(process.env.XDG_RUNTIME_DIR, "corral")
-    : join(tmpdir(), `corral-${process.getuid?.()}`);
-  const store = `st-${sha256(realpathSync(join(workspace, ".corral"))).slice(0, 16)}`;
-  return join(runtime, store, sha256(`${task}_${run}`).slice(0, 16), `g${generation}`);
-}
 
 export interface StoreEvent {
   readonly kind: string;
@@ -175,18 +122,6 @@ export class EventFollower {
   close(): void {
     this.tail.kill();
   }
-}
-
-/** Waits for `name` to appear in `dir` (which must exist), subscribing before checking. */
-export function fileAppears(dir: string, name: string, ms = 90_000): Promise<void> {
-  let watcher: ReturnType<typeof watch> | undefined;
-  const appeared = new Promise<void>((resolve) => {
-    watcher = watch(dir, () => {
-      if (existsSync(join(dir, name))) resolve();
-    });
-    if (existsSync(join(dir, name))) resolve();
-  });
-  return within(appeared, ms, `${name} in ${dir}`).finally(() => watcher?.close());
 }
 
 function files(dir: string): string[] {

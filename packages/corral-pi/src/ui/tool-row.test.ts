@@ -59,7 +59,7 @@ test("a failure differs from a success in glyph and words, without colour", () =
 });
 
 test("at 46 columns the row stays one line with glyph, verb and time", () => {
-  const model: RowModel = { state: "ok", verb: "bash", target: "cargo test -p corral-tui --lib shared_slot_header_renders_at_wide",
+  const model: RowModel = { state: "ok", verb: "bash", target: "cargo test -p corral-facts --lib runtime_cargo_workspace_golden",
     outcome: "exit 0 · test result: ok. 14 passed; 0 failed", right: "j14-439", duration: 225_000 };
   for (const width of [185, 100, 92, 61, 46]) {
     const { lines } = rowBlock(model, width, now, false);
@@ -76,7 +76,7 @@ test("at 46 columns a short outcome stays whole, a long one never pushes the tar
   const short = plain({ state: "ok", verb: "diagnostics", target: "crates/ops/src/attention/review_tests.rs", targetClip: "middle", outcome: "no diagnostics", duration: 2300 });
   expect(short).toContain("no diagnostics");
   expect(short).toContain("2.3s");
-  const long = plain({ state: "waiting", verb: "bash", target: "cargo check -p corral-ops >.evidence/c3-check.log", outcome: "continued in the background", duration: 1100 });
+  const long = plain({ state: "waiting", verb: "bash", target: "cargo check -p corral-engine >.evidence/c3-check.log", outcome: "continued in the background", duration: 1100 });
   expect(long).toContain("cargo check");
   const failed = plain({ state: "failed", verb: "ls", target: "~/miti-workspace/corral/.worktrees/T-854/crates", targetClip: "middle", outcome: "Path not found: /home/pawis/miti-workspace/corral/.worktrees/T-854/crates" });
   expect(failed).toContain("crates");

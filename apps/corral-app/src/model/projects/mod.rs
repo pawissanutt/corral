@@ -104,7 +104,7 @@ pub fn assistant_landing() -> AssistantLanding {
         title: "Ask about your workspace",
         explanation: "No projects are configured. Ask can help before project management is set up.",
         instructions_heading: "Add a project",
-        instructions: "Put a git repo under the workspace root or add [projects.<name>] path = ... to .corral/config.toml.",
+        instructions: "Put a git repo under the workspace root or add [projects.<name>] path = ... to .corral-next/corral.toml.",
         ask_label: "Ask",
     }
 }

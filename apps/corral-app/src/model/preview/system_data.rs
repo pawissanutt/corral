@@ -49,7 +49,7 @@ const fn t(
 
 const TYPES: &str = "crates/corral-types/src/lib.rs";
 const SCHEMA: &str = "crates/corral-protocol/schema/corral.v1.json";
-const CONFIG: &str = "crates/corral-core/src/config.rs";
+const CONFIG: &str = "crates/corral-engine/src/config.rs";
 
 const CORRAL: &[Sample] = &[
     t(

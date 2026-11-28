@@ -76,7 +76,7 @@ test("job rows name the command, not only the id", () => {
 });
 
 test("at 46 columns a long command stays one line with glyph, verb and state", () => {
-  const lines = row("bash", { command: "cargo test -p corral-tui --lib shared_slot_header_renders_at_wide_and_narrow_terminal_widths" },
+  const lines = row("bash", { command: "cargo test -p corral-facts --lib runtime_cargo_workspace_golden" },
     { result: exited("j1-5", 0, "ok") })(46);
   expect(lines).toHaveLength(1);
   expect(lines[0]!.trim().startsWith("✓ bash")).toBe(true);

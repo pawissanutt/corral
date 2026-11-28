@@ -85,21 +85,20 @@ fn coverage(path: &str, detectors: &[EntryDetector]) -> Row {
 }
 
 fn corral() -> Vec<Row> {
-    let cli = id(Binary, "corral", "crates/corral/src/main.rs");
-    let app = id(Binary, "nsh-app-corral", "apps/corral-app/src/main.rs");
-    let gate = id(Job, "gate", ".github/workflows/ci.yml");
-    let web = id(Job, "app-web", ".github/workflows/ci.yml");
-    let mut gate_unit = unit(Job, "gate", ".github/workflows/ci.yml", 12, "");
-    gate_unit.command = Some("corral gate --tier full".into());
+    let cli = id(Binary, "corral-next", "crates/corral-next/src/main.rs");
+    let daemon = id(Binary, "corrald-next", "crates/corral-daemon/src/main.rs");
+    let native = id(Job, "native", ".github/workflows/release.yml");
+    let mut native_unit = unit(Job, "native", ".github/workflows/release.yml", 57, "");
+    native_unit.command = Some("cargo build --locked --release".into());
     let owner = RuntimeSource::Unit { id: cli.clone() };
     let mut rows = vec![
         Row::Unit {
             unit: unit(
                 Binary,
-                "corral",
-                "crates/corral/src/main.rs",
+                "corral-next",
+                "crates/corral-next/src/main.rs",
                 1,
-                "crates/corral",
+                "crates/corral-next",
             ),
         },
         Row::Unit {
@@ -111,48 +110,38 @@ fn corral() -> Vec<Row> {
                 "apps/corral-app",
             ),
         },
-        Row::Unit { unit: gate_unit },
         Row::Unit {
-            unit: unit(Job, "app-web", ".github/workflows/ci.yml", 41, ""),
+            unit: unit(
+                Binary,
+                "corrald-next",
+                "crates/corral-daemon/src/main.rs",
+                1,
+                "crates/corral-daemon",
+            ),
         },
+        Row::Unit { unit: native_unit },
         edge(
-            RuntimeEdgeKind::Runs,
-            RuntimeSource::Unit { id: gate },
-            cli.clone(),
-            RuntimeBasis::Declared,
-            ".github/workflows/ci.yml",
-            20,
-        ),
-        edge(
-            RuntimeEdgeKind::Starts,
-            container("crates/corral-ops"),
-            cli.clone(),
-            RuntimeBasis::Syntax,
-            "crates/corral-ops/src/dispatch.rs",
-            88,
-        ),
-        edge(
-            RuntimeEdgeKind::Starts,
-            container("crates/corral-daemon"),
+            RuntimeEdgeKind::Builds,
+            RuntimeSource::Unit { id: native.clone() },
             cli,
-            RuntimeBasis::Syntax,
-            "crates/corral-daemon/src/system/worker.rs",
-            140,
+            RuntimeBasis::Declared,
+            ".github/workflows/release.yml",
+            94,
         ),
         edge(
-            RuntimeEdgeKind::Runs,
-            RuntimeSource::Unit { id: web },
-            app,
+            RuntimeEdgeKind::Builds,
+            RuntimeSource::Unit { id: native },
+            daemon,
             RuntimeBasis::Declared,
-            ".github/workflows/ci.yml",
-            52,
+            ".github/workflows/release.yml",
+            94,
         ),
     ];
-    for (name, line) in [("dispatch", 40), ("gate", 52), ("done", 61), ("daemon", 75)] {
+    for (name, line) in [("init", 31), ("list", 87), ("show", 96), ("dispatch", 112)] {
         rows.push(entry(
             EntryKind::Command,
             name,
-            "crates/corral/src/cli.rs",
+            "crates/corral-next/src/args.rs",
             line,
             owner.clone(),
         ));
@@ -167,9 +156,9 @@ fn corral() -> Vec<Row> {
         ));
     }
     rows.extend([
-        coverage("crates/corral", &[EntryDetector::Clap]),
+        coverage("crates/corral-next", &[EntryDetector::Clap]),
         coverage("crates/corral-types", &[EntryDetector::OperationEnum]),
-        coverage("crates/corral-core", &[]),
+        coverage("crates/corral-facts", &[]),
         coverage("apps/corral-app", &[]),
     ]);
     rows

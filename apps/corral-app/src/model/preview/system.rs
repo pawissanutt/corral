@@ -17,7 +17,7 @@ use corral_types::{
 use crate::model::Id;
 
 use ContainerKind::{Cargo, Folder, Npm, Python};
-use WorkspaceStatus::{Excluded, Member, SeparateWorkspace};
+use WorkspaceStatus::{Member, SeparateWorkspace};
 
 struct Container {
     path: &'static str,
@@ -47,14 +47,6 @@ const fn c(
 }
 
 const CORRAL: &[Container] = &[
-    c(
-        "crates/corral-core",
-        Cargo,
-        Member,
-        "Rust",
-        48_200,
-        &["store", "task", "config", "events", "lock", "frontmatter"],
-    ),
     c(
         "crates/corral-types",
         Cargo,
@@ -96,12 +88,12 @@ const CORRAL: &[Container] = &[
         &["dispatch", "review", "gate", "land", "facts", "pipeline"],
     ),
     c(
-        "crates/corral-ops",
+        "crates/corral-facts",
         Cargo,
         Member,
         "Rust",
         34_700,
-        &["sync", "artifacts", "pm", "review"],
+        &["entries", "runtime", "syntax", "data"],
     ),
     c(
         "crates/corral-daemon",
@@ -112,28 +104,12 @@ const CORRAL: &[Container] = &[
         &["views", "system", "topics", "app", "state"],
     ),
     c(
-        "crates/corral-tui",
-        Cargo,
-        Member,
-        "Rust",
-        28_900,
-        &["board", "screens", "keys"],
-    ),
-    c(
-        "crates/corral",
+        "crates/corral-next",
         Cargo,
         Member,
         "Rust",
         18_600,
-        &["cli", "plugin"],
-    ),
-    c(
-        "crates/corral-legacy-board",
-        Cargo,
-        Excluded,
-        "Rust",
-        22_400,
-        &["board", "render"],
+        &["cli", "import", "lens"],
     ),
     c(
         "apps/corral-app",
@@ -152,19 +128,11 @@ const CORRAL: &[Container] = &[
         &["host", "tools", "session", "test"],
     ),
     c(
-        "tools/pi-compare",
+        "tools/pi-probe",
         Npm,
         Member,
-        "TypeScript",
-        2_900,
-        &["compare"],
-    ),
-    c(
-        "tools/load-sandbox",
-        Folder,
-        Member,
-        "Shell",
-        600,
+        "JavaScript",
+        2_400,
         &["sandbox"],
     ),
     c(
@@ -188,36 +156,25 @@ const CORRAL: &[Container] = &[
 
 /// (from, to, kind, references).
 const CORRAL_EDGES: &[(usize, usize, PackageEdgeKind, u64)] = &[
-    (0, 1, PackageEdgeKind::DeclaredAndReferenced, 212),
-    (2, 1, PackageEdgeKind::DeclaredAndReferenced, 340),
-    (3, 0, PackageEdgeKind::DeclaredAndReferenced, 18),
-    (5, 0, PackageEdgeKind::DeclaredAndReferenced, 402),
-    (5, 1, PackageEdgeKind::DeclaredAndReferenced, 288),
-    (5, 3, PackageEdgeKind::DeclaredAndReferenced, 91),
-    (5, 4, PackageEdgeKind::DeclaredAndReferenced, 37),
-    (6, 5, PackageEdgeKind::DeclaredAndReferenced, 233),
-    (6, 0, PackageEdgeKind::DeclaredAndReferenced, 145),
-    (6, 4, PackageEdgeKind::DeclaredOnly, 0),
-    (7, 6, PackageEdgeKind::DeclaredAndReferenced, 176),
-    (7, 2, PackageEdgeKind::DeclaredAndReferenced, 520),
-    (7, 5, PackageEdgeKind::DeclaredAndReferenced, 98),
-    (8, 6, PackageEdgeKind::DeclaredAndReferenced, 121),
-    (8, 2, PackageEdgeKind::DeclaredAndReferenced, 64),
-    (9, 7, PackageEdgeKind::DeclaredAndReferenced, 44),
-    (9, 8, PackageEdgeKind::DeclaredAndReferenced, 29),
-    (9, 6, PackageEdgeKind::DeclaredAndReferenced, 81),
-    (10, 0, PackageEdgeKind::DeclaredOnly, 0),
-    (11, 2, PackageEdgeKind::DeclaredAndReferenced, 612),
-    (11, 1, PackageEdgeKind::DeclaredAndReferenced, 455),
-    (13, 12, PackageEdgeKind::ReferencedOnly, 6),
+    (1, 0, PackageEdgeKind::DeclaredAndReferenced, 340),
+    (4, 0, PackageEdgeKind::DeclaredAndReferenced, 288),
+    (4, 2, PackageEdgeKind::DeclaredAndReferenced, 91),
+    (4, 3, PackageEdgeKind::DeclaredAndReferenced, 37),
+    (4, 5, PackageEdgeKind::DeclaredAndReferenced, 233),
+    (5, 0, PackageEdgeKind::DeclaredAndReferenced, 45),
+    (6, 0, PackageEdgeKind::DeclaredAndReferenced, 176),
+    (6, 1, PackageEdgeKind::DeclaredAndReferenced, 520),
+    (6, 4, PackageEdgeKind::DeclaredAndReferenced, 98),
+    (7, 4, PackageEdgeKind::DeclaredAndReferenced, 44),
+    (8, 1, PackageEdgeKind::DeclaredAndReferenced, 612),
+    (8, 0, PackageEdgeKind::DeclaredAndReferenced, 455),
 ];
 
 const CORRAL_SPAWNS: &[(usize, &str, u64)] = &[
-    (3, "git", 41),
-    (4, "herdr", 23),
-    (5, "git", 6),
-    (12, "claude", 3),
-    (9, "herdr", 2),
+    (2, "git", 41),
+    (3, "herdr", 23),
+    (4, "git", 6),
+    (9, "claude", 3),
 ];
 
 const SITE: &[Container] = &[

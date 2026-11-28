@@ -1,6 +1,6 @@
 // Where the corral-owned Pi credentials live (OD8): $XDG_DATA_HOME/corral/corral-pi/auth/, or
 // ~/.local/share/corral/corral-pi/auth/ when XDG_DATA_HOME is unset or relative. The Rust side
-// (crates/corral-ops/src/agent/install.rs, data_root) resolves the same directory. No other
+// (crates/corral-engine/src/runner/pi/build.rs, pi_data_root) resolves the same directory. No other
 // harness store (~/.codex, ~/.pi, ~/.claude, ...) is ever derived from here.
 import { existsSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
