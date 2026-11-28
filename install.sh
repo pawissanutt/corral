@@ -15,7 +15,6 @@ min_herdr_version=0.9.3
 herdr_installer=https://herdr.dev/install.sh
 yes=false
 dry_run=false
-legacy=${CORRAL_INSTALL_LEGACY:-0}
 app_only=false
 
 fail() {
@@ -23,18 +22,21 @@ fail() {
     exit 1
 }
 
+retired_classic() {
+    fail "classic installation is retired; see the v0.4.0 archive: https://github.com/pawissanutt/corral/tree/v0.4.0"
+}
+
+[ "${CORRAL_INSTALL_LEGACY:-0}" != 1 ] || retired_classic
+
 for arg in "$@"; do
     case "$arg" in
     --yes) yes=true ;;
     --dry-run) dry_run=true ;;
-    --legacy) legacy=1 ;;
+    --legacy) retired_classic ;;
     --app-only) app_only=true ;;
-    *) fail "unknown option: $arg (use --yes, --dry-run, --legacy or --app-only)" ;;
+    *) fail "unknown option: $arg (use --yes, --dry-run or --app-only)" ;;
     esac
 done
-if [ "$legacy" = 1 ] && [ "$app_only" = true ]; then
-    fail "--legacy and --app-only are mutually exclusive"
-fi
 
 valid_tag() {
     printf '%s\n' "$1" | LC_ALL=C awk '
@@ -43,15 +45,10 @@ valid_tag() {
     '
 }
 [ "$version" = latest ] || valid_tag "$version" || fail "invalid release tag: $version (expected latest or vX.Y.Z)"
-if [ "$legacy" = 1 ] && [ "$version" = latest ] && [ "$base" = 'https://github.com/pawissanutt/corral/releases' ]; then
-    fail "--legacy requires CORRAL_VERSION set to a published legacy tag (vX.Y.Z)"
-fi
 
 if [ "$app_only" = false ]; then
     case "$(uname -s)" in
-    Linux)
-        if [ "$legacy" = 1 ]; then os=unknown-linux-musl; else os=unknown-linux-gnu; fi
-        ;;
+    Linux) os=unknown-linux-gnu ;;
     Darwin) os=apple-darwin ;;
     *) fail "unsupported OS $(uname -s); on native Windows use install.ps1" ;;
     esac
@@ -60,11 +57,7 @@ if [ "$app_only" = false ]; then
     aarch64 | arm64) arch=aarch64 ;;
     *) fail "unsupported CPU $(uname -m)" ;;
     esac
-    if [ "$legacy" = 1 ]; then
-        asset="corral-$arch-$os.tar.gz"
-    else
-        asset="corral-next-$arch-$os.tar.gz"
-    fi
+    asset="corral-next-$arch-$os.tar.gz"
 fi
 
 release_url() {
@@ -78,19 +71,13 @@ release_url() {
 if [ "$dry_run" = true ]; then
     if [ "$app_only" = false ]; then
         echo "would download and verify $(release_url "$version" "$asset") into $bin_dir"
-        if [ "$legacy" = 1 ]; then
-            echo "would install corral-pi-host beside corral when the archive has it, then run: corral agent install"
-        else
-            echo "would install corral-next, corrald-next and corral-pi (no daemon changes)"
-        fi
+        echo "would install corral-next, corrald-next and corral-pi (no daemon changes)"
         echo "would check for herdr >= $min_herdr_version, corral's terminal engine"
         echo "if needed, would offer: curl -fsSL $herdr_installer | sh"
     fi
-    if [ "$legacy" != 1 ]; then
-        app_tag=$version
-        if [ "$app_only" = false ] && [ "$version" = latest ]; then app_tag='<runtime tag>'; fi
-        echo "would download and verify $(release_url "$app_tag" "$app_asset") into $app_dir (no web server started)"
-    fi
+    app_tag=$version
+    if [ "$app_only" = false ] && [ "$version" = latest ]; then app_tag='<runtime tag>'; fi
+    echo "would download and verify $(release_url "$app_tag" "$app_asset") into $app_dir (no web server started)"
     exit 0
 fi
 
@@ -108,9 +95,6 @@ fetch() {
 download() {
     url=$(release_url "$1" "$2")
     if ! fetch "$url" "$tmp/$2"; then
-        if [ "$2" != "$app_asset" ] && [ "$legacy" != 1 ]; then
-            fail "download failed: $url (use --legacy with a published legacy tag for the old CLI)"
-        fi
         fail "download failed: $url"
     fi
     fetch "$url.sha256" "$tmp/$2.sha256" || fail "checksum download failed: $url.sha256"
@@ -156,8 +140,6 @@ lock_install() {
 
 names='corral-next corrald-next corral-pi'
 tmp=$(mktemp -d)
-staged=
-staged_host=
 bin_txn=
 bin_lock=
 web_txn=
@@ -212,8 +194,6 @@ cleanup() {
         if [ -n "$bin_txn" ]; then rollback_bins; fi
         rollback_web
     fi
-    if [ -n "$staged" ]; then rm -f "$staged" || true; fi
-    if [ -n "$staged_host" ]; then rm -f "$staged_host" || true; fi
     if [ -n "$bin_txn" ] && [ "${keep_bin:-false}" = false ]; then rm -rf "$bin_txn" || true; fi
     if [ -n "$web_txn" ] && [ "${keep_web:-false}" = false ]; then rm -rf "$web_txn" || true; fi
     if [ -n "$web_lock" ]; then rmdir "$web_lock" || true; fi
@@ -280,59 +260,6 @@ check_herdr() {
 check_pin() {
     if [ "$version" != latest ] && [ "$2" != "$1 ${version#v}" ]; then
         fail "version mismatch: requested $version, got $2; existing install unchanged"
-    fi
-}
-
-install_legacy() {
-    check_herdr
-    download "$version" "$asset"
-    mkdir "$tmp/archive"
-    unpack "$asset" "$tmp/archive"
-    regular_file "$tmp/archive/corral" || fail "archive has no regular corral binary"
-    # Releases before 0.4.0 ship corral alone; corral-pi then needs a source install.
-    host=false
-    if [ -e "$tmp/archive/corral-pi-host" ] || [ -L "$tmp/archive/corral-pi-host" ]; then
-        regular_file "$tmp/archive/corral-pi-host" || fail "archive has no regular corral-pi-host binary"
-        host=true
-    fi
-    for name in corral corral-pi-host; do
-        [ ! -d "$bin_dir/$name" ] || fail "install destination is a directory: $bin_dir/$name"
-    done
-    mkdir -p "$bin_dir"
-    if [ "$host" = true ]; then
-        staged_host=$(mktemp "$bin_dir/.corral-pi-host-install.XXXXXX")
-        cp "$tmp/archive/corral-pi-host" "$staged_host"
-        chmod 755 "$staged_host"
-        host_version=$("$staged_host" --version </dev/null) || fail "downloaded corral-pi-host cannot run on this machine; existing install unchanged"
-        case "$host_version" in
-        "corral-pi-host "*) ;;
-        *) fail "downloaded corral-pi-host did not identify itself; existing install unchanged" ;;
-        esac
-    fi
-    staged=$(mktemp "$bin_dir/.corral-install.XXXXXX")
-    cp "$tmp/archive/corral" "$staged"
-    chmod 755 "$staged"
-    installed_version=$("$staged" --version </dev/null) || fail "downloaded binary cannot run on this machine; existing install unchanged"
-    case "$installed_version" in
-    "corral "*) ;;
-    *) fail "downloaded binary did not identify itself as corral; existing install unchanged" ;;
-    esac
-    check_pin corral "$installed_version"
-    if [ "$host" = true ]; then
-        mv -f "$staged_host" "$bin_dir/corral-pi-host"
-        staged_host=
-    fi
-    mv -f "$staged" "$bin_dir/corral"
-    staged=
-    echo "installed $installed_version to $bin_dir/corral"
-    if [ "$host" = true ]; then
-        echo "installed $host_version to $bin_dir/corral-pi-host"
-        if "$bin_dir/corral" agent install </dev/null >"$tmp/agent-install.log" 2>&1; then
-            echo "set up the corral-pi agent host (corral agent install)"
-        else
-            echo "note: 'corral agent install' failed; corral-pi profiles need it. Output:"
-            awk '{ print "  " $0 }' "$tmp/agent-install.log"
-        fi
     fi
 }
 
@@ -465,7 +392,7 @@ install_current() {
     echo "Serve this directory with a web server that falls back to index.html for app routes."
 }
 
-if [ "$legacy" = 1 ]; then install_legacy; else install_current; fi
+install_current
 if [ "$app_only" = false ]; then
     case ":$PATH:" in
     *":$bin_dir:"*) ;;

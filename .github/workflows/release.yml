@@ -49,10 +49,10 @@ jobs:
           toolchain: "1.97.1"
       - name: Current workspace tests
         run: cargo test --locked --workspace </dev/null
-      - name: Legacy installer regressions
+      - name: Installer regressions
         run: |
           shellcheck install.sh scripts/install-test.sh
-          CORRAL_INSTALL_LEGACY=1 sh scripts/install-test.sh </dev/null
+          sh scripts/install-test.sh </dev/null
 
   native:
     strategy:
@@ -381,6 +381,13 @@ jobs:
                   if (result.returncode == 0) != expected:
                       raise AssertionError((argv, result.returncode, result.stdout, result.stderr))
                   return result
+
+              if windows:
+                  archive = 'https://github.com/pawissanutt/corral/tree/v0.4.0'
+                  for args in (['-Version', 'v0.4.0'], ['-AppOnly', '-Legacy']):
+                      result = run(install[:-1] + args + ['-DryRun'], expected=False)
+                      assert archive in result.stderr, result.stderr
+                  assert not site.exists()
 
               def install_case(label, success=True):
                   result = run(install, expected=success, timeout=120)

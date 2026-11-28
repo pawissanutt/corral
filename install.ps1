@@ -1,4 +1,4 @@
-# Native Windows installer: static web app or the classic CLI from a published legacy tag.
+# Native Windows installer: static web app only.
 [CmdletBinding()]
 param(
     [string]$Version = $env:CORRAL_VERSION,
@@ -124,49 +124,17 @@ function Install-CorralWebApp($Archive, $Destination, $Tag) {
     Write-Output 'Serve this directory with a web server that falls back to index.html for app routes. The current daemon must run on a supported Unix host.'
 }
 
-function Install-LegacyCorral($Archive, $Temporary, $Directory, $Tag, $ReleaseRepo) {
-    $staged = $null
-    try {
-        $expanded = Join-Path $Temporary 'expanded'
-        Expand-Archive -LiteralPath $Archive -DestinationPath $expanded
-        $binary = Join-Path $expanded 'corral.exe'
-        if (-not (Test-RegularFile $binary)) { throw 'corral: archive has no regular corral.exe.' }
-        [IO.Directory]::CreateDirectory($Directory) | Out-Null
-        $staged = Join-Path $Directory ('.corral-install-' + [guid]::NewGuid() + '.exe')
-        [IO.File]::Copy($binary, $staged)
-        $identity = & $staged --version
-        if ($LASTEXITCODE -ne 0 -or $identity -isnot [string] -or $identity -notmatch '^corral \S+$') {
-            throw 'corral: downloaded binary cannot run or identify itself; existing install unchanged.'
-        }
-        if ($Tag -ne 'latest' -and $identity -cne "corral $($Tag.Substring(1))") {
-            throw "corral: version mismatch: requested $Tag, got $identity; existing install unchanged."
-        }
-        $destination = Join-Path $Directory 'corral.exe'
-        if ([IO.File]::Exists($destination)) {
-            # Replace on the same filesystem; sharing violations leave the old file intact.
-            [IO.File]::Replace($staged, $destination, [System.Management.Automation.Language.NullString]::Value)
-        } else {
-            [IO.File]::Move($staged, $destination)
-        }
-        $staged = $null
-        Write-Output "installed $identity to $destination"
-        if (($env:PATH -split ';') -notcontains $Directory) {
-            Write-Output "Add $Directory to your user PATH in Settings > System > About > Advanced system settings > Environment Variables, then open a new terminal."
-            Write-Output ('For this PowerShell session: $env:PATH = "' + $Directory + ';$env:PATH"')
-        }
-        Write-Output 'Before corral up: install herdr >= 0.9.3 (https://herdr.dev/docs/install/), Git for Windows with Git Bash on PATH, and authenticate an agent CLI.'
-        Write-Output "Windows pane-shell setup: https://github.com/$ReleaseRepo/blob/main/docs/guide/classic/install.md#native-windows"
-    } finally {
-        if ($staged -and [IO.File]::Exists($staged)) { [IO.File]::Delete($staged) }
-    }
-}
-
 function Install-Corral {
     $ErrorActionPreference = 'Stop'
+    if ($Legacy -or $env:CORRAL_INSTALL_LEGACY -eq '1') {
+        throw 'corral: classic installation is retired; see the v0.4.0 archive: https://github.com/pawissanutt/corral/tree/v0.4.0'
+    }
     if ($env:OS -ne 'Windows_NT') {
         throw 'corral: install.ps1 supports native Windows only; use install.sh on Linux/macOS.'
     }
-    if ($AppOnly -and $Legacy) { throw 'corral: -AppOnly and -Legacy are mutually exclusive.' }
+    if (-not $AppOnly) {
+        throw 'corral: the current runtime is Unix-only. Use -AppOnly for the static web app. The classic Windows CLI installer is retired; see the v0.4.0 archive: https://github.com/pawissanutt/corral/tree/v0.4.0'
+    }
     if (-not $Version) { $Version = 'latest' }
     if ($Version -cne 'latest' -and $Version -cnotmatch '\Av[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?\z') {
         throw "corral: invalid release tag '$Version' (expected latest or vX.Y.Z)."
@@ -174,33 +142,15 @@ function Install-Corral {
     if (-not $Repo) { $Repo = 'pawissanutt/corral' }
     if (-not $BaseUrl) { $BaseUrl = "https://github.com/$Repo/releases" }
     $base = $BaseUrl.TrimEnd('/')
-    if ($AppOnly) {
-        if (-not $AppInstallDir) { $AppInstallDir = Join-Path $env:LOCALAPPDATA 'Programs\corral\web' }
-        $asset = 'corral-app-web.tar.gz'
-        $destination = [IO.Path]::GetFullPath($AppInstallDir)
-        if ($destination -eq [IO.Path]::GetPathRoot($destination)) { throw "corral: unsafe web app directory: $destination" }
-        $destination = $destination.TrimEnd([char[]] '\/')
-    } else {
-        if ($Version -eq 'latest' -and $base -eq 'https://github.com/pawissanutt/corral/releases') {
-            throw 'corral: the current runtime is Unix-only. Use -AppOnly for the static app or -Version vX.Y.Z for a published legacy Windows CLI.'
-        }
-        $architecture = $env:PROCESSOR_ARCHITEW6432
-        if (-not $architecture) { $architecture = $env:PROCESSOR_ARCHITECTURE }
-        if ($architecture -ne 'AMD64') {
-            throw "corral: unsupported Windows CPU $architecture; only legacy x86_64 CLI releases are available. Use -AppOnly for the static app."
-        }
-        if (-not $InstallDir) { $InstallDir = Join-Path $env:LOCALAPPDATA 'Programs\corral\bin' }
-        $asset = 'corral-x86_64-pc-windows-msvc.zip'
-        $destination = [IO.Path]::GetFullPath($InstallDir)
-    }
+    if (-not $AppInstallDir) { $AppInstallDir = Join-Path $env:LOCALAPPDATA 'Programs\corral\web' }
+    $asset = 'corral-app-web.tar.gz'
+    $destination = [IO.Path]::GetFullPath($AppInstallDir)
+    if ($destination -eq [IO.Path]::GetPathRoot($destination)) { throw "corral: unsafe web app directory: $destination" }
+    $destination = $destination.TrimEnd([char[]] '\/')
     $url = if ($Version -eq 'latest') { "$base/latest/download/$asset" } else { "$base/download/$Version/$asset" }
     if ($DryRun) {
         Write-Output "would download and verify $url into $destination"
-        if ($AppOnly) {
-            Write-Output 'static web app only; the current CLI, daemon and Pi are not available for native Windows'
-        } else {
-            Write-Output 'legacy CLI only; requires herdr >= 0.9.3, Git for Windows (including Git Bash), and an authenticated agent CLI before corral up'
-        }
+        Write-Output 'static web app only; the current CLI, daemon and Pi are not available for native Windows'
         return
     }
 
@@ -210,11 +160,7 @@ function Install-Corral {
     try {
         [IO.Directory]::CreateDirectory($temporary) | Out-Null
         $archive = Receive-VerifiedArchive $url $temporary $asset
-        if ($AppOnly) {
-            Install-CorralWebApp $archive $destination $Version
-        } else {
-            Install-LegacyCorral $archive $temporary $destination $Version $Repo
-        }
+        Install-CorralWebApp $archive $destination $Version
     } finally {
         if ([IO.Directory]::Exists($temporary)) { [IO.Directory]::Delete($temporary, $true) }
     }

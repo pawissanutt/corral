@@ -40,8 +40,7 @@ The app lives in the corral repository as `apps/corral-app/`. It is its own Carg
 
 ## Platform and release support
 
-The app and the new engine are separate from the classic `corral` release. The matrix
-below describes the intended release artifacts, not a claim that every source target or
+The matrix below describes the intended release artifacts, not a claim that every source target or
 native desktop host has been tested. A release must contain the assets before an install
 or upgrade can succeed; older releases do not necessarily contain them.
 
@@ -56,8 +55,7 @@ or upgrade can succeed; older releases do not necessarily contain them.
 Linux release targets are `x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu`;
 macOS targets are `x86_64-apple-darwin` and `aarch64-apple-darwin`. Linux packages are built
 and tested on Ubuntu 24.04 (glibc 2.39); older glibc distributions are not verified. macOS
-packages target macOS 14 or later. There is no Windows daemon or Linux musl artifact in this matrix. The classic CLI's separate Windows installer
-and musl archives do not install this app's daemon.
+packages target macOS 14 or later. There is no Windows daemon or Linux musl artifact in this matrix.
 
 ## Install and upgrade
 
@@ -66,8 +64,7 @@ app, verifies their SHA-256 sidecars, and installs the executables under `~/.loc
 default. It needs network access, `curl` or `wget`, `tar`, and `sha256sum` or `shasum`.
 For agent work, install Git and an authenticated agent provider; herdr 0.9.3 or newer is
 needed for the terminal engine. The installer may offer to install or upgrade herdr;
-`--yes` grants that consent. See the [installation guide](../../docs/guide/classic/install.md)
-for the classic CLI and its prerequisites.
+`--yes` grants that consent.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/pawissanutt/corral/main/install.sh -o install-corral.sh
@@ -94,8 +91,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install-corral.ps1 -Ap
 ```
 
 On Windows the default site directory is `$env:LOCALAPPDATA\Programs\corral\web`;
-`-AppInstallDir` or `CORRAL_APP_INSTALL_DIR` overrides it. The Windows installer's
-legacy CLI mode is separate and needs an older published tag.
+`-AppInstallDir` or `CORRAL_APP_INSTALL_DIR` overrides it.
 
 Keep the binaries and app from the same release: this is a prototype and the frontend
 does not emulate missing daemon capabilities. The normal Unix installer resolves the app
@@ -104,7 +100,9 @@ register or restart a daemon service, or serve the web app. Restart your daemon 
 upgrading its binary. The installer replaces its own web bundle; update separately deployed
 web files yourself. Back up your workspace and configuration before
 upgrading; no automatic rollback or downgrade compatibility is promised.
-`CORRAL_VERSION=v0.2.0 sh install-corral.sh --legacy` selects the published classic CLI instead. That classic release does not include the Pi host; the new engine's `corral-pi` artifact is separate and requires a release that actually contains it.
+
+Classic CLI installation is retired on Unix and Windows. For the classic installers and
+prerequisites, see the [v0.4.0 archive](https://github.com/pawissanutt/corral/tree/v0.4.0).
 
 ### Windows desktop
 
@@ -400,7 +398,7 @@ The sample preview carries one build session, `B-k3x9` (*parity-guide*), that se
 
 - **Devices**: this device and the paired ones, **Pair a device**, Revoke and Forget.
 - **This daemon**, **Connection**: daemon state, last sync and its error, endpoint and store, and this device's enrolment. The device id is kept in a private `0600` file, named as such, not an OS keychain.
-- **Notifications**: Web Push (below).
+- **Notifications**: Web Push requires the archived classic daemon.
 - **Configuration**: edits `corral.toml` through `config.get` and `config.put`, one part at a time: Workspace (limits, defaults, Auto dispatch, Auto land), Projects (gate lines, reviewer), Profiles, Harnesses, Routing, Artifacts (globs) and File (the whole file as text). A form field changes one key in place, so comments, order and unknown tables survive. **Save** (`Ctrl S` from any field) sends the whole draft once; corrald writes the file only after the engine's config check passes, and a refusal's reasons land on the field they name, or at the top. **Discard** drops the edits. Leaving with unsaved edits asks once. When the file changed outside the editor, a notice offers **Read again** and says unsaved edits are dropped only when there are some; a file on disk that does not parse is reported with its position. The `[daemon]` listener is read when corrald starts: change it in File and restart.
   - **Profiles** lists the profiles defined in the file. Search by name or configuration, then open a profile to change its harness, model, effort or arguments. Model and effort suggestions come from configured profiles, not a live catalog; exact custom values are still accepted for validation. Profile actions change the draft only.
   - **Harnesses** lists the five built-ins even when the file has no harness tables, alongside custom launch commands. Select **corral-pi** (profile key `pi`) for terminal sign-in instructions and to distinguish task profiles in `corral.toml` from Pi child profiles in `pi.toml`. Browsing the catalog does not create overrides.
@@ -458,15 +456,6 @@ generates a fixed `manifest.webmanifest` without `share_target`, and
 has no manifest override/share-target setting. No unsupported manifest key or simulated
 share receiver is installed. Paste and file picking remain available
 inside Ask.
-
-### Web Push
-
-Paired browsers can opt in under Settings › Notifications, with per-kind filters.
-This requires service-worker support, notification permission, same-origin secure
-hosting and operator-configured VAPID credentials/push-service origins. It is off by
-default. Notifications are content-free; “push service accepted” does not prove display
-or reading. See [Web Push setup](../../docs/guide/daemon.md#opt-in-web-push).
-Push does not provide reach, and a stopped daemon cannot announce its own absence.
 
 ## Commands
 
@@ -611,8 +600,8 @@ Native desktop backends are behind the off-by-default `desktop` Cargo feature be
 Relay rendezvous/dead-man delivery and native APNs/FCM push remain blocked on hosted TLS
 infrastructure and publisher credentials/tokens. Inbound OS share targets are blocked by
 NSH 0.5.0 as evidenced above. Native global Ask shortcut and tray are implemented but
-unverified on this host; Web Push and opt-in direct LAN/Tailscale reach are implemented,
-not evidence of exercised remote delivery.
+unverified on this host. Opt-in direct LAN/Tailscale reach is implemented but has not
+been exercised for remote delivery here.
 
 Biometric confirmation and native window chrome remain unverified or unbuilt. GTK desktop
 and physical phone builds have not been exercised here. Existing headless/Chromium and

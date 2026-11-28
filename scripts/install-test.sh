@@ -113,24 +113,17 @@ https://herdr.dev/install.sh)
 https://fixture.invalid/*/*.tar.gz.sha256)
     [ "${TEST_CHECKSUM_DOWNLOAD_FAIL:-0}" = 0 ] || exit 22
     if [ "${TEST_BAD_CHECKSUM:-0}" = 1 ]; then
-        printf '%064d  corral-x86_64-unknown-linux-musl.tar.gz\n' 0 >"$destination"
+        asset=${url##*/}
+        printf '%064d  %s\n' 0 "${asset%.sha256}" >"$destination"
     elif [ "${TEST_WRONG_CHECKSUM_NAME:-0}" = 1 ]; then
         printf '%064d  unrelated.tar.gz\n' 0 >"$destination"
     else
-        case "${url##*/}" in
-        corral-next-* | corral-app-web.*)
-            cp "$TEST_FIXTURES/${TEST_CURRENT_FIXTURE:-1}/${url##*/}" "$destination" ;;
-        *) cp "$TEST_FIXTURES/${TEST_ARCHIVE:-release}.sha256" "$destination" ;;
-        esac
+        cp "$TEST_FIXTURES/${TEST_CURRENT_FIXTURE:-1}/${url##*/}" "$destination"
     fi
     ;;
 https://fixture.invalid/*/*.tar.gz)
     [ "${TEST_RELEASE_DOWNLOAD_FAIL:-0}" = 0 ] || exit 22
-    case "${url##*/}" in
-    corral-next-* | corral-app-web.*)
-        cp "$TEST_FIXTURES/${TEST_CURRENT_FIXTURE:-1}/${url##*/}" "$destination" ;;
-    *) cp "$TEST_FIXTURES/${TEST_ARCHIVE:-release}.tar.gz" "$destination" ;;
-    esac
+    cp "$TEST_FIXTURES/${TEST_CURRENT_FIXTURE:-1}/${url##*/}" "$destination"
     ;;
 *) exit 23 ;;
 esac
@@ -144,42 +137,12 @@ printf '%s\n' "$*" >>"$TEST_ROOT/herdr-calls"
 echo "${TEST_HERDR_VERSION:-herdr 0.9.3}"
 exit "${TEST_VERSION_EXIT:-0}"
 SH
-cat >"$suite/fixtures/corral" <<'SH'
-#!/bin/sh
-case "$*" in
---version)
-    echo "corral ${TEST_CORRAL_VERSION:-fixture}"
-    exit "${TEST_BINARY_EXIT:-0}"
-    ;;
-"agent install")
-    # The real command installs the sibling corral-pi-host; record that it ran beside one.
-    [ -x "${0%/*}/corral-pi-host" ] || exit 98
-    printf 'agent install\n' >>"$TEST_ROOT/agent-calls"
-    exit "${TEST_AGENT_INSTALL_EXIT:-0}"
-    ;;
-*) exit 99 ;;
-esac
-SH
-cat >"$suite/fixtures/corral-pi-host" <<'SH'
-#!/bin/sh
-[ "$#" = 1 ] && [ "$1" = --version ] || exit 99
-echo "corral-pi-host pi fixture bun fixture"
-exit "${TEST_HOST_EXIT:-0}"
-SH
 cat >"$suite/fixtures/engine.sh" <<'SH'
 #!/bin/sh
 printf 'accepted\n' >"$TEST_ROOT/engine-ran"
 exit "${TEST_ENGINE_EXIT:-0}"
 SH
-chmod +x "$suite/bin/uname" "$suite/bin/curl" "$suite/fixtures/herdr" "$suite/fixtures/corral" \
-    "$suite/fixtures/corral-pi-host"
-# release: corral with its compiled corral-pi host (0.4.0+); legacy: corral alone (earlier).
-tar -czf "$suite/fixtures/release.tar.gz" -C "$suite/fixtures" corral corral-pi-host
-tar -czf "$suite/fixtures/legacy.tar.gz" -C "$suite/fixtures" corral
-for archive in release legacy; do
-    hash=$(sha256sum "$suite/fixtures/$archive.tar.gz")
-    printf '%s  corral-x86_64-unknown-linux-musl.tar.gz\n' "${hash%% *}" >"$suite/fixtures/$archive.sha256"
-done
+chmod +x "$suite/bin/uname" "$suite/bin/curl" "$suite/fixtures/herdr"
 
 export PATH="$suite/bin" TEST_FIXTURES="$suite/fixtures" SHELL=/bin/sh
 cases=0
@@ -192,9 +155,9 @@ new_case() {
     unset TEST_CURRENT_FIXTURE TEST_FAIL_PROMOTION TEST_PAUSE_BACKUP TEST_PROMOTION_COLLISION TEST_BACKUP_RACE
     unset TEST_HERDR_VERSION TEST_VERSION_EXIT TEST_ENGINE_DOWNLOAD_FAIL TEST_ENGINE_EXIT
     unset TEST_BAD_CHECKSUM TEST_ARCH TEST_OS CORRAL_REPO
-    unset TEST_CORRAL_VERSION TEST_BINARY_EXIT TEST_WRONG_CHECKSUM_NAME
+    unset TEST_WRONG_CHECKSUM_NAME
     unset TEST_RELEASE_DOWNLOAD_FAIL TEST_CHECKSUM_DOWNLOAD_FAIL
-    unset TEST_ARCHIVE TEST_HOST_EXIT TEST_AGENT_INSTALL_EXIT
+    unset CORRAL_INSTALL_LEGACY
     mkdir -p "$HOME"
     rm -f "$suite/bin/herdr" "$suite/bin/wget"
     [ -f "$suite/bin/curl" ] || cp "$suite/fixtures/downloader" "$suite/bin/curl"
@@ -203,41 +166,47 @@ cp "$suite/bin/curl" "$suite/fixtures/downloader"
 run() {
     sh "$installer" "$@" >"$TEST_ROOT/output" 2>&1 </dev/null
 }
-installed() {
-    [ -x "$CORRAL_INSTALL_DIR/corral" ]
-    [ "$("$CORRAL_INSTALL_DIR/corral" --version)" = "corral ${TEST_CORRAL_VERSION:-fixture}" ]
-}
-host_installed() {
-    [ -x "$CORRAL_INSTALL_DIR/corral-pi-host" ]
-    [ "$(PATH=$original_path wc -l <"$TEST_ROOT/agent-calls")" -eq 1 ]
-}
+for revision in 1 2; do
+    fixture=$TEST_FIXTURES/$revision
+    mkdir "$fixture"
+    printf 'site %s\n' "$revision" >"$fixture/index.html"
+    for spec in 'corral-next|corral-next' 'corrald-next|corral-daemon' 'corral-pi|corral-pi pi'; do
+        name=${spec%%|*}
+        # The fixture, not this harness, expands $1.
+        # shellcheck disable=SC2016
+        printf '#!/bin/sh\n[ "$1" = --version ] || exit 98\necho "%s 7.8.%s"\n' "${spec#*|}" "$revision" >"$fixture/$name"
+    done
+    tar -czf "$fixture/corral-app-web.tar.gz" -C "$fixture" index.html
+    tar -czf "$fixture/corral-next-x86_64-unknown-linux-gnu.tar.gz" -C "$fixture" corral-next corrald-next corral-pi
+    (cd "$fixture" && sha256sum corral-app-web.tar.gz >corral-app-web.tar.gz.sha256 &&
+        sha256sum corral-next-x86_64-unknown-linux-gnu.tar.gz >corral-next-x86_64-unknown-linux-gnu.tar.gz.sha256)
+done
+
+installed() { [ "$("$CORRAL_INSTALL_DIR/corral-next" --version)" = "corral-next 7.8.${TEST_CURRENT_FIXTURE:-1}" ]; }
 engine_skipped() { [ ! -f "$TEST_ROOT/engine-ran" ]; }
 engine_accepted() { [ -f "$TEST_ROOT/engine-ran" ]; }
 
-export CORRAL_INSTALL_LEGACY=1
-# Given no engine and noninteractive stdin, installation continues without consent.
+# Retired modes must fail before downloading or changing either destination.
+for mode in flag env; do
+    new_case
+    case "$mode" in
+    flag) set -- --legacy --yes ;;
+    env) export CORRAL_INSTALL_LEGACY=1; set -- --app-only --dry-run ;;
+    esac
+    if run "$@"; then
+        echo "unexpected success: retired classic mode ($mode)" >&2
+        exit 1
+    fi
+    PATH=$original_path grep -F 'https://github.com/pawissanutt/corral/tree/v0.4.0' "$TEST_ROOT/output" >/dev/null
+    [ ! -e "$TEST_ROOT/downloads" ]
+    [ ! -e "$CORRAL_INSTALL_DIR" ]
+    [ ! -e "$CORRAL_APP_INSTALL_DIR" ]
+done
+
 new_case
 run
 installed
-host_installed
 engine_skipped
-
-# Given a release archive from before the compiled host, corral installs alone.
-new_case
-export TEST_ARCHIVE=legacy
-run
-installed
-[ ! -e "$CORRAL_INSTALL_DIR/corral-pi-host" ]
-[ ! -e "$TEST_ROOT/agent-calls" ]
-
-# Given a failing 'corral agent install', corral stays installed and the note names the command.
-new_case
-export TEST_AGENT_INSTALL_EXIT=1
-run
-installed
-host_installed
-PATH=$original_path grep -F "note: 'corral agent install' failed" "$TEST_ROOT/output" >/dev/null
-PATH=$original_path grep -F 'curl -fsSL https://herdr.dev/install.sh | sh' "$TEST_ROOT/output" >/dev/null
 
 # Given a missing engine, --yes explicitly authorizes only the fixture installer.
 new_case
@@ -302,10 +271,10 @@ done
 
 # Given explicit corral download overrides, preserve the version, base and destination.
 new_case
-export CORRAL_VERSION=v7.8.9 TEST_CORRAL_VERSION=7.8.9 CORRAL_INSTALL_DIR="$HOME/custom bin"
+export CORRAL_VERSION=v7.8.1 CORRAL_INSTALL_DIR="$HOME/custom bin"
 run
 installed
-PATH=$original_path grep -Fx 'https://fixture.invalid/releases/download/v7.8.9/corral-x86_64-unknown-linux-musl.tar.gz' "$TEST_ROOT/downloads" >/dev/null
+PATH=$original_path grep -Fx 'https://fixture.invalid/releases/download/v7.8.1/corral-next-x86_64-unknown-linux-gnu.tar.gz' "$TEST_ROOT/downloads" >/dev/null
 
 # Given only a repository override, dry-run constructs the corresponding GitHub URL.
 new_case
@@ -334,7 +303,7 @@ for failure in download engine checksum; do
         echo "unexpected success: $failure" >&2
         exit 1
     fi
-    [ ! -e "$CORRAL_INSTALL_DIR/corral" ]
+    [ ! -e "$CORRAL_INSTALL_DIR/corral-next" ]
 done
 
 # Given an unknown option or unsupported platform, fail without downloading.
@@ -353,28 +322,26 @@ for option in --unknown unsupported-os unsupported-cpu; do
 done
 
 # Given an existing installation, failed updates leave its bytes unchanged.
-for failure in archive-download checksum-download checksum manifest binary host version; do
+for failure in archive-download checksum-download checksum manifest version; do
     new_case
     run
-    prior=$(sha256sum "$CORRAL_INSTALL_DIR/corral")
-    prior_host=$(sha256sum "$CORRAL_INSTALL_DIR/corral-pi-host")
+    prior=$(sha256sum "$CORRAL_INSTALL_DIR/corral-next")
+    prior_host=$(sha256sum "$CORRAL_INSTALL_DIR/corral-pi")
     case "$failure" in
     archive-download) export TEST_RELEASE_DOWNLOAD_FAIL=1 ;;
     checksum-download) export TEST_CHECKSUM_DOWNLOAD_FAIL=1 ;;
     checksum) export TEST_BAD_CHECKSUM=1 ;;
     manifest) export TEST_WRONG_CHECKSUM_NAME=1 ;;
-    binary) export TEST_BINARY_EXIT=1 ;;
-    host) export TEST_HOST_EXIT=1 ;;
     version) export CORRAL_VERSION=v9.8.7 ;;
     esac
     if run; then
         echo "unexpected update success: $failure" >&2
         exit 1
     fi
-    [ "$(sha256sum "$CORRAL_INSTALL_DIR/corral")" = "$prior" ]
-    [ "$(sha256sum "$CORRAL_INSTALL_DIR/corral-pi-host")" = "$prior_host" ]
-    set -- "$CORRAL_INSTALL_DIR"/.corral-install.* "$CORRAL_INSTALL_DIR"/.corral-pi-host-install.*
-    [ ! -e "$1" ] && [ ! -e "$2" ]
+    [ "$(sha256sum "$CORRAL_INSTALL_DIR/corral-next")" = "$prior" ]
+    [ "$(sha256sum "$CORRAL_INSTALL_DIR/corral-pi")" = "$prior_host" ]
+    set -- "$CORRAL_INSTALL_DIR"/.corral-next-install.*
+    [ ! -e "$1" ]
 done
 
 # Given a release path instead of a tag, reject it before any network request.
@@ -385,23 +352,6 @@ if run; then
     exit 1
 fi
 [ ! -e "$TEST_ROOT/downloads" ]
-
-unset CORRAL_INSTALL_LEGACY
-for revision in 1 2; do
-    fixture=$TEST_FIXTURES/$revision
-    mkdir "$fixture"
-    printf 'site %s\n' "$revision" >"$fixture/index.html"
-    for spec in 'corral-next|corral-next' 'corrald-next|corral-daemon' 'corral-pi|corral-pi pi'; do
-        name=${spec%%|*}
-        # The fixture, not this harness, expands $1.
-        # shellcheck disable=SC2016
-        printf '#!/bin/sh\n[ "$1" = --version ] || exit 98\necho "%s 7.8.%s"\n' "${spec#*|}" "$revision" >"$fixture/$name"
-    done
-    tar -czf "$fixture/corral-app-web.tar.gz" -C "$fixture" index.html
-    tar -czf "$fixture/corral-next-x86_64-unknown-linux-gnu.tar.gz" -C "$fixture" corral-next corrald-next corral-pi
-    (cd "$fixture" && sha256sum corral-app-web.tar.gz >corral-app-web.tar.gz.sha256 &&
-        sha256sum corral-next-x86_64-unknown-linux-gnu.tar.gz >corral-next-x86_64-unknown-linux-gnu.tar.gz.sha256)
-done
 
 # Ordinary sites and hidden entries (including dangling links) are not ownership proof.
 for existing in index dotfile marker directory symlink; do
