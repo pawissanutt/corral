@@ -28,7 +28,7 @@ export function mcpControlTools(access: McpAccess, pi: ExtensionAPI, deferred: b
     },
     ...(deferred ? [{
       name: "mcp_activate", label: "Activate MCP tool",
-      description: "Refresh a configured server, then activate approved tool names returned by tool_search. Does not enable codemode.",
+      description: "Refresh a configured server, then activate approved tool names returned by tool_search. Does not enable eval_js.",
       parameters: Type.Object({ server: Type.String(), tools: Type.Array(Type.String(), { minItems: 1 }) }),
       async execute(_id: string, params: { server: string; tools: string[] }) {
         await access.refresh(params.server);

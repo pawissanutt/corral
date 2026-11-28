@@ -1,15 +1,15 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 
-// The same loadout gates direct and nested tool calls. Code Mode never calls itself.
+// The same loadout gates direct and nested tool calls. A JavaScript cell never calls itself.
 export function executionRefusal(
   tool: string, nested: boolean, allowed: ReadonlySet<string>,
 ): string | undefined {
   if (!allowed.has(tool)) return `${tool} is not in this session's loadout`;
-  if (nested && tool === "codemode") return "codemode cannot run inside another tool";
+  if (nested && tool === "eval_js") return "eval_js cannot run inside another tool";
   return undefined;
 }
 
-const CHILD_READS = new Set(["read", "grep", "find", "ls", "lsp_diagnostics", "lsp_definition", "lsp_references", "web_fetch", "web_read", "web_search", "codemode"]);
+const CHILD_READS = new Set(["read", "grep", "find", "ls", "lsp_diagnostics", "lsp_definition", "lsp_references", "web_fetch", "web_read", "web_search", "eval_js"]);
 /** Parent intersection with a fixed child ceiling: no shell, MCP, hooks or recursive children. */
 export function exploreLoadout(parent: readonly string[]): string[] {
   return parent.filter((name) => CHILD_READS.has(name));

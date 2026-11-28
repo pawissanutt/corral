@@ -48,7 +48,7 @@ export function turnWaits(input: {
     }
   }
   for (const cell of input.cells ?? []) {
-    if (cell.detached) waits.push({ kind: "cell", id: cell.cell, label: label(`Code Mode cell ${cell.cell}`) });
+    if (cell.detached) waits.push({ kind: "cell", id: cell.cell, label: label(`JavaScript cell ${cell.cell}`) });
   }
   for (const event of input.events ?? []) waits.push({ ...event, label: label(event.label) });
   return waits.filter((wait, index) => waits.findIndex(other => other.kind === wait.kind && other.id === wait.id) === index);

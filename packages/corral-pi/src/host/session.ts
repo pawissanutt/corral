@@ -18,7 +18,7 @@ import { getApiProvider } from "@earendil-works/pi-ai/compat";
 
 import type { AwsBinding, AwsCredentialResolver } from "../auth/aws.ts";
 import { compactionSettings } from "../capabilities/compaction.ts";
-import { codemodeTool } from "../capabilities/codemode.ts";
+import { CODEMODE_TOOL, codemodeTool } from "../capabilities/codemode.ts";
 import { nestedChild } from "../extensions/codemode/child.ts";
 import { CODE_CALL_ENTRY, CodeRuntime } from "../extensions/codemode/runtime.ts";
 import { HOOK_ENTRY, Hooks } from "../capabilities/hooks.ts";
@@ -615,7 +615,7 @@ export class HostSession {
       parent: { provider: this.provider, model: options.model.startsWith(`${this.provider}/`) ? options.model.slice(this.provider.length + 1) : options.model,
         effort: options.effort },
       assetRoot: options.modules.assetRoot, agentDir: options.agentDir, wake: this.inputWake,
-      parentLoadout: [...(options.capabilities?.enabled.includes("codemode") ? ["codemode"] : []),
+      parentLoadout: [...(options.capabilities?.enabled.includes("codemode") ? [CODEMODE_TOOL] : []),
         ...Object.entries(options.capabilities?.hosted_tools ?? {}).filter(([, route]) => route && route !== "off").map(([name]) => name)],
       hostedTools: childHosted,
       localTools: () => this.childLocalTools().filter(tool => !this.buildControls?.tools.includes(tool)),
@@ -917,7 +917,7 @@ export class HostSession {
     // plan_submit stays out of localTools, which children inherit; it is present in every phase so the tool list is stable.
     this.baseLoadout = [...role.upstreamTools.filter(name => !local.includes(name)), ...corralToolNames(specs), ...local,
       ...(this.planMode ? [PLAN_SUBMIT_TOOL] : []), ...(mcp ? MCP_CONTROLS : []), ...(mcp && search ? ["mcp_activate"] : []), ...(search ? ["tool_search"] : []),
-      ...(options.capabilities?.enabled.includes("codemode") ? ["codemode"] : [])];
+      ...(options.capabilities?.enabled.includes("codemode") ? [CODEMODE_TOOL] : [])];
     if (new Set(this.loadout).size !== this.loadout.length) throw new Error("module_invalid: the loadout names a tool twice");
     this.settings = {
       ...restrictedSettings(), ...compactionSettings(options.capabilities, options.guidance),

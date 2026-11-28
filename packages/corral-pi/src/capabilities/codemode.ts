@@ -1,4 +1,4 @@
-// The `codemode` tool (T-683): cells of JavaScript on this session's Corral-owned persistent Bun
+// The `eval_js` tool (T-683): cells of JavaScript on this session's Corral-owned persistent Bun
 // kernel (extensions/codemode). It is the only code tool; no QuickJS or other engine remains. The
 // callable list in its description and every nested execution derive from one predicate, the
 // host's execution check, so code reaches exactly the tools a direct call could.
@@ -8,7 +8,7 @@ import { Type } from "typebox";
 import { type CellReport, reportContent } from "../extensions/codemode/report.ts";
 import { type CodeRuntime, DEFAULT_WAIT_MS, MAX_WAIT_MS } from "../extensions/codemode/runtime.ts";
 
-export const CODEMODE_TOOL = "codemode";
+export const CODEMODE_TOOL = "eval_js";
 
 const DESCRIPTION = [
   "Prefer a direct tool call for one independent operation. For several independent calls whose results you would",
@@ -59,8 +59,8 @@ export function codemodeTool(runtime: CodeRuntime, callable: (names: readonly st
     reset: Type.Optional(Type.Boolean({ description: "Discard every kernel variable, then run code if given" })),
   }) : Parameters;
   return {
-    name: CODEMODE_TOOL, label: "Code Mode", exposure: "model-only", description, parameters,
-    promptSnippet: "Prefer direct tools for one independent operation, independent results printed unchanged (parallel direct calls in one turn run concurrently), and edits, writes or other state changes unless a later step in the same cell depends on the result. Use cells for dependent chains, filtering or summarising large results before they reach context, loops over many items, computation, or earlier-cell variables.",
+    name: CODEMODE_TOOL, label: "JavaScript cell", exposure: "model-only", description, parameters,
+    promptSnippet: "Prefer direct tools for one independent operation, independent results printed unchanged (parallel direct calls in one turn run concurrently), and edits, writes or other state changes unless a later step in the same cell depends on the result. Use JavaScript cells for dependent chains, filtering or summarising large results before they reach context, loops over many items, computation, or earlier-cell variables.",
     prepareLoadout: (loadout) => {
       const names = callable(loadout.callable.map((tool) => tool.name).filter((name) => name !== CODEMODE_TOOL));
       // The legacy launch alias stays callable, but new scripts should use bash({ wait_ms: 0 }).
@@ -75,7 +75,7 @@ export function codemodeTool(runtime: CodeRuntime, callable: (names: readonly st
         return answer([await runtime.cancel(params.cancel)], "");
       }
       if (params.code === undefined && !params.reset) {
-        return { content: [{ type: "text", text: "codemode needs code, cancel or reset" }], details: { cells: [] }, isError: true };
+        return { content: [{ type: "text", text: `${CODEMODE_TOOL} needs code, cancel or reset` }], details: { cells: [] }, isError: true };
       }
       const lost = params.reset ? await runtime.reset() : [];
       if (params.code === undefined) return answer(lost, "Kernel reset: every variable was discarded.");
