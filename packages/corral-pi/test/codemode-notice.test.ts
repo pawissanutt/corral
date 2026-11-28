@@ -44,7 +44,7 @@ test("a detached notice keeps every mandatory section and the return value past 
   try {
     // When a detached cell catches ten failed calls, prints far past the budget and returns a large value:
     const code = `await tools.fixture_hold({ name: "gate" });${failures}return ${JSON.stringify(VALUE)};`;
-    await fx.turn([{ toolCalls: [{ callId: "c1", name: "codemode", arguments: { code, wait_ms: 0 } }] }, { text: "Waiting" }]);
+    await fx.turn([{ toolCalls: [{ callId: "c1", name: "eval_js", arguments: { code, wait_ms: 0 } }] }, { text: "Waiting" }]);
     fx.transport.script([{ text: "Noted" }]);
     const ended = nextEvent(fx.events, (event) => event.kind === "turn_ended");
     fx.holds.get("gate").release("go");
@@ -66,7 +66,7 @@ test("a reload-deferred notice keeps the mandatory sections too, and an inline r
   try {
     // When a cell that already caught its failures and printed is closed by a reload while it waits:
     const code = `${failures}await tools.fixture_hold({ name: "late" });`;
-    await fx.turn([{ toolCalls: [{ callId: "c1", name: "codemode", arguments: { code, wait_ms: 0 } }] }, { text: "Waiting" }]);
+    await fx.turn([{ toolCalls: [{ callId: "c1", name: "eval_js", arguments: { code, wait_ms: 0 } }] }, { text: "Waiting" }]);
     await fx.holds.get("late").started;
     fx.transport.script([{ text: "Noted" }]);
     const notified = nextEvent(fx.events, (event) => event.kind === "code_cell_notified");
@@ -80,7 +80,7 @@ test("a reload-deferred notice keeps the mandatory sections too, and an inline r
     expectMandatory(notice ?? "", "closed");
     expect(notice).toContain("every variable defined before is gone");
     // And an inline report keeps the cell's whole printed output (bounded by the kernel, not the notice).
-    await fx.turn([{ toolCalls: [{ callId: "c2", name: "codemode", arguments: { code: `print("y".repeat(${PRINTED}));` } }] },
+    await fx.turn([{ toolCalls: [{ callId: "c2", name: "eval_js", arguments: { code: `print("y".repeat(${PRINTED}));` } }] },
       { text: "Finished" }]);
     const inline = fx.result("c2").text;
     expect(inline).toContain("y".repeat(PRINTED));

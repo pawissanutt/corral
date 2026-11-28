@@ -35,8 +35,8 @@ test("one loadout check decides direct and Code Mode calls; every Corral tool is
       expect([tool.exposure, tool.description]).toEqual(["direct", spec.description]);
     }
   }
-  expect(executionRefusal("codemode", false, new Set(["codemode"]))).toBeUndefined();
-  expect(executionRefusal("codemode", true, new Set(["codemode"]))).toContain("codemode");
+  expect(executionRefusal("eval_js", false, new Set(["eval_js"]))).toBeUndefined();
+  expect(executionRefusal("eval_js", true, new Set(["eval_js"]))).toContain("eval_js");
 });
 
 test("a terminal verdict flushes reported usage before an engine that can close the reviewer", async () => {

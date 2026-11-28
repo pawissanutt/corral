@@ -78,7 +78,7 @@ export interface CodeFixture {
   forbiddenRuns(): number;
   /** Scripts the provider and submits one prompt; resolves after its turn and usage report. */
   turn(steps: readonly FakeStep[], text?: string): Promise<void>;
-  /** The model-visible description of the codemode tool as last prepared. */
+  /** The model-visible description of the eval_js tool as last prepared. */
   description(): string;
   /** The model-visible tool result whose scripted ID is `callId`. */
   result(callId: string): { text: string; isError: boolean; details: unknown };
@@ -178,7 +178,7 @@ export async function codeHost(role: CodeRole, options: CodeFixtureOptions = {})
       await ended;
       await live.drained();
     },
-    description: () => live.session.agent.state.tools.find((tool) => tool.name === "codemode")?.description ?? "",
+    description: () => live.session.agent.state.tools.find((tool) => tool.name === "eval_js")?.description ?? "",
     result(callId) {
       const message = live.session.messages.find((m) => m.role === "toolResult" && m.toolCallId.startsWith(`${callId}|`));
       if (message?.role !== "toolResult") throw new Error(`no result for ${callId}`);

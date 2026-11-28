@@ -93,7 +93,7 @@ test("empty and token-limited research cannot masquerade as completed findings",
 });
 
 test("child ceiling denies writes, shell, MCP, hooks, recursive spawn and Corral at every depth", () => {
-  const parent = ["read", "grep", "find", "ls", "lsp_definition", "web_fetch", "web_read", "write", "edit", "bash", "explore", "oracle", "codemode", "mcp_call", "corral_done"];
+  const parent = ["read", "grep", "find", "ls", "lsp_definition", "web_fetch", "web_read", "write", "edit", "bash", "explore", "oracle", "eval_js", "mcp_call", "corral_done"];
   const allowed = new Set(exploreLoadout(parent));
   expect([...allowed]).toEqual(parent.slice(0, 7));
   for (const nested of [false, true]) {

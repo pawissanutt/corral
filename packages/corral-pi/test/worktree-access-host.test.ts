@@ -64,7 +64,7 @@ test("assistant checkout takeover uses the owner card and guards direct and nest
     expect(await host.replyToQuestion(CHOICE.session)).toBeFalse();
     tryWorktreeLock(lock, false).close(); // a pending question reserves no writer authority
 
-    transport.script([call("direct", "write", { path: source, content: "first\n" }), call("nested", "codemode", { code: `
+    transport.script([call("direct", "write", { path: source, content: "first\n" }), call("nested", "eval_js", { code: `
       await tools.edit({path:${JSON.stringify(source)}, edits:[{oldText:'first',newText:'nested'}]});
       for (const path of ${JSON.stringify([link, sibling, protectedPath])}) {
         try { await tools.write({path, content:'denied'}); } catch {}

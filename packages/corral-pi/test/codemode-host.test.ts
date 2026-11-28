@@ -25,19 +25,21 @@ for (const role of ["worker", "reviewer", "assistant"] as const) {
     `;
     try {
       await fx.turn([
-        { toolCalls: [{ callId: "c1", name: "codemode", arguments: { code } }] },
-        { toolCalls: [{ callId: "c2", name: "codemode", arguments: { code: "return kept;" } }] },
+        { toolCalls: [{ callId: "c1", name: "eval_js", arguments: { code } }] },
+        { toolCalls: [{ callId: "c2", name: "eval_js", arguments: { code: "return kept;" } }] },
         { toolCalls: [{ callId: "direct", name: "corral_artifact", arguments: assistant
           ? { path: "one.txt", kind: "evidence", to: "T-683", replaces: reference }
           : { path: "two.txt", kind: "evidence" } }] },
         { text: "Finished" },
       ]);
 
+      const advertised = fx.host.session.agent.state.tools.map(tool => tool.name);
+      expect(advertised.filter(name => name === "eval_js" || name === "codemode")).toEqual(["eval_js"]);
       const callable = (fx.description().split("Callable as tools.<name>: ")[1] ?? "").replace(/\.$/, "").split(", ");
       expect(callable).toContain("read");
       expect(callable).toContain("fixture_fail");
       expect(callable).toContain("corral_artifact");
-      for (const name of ["fixture_forbidden", "codemode", foreign]) expect(callable).not.toContain(name);
+      for (const name of ["fixture_forbidden", "eval_js", "codemode", foreign]) expect(callable).not.toContain(name);
       const first = fx.result("c1");
       expect(first.isError).toBeFalse();
       expect(first.text).toContain('Return value: {\n  "kept": 2,\n  "kind": "evidence"\n}');
@@ -67,7 +69,7 @@ for (const role of ["worker", "reviewer", "assistant"] as const) {
       expect(typeof call === "string" && call.startsWith("c1|")).toBeTrue();
 
       await fx.host.session.reload();
-      await fx.turn([{ toolCalls: [{ callId: "c3", name: "codemode", arguments: { code: "return typeof kept;" } }] },
+      await fx.turn([{ toolCalls: [{ callId: "c3", name: "eval_js", arguments: { code: "return typeof kept;" } }] },
         { text: "Finished" }]);
       expect(fx.result("c3").text).toContain("Return value: undefined");
     } finally {
@@ -81,8 +83,10 @@ test("a disabled Code Mode leaves direct engine tools available across reload", 
   try {
     for (const stage of ["startup", "reload"]) {
       if (stage === "reload") await fx.host.session.reload();
-      expect(fx.host.loadout).not.toContain("codemode");
-      expect(fx.host.session.getAllTools().some(tool => tool.name === "codemode")).toBeFalse();
+      for (const name of ["eval_js", "codemode"]) {
+        expect(fx.host.loadout).not.toContain(name);
+        expect(fx.host.session.getAllTools().some(tool => tool.name === name)).toBeFalse();
+      }
       await fx.turn([
         { toolCalls: [{ callId: `artifact-${stage}`, name: "corral_artifact",
           arguments: { path: "one.txt", kind: "reference", title: stage } }] },

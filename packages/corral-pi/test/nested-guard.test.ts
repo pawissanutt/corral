@@ -93,7 +93,7 @@ test("nested calls pass the role check and cannot recurse into Code Mode across 
     await host.session.bindExtensions({ onError: error => { throw error.error; } });
     await host.startLocal();
     expect(host.state().capabilities).toEqual(capabilities);
-    expect(host.loadout).toContain("codemode");
+    expect(host.loadout).toContain("eval_js");
 
     for (const stage of ["startup", "reload", "refused replacement"]) {
       if (stage === "reload") await host.session.reload();
@@ -105,7 +105,7 @@ test("nested calls pass the role check and cannot recurse into Code Mode across 
             callId: `${stage}-nest`, name: "fixture_nest", arguments: {
               calls: [
                 { name: "read", args: { path: join(cwd, "notes.txt") } },
-                { name: "codemode", args: { code: "throw new Error('nested cell ran');" } },
+                { name: "eval_js", args: { code: "throw new Error('nested cell ran');" } },
                 { name: "fixture_hidden", args: {} },
               ],
             },
@@ -113,7 +113,7 @@ test("nested calls pass the role check and cannot recurse into Code Mode across 
         },
         {
           toolCalls: [
-            { callId: `${stage}-code`, name: "codemode", arguments: { code: "return 42;" } },
+            { callId: `${stage}-code`, name: "eval_js", arguments: { code: "return 42;" } },
             { callId: `${stage}-hidden`, name: "fixture_hidden", arguments: {} },
           ],
         },
@@ -126,7 +126,7 @@ test("nested calls pass the role check and cannot recurse into Code Mode across 
       await host.drained();
       // Nested reads are allowed and nested Code Mode is blocked before starting a cell.
       expect(outcomes.at(-1)).toEqual([
-        { name: "read", isError: false }, { name: "codemode", isError: true }, { name: "fixture_hidden", isError: true },
+        { name: "read", isError: false }, { name: "eval_js", isError: true }, { name: "fixture_hidden", isError: true },
       ]);
       expect(hiddenRuns).toBe(0);
       const page = events.since(from, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER).events;

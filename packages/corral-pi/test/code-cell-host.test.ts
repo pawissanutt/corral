@@ -33,7 +33,7 @@ test("a Code Mode cell shows the calls it made, live, and its final state", asyn
   try {
     writeFileSync(join(h.work, "present.txt"), "PRESENT_FILE_LINE\n");
     fixtureTransport().script([
-      { toolCalls: [{ callId: "cell", name: "codemode", arguments: { code: SCRIPT } }] },
+      { toolCalls: [{ callId: "cell", name: "eval_js", arguments: { code: SCRIPT } }] },
       { text: "CELL_REPLY_DONE" },
     ]);
     const ended = nextEvent(h.events, event => event.kind === "turn_ended");

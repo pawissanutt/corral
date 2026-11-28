@@ -52,11 +52,11 @@ try {
   for (const stage of ["startup", "reload"]) {
     if (stage === "reload") await host.session.reload();
     fixtureTransport().script([
-      { toolCalls: [{ callId: `${stage}-before`, name: "codemode", arguments: { code: "return typeof kept;" } }] },
-      { toolCalls: [{ callId: `${stage}-read`, name: "codemode", arguments: {
+      { toolCalls: [{ callId: `${stage}-before`, name: "eval_js", arguments: { code: "return typeof kept;" } }] },
+      { toolCalls: [{ callId: `${stage}-read`, name: "eval_js", arguments: {
         code: 'const s = await tools.read({path:"notes.txt"}); let kept = s.split("\\n").filter(s => s === "keep"); return kept;',
       } }] },
-      { toolCalls: [{ callId: `${stage}-kept`, name: "codemode", arguments: { code: "return kept.length;" } }] },
+      { toolCalls: [{ callId: `${stage}-kept`, name: "eval_js", arguments: { code: "return kept.length;" } }] },
       { text: "Finished" },
     ]);
     await host.session.prompt(stage);

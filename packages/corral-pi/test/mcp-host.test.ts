@@ -80,7 +80,7 @@ test("workspace MCP policy holds directly, deferred and nested across reconnect 
           expect(peer.calls.filter(({ method }) => method === "initialize")).toHaveLength(1);
           expect(host.session.getActiveToolNames().includes(lookup)).toBe(!search);
           expect(host.loadout.includes("tool_search")).toBe(search);
-          expect(host.loadout).not.toContain("codemode");
+          expect(host.loadout).not.toContain("eval_js");
           for (const builtin of ["mcp", "codemode", "tool-search"]) expect(BUILTIN_EXTENSIONS).toContain(builtin);
           if (search) {
             const metadata = host.session.getAllTools()
@@ -147,7 +147,7 @@ test("workspace MCP policy holds directly, deferred and nested across reconnect 
             }
             expect(peer.calls.filter(({ method, params }) => method === "tools/call" && params.name !== "lookup")).toEqual([]);
             expect(host.loadout).not.toContain(write);
-            expect(host.loadout).not.toContain("codemode");
+            expect(host.loadout).not.toContain("eval_js");
           }
           expect(peer.calls.filter(({ method }) => method === "tools/call")).toHaveLength(6);
           expect(host.state().capabilities).toEqual(capabilities);

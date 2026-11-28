@@ -21,7 +21,7 @@ test("cancelling a running cell keeps completed writes and runs nothing after", 
     `;
     const settled = nextEvent(fx.events, (event) => event.kind === "code_cell" && event.phase === "settled");
     // An aborted turn makes no further provider request, so only the cell's step is scripted.
-    const done = fx.turn([{ toolCalls: [{ callId: "c1", name: "codemode", arguments: { code } }] }]);
+    const done = fx.turn([{ toolCalls: [{ callId: "c1", name: "eval_js", arguments: { code } }] }]);
     await fx.holds.get("stuck").started;
     expect(await fx.host.cancel(undefined)).toMatchObject({ cancelled: true });
     expect(await settled).toMatchObject({ cell: "cell-1", status: "cancelled", state_lost: true });
@@ -43,7 +43,7 @@ test("a detached cell reports exactly once: one delivered notice, or the cancel 
   try {
     const hold = (gate: string) => `const value = await tools.fixture_hold({ name: "${gate}" }); return value;`;
     // When a cell detaches at once and the model ends its turn:
-    await fx.turn([{ toolCalls: [{ callId: "c1", name: "codemode", arguments: { code: hold("slow"), wait_ms: 0 } }] },
+    await fx.turn([{ toolCalls: [{ callId: "c1", name: "eval_js", arguments: { code: hold("slow"), wait_ms: 0 } }] },
       { text: "Waiting for the cell" }]);
     const handle = fx.result("c1");
     expect(handle.isError).toBe(false);
@@ -69,15 +69,15 @@ test("a detached cell reports exactly once: one delivered notice, or the cancel 
 
     // When a second detached cell is cancelled by the model, the cancel result is its report:
     await fx.turn([
-      { toolCalls: [{ callId: "c2", name: "codemode", arguments: { code: hold("never"), wait_ms: 0 } }] },
-      { toolCalls: [{ callId: "c3", name: "codemode", arguments: { cancel: "cell-2" } }] },
+      { toolCalls: [{ callId: "c2", name: "eval_js", arguments: { code: hold("never"), wait_ms: 0 } }] },
+      { toolCalls: [{ callId: "c3", name: "eval_js", arguments: { cancel: "cell-2" } }] },
       { text: "Cancelled" },
     ]);
     expect(fx.result("c3").text).toContain("Cell cell-2: cancelled");
     await fx.host.codeNoticed();
     expect(fx.since(0).filter((event) => event.kind === "code_cell_notified").map((event) => event.cell)).toEqual(["cell-1"]);
     expect(fx.result("c3").isError).toBe(false);
-    await fx.turn([{ toolCalls: [{ callId: "c4", name: "codemode", arguments: { cancel: "cell-2" } }] }, { text: "Ok" }]);
+    await fx.turn([{ toolCalls: [{ callId: "c4", name: "eval_js", arguments: { cancel: "cell-2" } }] }, { text: "Ok" }]);
     expect(fx.result("c4").text).toContain("Cell cell-2: no live cell has this id");
   } finally {
     await fx.close();
@@ -93,7 +93,7 @@ test("a reload replaces the binding: the old cell settles once, its late complet
       await tools.write({ path: "after-reload.txt", content: "must not run" });
       return before;
     `;
-    await fx.turn([{ toolCalls: [{ callId: "c1", name: "codemode", arguments: { code, wait_ms: 0 } }] }, { text: "Waiting" }]);
+    await fx.turn([{ toolCalls: [{ callId: "c1", name: "eval_js", arguments: { code, wait_ms: 0 } }] }, { text: "Waiting" }]);
     await fx.holds.get("late").started;
     // When the session reloads while the cell's nested call is in flight:
     fx.transport.script([{ text: "Noted the lost cell" }]);
@@ -115,7 +115,7 @@ test("a reload replaces the binding: the old cell settles once, its late complet
     expect(existsSync(join(fx.cwd, "after-reload.txt"))).toBeFalse();
     expect(fx.journal().filter((entry) => entry.tool === "fixture_hold").map((entry) => entry.phase)).toEqual(["started", "settled"]);
     // And the replacement kernel starts empty and serves new cells.
-    await fx.turn([{ toolCalls: [{ callId: "c2", name: "codemode", arguments: { code: "return typeof before;" } }] },
+    await fx.turn([{ toolCalls: [{ callId: "c2", name: "eval_js", arguments: { code: "return typeof before;" } }] },
       { text: "Finished" }]);
     expect(fx.result("c2").text).toContain("Return value: undefined");
     await fx.host.codeNoticed();
@@ -130,7 +130,7 @@ test("a pipeline over a large intermediate result emits only its selected summar
   try {
     const code = `const text = await tools.fixture_big({}); return text.split("\\n").find(line => line.startsWith("needle:"));`;
     await fx.turn([
-      { toolCalls: [{ callId: "piped", name: "codemode", arguments: { code } }] },
+      { toolCalls: [{ callId: "piped", name: "eval_js", arguments: { code } }] },
       { toolCalls: [{ callId: "direct", name: "fixture_big", arguments: {} }] },
       { text: "Finished" },
     ]);

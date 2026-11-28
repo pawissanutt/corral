@@ -70,7 +70,7 @@ test("early strict/standard static profiles retain raw prompts and schemas for e
             prompt_sha256: sha256Hex(prompt), tools_sha256: sha256Hex(toolJson),
           })}`);
           expect(tools.length).toBeGreaterThan(0);
-          expect(host.loadout.includes("codemode")).toBe(preset === "standard" && (role === "worker" || role === "reviewer"));
+          expect(host.loadout.includes("eval_js")).toBe(preset === "standard" && (role === "worker" || role === "reviewer"));
           expect(host.loadout.includes("corral_todo")).toBe(preset === "standard" && role !== "reviewer");
         } finally { await host.close(); }
       }

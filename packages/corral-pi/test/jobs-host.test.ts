@@ -119,7 +119,7 @@ test("a worker starts, peeks and kills managed jobs; a nested monitor wakes it o
       for (const tools of declared) {
         expect(tools.map(tool => tool.name)).not.toContain("job_start");
         expect(tools.map(tool => tool.name)).toContain("bash");
-        const description = tools.find(tool => tool.name === "codemode")?.description ?? "";
+        const description = tools.find(tool => tool.name === "eval_js")?.description ?? "";
         expect(description).toContain("bash");
         expect(description).not.toContain("job_start");
       }

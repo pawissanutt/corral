@@ -37,7 +37,7 @@ export default {
     writeFileSync(join(work, "prompt.md"), "Run the fixture cell.\n");
     writeFileSync(join(work, "evidence.txt"), "fixture artifact\n");
     expect(spawnSync("mkfifo", [edit]).status).toBe(0);
-    writeFileSync(steps, JSON.stringify([{ toolCalls: [{ callId: "interrupted", name: "codemode", arguments: { code: `
+    writeFileSync(steps, JSON.stringify([{ toolCalls: [{ callId: "interrupted", name: "eval_js", arguments: { code: `
       await tools.corral_artifact({path: "evidence.txt", kind: "evidence"});
       await tools.edit({path: "edit.fifo", edits: [{oldText: "a", newText: "b"}]});
       await tools.write({path: "after.txt", content: "would mean the lost cell ran again"});
