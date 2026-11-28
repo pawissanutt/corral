@@ -95,10 +95,12 @@ test("empty and token-limited research cannot masquerade as completed findings",
 test("child ceiling denies writes, shell, MCP, hooks, recursive spawn and Corral at every depth", () => {
   const parent = ["read", "grep", "find", "ls", "lsp_definition", "web_fetch", "web_read", "write", "edit", "bash", "explore", "oracle", "eval_js", "mcp_call", "corral_done"];
   const allowed = new Set(exploreLoadout(parent));
-  expect([...allowed]).toEqual(parent.slice(0, 7));
+  expect([...allowed]).toEqual([...parent.slice(0, 7), "eval_js"]);
+  expect(executionRefusal("eval_js", false, allowed)).toBeUndefined();
+  expect(executionRefusal("eval_js", true, allowed)).toContain("inside another tool");
   for (const nested of [false, true]) {
     expect(executionRefusal("read", nested, allowed)).toBeUndefined();
-    for (const tool of parent.slice(7)) expect(executionRefusal(tool, nested, allowed)).toBeDefined();
+    for (const tool of parent.slice(7).filter(name => name !== "eval_js")) expect(executionRefusal(tool, nested, allowed)).toBeDefined();
   }
   expect(exploreLoadout(["read"])).toEqual(["read"]);
   // The child ceiling, not a nesting rule, keeps Corral out of every auxiliary depth.

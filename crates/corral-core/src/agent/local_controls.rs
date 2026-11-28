@@ -140,7 +140,16 @@ impl HookSettings {
                 .pre_tool
                 .iter()
                 .chain(&self.post_tool)
-                .any(|hook| hook.tools.is_empty() || hook.tools.iter().any(|t| t == tool))
+                .any(|hook| {
+                    hook.tools.is_empty()
+                        || hook.tools.iter().any(|t| {
+                            t == tool
+                                || matches!(
+                                    (t.as_str(), tool),
+                                    ("codemode", "eval_js") | ("eval_js", "codemode")
+                                )
+                        })
+                })
     }
 
     /// The enabled hook settings a generation snapshot recorded, if any.
@@ -272,7 +281,7 @@ mod tests {
     fn hooks_wrap_only_named_or_all_local_tools_and_never_corral() {
         // Given a tool-scoped pre hook and an unscoped post hook.
         let scoped = HookSettings {
-            pre_tool: vec![hook("lint", &["lint"], &["edit"])],
+            pre_tool: vec![hook("lint", &["lint"], &["edit", "codemode"])],
             ..HookSettings::default()
         };
         let all = HookSettings {
@@ -281,6 +290,7 @@ mod tests {
         };
         // Then scoping is honored and corral operations are never wrapped.
         assert!(scoped.wraps("edit") && !scoped.wraps("read"));
+        assert!(scoped.wraps("eval_js") && scoped.wraps("codemode"));
         assert!(all.wraps("read") && all.wraps("bash"));
         assert!(!all.wraps("corral_done"));
         assert!(!HookSettings::default().wraps("read"));
